@@ -1,0 +1,122 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap");
+
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #00ea6b;
+  --color-primaryText: #033c40;
+  --color-primary200: #319f43;
+  --color-primaryLight: #e5f2eb;
+  --color-secondary: #033c40;
+  --color-tertiary: #8d1514;
+  --color-tertiaryLight: #fbeae9;
+  --color-background: #2d2d35;
+  --color-background200: #f8f8f8;
+  --color-outline: #dee0e4;
+  --color-pText: #7b7c80;
+  --color-image: #d9d9d9;
+  --color-purple: #4448a0;
+  --color-purpleLight: #ededf6;
+  --color-blue: #1877f2;
+  --color-blueLight: #f6f9fc;
+  --color-outline: #dee0e4;
+}
+
+:root {
+  font-family: "DM Sans", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+textarea {
+  resize: none;
+}
+textarea:focus {
+  outline: none;
+}
+
+input:focus {
+  outline: none;
+}
+
+h1,
+.h1 {
+  @apply text-4xl lg:text-6xl font-black;
+}
+
+h2,
+.h2 {
+  @apply text-3xl lg:text-4xl font-bold;
+}
+
+h3,
+.h3 {
+  @apply text-2xl lg:text-3xl font-bold;
+}
+
+h4,
+.h4 {
+  @apply text-xl lg:text-2xl font-bold;
+}
+
+h5,
+.h5 {
+  @apply text-lg lg:text-xl font-[500];
+}
+
+h6,
+.h6 {
+  @apply text-base lg:text-lg font-medium;
+}
+
+p {
+  @apply text-sm lg:text-base leading-relaxed;
+}
+
+span {
+  @apply text-lg lg:text-base;
+}
+
+small {
+  @apply text-xs;
+}
+
+.text-small {
+  @apply text-sm;
+}
+
+.text-xsmall {
+  @apply text-xs;
+}
+
+.text-large {
+  @apply text-lg;
+}
+
+button {
+  @apply cursor-pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-ms-thumb {
+  width: 0;
+  height: 0;
+}
