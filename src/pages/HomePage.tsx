@@ -1,6 +1,7 @@
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
 import HomeFavoriteSection from "../sections/home/HomeFavoriteSection";
+import HomePostsSection from "../sections/home/HomePostsSection";
 import HomeSearchSection from "../sections/home/HomeSearchSection";
 
 function HomePage() {
@@ -12,23 +13,7 @@ function HomePage() {
       </div>
       <div className="w-full px-[1px] flex flex-col">
         <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
-        <HomeFavoriteSection />
+        <HomePostsSection />
       </div>
     </PrimaryPageContainer>
   );

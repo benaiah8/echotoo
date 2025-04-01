@@ -3,6 +3,7 @@ import { Paths } from "./Paths";
 import HomePage from "../pages/HomePage";
 import CreatePage from "../pages/CreatePage";
 import CreateTitlePage from "../pages/CreateTitlePage";
+import ExperiencePage from "../pages/ExperiencePage";
 
 function AppRouter() {
   return (
@@ -12,6 +13,7 @@ function AppRouter() {
           <Route path={Paths.home} Component={HomePage} />
           <Route path={Paths.create} Component={CreatePage} />
           <Route path={Paths.createTitle} Component={CreateTitlePage} />
+          <Route path={Paths.experience} Component={ExperiencePage} />
         </Routes>
       </div>
     </Router>
