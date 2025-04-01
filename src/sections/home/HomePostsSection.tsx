@@ -102,7 +102,7 @@ function HomePostsSection() {
                   <MdShare />
                 </span>
                 <span>
-                  <MdChat />
+                  <FaCommentDots />
                 </span>
                 <button className="px-3 py-1 rounded-md bg-white text-black">
                   <div className="!text-xs font-medium">Remix</div>
@@ -122,20 +122,14 @@ function HomePostsSection() {
                 </div>
               ))}
             </div>
-            <small className="text-sm !font-light">
+            <p className="font-extralight text-xs leading-5 mt-1 opacity-70">
               If you could live anywhere in the world, where would you pick? If
               you could live anywhere in the world, where would you pick?
-            </small>
+            </p>
             <div className="mt-3 w-full gap-4 flex items-center">
-              <div className="flex flex-1 flex-col">
-                <button className="text-white">
-                  <span>
-                    <FaCommentDots />
-                  </span>
-                </button>
-              </div>
-              <button className="px-3 rounded-md py-1 bg-background200">
-                <small className="text-white">See remixes</small>
+              <div className="flex flex-1 flex-col"></div>
+              <button className="px-3 rounded-md py-1 bg-primary">
+                <small className="text-black text-xs">See remixes</small>
               </button>
             </div>
           </div>

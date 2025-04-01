@@ -1,12 +1,14 @@
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import ExperienceHeroSection from "../sections/experience/ExperienceHeroSection";
 import ExperienceCategoriesSection from "../sections/experience/ExperienceCategoriesSection";
+import ExperienceActivitiesSection from "../sections/experience/ExperienceActivitiesSection";
 
 function ExperiencePage() {
   return (
-    <PrimaryPageContainer>
+    <PrimaryPageContainer back>
       <ExperienceHeroSection />
       <ExperienceCategoriesSection />
+      <ExperienceActivitiesSection />
     </PrimaryPageContainer>
   );
 }

@@ -3,4 +3,5 @@ export const Paths = {
   create: "/create",
   createTitle: "/create/title",
   experience: "/experience",
+  notification: "/notification",
 };

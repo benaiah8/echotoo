@@ -1,6 +1,6 @@
 import { BsPersonFill } from "react-icons/bs";
 import { FaHome } from "react-icons/fa";
-import { IoGameController } from "react-icons/io5";
+import { IoGameController, IoNotifications } from "react-icons/io5";
 import { RiAddBoxFill } from "react-icons/ri";
 import { useNavigate } from "react-router-dom";
 import { Paths } from "../router/Paths";
@@ -25,8 +25,10 @@ function BottomTab() {
       },
     },
     {
-      icon: <RiAddBoxFill />,
-      onClick: () => {},
+      icon: <IoNotifications />,
+      onClick: () => {
+        navigate(Paths.notification);
+      },
     },
     {
       icon: <BsPersonFill />,

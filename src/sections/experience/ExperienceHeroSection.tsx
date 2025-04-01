@@ -73,7 +73,7 @@ function ExperienceHeroSection() {
       <div className="rounded-md bg-background flex gap-4 p-3 mt-3">
         <div className="flex flex-1 flex-col px-2">
           <span className="font-medium !text-sm">Title of The experience</span>
-          <div className="text-xs mt-2">
+          <div className="text-xs mt-2 opacity-70">
             If you could live anywhere in the world, where would you pick? If
             you could live anywhere in the world, where would you pick?
           </div>
