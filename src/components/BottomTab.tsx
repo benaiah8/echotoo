@@ -10,7 +10,9 @@ function BottomTab() {
   const menu = [
     {
       icon: <FaHome />,
-      onClick: () => {},
+      onClick: () => {
+        navigate(Paths.home);
+      },
     },
     {
       icon: <IoGameController />,

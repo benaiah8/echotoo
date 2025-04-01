@@ -3,15 +3,15 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #00ea6b;
+  --color-primary: #edbd00;
   --color-primaryText: #033c40;
-  --color-primary200: #319f43;
+  --color-primary200: #fff0bf;
   --color-primaryLight: #e5f2eb;
   --color-secondary: #033c40;
   --color-tertiary: #8d1514;
   --color-tertiaryLight: #fbeae9;
   --color-background: #2d2d35;
-  --color-background200: #f8f8f8;
+  --color-background200: #1e1f24;
   --color-outline: #dee0e4;
   --color-pText: #7b7c80;
   --color-image: #d9d9d9;

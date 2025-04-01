@@ -57,39 +57,30 @@ const PrimaryDatePicker = forwardRef<HTMLInputElement, PrimaryDatePickerProps>(
         parentToggle={setIsDropdownOpen}
       >
         <div
-          className={`flex flex-col px-2 h-14 items-center justify-center rounded-md border transition-all cursor-pointer ${
-            error ? "border-tertiary" : "border-outline"
+          className={`flex flex-col justify-center border-b transition-all cursor-pointer h-12 ${
+            error ? "border-tertiary" : "border-gray-700"
           }`}
         >
-          <div className="w-full flex items-center justify-between gap-2">
-            <h5 className="text-pText ">
-              <MdCalendarMonth />
-            </h5>
-
-            <div className="flex flex-col flex-1 items-start transition-all duration-500 justify-center">
-              {/* {selectedDate && ( */}
+          <div className="w-full flex items-center gap-2 text-white px-1">
+            <div className="flex-1">
               <small
-                className={`text-pText ${date ? "opacity-100" : "opacity-0"}`}
+                className={`block text-xs text-pText transition-opacity duration-300 ${
+                  date ? "opacity-100" : "opacity-0"
+                }`}
               >
                 {label}
               </small>
-              <span className={date ? "text-black" : "text-pText"}>
-                {date ? `${moment(date).format("DD/MM/YYYY")}` : label}{" "}
-                {date ? (
-                  <small className="text-pText">
+              <span className={date ? "text-white" : "text-pText"}>
+                {date ? `${moment(date).format("DD/MM/YYYY")}` : label}
+                {date && (
+                  <small className="ml-1 text-sm text-pText">
                     ({moment(date).format("ddd")})
                   </small>
-                ) : (
-                  <></>
                 )}
               </span>
             </div>
 
-            {error && (
-              <span className="text-tertiary !text-2xl">
-                <MdErrorOutline />
-              </span>
-            )}
+            {error && <MdErrorOutline className="text-tertiary text-2xl" />}
           </div>
         </div>
       </DropdownContainer>

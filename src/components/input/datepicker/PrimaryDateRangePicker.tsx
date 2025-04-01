@@ -1,7 +1,7 @@
 import { useState, forwardRef } from "react";
 import { MdCalendarMonth, MdErrorOutline } from "react-icons/md";
 import DatePicker from "./DatePicker";
-import DropdownContainer from "../dropdown/DropdownContainer";
+import DropdownContainer from "../dropdown/DropdownContainer.tsx";
 import moment from "moment";
 
 interface PrimaryDateRangePickerProps {

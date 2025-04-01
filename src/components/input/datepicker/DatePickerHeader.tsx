@@ -69,7 +69,7 @@ const DatePickerHeader: React.FC<DatePickerHeaderProps> = ({
   }, [isYearPickerOpen]);
 
   return (
-    <div className="flex items-center justify-between bg-background200 px-4 py-2 text-sm relative">
+    <div className="flex items-center justify-between bg-black px-4 py-2 text-sm relative">
       {!hide || hide !== "first" ? (
         <button
           onClick={() =>

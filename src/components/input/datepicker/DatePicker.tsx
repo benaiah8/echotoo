@@ -139,19 +139,22 @@ const DatePicker: React.FC<DatePickerProps> = ({
         />
 
         <div className="p-2 flex flex-col">
-          <div className="grid grid-cols-7 gap-1 text-center text-sm font-medium w-[340px]">
+          <div className="grid grid-cols-7 gap-1 text-center text-sm font-medium w-[320px]">
             {weekdays.map(({ label }) => (
-              <span key={label} className="!text-xs">
+              <span
+                key={label}
+                className="!text-xs w-9 items-center justify-center flex"
+              >
                 {label}
               </span>
             ))}
           </div>
 
-          <div className="grid grid-cols-7 gap-1 mt-2 w-[340px]">
+          <div className="grid grid-cols-7 gap-1 mt-2 w-[320px]">
             {Array.from({ length: firstDayOfWeek - 1 }).map((_, i) => (
               <div
                 key={`empty-${i}`}
-                className="w-11 h-9 flex-shrink-0 text-xs"
+                className="w-9 h-9 flex-shrink-0 text-xs"
               ></div>
             ))}
 
@@ -180,16 +183,16 @@ const DatePicker: React.FC<DatePickerProps> = ({
               return (
                 <button
                   key={day}
-                  className={`w-11 h-9 flex items-center justify-center rounded-sm flex-shrink-0 text-xs cursor-pointer transition-all
+                  className={`w-9 h-9 flex items-center justify-center rounded-sm flex-shrink-0 text-xs cursor-pointer transition-all
                     ${
                       isDisabledDate
                         ? "!bg-outline text-pText hover:!bg-outline !cursor-not-allowed"
                         : ""
                     }
-                    ${isSelected ? "bg-primary " : ""}
-                    ${isToday ? "border border-primary" : ""}
-                    ${isStart ? "bg-primary " : ""}
-                    ${isEnd ? "bg-primary " : ""}
+                    ${isSelected ? "bg-white text-black" : "text-white"}
+                    ${isToday ? "border border-white" : ""}
+                    ${isStart ? "bg-white " : ""}
+                    ${isEnd ? "bg-white " : ""}
                     ${isInRange ? "bg-primaryLight" : ""}
                     ${isHoveredInRange ? "bg-primaryLight" : ""}
                     ${
@@ -219,7 +222,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
   };
 
   return (
-    <div className="bg-white shadow-sm rounded-lg flex flex-col lg:flex-row gap-2">
+    <div className="bg-background shadow-sm rounded-lg flex flex-col lg:flex-row gap-2 text-white">
       {renderMonth(currentMonth)}
       {dualMonth && renderMonth(nextMonth, true)}
     </div>
