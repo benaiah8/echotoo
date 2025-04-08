@@ -4,8 +4,11 @@ import PrimaryInput from "../components/input/PrimaryInput";
 import { useState } from "react";
 import PrimaryDatePicker from "../components/input/datepicker/PrimaryDatePicker";
 import PrimaryToggle from "../components/input/PrimaryToggle";
+import { useNavigate } from "react-router-dom";
+import { Paths } from "../router/Paths";
 
 function CreateTitlePage() {
+  const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
@@ -13,7 +16,7 @@ function CreateTitlePage() {
   const [anonymous, setAnonymous] = useState(false);
 
   return (
-    <PrimaryPageContainer>
+    <PrimaryPageContainer back>
       <div className="flex flex-1 flex-col items-center justify-center relative">
         <div className="w-full mt-8 p-4 rounded-md flex flex-col bg-background">
           <PrimaryInput
@@ -71,7 +74,10 @@ function CreateTitlePage() {
             ))}
           </div>
           <div className="flex flex-1 justify-end">
-            <button className="flex items-center gap-1 ml-4">
+            <button
+              className="flex items-center gap-1 ml-4"
+              onClick={() => navigate(Paths.createActivities)}
+            >
               <span>Next</span>
               <span>
                 {" "}

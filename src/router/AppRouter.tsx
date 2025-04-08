@@ -6,6 +6,7 @@ import CreateTitlePage from "../pages/CreateTitlePage";
 import ExperiencePage from "../pages/ExperiencePage";
 import NotificationPage from "../pages/NotificationPage";
 import ProfilePage from "../pages/ProfilePage";
+import CreateActivitiesPage from "../pages/CreateActivitiesPage";
 
 function AppRouter() {
   return (
@@ -15,6 +16,10 @@ function AppRouter() {
           <Route path={Paths.home} Component={HomePage} />
           <Route path={Paths.create} Component={CreatePage} />
           <Route path={Paths.createTitle} Component={CreateTitlePage} />
+          <Route
+            path={Paths.createActivities}
+            Component={CreateActivitiesPage}
+          />
           <Route path={Paths.experience} Component={ExperiencePage} />
           <Route path={Paths.notification} Component={NotificationPage} />
           <Route path={Paths.profile} Component={ProfilePage} />
