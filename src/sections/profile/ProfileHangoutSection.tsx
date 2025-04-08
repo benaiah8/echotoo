@@ -1,7 +1,7 @@
 import { FaBookmark, FaGlassCheers } from "react-icons/fa";
-import { MdChalet, MdLocationOn } from "react-icons/md";
+import { MdLocationOn } from "react-icons/md";
 
-function HomeFavoriteSection() {
+function ProfileHangoutSection() {
   const items = [
     { label: "Today" },
     { label: "3-hrs" },
@@ -47,4 +47,4 @@ function HomeFavoriteSection() {
   );
 }
 
-export default HomeFavoriteSection;
+export default ProfileHangoutSection;

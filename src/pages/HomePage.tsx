@@ -1,6 +1,6 @@
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
-import HomeFavoriteSection from "../sections/home/HomeFavoriteSection";
+import HomeHangoutSection from "../sections/home/HomeHangoutSection";
 import HomePostsSection from "../sections/home/HomePostsSection";
 import HomeSearchSection from "../sections/home/HomeSearchSection";
 
@@ -12,7 +12,7 @@ function HomePage() {
         <HomeCategorySection />
       </div>
       <div className="w-full px-[1px] flex flex-col">
-        <HomeFavoriteSection />
+        <HomeHangoutSection />
         <HomePostsSection />
       </div>
     </PrimaryPageContainer>

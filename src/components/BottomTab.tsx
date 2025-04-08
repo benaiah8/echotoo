@@ -32,7 +32,9 @@ function BottomTab() {
     },
     {
       icon: <BsPersonFill />,
-      onClick: () => {},
+      onClick: () => {
+        navigate(Paths.profile);
+      },
     },
   ];
 

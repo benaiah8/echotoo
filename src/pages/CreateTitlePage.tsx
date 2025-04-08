@@ -15,10 +15,6 @@ function CreateTitlePage() {
   return (
     <PrimaryPageContainer>
       <div className="flex flex-1 flex-col items-center justify-center relative">
-        <div className="w-full flex items-center justify-center sticky top-0">
-          <span className="uppercase">rendezvous</span>
-        </div>
-
         <div className="w-full mt-8 p-4 rounded-md flex flex-col bg-background">
           <PrimaryInput
             label="Title"
