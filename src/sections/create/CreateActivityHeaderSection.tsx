@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { ActivityType } from "../../types/post";
 import { MdAdd } from "react-icons/md";
 import DropdownContainer from "../../components/input/dropdown/DropdownContainer";
@@ -24,8 +24,8 @@ function CreateActivityHeaderSection({
       ...activities,
       { title: `Activity ${activities.length + 1}` },
     ];
-    setActivity(newActivities[newActivities.length - 1]);
     setActivities(newActivities);
+    setActivity(newActivities.length - 1);
   };
 
   return (
@@ -41,7 +41,7 @@ function CreateActivityHeaderSection({
                   className="text-xs font-medium px-4 py-2 text-white w-full cursor-pointer"
                   key={itemIndex}
                   onClick={() => {
-                    setActivity(item);
+                    setActivity(itemIndex);
                     closeDropdown();
                   }}
                 >
@@ -53,9 +53,8 @@ function CreateActivityHeaderSection({
           parentToggle={setDropdown}
         >
           <div className="w-full bg-background rounded-full px-4 py-2 justify-between text-xs flex items-center">
-            <span>{activity?.title}</span>
+            <span>{activities[activity]?.title}</span>
             <span>
-              {" "}
               <IoIosArrowDown
                 className={`transition-all ${dropdown ? "rotate-180" : ""}`}
               />

@@ -1,5 +1,5 @@
 import { useState, forwardRef } from "react";
-import { MdCalendarMonth, MdErrorOutline } from "react-icons/md";
+import { MdErrorOutline } from "react-icons/md";
 import DatePicker from "./DatePicker";
 import DropdownContainer from "../dropdown/DropdownContainer";
 import moment from "moment";

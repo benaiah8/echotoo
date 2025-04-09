@@ -186,7 +186,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
                   className={`w-9 h-9 flex items-center justify-center rounded-sm flex-shrink-0 text-xs cursor-pointer transition-all
                     ${
                       isDisabledDate
-                        ? "!bg-outline text-pText hover:!bg-outline !cursor-not-allowed"
+                        ? "!bg-gray-700 text-pText hover:!bg-gray-700 !cursor-not-allowed"
                         : ""
                     }
                     ${isSelected ? "bg-white text-black" : "text-white"}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { IoMdArrowDropdown } from "react-icons/io";
 import { MdMap } from "react-icons/md";
 import Collapsible from "../../components/Collapsible";
+import ExperienceActivityImagesSection from "./ExperienceActivityImagesSection";
 
 function ExperienceActivitiesSection() {
   return (
@@ -52,6 +53,28 @@ const Activity = () => {
         </div>
         <Collapsible open={open}>
           <div className="w-full flex flex-col">
+            <ExperienceActivityImagesSection />
+            <div className="w-full pb-4 pt-2 px-4 rounded-lg bg-background200 flex flex-col mt-4">
+              <div className="w-full flex flex-col gap-2">
+                {[...Array(3)].map((_, gameIndex) => (
+                  <div
+                    className="w-full flex flex-col gap-1 border-t first:border-none py-2 border-white/30"
+                    key={gameIndex}
+                  >
+                    <div className="w-full flex gap-2 justify-between items-end mb-2">
+                      <span className="!text-sm font-medium flex-1 ">
+                        Dress code
+                      </span>
+                    </div>
+                    <p className="font-light text-xs opacity-70">
+                      If you could live anywhere in the world, where would you
+                      pick? If you could live anywhere in the world, where would
+                      you pick?
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="w-full pb-4 pt-2 px-4 rounded-lg bg-background200 flex flex-col mt-4">
               <div className="w-full flex gap-2 justify-between items-end mb-2">
                 <span className="!text-sm font-medium flex-1 ">Games</span>

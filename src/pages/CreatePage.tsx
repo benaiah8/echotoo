@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import { Paths } from "../router/Paths";
+import CreateTabsSection from "../sections/create/CreateTabsSection";
 
 function CreatePage() {
   const navigate = useNavigate();
@@ -32,16 +33,7 @@ function CreatePage() {
             </button>
           ))}
         </div>
-        <div className="w-full flex items-center gap-2 mt-8 justify-center">
-          {[...Array(5)].map((_, index) => (
-            <div
-              className={`w-4 h-1 rounded-full ${
-                index === 0 ? "bg-white" : "bg-white/20"
-              }`}
-              key={index}
-            ></div>
-          ))}
-        </div>
+        <CreateTabsSection step={1} className="" />
       </div>
     </PrimaryPageContainer>
   );

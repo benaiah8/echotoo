@@ -39,7 +39,7 @@ function BottomTab() {
   ];
 
   return (
-    <div className="w-full flex items-center justify-center px-3 py-2 sticky bottom-0">
+    <div className="w-full flex items-center justify-center px-1 py-2 sticky bottom-0">
       <div className="flex-1 px-4 py-2 rounded-xl flex items-center justify-between bg-white/10 backdrop-blur-md">
         {menu.map((item, index) => (
           <button

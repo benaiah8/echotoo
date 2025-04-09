@@ -1,14 +1,12 @@
-import { IoArrowForward } from "react-icons/io5";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import PrimaryInput from "../components/input/PrimaryInput";
 import { useState } from "react";
 import PrimaryDatePicker from "../components/input/datepicker/PrimaryDatePicker";
 import PrimaryToggle from "../components/input/PrimaryToggle";
-import { useNavigate } from "react-router-dom";
 import { Paths } from "../router/Paths";
+import CreateTabsSection from "../sections/create/CreateTabsSection";
 
 function CreateTitlePage() {
-  const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [additionalDescription, setAdditionalDescription] = useState("");
@@ -61,31 +59,8 @@ function CreateTitlePage() {
         </div>
 
         <div className="flex flex-1"></div>
-        <div className="w-full flex items-center gap-2 mt-8 justify-between">
-          <div className="flex flex-1"></div>
-          <div className="flex items-center gap-2">
-            {[...Array(5)].map((_, index) => (
-              <div
-                className={`w-4 h-1 rounded-full ${
-                  index === 1 ? "bg-white" : "bg-white/20"
-                }`}
-                key={index}
-              ></div>
-            ))}
-          </div>
-          <div className="flex flex-1 justify-end">
-            <button
-              className="flex items-center gap-1 ml-4"
-              onClick={() => navigate(Paths.createActivities)}
-            >
-              <span>Next</span>
-              <span>
-                {" "}
-                <IoArrowForward />{" "}
-              </span>
-            </button>
-          </div>
-        </div>
+
+        <CreateTabsSection step={2} nextPath={Paths.createActivities} />
       </div>
     </PrimaryPageContainer>
   );

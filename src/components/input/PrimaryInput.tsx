@@ -38,11 +38,11 @@ const PrimaryInput = React.forwardRef<
   }, [textarea]);
 
   const sharedStyles =
-    "w-full bg-transparent text-white placeholder-gray-400 border-b border-gray-700 transition-all pb-1 font-normal";
+    "w-full text-xs bg-transparent text-white placeholder-gray-400 border-b border-gray-700 transition-all pb-1 font-normal";
 
   return (
     <div className="flex flex-col gap-2">
-      {label && <label className="text-white text-sm">{label}</label>}
+      {label && <label className="text-white/60 text-sm">{label}</label>}
       {textarea ? (
         <textarea
           ref={setRefs}

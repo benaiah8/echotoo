@@ -1,45 +1,32 @@
-import { IoArrowForward } from "react-icons/io5";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import { useState } from "react";
 import CreateActivityHeaderSection from "../sections/create/CreateActivityHeaderSection";
+import CreateActivityDetailSection from "../sections/create/CreateActivityDetailSection";
+import CreateTabsSection from "../sections/create/CreateTabsSection";
+import { Paths } from "../router/Paths";
 
 function CreateActivitiesPage() {
   const [activities, setActivities] = useState([{ title: "Activity 1" }]);
-  const [activity, setActivity] = useState({ title: "Activity 1" });
+  const [activity, setActivity] = useState(0);
 
   return (
     <PrimaryPageContainer back>
       <div className="flex flex-1 flex-col items-center justify-center relative">
-        <div className="flex flex-1 w-full">
+        <div className="flex flex-1 w-full flex-col">
           <CreateActivityHeaderSection
             activities={activities}
             activity={activity}
             setActivities={setActivities}
             setActivity={setActivity}
           />
+          <CreateActivityDetailSection
+            setActivities={setActivities}
+            activities={activities}
+            activity={activity}
+          />
         </div>
-        <div className="w-full flex items-center gap-2 mt-8 justify-between sticky bottom-0">
-          <div className="flex flex-1"></div>
-          <div className="flex items-center gap-2">
-            {[...Array(5)].map((_, index) => (
-              <div
-                className={`w-4 h-1 rounded-full ${
-                  index === 2 ? "bg-white" : "bg-white/20"
-                }`}
-                key={index}
-              ></div>
-            ))}
-          </div>
-          <div className="flex flex-1 justify-end">
-            <button className="flex items-center gap-1 ml-4">
-              <span>Next</span>
-              <span>
-                {" "}
-                <IoArrowForward />{" "}
-              </span>
-            </button>
-          </div>
-        </div>
+
+        <CreateTabsSection step={3} nextPath={Paths.createCategories} />
       </div>
     </PrimaryPageContainer>
   );
