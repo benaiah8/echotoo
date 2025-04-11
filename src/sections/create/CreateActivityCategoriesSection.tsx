@@ -1,7 +1,6 @@
 import PrimaryInput from "../../components/input/PrimaryInput";
 import { useState } from "react";
 import { categoriesData } from "../../data/data";
-import PrimarySelectable from "../../components/input/PrimarySelectable";
 import CreateCategoriesSelectionSection from "./CreateCategoriesSelectionSection";
 
 function CreateActivityCategoriesSection() {
@@ -64,16 +63,6 @@ function CreateActivityCategoriesSection() {
             />
           ))}
         </div>
-        {/* <div className="flex flex-1 flex-wrap mt-3 gap-2">
-          {categories?.map((cat, catIndex) => (
-            <PrimarySelectable
-              key={catIndex}
-              label={cat}
-              selected={Boolean(selected?.find((selec) => selec === cat))}
-              onSelect={() => handleSelect(cat)}
-            />
-          ))}
-        </div> */}
       </div>
     </div>
   );

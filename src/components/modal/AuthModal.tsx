@@ -1,24 +1,25 @@
-import { MdArrowBack, MdArrowForward, MdClose } from "react-icons/md";
 import Modal from "./Modal";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
 import LoginForm from "./Auth/LoginForm";
 import SignupForm from "./Auth/SignupForm";
+import useUserApi, { UserPayloadInterface } from "../../hooks/useUserApi";
 
 const AuthModal = () => {
+  const { registerUser } = useUserApi();
   const dispatch = useDispatch();
   const { authModal } = useSelector((state: RootState) => state.modal);
   const [tab, setTab] = useState("login");
-  const imagesRef = useRef<HTMLDivElement | null>(null);
-  const images = [
-    "https://plus.unsplash.com/premium_photo-1677000666741-17c3c57139a2?w=600",
-    "https://images.unsplash.com/photo-1728044849256-ad00ec91e794?q=80&w=1974",
-    "https://plus.unsplash.com/premium_photo-1681841594224-ad729a249113?w=600",
-    "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=600",
-    "https://images.unsplash.com/photo-1605926637512-c8b131444a4b?w=600",
-  ];
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<UserPayloadInterface>({
+    email: "test1@gmail.com",
+    password: "password",
+    repeatPassword: "password",
+    username: "username1",
+    fullName: "Full name",
+  });
 
   const handleClose = () => {
     dispatch(setAuthModal(false));
@@ -40,6 +41,15 @@ const AuthModal = () => {
       },
     },
   ];
+
+  const handleContinue = async () => {
+    if (tab === "login") {
+    } else {
+      let paylaodData = data;
+      delete paylaodData.repeatPassword;
+      await registerUser({ setLoading, data: paylaodData });
+    }
+  };
 
   return (
     <Modal
@@ -73,10 +83,23 @@ const AuthModal = () => {
         </div>
         <div className="w-full flex flex-col px-4 bg-background200 py-3 rounded-md mt-4">
           <div className="w-full my-4">
-            {tab === "login" ? <LoginForm /> : <SignupForm />}
+            {tab === "login" ? (
+              <LoginForm data={data} setData={setData} />
+            ) : (
+              <SignupForm data={data} setData={setData} />
+            )}
           </div>
-          <button className="w-full py-2 rounded-md text-xs font-medium bg-primary text-black">
-            {tab === "login" ? "Login" : "Sign up"}
+          <button
+            className="w-full py-2 rounded-md text-xs font-medium bg-primary text-black"
+            onClick={() => handleContinue()}
+          >
+            {loading ? (
+              <div className="buttonLoader"></div>
+            ) : tab === "login" ? (
+              "Login"
+            ) : (
+              "Sign up"
+            )}
           </button>
         </div>
         <div className="w-full mt-3 mb-2 gap-1 flex items-center">

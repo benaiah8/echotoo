@@ -1,21 +1,20 @@
 import { useState } from "react";
 import PrimaryInput from "../../input/PrimaryInput";
+import { UserPayloadInterface } from "../../../hooks/useUserApi";
 
-function SignupForm() {
-  const [data, setData] = useState({
-    name: "",
-    username: "",
-    email: "",
-    password: "",
-    repeatPassword: "",
-  });
+interface SignupFormInterface {
+  data: UserPayloadInterface;
+  setData: (data: UserPayloadInterface) => void;
+}
+
+function SignupForm({ data, setData }: SignupFormInterface) {
   return (
     <div className="w-full flex flex-col ">
       <PrimaryInput
         label="Full name"
         placeholder="Enter your full name"
-        value={data.name}
-        onChange={(e) => setData({ ...data, name: e.target.value })}
+        value={data.fullName}
+        onChange={(e) => setData({ ...data, fullName: e.target.value })}
       />
       <div className="mt-2"></div>
       <PrimaryInput

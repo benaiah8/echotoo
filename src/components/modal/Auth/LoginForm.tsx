@@ -1,11 +1,13 @@
 import React, { useState } from "react";
 import PrimaryInput from "../../input/PrimaryInput";
+import { UserPayloadInterface } from "../../../hooks/useUserApi";
 
-function LoginForm() {
-  const [data, setData] = useState({
-    email: "",
-    password: "",
-  });
+interface LoginFormProps {
+  data: UserPayloadInterface;
+  setData: (data: UserPayloadInterface) => void;
+}
+
+function LoginForm({ data, setData }: LoginFormProps) {
   return (
     <div className="w-full flex flex-col ">
       <PrimaryInput
