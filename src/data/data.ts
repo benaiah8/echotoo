@@ -72,10 +72,65 @@ export const additionalActiviesData = [
 ];
 
 export const categoriesData = [
-  "Date",
-  "Family",
-  "Dinner",
-  "Date",
-  "Hangout",
-  "Dinning",
+  {
+    label: "By Activity Type",
+    items: [
+      "Food",
+      "Drinks",
+      "Hiking",
+      "Movie",
+      "Gaming",
+      "Art",
+      "Music",
+      "Sports",
+      "Study",
+      "Networking",
+      "Workshop",
+      "Support",
+      "Volunteer",
+    ],
+  },
+  {
+    label: "By Theme/Genre",
+    items: [
+      "Nightlife",
+      "Outdoors",
+      "Indoors",
+      "Tech",
+      "Wellness",
+      "Cultural",
+      "Educational",
+      "Adventure",
+      "Relaxation",
+    ],
+  },
+  {
+    label: "By Audience",
+    items: [
+      "Family",
+      "Kids",
+      "Teens",
+      "Adults",
+      "Seniors",
+      "Newcomers",
+      "Travelers",
+      "Couples",
+      "Singles",
+    ],
+  },
+  {
+    label: "By Time/Season",
+    items: [
+      "Weekend",
+      "Weeknight",
+      "Morning",
+      "Late-night",
+      "Summer",
+      "Holiday",
+    ],
+  },
+  {
+    label: "Custom",
+    items: [],
+  },
 ];

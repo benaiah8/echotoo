@@ -2,10 +2,16 @@ import PrimaryInput from "../../components/input/PrimaryInput";
 import { useState } from "react";
 import { categoriesData } from "../../data/data";
 import PrimarySelectable from "../../components/input/PrimarySelectable";
+import CreateCategoriesSelectionSection from "./CreateCategoriesSelectionSection";
 
 function CreateActivityCategoriesSection() {
   const [tag, setTag] = useState("");
-  const [categories, setCategories] = useState(categoriesData);
+  const [categories, setCategories] = useState<
+    {
+      label: string;
+      items: string[];
+    }[]
+  >(categoriesData);
   const [selected, setSelected] = useState<string[]>([]);
 
   const handleSelect = (option: string) => {
@@ -34,14 +40,31 @@ function CreateActivityCategoriesSection() {
           <button
             className="px-3 py-1 rounded-md bg-primary text-black font-medium"
             onClick={() => {
-              setCategories([...categories, tag]);
+              setCategories(
+                categories.map((cat) =>
+                  cat.label === "Custom"
+                    ? { ...cat, items: [...cat.items, tag] }
+                    : cat
+                )
+              );
               setTag("");
             }}
           >
             <small>Add</small>
           </button>
         </div>
-        <div className="flex flex-1 flex-wrap mt-3 gap-2">
+        <div className="flex flex-1 flex-wrap mt-3 ">
+          {categories?.map((cat, catIndex) => (
+            <CreateCategoriesSelectionSection
+              key={catIndex}
+              categories={cat}
+              selected={selected}
+              index={catIndex}
+              onSelect={handleSelect}
+            />
+          ))}
+        </div>
+        {/* <div className="flex flex-1 flex-wrap mt-3 gap-2">
           {categories?.map((cat, catIndex) => (
             <PrimarySelectable
               key={catIndex}
@@ -50,7 +73,7 @@ function CreateActivityCategoriesSection() {
               onSelect={() => handleSelect(cat)}
             />
           ))}
-        </div>
+        </div> */}
       </div>
     </div>
   );

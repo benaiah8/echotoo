@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FiSearch, FiSliders } from "react-icons/fi";
+import { FiSearch } from "react-icons/fi";
 
 export default function HomeSearchSection() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -8,6 +8,7 @@ export default function HomeSearchSection() {
   const items = [
     { label: "Current Location", value: "current" },
     { label: "Today", value: "today" },
+    { label: "Surprise me", value: "surprise" },
   ];
 
   return (
@@ -23,9 +24,9 @@ export default function HomeSearchSection() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
-        <span>
+        {/* <span>
           <FiSliders size={20} />
-        </span>
+        </span> */}
       </div>
       <div className="flex w-full gap-2 px-4 py-2 rounded-xl bg-background200">
         {items.map((item, index) => (

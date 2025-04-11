@@ -13,25 +13,25 @@ function Post() {
   const navigate = useNavigate();
   const items = [
     { label: "Today" },
-    { label: "3-hrs" },
+    // { label: "3-hrs" },
     { label: "2", icon: <MdLocationOn /> },
   ];
 
-  const tags = [
-    "Family",
-    "Dinning",
-    "Dinner",
-    "Date",
-    "Hangout",
-    "Family",
-    "Dinning",
-  ];
   return (
     <div className="w-full rounded-xl bg-background flex flex-col overflow-hidden">
       {/* <div className="h-56 rounded-xl" ></div> */}
       <div className="w-full relative h-56 rounded-xl overflow-hidden flex bg-[url('https://plus.unsplash.com/premium_photo-1677000666741-17c3c57139a2?w=600')] bg-cover bg-center">
         <div className="w-full h-full flex bg-black/40 px-4 py-2 flex-col">
-          <div className="w-full justify-between items-center flex">
+          <div
+            className="flex flex-1"
+            onClick={() => {
+              navigate(Paths.experience);
+            }}
+          ></div>
+          <div className="flex w-full gap-2 flex-wrap">
+            <small className="!text-xs font-light rounded-md px-2 py-1 text-black bg-white">
+              @chrisH
+            </small>
             <div className="flex gap-2">
               {items.map((item, itemIndex) => (
                 <div
@@ -45,46 +45,11 @@ function Post() {
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-1 bg-primary text-black py-1 px-2 rounded-md w-fit">
-              <small className="!text-[10px] !font-medium">Category</small>
-              <div className="text-xs">
-                {" "}
-                <FaGlassCheers />{" "}
-              </div>
-            </div>
-          </div>
-          <div
-            className="flex flex-1"
-            onClick={() => {
-              navigate(Paths.experience);
-            }}
-          ></div>
-          <div className="flex w-full flex-col">
-            <div className="w-full flex gap-2 justify-between">
-              <div className="flex items-center gap-2 ">
-                <div className="w-8 h-8 border border-primary rounded-full bg-image"></div>
-                <div className="flex flex-1 flex-col">
-                  <small className="!text-xs font-medium ">
-                    Chris Johnson (wise owl)
-                  </small>
-                  <small className="!text-xs font-light">@chrisH</small>
-                </div>
-              </div>
-              <div>
-                <div className="border-2 border-white w-8 h-8 rounded-md flex items-center justify-center">
-                  <span className="text-primary">
-                    {" "}
-                    <MdMap />{" "}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <span className="font-medium mt-2">Title of The experience</span>
           </div>
         </div>
       </div>
       <div className="px-4 pt-2 pb-2">
-        <div className="w-full flex items-center justify-between">
+        <div className="w-full flex items-center justify-between mb-2">
           <div className="flex gap-4 items-center text-white">
             <span>
               <MdFavorite />
@@ -103,25 +68,27 @@ function Post() {
             <MdBookmark />
           </span>
         </div>
-        <div className="w-full flex gap-1 mt-3 flex-wrap mb-1">
-          {tags.map((tag, index) => (
-            <div
-              key={index}
-              className="text-xs bg-background200 text-white px-2 py-1 rounded-md"
-            >
-              {tag}
-            </div>
-          ))}
-        </div>
-        <p className="font-extralight text-xs leading-5 mt-1 opacity-70">
+
+        <span className="font-medium mt-2 text-sm">
+          Title of The experience
+        </span>
+        <p className="font-extralight text-xs leading-5 mt-1 opacity-70 whitespace-nowrap overflow-hidden w-full text-ellipsis">
           If you could live anywhere in the world, where would you pick? If you
           could live anywhere in the world, where would you pick?
         </p>
-        <div className="mt-3 w-full gap-4 flex items-center">
-          <div className="flex flex-1 flex-col"></div>
-          <button className="px-3 rounded-md py-1 bg-primary">
-            <small className="text-black text-xs">See remixes</small>
-          </button>
+        <div className="mt-3 gap-2 flex items-center flex-wrap rounded-full p-2 bg-background200 w-fit">
+          {[
+            { label: "Follow", action: () => {} },
+            { label: "See remixes", action: () => {} },
+          ].map((item, itemIndex) => (
+            <button
+              key={itemIndex}
+              className="px-6 py-1 rounded-full text-xs bg-background"
+              onClick={item.action}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </div>
     </div>

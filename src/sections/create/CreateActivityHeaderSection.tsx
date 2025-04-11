@@ -64,7 +64,7 @@ function CreateActivityHeaderSection({
       </div>
       <div className="flex flex-1 justify-end items-center cursor-pointer gap-1">
         <div
-          className="bg-background gap-2 rounded-full px-4 py-2 justify-between text-xs flex items-center cursor-pointer"
+          className="bg-white text-black font-medium gap-2 rounded-full px-4 py-2 justify-between text-xs flex items-center cursor-pointer"
           onClick={() => handleAdd()}
         >
           <span>Add activity</span>

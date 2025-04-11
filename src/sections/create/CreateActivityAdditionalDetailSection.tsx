@@ -24,14 +24,14 @@ function CreateActivityAdditionalDetailSection({
         className="w-full items-center justify-between flex cursor-pointer"
         onClick={() => setOpen(!open)}
       >
-        <small className="">Additional activities</small>
+        <small className="">Additional info</small>
         <IoIosArrowDown
           className={`transition-all ${open ? "rotate-180" : ""}`}
         />
       </div>
       <Collapsible open={open}>
         <div className="w-full py-2 flex flex-col gap-2">
-          {activity?.additionalActivities?.map((add: any, addIndex: number) => (
+          {activity?.additionalInfo?.map((add: any, addIndex: number) => (
             <div
               className="w-full p-2 rounded-md bg-background200 flex flex-col relative"
               key={addIndex}
@@ -40,11 +40,10 @@ function CreateActivityAdditionalDetailSection({
                 <button
                   className="text-white p-2"
                   onClick={() => {
-                    let additionalActivities =
-                      activity.additionalActivities?.filter(
-                        (_: any, actIndex: any) => actIndex !== addIndex
-                      );
-                    handleChange("additionalActivities", additionalActivities);
+                    let additionalInfo = activity.additionalInfo?.filter(
+                      (_: any, actIndex: any) => actIndex !== addIndex
+                    );
+                    handleChange("additionalInfo", additionalInfo);
                   }}
                 >
                   <MdClose />
@@ -56,20 +55,20 @@ function CreateActivityAdditionalDetailSection({
                 rows={1}
                 textarea
                 onChange={(e) => {
-                  let additionalActivities = activity.additionalActivities?.map(
+                  let additionalInfo = activity.additionalInfo?.map(
                     (act: any, actIndex: any) =>
                       actIndex === addIndex
                         ? { ...act, value: e.target.value }
                         : act
                   );
-                  handleChange("additionalActivities", additionalActivities);
+                  handleChange("additionalInfo", additionalInfo);
                 }}
               />
             </div>
           ))}
           <SecondaryDropdown
             className="mt-3"
-            label="Add activity"
+            label="Add additional info"
             value=""
             options={additionalActiviesData?.map((act) => {
               return {
@@ -78,8 +77,8 @@ function CreateActivityAdditionalDetailSection({
               };
             })}
             onChange={(val) => {
-              handleChange("additionalActivities", [
-                ...(activity?.additionalActivities || []),
+              handleChange("additionalInfo", [
+                ...(activity?.additionalInfo || []),
                 {
                   title: val,
                   value: "",
