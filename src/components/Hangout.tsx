@@ -18,13 +18,13 @@ function Hangout() {
   };
 
   return (
-    <button className="w-36 pb-2 relative">
+    <button className="w-36  relative">
       <div className="w-36 h-34 rounded-xl bg-background p-2 flex flex-col flex-1">
         <div className="flex w-full flex-wrap gap-1">
           {items.map((item, itemIndex) => (
             <div
               key={itemIndex}
-              className="flex items-center gap-2 bg-background200 py-1 px-2 rounded-md"
+              className="flex items-center gap-1 bg-background200 py-1 px-2 rounded-md"
             >
               <small className="!text-[8px] font-normal">{item.label}</small>
               {item.icon && <div className="text-[10px]">{item.icon}</div>}
@@ -43,7 +43,8 @@ function Hangout() {
             <MdShare />
           </div>
           <button
-            className="flex h-5  overflow-hidden bg-white text-black rounded-sm cursor-pointer"
+            className="flex h-5 items-center overflow-hidden bg-white text-black
+             rounded-sm cursor-pointer"
             onClick={() => handleRSVP()}
           >
             <div className="flex items-center justify-center px-1 pl-2">
@@ -52,7 +53,7 @@ function Hangout() {
             <div
               className={`h-full ${
                 rsvp ? "bg-primary text-black" : "bg-background200 text-white"
-              } px-1 flex items-center justify-center rounded-l-sm`}
+              } px-1 flex items-center justify-center `}
             >
               <small className="!text-[10px]">{beThere}</small>
             </div>

@@ -1,45 +1,74 @@
+import React, { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import PrimaryInput from "../components/input/PrimaryInput";
-import { useState } from "react";
-import CreateTabsSection from "../sections/create/CreateTabsSection";
 import CreateActivityCategoriesSection from "../sections/create/CreateActivityCategoriesSection";
+import CreateTabsSection from "../sections/create/CreateTabsSection";
+import { Paths } from "../router/Paths";
 
-function CreateCategoryPage() {
+export default function CreateCategoryPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const postType = searchParams.get("type") || "journey";
+
+  const base = `?type=${postType}`;
+  const paths = [
+    `${Paths.createTitle}${base}`,
+    `${Paths.createActivities}${base}`,
+    `${Paths.createCategories}${base}`,
+    `${Paths.preview}${base}`,
+  ];
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [error, setError] = useState("");
+
+  const handleNext = () => {
+    if (tags.length < 2) {
+      setError("Please select at least two tags.");
+    } else {
+      setError("");
+      navigate(paths[3]);
+    }
+  };
 
   return (
     <PrimaryPageContainer back>
-      <div className="flex flex-1 flex-col items-center justify-center relative">
-        <div className="w-full mt-8 p-4 rounded-md flex flex-col bg-background">
+      <div className="flex-1 w-full px-4 flex flex-col">
+        {/* Edit Title & Description */}
+        <div className="w-full bg-background p-4 rounded-md mt-8 flex flex-col gap-4">
           <PrimaryInput
             label="Title"
             value={title}
-            placeholder="This is the first thing other owls see"
+            placeholder="Edit your title"
             onChange={(e) => setTitle(e.target.value)}
           />
-          <div className="mt-4"></div>
           <PrimaryInput
             label="Description"
-            // className=""
+            textarea
             rows={1}
             value={description}
-            textarea
-            placeholder="Optional - let people know what to expect"
+            placeholder="Edit your description"
             onChange={(e) => setDescription(e.target.value)}
           />
         </div>
 
-        <div className="flex flex-1 w-full">
-          <div className="w-full">
-            <CreateActivityCategoriesSection />
-          </div>
+        {/* Tag selector */}
+        <div className="w-full mt-6">
+          <CreateActivityCategoriesSection
+            selectedTags={tags}
+            onAddTag={(t) =>
+              t && !tags.includes(t) && setTags([...tags, t])
+            }
+          />
+          {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
         </div>
 
-        <CreateTabsSection step={4} onPost={() => {}} />
+        <div className="flex-1" />
+
+        <CreateTabsSection step={3} paths={paths} onNext={handleNext} />
       </div>
     </PrimaryPageContainer>
   );
 }
-
-export default CreateCategoryPage;

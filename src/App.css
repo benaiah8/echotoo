@@ -1,7 +1,9 @@
+/* Hide scrollbars */
 .scroll-hide::-webkit-scrollbar {
   display: none;
 }
 
+/* Loaders */
 .primaryLoader {
   width: 20px;
   --b: 4px;
@@ -19,11 +21,12 @@
       #0000 calc(100% - var(--b) - 1px),
       #000 calc(100% - var(--b))
     );
+  mask: repeating-conic-gradient(…);
+
   -webkit-mask-composite: destination-in;
   mask-composite: intersect;
   animation: l4 1s infinite steps(10);
 }
-
 .buttonLoader {
   width: 20px;
   --b: 4px;
@@ -41,6 +44,8 @@
       #0000 calc(100% - var(--b) - 1px),
       #000 calc(100% - var(--b))
     );
+  mask: repeating-conic-gradient(…);
+
   -webkit-mask-composite: destination-in;
   mask-composite: intersect;
   animation: l4 1s infinite steps(10);
@@ -50,4 +55,131 @@
   to {
     transform: rotate(1turn);
   }
+}
+
+/* Shake animation */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  10%,
+  30%,
+  50%,
+  70%,
+  90% {
+    transform: translateX(-2px);
+  }
+  20%,
+  40%,
+  60%,
+  80% {
+    transform: translateX(2px);
+  }
+}
+.animate-shake {
+  animation: shake 0.3s ease;
+}
+
+/* -------- react-day-picker full dark/grayscale theme -------- */
+.rdp-theme {
+  /* your dark palette */
+  --rdp-background-color: #1f1f29 !important;
+  --rdp-text-color: #ececec !important;
+  /* make selected days gray, not yellow */
+  --rdp-accent-color: #ececec !important;
+}
+
+/* ensure the container itself is dark */
+.rdp-theme,
+.rdp-theme .rdp-nav,
+.rdp-theme .rdp-caption {
+  background-color: var(--rdp-background-color) !important;
+  color: var(--rdp-text-color) !important;
+}
+
+/* calendar days */
+.rdp-theme .rdp-day {
+  background-color: transparent !important;
+  color: var(--rdp-text-color) !important;
+}
+/* selected days */
+.rdp-theme .rdp-day_selected {
+  background-color: var(--rdp-accent-color) !important;
+  color: var(--rdp-background-color) !important;
+}
+/* keep “today” outline in gray too */
+.rdp-theme .rdp-day_today {
+  outline-color: var(--rdp-accent-color) !important;
+}
+
+/* navigation buttons (prev/next arrows) */
+.rdp-theme .rdp-nav_button {
+  color: var(--rdp-text-color) !important;
+}
+/* override the SVG path fill/stroke */
+.rdp-theme .rdp-nav_button svg path {
+  stroke: var(--rdp-text-color) !important;
+  fill: var(--rdp-text-color) !important;
+}
+
+/* button backgrounds (if any) */
+.rdp-theme .rdp-button {
+  background: transparent !important;
+  color: var(--rdp-text-color) !important;
+}
+
+/* Make the calendar wrapper match the card background */
+.rdp-theme {
+  background-color: var(--rdp-background-color) !important;
+  padding: 0.5rem; /* optional: give it the same padding as the card */
+  border-radius: 0.5rem; /* match your container’s rounding */
+}
+/* ✅ Force the calendar grid to fill its wrapper */
+.rdp-theme {
+  display: block !important;
+  width: 100% !important;
+  box-sizing: border-box;
+  padding-left: 2rem;
+  padding-right: 2rem;
+}
+.rdp-theme .rdp-month {
+  width: 100% !important;
+}
+
+/* pill container must be position:relative */
+.pill {
+  position: relative;
+}
+
+/* delete “×” */
+.pill .delete-btn {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  background: #fff; /* white circle */
+  color: #333; /* dark “×” */
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
+}
+.delete-btn {
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+  background: #fff;
+  border: 2px solid black;
+
+  color: #333;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
 }

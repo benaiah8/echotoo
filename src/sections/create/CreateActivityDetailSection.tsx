@@ -1,5 +1,7 @@
+// src/sections/create/CreateActivityDetailSection.tsx
+
 import { ActivityType } from "../../types/post";
-import ActivitiesDropdown from "../../components/input/dropdown/ActivitiesDropdown";
+import ActivitiesTagsInput from "../../components/ActivitiesTagsInput";
 import PrimaryInput from "../../components/input/PrimaryInput";
 import CreateActivityAdditionalDetailSection from "./CreateActivityAdditionalDetailSection";
 import CreateActivityLocationSection from "./CreateActivityLocationSection";
@@ -7,50 +9,57 @@ import CreateActivityImagesSection from "./CreateActivityImagesSection";
 
 interface CreateActivityDetailSectionProps {
   activity: number;
+  activityIndex: number;
   activities: ActivityType[];
   setActivities: (activities: ActivityType[]) => void;
 }
-function CreateActivityDetailSection({
+
+export default function CreateActivityDetailSection({
   activities,
   activity: activityIndex,
   setActivities,
 }: CreateActivityDetailSectionProps) {
-  let activity = activities[activityIndex];
+  const activity = activities[activityIndex];
 
   const handleChange = (field: string, value: any) => {
-    setActivities([
-      ...activities.map((activity1, index) =>
-        index === activityIndex ? { ...activity1, [field]: value } : activity1
-      ),
-    ]);
+    setActivities(
+      activities.map((act, idx) =>
+        idx === activityIndex ? { ...act, [field]: value } : act
+      )
+    );
   };
+
   return (
     <div className="w-full flex flex-col mt-4">
-      <div className="bg-background w-full rounded-lg p-4 py-2 pb-4 flex flex-col">
-        <small className="mb-2">Activity</small>
-        <ActivitiesDropdown
-          label="Select activity"
-          value={activity?.activity}
-          onChange={(val) => handleChange("activity", val)}
+      {/* Activity tags input */}
+      <div className="bg-background w-full rounded-lg p-4 flex flex-col gap-2">
+        <small className="mb-1 text-xs text-white">Activities</small>
+        <ActivitiesTagsInput
+          tags={activity.tags}
+          onChange={(newTags) => handleChange("tags", newTags)}
         />
-        {activity?.activity === "custom" ? (
-          <div className="w-full mt-3">
-            <PrimaryInput
-              placeholder="Custom activity"
-              value={activity?.customActivity}
-              onChange={(e) => handleChange("customActivity", e.target.value)}
-            />
-          </div>
-        ) : (
-          <></>
-        )}
       </div>
+
+      {/* If user typed “custom” and you want a free‐form input */}
+      {activity.tags.includes("custom") && (
+        <div className="w-full mt-3 px-4">
+          <PrimaryInput
+            label="Custom activity"
+            placeholder="Describe your custom activity"
+            value={activity.customActivity}
+            onChange={(e) => handleChange("customActivity", e.target.value)}
+          />
+        </div>
+      )}
+
+      {/* The rest of your detail sections */}
       <CreateActivityAdditionalDetailSection
         activity={activity}
         handleChange={handleChange}
       />
       <CreateActivityLocationSection
         activity={activity}
+        activityIndex={activityIndex}
         handleChange={handleChange}
       />
       <CreateActivityImagesSection
@@ -60,5 +69,3 @@ function CreateActivityDetailSection({
     </div>
   );
 }
-
-export default CreateActivityDetailSection;
