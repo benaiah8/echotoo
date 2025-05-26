@@ -1,41 +1,52 @@
-import { MdMap } from "react-icons/md";
-import { ActivityType } from "../../types/post";
-import PrimaryInput from "../../components/input/PrimaryInput";
+// src/sections/create/CreateActivityLocationSection.tsx
 import { useState } from "react";
-import Collapsible from "../../components/Collapsible";
+import { useNavigate } from "react-router-dom";
+import { MdMap } from "react-icons/md";
 import { IoIosArrowDown } from "react-icons/io";
+import Collapsible from "../../components/Collapsible";
+import PrimaryInput from "../../components/input/PrimaryInput";
+import { Paths } from "../../router/Paths";
+import { ActivityType } from "../../types/post";
 
-interface CreateActivityLocationSectionProps {
+interface Props {
   activity: ActivityType;
+  activityIndex: number;
   handleChange: (field: string, value: any) => void;
 }
 
-function CreateActivityLocationSection({
+export default function CreateActivityLocationSection({
   activity,
+  activityIndex,
   handleChange,
-}: CreateActivityLocationSectionProps) {
+}: Props) {
   const [open, setOpen] = useState(false);
+  const nav = useNavigate();
 
   return (
-    <div className="bg-background w-full rounded-lg p-4 py-2 flex flex-col mt-3">
+    <div className="bg-background w-full rounded-lg p-4 flex flex-col mt-3">
       <div
-        className="w-full items-center justify-between flex cursor-pointer"
-        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between cursor-pointer"
+        onClick={() => setOpen((o) => !o)}
       >
-        <small className="">Add location</small>
+        <small className="text-white text-sm">Add location</small>
         <IoIosArrowDown
-          className={`transition-all ${open ? "rotate-180" : ""}`}
+          className={`transition-transform ${open ? "rotate-180" : ""}`}
         />
       </div>
+
       <Collapsible open={open}>
-        <div className="w-full py-2 flex flex-col gap-2">
+        <div className="py-2 flex flex-col gap-2">
           <PrimaryInput
-            placeholder="You can write your own custom location"
-            value={activity?.location}
+            placeholder="Or enter address manually"
+            value={activity.location}
             onChange={(e) => handleChange("location", e.target.value)}
           />
-          <button className="w-full flex items-center justify-center gap-1 py-2 text-black font-medium rounded-md bg-primary cursor-pointer">
-            <small>Go To Map</small>
+
+          <button
+            onClick={() => nav(`${Paths.createMap}?activity=${activityIndex}`)}
+            className="w-full flex items-center justify-center gap-1 py-2 bg-primary text-black font-medium rounded-md"
+          >
+            <small>Pick on Map</small>
             <MdMap />
           </button>
         </div>
@@ -43,5 +54,3 @@ function CreateActivityLocationSection({
     </div>
   );
 }
-
-export default CreateActivityLocationSection;

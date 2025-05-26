@@ -8,6 +8,7 @@ import NotificationPage from "../pages/NotificationPage";
 import ProfilePage from "../pages/ProfilePage";
 import CreateActivitiesPage from "../pages/CreateActivitiesPage";
 import CreateCategoryPage from "../pages/CreateCategoryPage";
+import CreateMapPage from "../pages/CreateMapPage";
 
 function AppRouter() {
   return (
@@ -25,6 +26,7 @@ function AppRouter() {
           <Route path={Paths.experience} Component={ExperiencePage} />
           <Route path={Paths.notification} Component={NotificationPage} />
           <Route path={Paths.profile} Component={ProfilePage} />
+          <Route path={Paths.createMap} element={<CreateMapPage />} />
         </Routes>
       </div>
     </Router>
