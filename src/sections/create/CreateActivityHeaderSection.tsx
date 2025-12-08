@@ -1,12 +1,4 @@
 // src/sections/create/CreateActivityHeaderSection.tsx
-interface SortableItemProps {
-  id: string;
-  index: number;
-  isActive: boolean;
-  setActivity: (i: number) => void;
-  onDelete: (i: number) => void;
-}
-
 import { useEffect } from "react";
 import {
   DndContext,
@@ -33,27 +25,54 @@ interface Props {
   setActivity: (i: number) => void;
 }
 
+interface SortableItemProps {
+  id: string;
+  index: number;
+  isActive: boolean;
+  setActivity: (i: number) => void;
+  onDelete: (i: number) => void;
+  activityObj: ActivityType;
+}
+
+function getActivityLabel(a: ActivityType, index: number) {
+  // Priority: customActivity > activityType > title > "Activity n"
+  const raw =
+    (a.customActivity?.trim() ||
+      a.activityType?.trim() ||
+      a.title?.trim() ||
+      `Activity ${index + 1}`) ??
+    `Activity ${index + 1}`;
+
+  // crop for small pills
+  const max = 18;
+  return raw.length > max ? raw.slice(0, max - 1) + "…" : raw;
+}
+
 function SortableItem({
   id,
   index,
   isActive,
   setActivity,
   onDelete,
+  activityObj,
 }: SortableItemProps) {
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id });
   const style = { transform: CSS.Transform.toString(transform), transition };
-  const label = `Activity ${index + 1}`;
+
+  const label = getActivityLabel(activityObj, index);
 
   return (
     <div
       ref={setNodeRef}
       style={style}
       onClick={() => setActivity(index)}
-      className={`pill relative flex items-center gap-1 px-2 py-1 rounded cursor-pointer
-        ${
-          isActive ? "bg-white text-black pr-5" : "bg-background200 text-white"
-        }`}
+      className={`relative flex items-center gap-1 px-3 py-1 rounded-lg cursor-pointer border ${
+        isActive
+          ? "bg-[var(--surface-2)] text-[var(--text)] border-[var(--brand)] pr-5"
+          : "bg-[var(--surface-2)] text-[var(--text)] border-[var(--border)]"
+      }`}
+      title={label}
     >
       <span {...attributes} {...listeners} className="p-1">
         <MdDragHandle size={16} />
@@ -66,6 +85,8 @@ function SortableItem({
             if (window.confirm("Delete this activity?")) onDelete(index);
           }}
           className="delete-btn absolute -top-3 -right-3"
+          aria-label="Delete activity"
+          title="Delete activity"
         >
           ×
         </button>
@@ -80,10 +101,11 @@ export default function CreateActivityHeaderSection({
   setActivities,
   setActivity,
 }: Props) {
-  // load/save to localStorage
+  // load/save to localStorage (back to working solution)
   useEffect(() => {
     const saved = localStorage.getItem("draftActivities");
     if (saved) setActivities(JSON.parse(saved));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     localStorage.setItem("draftActivities", JSON.stringify(activities));
@@ -113,7 +135,10 @@ export default function CreateActivityHeaderSection({
         locationDesc: "",
         tags: [],
         location: "",
-      },
+        images: [],
+        duration: "",
+        durationNotes: "",
+      } as ActivityType,
     ];
     setActivities(next);
     setActivity(next.length - 1);
@@ -132,7 +157,10 @@ export default function CreateActivityHeaderSection({
           locationDesc: "",
           tags: [],
           location: "",
-        },
+          images: [],
+          duration: "",
+          durationNotes: "",
+        } as ActivityType,
       ];
     }
     setActivities(next);
@@ -140,39 +168,48 @@ export default function CreateActivityHeaderSection({
   };
 
   return (
-    <div className="w-full flex flex-col gap-2">
-      <h4 className="text-sm font-medium text-white">Your Activities</h4>
-
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={activities.map((_, i) => i.toString())}
-          strategy={verticalListSortingStrategy}
-        >
-          <div className="flex flex-wrap gap-2">
-            {activities.map((_, i) => (
-              <SortableItem
-                key={i}
-                id={i.toString()}
-                index={i}
-                isActive={i === activity}
-                setActivity={setActivity}
-                onDelete={deleteActivity}
-              />
-            ))}
+    <div className="w-full flex flex-col pt-4">
+      <div className="w-full">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)]/30 px-3 py-3 flex flex-col gap-3">
+          {/* Page title inside the box */}
+          <div className="w-full">
+            <h2 className="text-base sm:text-lg font-semibold text-[var(--text)] text-center">
+              Your Activities
+            </h2>
+            <div className="border-b border-[var(--border)] mt-3" />
           </div>
-        </SortableContext>
-      </DndContext>
-
-      <button
-        onClick={addActivity}
-        className="mt-2 bg-primary200 text-black text-xs font-medium rounded-full px-4 py-2 inline-flex items-center gap-1"
-      >
-        <MdAdd size={16} /> Add Next Stop
-      </button>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={activities.map((_, i) => i.toString())}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="flex flex-wrap gap-2">
+                {activities.map((a, i) => (
+                  <SortableItem
+                    key={i}
+                    id={i.toString()}
+                    index={i}
+                    isActive={i === activity}
+                    setActivity={setActivity}
+                    onDelete={deleteActivity}
+                    activityObj={a}
+                  />
+                ))}
+                <button
+                  onClick={addActivity}
+                  className="inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-3 py-1 bg-[var(--button-primary-bg)] text-[var(--button-primary-text)] hover:opacity-90 active:scale-[0.99] transition border border-[var(--border)]"
+                >
+                  <MdAdd size={16} /> Add Next Stop
+                </button>
+              </div>
+            </SortableContext>
+          </DndContext>
+        </div>
+      </div>
     </div>
   );
 }

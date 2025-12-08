@@ -23,7 +23,7 @@ function CreateActivityCategoriesSection() {
   };
 
   return (
-    <div className="bg-background w-full rounded-lg p-4 py-2 flex flex-col mt-3">
+    <div className="bg-[var(--surface-2)] w-full rounded-lg p-4 py-2 flex flex-col mt-3">
       <div className="w-full items-center justify-between flex cursor-pointer">
         <small className="">Categories/Tags</small>
       </div>

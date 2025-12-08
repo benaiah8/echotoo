@@ -61,7 +61,7 @@ const PrimaryDatePicker = forwardRef<HTMLInputElement, PrimaryDatePickerProps>(
             error ? "border-tertiary" : "border-gray-700"
           }`}
         >
-          <div className="w-full flex items-center gap-2 text-white px-1">
+          <div className="w-full flex items-center gap-2 text-[var(--text)] px-1">
             <div className="flex-1">
               <small
                 className={`block text-xs text-pText transition-opacity duration-300 ${
@@ -70,7 +70,7 @@ const PrimaryDatePicker = forwardRef<HTMLInputElement, PrimaryDatePickerProps>(
               >
                 {label}
               </small>
-              <span className={date ? "text-white" : "text-pText"}>
+              <span className={date ? "text-[var(--text)]" : "text-pText"}>
                 {date ? `${moment(date).format("DD/MM/YYYY")}` : label}
                 {date && (
                   <small className="ml-1 text-sm text-pText">

@@ -24,10 +24,10 @@ function PrimarySelectable({
     >
       {selected ? (
         <div className="flex items-center gap-1">
-          <span className="text-white">
+          <span className="text-[var(--text)]">
             <MdCheck />
           </span>
-          <span className="font-medium text-white">{label}</span>
+          <span className="font-medium text-[var(--text)]">{label}</span>
         </div>
       ) : (
         <span className="font-medium">{label}</span>

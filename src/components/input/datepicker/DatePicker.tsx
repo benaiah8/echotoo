@@ -43,9 +43,15 @@ const DatePicker: React.FC<DatePickerProps> = ({
   maxDate,
   onSelectionDone,
 }) => {
-  const [currentMonth, setCurrentMonth] = useState<Moment>(
-    moment().startOf("month")
-  );
+  // Ensure calendar opens to current month by default
+  const [currentMonth, setCurrentMonth] = useState<Moment>(() => {
+    // If we're in range mode and have start date, use that month
+    // Otherwise use current month
+    if (range && externalStart) {
+      return moment(externalStart).startOf("month");
+    }
+    return moment().startOf("month");
+  });
   const nextMonth = moment(currentMonth).add(1, "month");
 
   const [selectedDate, setSelectedDate] = useState<string | null>(
@@ -65,6 +71,23 @@ const DatePicker: React.FC<DatePickerProps> = ({
     setRangeStart(externalStart || null);
     setRangeEnd(externalEnd || null);
   }, [externalStart, externalEnd]);
+
+  // Ensure calendar shows current month when no external dates are provided
+  useEffect(() => {
+    if (range) {
+      // In range mode, if no start date, show current month
+      if (!externalStart && !rangeStart) {
+        setCurrentMonth(moment().startOf("month"));
+      } else if (externalStart) {
+        setCurrentMonth(moment(externalStart).startOf("month"));
+      }
+    } else {
+      // In single date mode, if no date selected, show current month
+      if (!externalDate && !selectedDate) {
+        setCurrentMonth(moment().startOf("month"));
+      }
+    }
+  }, [range, externalStart, externalDate, rangeStart, selectedDate]);
 
   const getDaysInMonth = (month: Moment) =>
     Array.from({ length: month.daysInMonth() }, (_, i) => i + 1);
@@ -183,29 +206,64 @@ const DatePicker: React.FC<DatePickerProps> = ({
               return (
                 <button
                   key={day}
-                  className={`w-9 h-9 flex items-center justify-center rounded-sm flex-shrink-0 text-xs cursor-pointer transition-all
+                  className={`w-9 h-9 flex items-center justify-center rounded-sm flex-shrink-0 text-xs cursor-pointer transition-all relative
                     ${
                       isDisabledDate
-                        ? "!bg-gray-700 text-pText hover:!bg-gray-700 !cursor-not-allowed"
-                        : ""
+                        ? "!bg-gray-700 text-gray-500 hover:!bg-gray-700 !cursor-not-allowed"
+                        : "text-[var(--text)]"
                     }
-                    ${isSelected ? "bg-white text-black" : "text-white"}
-                    ${isToday ? "border border-white" : ""}
-                    ${isStart ? "bg-white " : ""}
-                    ${isEnd ? "bg-white " : ""}
-                    ${isInRange ? "bg-primaryLight" : ""}
-                    ${isHoveredInRange ? "bg-primaryLight" : ""}
+                    ${isSelected ? "" : ""}
+                    ${isToday ? (isSelected || isStart || isEnd ? "" : "") : ""}
+                    ${isStart ? "" : ""}
+                    ${isEnd ? "" : ""}
+                    ${isInRange ? "" : ""}
+                    ${isHoveredInRange ? "" : ""}
                     ${
                       !isHoveredInRange &&
                       !isInRange &&
                       !isEnd &&
                       !isStart &&
                       !isToday &&
-                      !isSelected
-                        ? "hover:bg-primaryLight"
+                      !isSelected &&
+                      !isDisabledDate
+                        ? "hover:bg-[var(--calendar-hover-bg)]"
                         : ""
                     }
                     `}
+                  style={{
+                    ...(isDisabledDate && {
+                      backgroundColor: "var(--surface-2)",
+                      color: "var(--muted)",
+                    }),
+                    ...(!isDisabledDate && {
+                      color: "var(--text)",
+                    }),
+                    ...(isToday &&
+                      !isSelected &&
+                      !isStart &&
+                      !isEnd &&
+                      !isDisabledDate && {
+                        backgroundColor: "var(--calendar-today-bg)",
+                        color: "var(--calendar-today-text)",
+                        border: "1px solid var(--calendar-today-border)",
+                        fontWeight: "bold",
+                      }),
+                    ...(isSelected &&
+                      !range && {
+                        backgroundColor: "var(--calendar-selected-bg)",
+                        color: "var(--calendar-selected-text)",
+                      }),
+                    ...(range &&
+                      (isStart || isEnd) &&
+                      !isDisabledDate && {
+                        backgroundColor: "var(--calendar-selected-bg)",
+                        color: "var(--calendar-selected-text)",
+                      }),
+                    ...((isInRange || isHoveredInRange) &&
+                      !isDisabledDate && {
+                        backgroundColor: "var(--calendar-range-bg)",
+                      }),
+                  }}
                   onClick={() => handleDateSelect(day, month)}
                   onMouseEnter={() => !isDisabledDate && setHoveredDate(date)}
                   onMouseLeave={() => !isDisabledDate && setHoveredDate(null)}
@@ -222,7 +280,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
   };
 
   return (
-    <div className="bg-background shadow-sm rounded-lg flex flex-col lg:flex-row gap-2 text-white">
+    <div className="bg-[var(--surface-2)] shadow-sm rounded-lg flex flex-col lg:flex-row gap-2 text-[var(--text)]">
       {renderMonth(currentMonth)}
       {dualMonth && renderMonth(nextMonth, true)}
     </div>

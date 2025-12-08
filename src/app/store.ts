@@ -6,6 +6,7 @@ import {
 } from "@reduxjs/toolkit";
 import userReducer from "../reducers/userReducer";
 import modalReducer from "../reducers/modalReducer";
+import authReducer from "../reducers/authReducer";
 import {
   createStateSyncMiddleware,
   initMessageListener,
@@ -19,6 +20,7 @@ export const store = configureStore({
   reducer: {
     user: userReducer,
     modal: modalReducer,
+    auth: authReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(syncMiddleware),

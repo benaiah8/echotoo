@@ -2,63 +2,235 @@
 
 @import "tailwindcss";
 
-@theme {
-  --color-primary: #edbd00;
-  --color-primaryText: #033c40;
-  --color-primary200: #fff0bf;
-  --color-primaryLight: #e5f2eb;
-  --color-secondary: #033c40;
-  --color-tertiary: #8d1514;
-  --color-tertiaryLight: #fbeae9;
-  --color-background: #2d2d35;
-  --color-background200: #1e1f24;
-  --color-backgroundLight: #7d7d7d;
-  --color-outline: #dee0e4;
-  --color-pText: #7b7c80;
-  --color-image: #d9d9d9;
-  --color-purple: #4448a0;
-  --color-purpleLight: #ededf6;
-  --color-blue: #1877f2;
-  --color-blueLight: #f6f9fc;
-  --color-outline: #dee0e4;
-}
-
 :root {
   font-family: "Poppins", sans-serif;
   font-weight: 400;
-
   color-scheme: light dark;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Theme variables */
+  --bg: #0b0b0c;
+  --surface: #151516;
+  --surface-2: #1b1c1e;
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.7);
+  --border: rgba(255, 255, 255, 0.16);
+  --border-contrast: rgba(
+    255,
+    255,
+    255,
+    1
+  ); /* High contrast border for logos */
+  --ring: rgba(255, 255, 255, 0.28);
+  --brand: #f7d047;
+  --brand-dark: #d4a03e; /* Darker yellow for better text contrast */
+  --green-bg: rgba(34, 197, 94, 0.15); /* Green background with transparency */
+  --green-text: rgb(34, 197, 94); /* Dark green text */
+  --green-border: rgba(34, 197, 94, 0.3); /* Green border */
+  --blue-bg: rgba(59, 130, 246, 0.15); /* Blue background with transparency */
+  --blue-text: rgb(59, 130, 246); /* Blue text */
+  --blue-border: rgba(59, 130, 246, 0.3); /* Blue border */
+  --rail-bg: #1a1b1e; /* Creamy background for horizontal rail */
+  --rsvp-active-bg: #ffffff; /* RSVP button active background (dark mode) */
+  --rsvp-active-text: #000000; /* RSVP button active text (dark mode) */
+  --rsvp-active-border: #ffffff; /* RSVP button active border (dark mode) */
+  --calendar-today-bg: rgba(
+    247,
+    208,
+    71,
+    0.15
+  ); /* Very subtle today's date background */
+  --calendar-today-text: var(--text); /* Today's date text */
+  --calendar-today-border: transparent; /* No border for today */
+  --calendar-selected-bg: #ffffff; /* Selected date background */
+  --calendar-selected-text: #000000; /* Selected date text */
+  --calendar-range-bg: rgba(247, 208, 71, 0.15); /* Range background */
+  --calendar-hover-bg: rgba(255, 255, 255, 0.1); /* Hover background */
+  --danger: #ff5b5b;
+  --brand-ink: #0b0b0b;
+  --button-primary-bg: #ffffff;
+  --button-primary-text: #000000;
+  --toggle-bg: rgba(255, 255, 255, 0.2);
+  --toggle-bg-active: rgba(255, 255, 255, 0.9);
+  --toggle-thumb: var(--surface);
+  --date-highlight-bg: rgba(
+    247,
+    208,
+    71,
+    0.15
+  ); /* Light yellow background for special dates */
+  --date-highlight-text: var(--text); /* Text color for highlighted dates */
+  --gutter: 14px;
 }
 
+.theme-light {
+  --bg: #ffffff;
+  --surface: #f2f3f6;
+  --surface-2: #e8eaef;
+  --text: #0b0b0c;
+  --muted: rgba(0, 0, 0, 0.7);
+  --border: rgba(0, 0, 0, 0.2);
+  --border-contrast: rgba(0, 0, 0, 1); /* High contrast border for logos */
+  --ring: rgba(0, 0, 0, 0.28);
+  --brand: #f7d047;
+  --brand-dark: #d4a03e; /* Darker yellow for better text contrast */
+  --green-bg: rgba(
+    21,
+    128,
+    61,
+    0.15
+  ); /* Darker green background for light mode */
+  --green-text: rgb(21, 128, 61); /* Darker green text for light mode */
+  --green-border: rgba(
+    21,
+    128,
+    61,
+    0.4
+  ); /* Darker green border for light mode */
+  --blue-bg: rgba(
+    37,
+    99,
+    235,
+    0.15
+  ); /* Darker blue background for light mode */
+  --blue-text: rgb(37, 99, 235); /* Darker blue text for light mode */
+  --blue-border: rgba(37, 99, 235, 0.4); /* Darker blue border for light mode */
+  --rail-bg: #f8f9fc; /* Creamy background for horizontal rail in light mode */
+  --rsvp-active-bg: #000000; /* RSVP button active background (light mode) */
+  --rsvp-active-text: #ffffff; /* RSVP button active text (light mode) */
+  --rsvp-active-border: #000000; /* RSVP button active border (light mode) */
+  --calendar-today-bg: rgba(
+    247,
+    208,
+    71,
+    0.2
+  ); /* Very subtle today's date background for light mode */
+  --calendar-today-text: var(--text); /* Today's date text */
+  --calendar-today-border: transparent; /* No border for today */
+  --calendar-selected-bg: #000000; /* Selected date background */
+  --calendar-selected-text: #ffffff; /* Selected date text */
+  --calendar-range-bg: rgba(247, 208, 71, 0.2); /* Range background */
+  --calendar-hover-bg: rgba(0, 0, 0, 0.1); /* Hover background */
+  --button-primary-bg: #1a1a1a;
+  --button-primary-text: #ffffff;
+  --toggle-bg: rgba(0, 0, 0, 0.2);
+  --toggle-bg-active: #000000;
+  --toggle-thumb: #ffffff;
+  --date-highlight-bg: rgba(
+    247,
+    208,
+    71,
+    0.2
+  ); /* Slightly more opaque yellow for light mode */
+  --date-highlight-text: var(--text); /* Text color for highlighted dates */
+}
+
+html,
+body,
+#root {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Basic utility classes */
+.app-container {
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+.page-content {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.page-content-wide {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.ui-surface {
+  background: var(--surface);
+}
+
+.ui-surface-2 {
+  background: var(--surface-2);
+}
+
+.ui-border {
+  border: 1px solid var(--border);
+}
+
+.ui-text {
+  color: var(--text);
+}
+
+.ui-muted {
+  color: var(--muted);
+}
+
+/* Form elements */
 textarea {
   resize: none;
 }
-textarea:focus {
-  outline: none;
-}
 
+textarea:focus,
 input:focus {
   outline: none;
 }
 
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 0;
-  height: 0;
+/* Scroll utilities */
+.scroll-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-input[type="range"]::-moz-range-thumb {
-  width: 0;
-  height: 0;
+.scroll-hide::-webkit-scrollbar {
+  display: none;
 }
 
-input[type="range"]::-ms-thumb {
-  width: 0;
-  height: 0;
+/* Card utilities */
+.ui-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+/* Logo utilities */
+.logo-pill {
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  border-radius: 12px;
+}
+
+.logo-tint-black img,
+.logo-tint-black svg {
+  filter: brightness(0);
+}
+
+/* Animation */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
 }

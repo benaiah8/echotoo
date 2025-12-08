@@ -12,12 +12,12 @@ function ProfileHangoutSection() {
     <div className="w-full flex gap-3 scroll-hide overflow-scroll mt-3">
       {[...Array(10)].map((_, index) => (
         <button className="w-36 pb-2 relative" key={index}>
-          <div className="w-36 h-34 rounded-xl bg-background p-2 flex flex-col flex-1">
+          <div className="w-36 h-34 rounded-xl bg-[var(--surface-2)] p-2 flex flex-col flex-1">
             <div className="flex w-full flex-wrap gap-1">
               {items.map((item, itemIndex) => (
                 <div
                   key={itemIndex}
-                  className="flex items-center gap-2 bg-background200 py-1 px-2 rounded-md"
+                  className="flex items-center gap-2 bg-[var(--surface-2)]200 py-1 px-2 rounded-md"
                 >
                   <small className="!text-[8px] font-normal">
                     {item.label}
@@ -31,7 +31,7 @@ function ProfileHangoutSection() {
             </small>
             <div className="flex flex-1"></div>
             <div className="flex w-full justify-end">
-              <div className="text-xs px-2 py-1 rounded-md bg-background200 text-white">
+              <div className="text-xs px-2 py-1 rounded-md bg-[var(--surface-2)]200 text-[var(--text)]">
                 <FaGlassCheers />
               </div>
             </div>

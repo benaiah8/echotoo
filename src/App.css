@@ -84,56 +84,335 @@
 /* -------- react-day-picker full dark/grayscale theme -------- */
 .rdp-theme {
   /* your dark palette */
-  --rdp-background-color: #1f1f29 !important;
-  --rdp-text-color: #ececec !important;
+  --rdp-background-color: var(--bg) !important;
+  --rdp-text-color: var(--text) !important;
   /* make selected days gray, not yellow */
-  --rdp-accent-color: #ececec !important;
+  --rdp-accent-color: var(--text) !important;
 }
 
 /* ensure the container itself is dark */
 .rdp-theme,
 .rdp-theme .rdp-nav,
 .rdp-theme .rdp-caption {
-  background-color: var(--rdp-background-color) !important;
-  color: var(--rdp-text-color) !important;
+  background-color: var(--bg) !important;
+  color: var(--text) !important;
 }
 
 /* calendar days */
 .rdp-theme .rdp-day {
   background-color: transparent !important;
-  color: var(--rdp-text-color) !important;
+  color: var(--text) !important;
 }
-/* selected days */
-.rdp-theme .rdp-day_selected {
-  background-color: var(--rdp-accent-color) !important;
-  color: var(--rdp-background-color) !important;
+/* Remove ALL circular styling and force rectangular selection */
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day[aria-selected="true"],
+.rdp .rdp-day_selected,
+.rdp .rdp-day[aria-selected="true"],
+.rdp-theme button.rdp-day_selected,
+.rdp button.rdp-day_selected {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: 1px solid var(--brand) !important;
+  border-radius: 4px !important;
+  position: relative !important;
+  font-weight: 500 !important;
+  /* Remove any circular styling from default react-day-picker */
+  box-shadow: none !important;
+  outline: none !important;
+  /* Override any white borders that might be causing the circular appearance */
+  border-color: var(--brand) !important;
+  /* Remove any focus or active states that might add white borders */
 }
-/* keep “today” outline in gray too */
-.rdp-theme .rdp-day_today {
-  outline-color: var(--rdp-accent-color) !important;
+
+/* Additional override for any nested elements or pseudo-elements */
+.rdp-theme .rdp-day_selected *,
+.rdp-theme button.rdp-day_selected *,
+.rdp button.rdp-day_selected * {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Handle focus and active states that might add white borders */
+.rdp-theme .rdp-day_selected:focus,
+.rdp-theme .rdp-day_selected:focus-visible,
+.rdp-theme .rdp-day_selected:active,
+.rdp-theme button.rdp-day_selected:focus,
+.rdp-theme button.rdp-day_selected:focus-visible,
+.rdp-theme button.rdp-day_selected:active {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: 1px solid var(--brand) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Override any potential ring or outline styles */
+.rdp-theme .rdp-day_selected:focus-visible,
+.rdp-theme button.rdp-day_selected:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+  ring: none !important;
+  ring-width: 0 !important;
+}
+
+/* Final comprehensive override for white circular borders - NO BORDERS on background */
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day_selected.rdp-button,
+.rdp-theme .rdp-button.rdp-day_selected,
+.rdp-theme .range-start,
+.rdp-theme .range-end,
+.rdp-theme .range-middle,
+.rdp-theme .single-only,
+.rdp .rdp-day_selected,
+.rdp .rdp-button.rdp-day_selected {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: none !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Remove any focus rings that might appear white */
+.rdp-theme .rdp-day_selected:focus,
+.rdp-theme .rdp-day_selected:focus-visible,
+.rdp-theme .rdp-button.rdp-day_selected:focus,
+.rdp-theme .rdp-button.rdp-day_selected:focus-visible {
+  box-shadow: none !important;
+  outline: none !important;
+  border-color: var(--brand) !important;
+}
+
+/* Target any potential pseudo-elements or inner elements that might have white circular borders */
+.rdp-theme .rdp-day_selected::before,
+.rdp-theme .rdp-day_selected::after,
+.rdp-theme .rdp-day_selected *,
+.rdp-theme .rdp-button.rdp-day_selected::before,
+.rdp-theme .rdp-button.rdp-day_selected::after,
+.rdp-theme .rdp-button.rdp-day_selected *,
+.rdp-theme .rdp-day_selected span,
+.rdp-theme .rdp-button.rdp-day_selected span {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: inherit !important;
+  border-radius: 0 !important;
+}
+
+/* Specific targeting for any circular styling that might be on the text content */
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-button.rdp-day_selected {
+  position: relative !important;
+}
+
+.rdp-theme .rdp-day_selected::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Override any default react-day-picker circular styling */
+.rdp-theme [data-selected="true"],
+.rdp-theme [aria-selected="true"] {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: 1px solid var(--brand) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+.rdp-theme [data-selected="true"] *,
+.rdp-theme [aria-selected="true"] * {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Nuclear option: target any potential white borders with high specificity - NO BORDERS */
+.rdp-theme button.rdp-day_selected,
+.rdp-theme .rdp-day_selected button,
+.rdp-theme [role="gridcell"] button[aria-selected="true"],
+.rdp button[aria-selected="true"] {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: none !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  outline: none !important;
+  position: relative !important;
+}
+
+/* Target any nested elements that might have borders */
+.rdp-theme button.rdp-day_selected *,
+.rdp-theme .rdp-day_selected button *,
+.rdp-theme [role="gridcell"] button[aria-selected="true"] * {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+
+/* Remove any potential ::before or ::after pseudo-elements that might be creating white circles */
+.rdp-theme .rdp-day_selected::before,
+.rdp-theme .rdp-day_selected::after,
+.rdp-theme button.rdp-day_selected::before,
+.rdp-theme button.rdp-day_selected::after {
+  display: none !important;
+  content: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Additional comprehensive targeting for any text elements or spans that might have white borders */
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day_selected > *,
+.rdp-theme .rdp-day_selected span,
+.rdp-theme .rdp-day_selected div,
+.rdp-theme button.rdp-day_selected,
+.rdp-theme button.rdp-day_selected > *,
+.rdp-theme button.rdp-day_selected span,
+.rdp-theme button.rdp-day_selected div {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+/* Ensure no white borders on any calendar day elements */
+.rdp-theme .rdp-day,
+.rdp-theme .rdp-day button,
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day_selected button {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Override any potential white borders from react-day-picker defaults */
+.rdp-theme [role="gridcell"] button,
+.rdp-theme [role="gridcell"] button:focus,
+.rdp-theme [role="gridcell"] button:active,
+.rdp-theme [role="gridcell"] button[aria-selected="true"] {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Final nuclear option - target any element that might have white circular styling */
+.rdp-theme * {
+  /* Remove any potential white circular borders from any nested elements */
+}
+
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day_selected *,
+.rdp-theme button[aria-selected="true"],
+.rdp-theme button[aria-selected="true"] * {
+  /* Ensure absolutely no white borders anywhere */
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-image: none !important;
+}
+
+/* Target the button element specifically to remove white circular borders - NO BORDERS */
+.rdp-theme .rdp-day_selected.rdp-button,
+.rdp-theme button.rdp-day_selected,
+.rdp button.rdp-day_selected {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border: none !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+/* Override any circular border styling that might be applied by default */
+.rdp-theme .rdp-day_selected::before,
+.rdp-theme .rdp-day_selected::after,
+.rdp .rdp-day_selected::before,
+.rdp .rdp-day_selected::after {
+  display: none !important;
+}
+
+/* Force rectangular styling on all selected days - override any circular styling */
+.rdp-theme .rdp-day_selected,
+.rdp-theme .rdp-day[aria-selected="true"],
+.rdp-theme .rdp-button[aria-selected="true"],
+.rdp .rdp-day_selected,
+.rdp .rdp-day[aria-selected="true"],
+.rdp .rdp-button[aria-selected="true"] {
+  border-radius: 4px !important;
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+}
+
+/* Range pieces using custom class names from modifiersClassNames */
+.rdp-theme .range-start {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+
+.rdp-theme .range-end {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+
+.rdp-theme .range-middle {
+  background-color: var(--calendar-range-bg) !important;
+  color: var(--text) !important;
+  border-radius: 0 !important;
+  font-weight: 500 !important;
+}
+
+.rdp-theme .single-only {
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+}
+/* today's date - very subtle highlighting */
+.rdp-theme .rdp-day_today,
+.rdp-theme .rdp-day[data-today="true"],
+.rdp .rdp-day_today,
+.rdp .rdp-day[data-today="true"] {
+  background-color: var(--calendar-today-bg) !important;
+  color: var(--calendar-today-text) !important;
+  border: none !important;
+  border-radius: 6px !important;
+  font-weight: normal !important;
 }
 
 /* navigation buttons (prev/next arrows) */
 .rdp-theme .rdp-nav_button {
-  color: var(--rdp-text-color) !important;
+  color: var(--text) !important;
 }
 /* override the SVG path fill/stroke */
 .rdp-theme .rdp-nav_button svg path {
-  stroke: var(--rdp-text-color) !important;
-  fill: var(--rdp-text-color) !important;
+  stroke: var(--text) !important;
+  fill: var(--text) !important;
 }
 
 /* button backgrounds (if any) */
 .rdp-theme .rdp-button {
   background: transparent !important;
-  color: var(--rdp-text-color) !important;
+  color: var(--text) !important;
 }
 
 /* Make the calendar wrapper match the card background */
 .rdp-theme {
-  background-color: var(--rdp-background-color) !important;
+  background-color: var(--bg) !important;
   padding: 0.5rem; /* optional: give it the same padding as the card */
-  border-radius: 0.5rem; /* match your container’s rounding */
+  border-radius: 0.5rem; /* match your container's rounding */
 }
 /* ✅ Force the calendar grid to fill its wrapper */
 .rdp-theme {

@@ -38,10 +38,10 @@ const ActivityImagesModal = ({ isOpen, onClose }: LoginModalProps) => {
       isOpen={isOpen}
       onClose={onClose}
       modalType="center"
-      centerModalOverrideClassname="!bg-black/20"
+      centerModalOverrideClassname="!bg-[var(--surface)]/20"
     >
       <div className="flex flex-col h-screen w-full overflow-scroll scroll-hide relative p-4 px-2">
-        <div className="w-full flex justify-end text-white mb-2">
+        <div className="w-full flex justify-end text-[var(--text)] mb-2">
           <button className="" onClick={() => onClose()}>
             {" "}
             <MdClose />{" "}
@@ -67,13 +67,13 @@ const ActivityImagesModal = ({ isOpen, onClose }: LoginModalProps) => {
         <div className="w-full flex items-center justify-between mb-6">
           <button
             onClick={prevImage}
-            className=" bg-black text-white p-2 rounded-full z-10"
+            className=" bg-[var(--surface)] text-[var(--text)] p-2 rounded-full z-10"
           >
             <MdArrowBack size={24} />
           </button>
           <button
             onClick={nextImage}
-            className=" bg-black text-white p-2 rounded-full z-10"
+            className=" bg-[var(--surface)] text-[var(--text)] p-2 rounded-full z-10"
           >
             <MdArrowForward size={24} />
           </button>

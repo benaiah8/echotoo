@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.vercel
+.env
+
+# Capacitor
+ios/
+android/
+.capacitor/

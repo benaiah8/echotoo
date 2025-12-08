@@ -52,7 +52,11 @@ const Modal = ({
         modalType === "center"
           ? "items-center justify-center"
           : "justify-end items-stretch"
-      } ${isVisible ? "bg-black/50 opacity-100" : "bg-black/0 opacity-0"}`}
+      } ${
+        isVisible
+          ? "bg-[var(--surface)]/50 opacity-100"
+          : "bg-[var(--surface)]/0 opacity-0"
+      }`}
     >
       {modalType === "center" ? (
         <div

@@ -1,39 +1,84 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { RRule } from "rrule";
 
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import PrimaryInput from "../components/input/PrimaryInput";
 import PrimaryToggle from "../components/input/PrimaryToggle";
 import CreateTabsSection from "../sections/create/CreateTabsSection";
 import CalendarModal from "../components/CalendarModal";
+import DurationSelect from "../components/DurationSelect";
 import { Paths } from "../router/Paths";
 
-const WEEKDAYS = ["MO","TU","WE","TH","FR","SA","SU"];
-const WEEKDAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+type DraftMeta = {
+  caption?: string;
+  duration?: string;
+  durationNotes?: string;
+  isRecurring?: boolean;
+  selectedDates?: string[]; // ISO strings
+  anonymous?: boolean;
+};
 
 export default function CreateTitlePage() {
   const navigate = useNavigate();
   const [q] = useSearchParams();
-  const postType = q.get("type") || "journey";
+  const postType = q.get("type") || "experience";
 
-  // form state
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [details, setDetails] = useState("");
-  const [anonymous, setAnonymous] = useState(false);
-  const [errors, setErrors] = useState<{ title?: string; details?: string }>({});
+  // hydrate from localStorage (support older "title/description" too)
+  const [caption, setCaption] = useState(() => {
+    try {
+      const raw = localStorage.getItem("draftMeta");
+      if (!raw) return "";
+      const meta = JSON.parse(raw);
+      return meta.caption ?? meta.title ?? meta.description ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [duration, setDuration] = useState(() => {
+    try {
+      const raw = localStorage.getItem("draftMeta");
+      return raw ? JSON.parse(raw).duration ?? "" : "";
+    } catch {
+      return "";
+    }
+  });
+  const [durationNotes, setDurationNotes] = useState(() => {
+    try {
+      const raw = localStorage.getItem("draftMeta");
+      return raw ? JSON.parse(raw).durationNotes ?? "" : "";
+    } catch {
+      return "";
+    }
+  });
 
-  // calendar & recurrence
   const [showCal, setShowCal] = useState(false);
-  const [selectedDates, setSelectedDates] = useState<Date[]>([]);
+  const [selectedDates, setSelectedDates] = useState<Date[]>([
+    new Date(), // preselect "today"
+  ]);
   const [isRecurring, setIsRecurring] = useState(false);
-  const [recurrenceDays, setRecurrenceDays] = useState<string[]>([]);
+  const [anonymous, setAnonymous] = useState(() => {
+    try {
+      const raw = localStorage.getItem("draftMeta");
+      return raw ? Boolean(JSON.parse(raw).anonymous) : false;
+    } catch {
+      return false;
+    }
+  });
 
-  const toggleRecurrenceDay = (d: string) =>
-    setRecurrenceDays(prev =>
-      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]
-    );
+  // persist as-you-type
+  useEffect(() => {
+    const payload: DraftMeta = {
+      caption,
+      duration,
+      durationNotes,
+      isRecurring,
+      selectedDates: selectedDates.map((d) => d.toISOString()),
+      anonymous,
+    };
+    try {
+      localStorage.setItem("draftMeta", JSON.stringify(payload));
+    } catch {}
+  }, [caption, duration, durationNotes, isRecurring, selectedDates, anonymous]);
 
   // wizard URLs
   const base = `?type=${postType}`;
@@ -44,53 +89,8 @@ export default function CreateTitlePage() {
     `${Paths.preview}${base}`,
   ];
 
-  // step-1 validation
-  const handleNext = () => {
-    const errs: typeof errors = {};
-    if (!title.trim()) errs.title = "Title is required.";
-    if (!details.trim()) errs.details = "Details are required.";
-    setErrors(errs);
-    if (!Object.keys(errs).length) navigate(paths[1]);
-  };
-
-  // summary renderer
-  // inside CreateTitlePage component, replace renderSummary() with:
-const renderSummary = () => {
-  const pills: JSX.Element[] = [];
-
-  // Recurring pill (one only)
-  if (isRecurring && recurrenceDays.length) {
-    const names = recurrenceDays
-      .map(d => WEEKDAY_NAMES[WEEKDAYS.indexOf(d)])
-      .join(", ");
-    pills.push(
-      <span
-        key="recurring"
-        className="text-xs bg-white text-black rounded-full px-2 py-1"
-      >
-        Every {names}
-      </span>
-    );
-  }
-
-  // Specific date pills
-  selectedDates.forEach(dt =>
-    pills.push(
-      <span
-        key={dt.toISOString()}
-        className="text-xs bg-background200 text-white rounded-full px-2 py-1"
-      >
-        {dt.toLocaleDateString()}
-      </span>
-    )
-  );
-
-  if (!pills.length) {
-    return <span className="text-xs text-white/70">Select date(s)</span>;
-  }
-  return <div className="flex flex-wrap gap-2">{pills}</div>;
-};
-
+  // let users continue even if blank (you asked to remove "required" gating)
+  const handleNext = () => navigate(paths[1]);
 
   return (
     <PrimaryPageContainer back>
@@ -99,71 +99,63 @@ const renderSummary = () => {
         selectedDates={selectedDates}
         onSelectDates={setSelectedDates}
         isRecurring={isRecurring}
-        recurrenceDays={recurrenceDays}
-        onToggleRecurrenceDay={toggleRecurrenceDay}
+        recurrenceDays={[]} // not used now
+        onToggleRecurrenceDay={() => {}}
         onClose={() => setShowCal(false)}
       />
 
       <div className="flex flex-1 flex-col items-center justify-start w-full px-4 pt-8 pb-4">
-        {/* Title & Description */}
-        <div className="w-full bg-background p-4 rounded-md flex flex-col gap-4">
-          <div className={`p-1 ${errors.title ? "border border-red-500 rounded animate-shake" : ""}`}>
-            <PrimaryInput
-              label="Title"
-              value={title}
-              placeholder="This is the first thing other owls see"
-              onChange={e => setTitle(e.target.value)}
-            />
-            {errors.title && <p className="text-red-500 text-xs mt-1">{errors.title}</p>}
-          </div>
+        {/* Caption */}
+        <div className="w-full bg-[var(--surface-2)] p-4 rounded-md flex flex-col gap-4">
           <PrimaryInput
-            label="Description"
-            textarea
-            rows={1}
-            value={description}
-            placeholder="Optional – let people know what to expect"
-            onChange={e => setDescription(e.target.value)}
+            label="Caption"
+            value={caption}
+            placeholder="Say what this experience is about..."
+            onChange={(e) => setCaption(e.target.value)}
           />
         </div>
 
-        {/* Recurrence toggle */}
-        <div className="w-full mt-4 flex items-center gap-2">
-          <span className="text-xs text-white">Repeat weekly?</span>
-          <PrimaryToggle value={isRecurring} onChange={setIsRecurring} />
+        {/* Duration + Other notes */}
+        <div className="w-full mt-4 bg-[var(--surface-2)] p-4 rounded-md flex flex-col gap-4">
+          <DurationSelect value={duration} onChange={setDuration} />
+
+          <PrimaryInput
+            label="Other details (optional)"
+            textarea
+            rows={1}
+            value={durationNotes}
+            placeholder="e.g., meet-up window, breaks, flex timing"
+            onChange={(e) => setDurationNotes(e.target.value)}
+          />
         </div>
 
-        {/* Date summary & Details */}
-        <div className="w-full mt-4 bg-background p-4 rounded-md flex flex-col gap-4">
+        {/* Date + Recurrence */}
+        <div className="w-full mt-4 bg-[var(--surface-2)] p-4 rounded-md flex flex-col gap-4">
           <div
-            className="cursor-pointer bg-background200 rounded px-3 py-2 w-full"
+            className="cursor-pointer bg-[var(--surface-2)]200 rounded px-3 py-2 w-full text-[var(--text)]/80 text-sm"
             onClick={() => setShowCal(true)}
           >
-            {renderSummary()}
+            {selectedDates.length
+              ? selectedDates.map((d) => d.toLocaleDateString()).join(", ")
+              : "Select date(s)"}
           </div>
-          <div className={`p-1 ${errors.details ? "border border-red-500 rounded animate-shake" : ""}`}>
-            <PrimaryInput
-              label="Details"
-              textarea
-              rows={1}
-              value={details}
-              placeholder="Duration or extra info (required)"
-              onChange={e => setDetails(e.target.value)}
-            />
-            {errors.details && <p className="text-red-500 text-xs mt-1">{errors.details}</p>}
+
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-[var(--text)]">Repeat weekly?</span>
+            <PrimaryToggle value={isRecurring} onChange={setIsRecurring} />
           </div>
         </div>
 
         {/* Anonymous */}
-        <div className="w-full mt-4 bg-background p-4 rounded-md">
+        <div className="w-full mt-4 bg-[var(--surface-2)] p-4 rounded-md">
           <div className="flex justify-between items-center">
-            <span className="text-xs text-white">Post anonymously</span>
+            <span className="text-xs text-[var(--text)]">Post anonymously</span>
             <PrimaryToggle value={anonymous} onChange={setAnonymous} />
           </div>
         </div>
 
         <div className="flex-1" />
 
-        {/* Stepper */}
         <CreateTabsSection step={1} paths={paths} onNext={handleNext} />
       </div>
     </PrimaryPageContainer>

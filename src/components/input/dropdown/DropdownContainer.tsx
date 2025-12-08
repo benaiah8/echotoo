@@ -96,7 +96,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
         ReactDOM.createPortal(
           <div
             ref={dropdownRef}
-            className={`absolute bg-background border text-black border-gray-700 shadow-md rounded-md overflow-auto scroll-hide z-[9999] ${maxHeight} ${dropdownClassName}`}
+            className={`absolute bg-[var(--surface-2)] border text-black border-gray-700 shadow-md rounded-md overflow-auto scroll-hide z-[9999] ${maxHeight} ${dropdownClassName}`}
             style={{
               top: dropdownPosition.top + 6,
               left: left ? dropdownPosition.left : undefined,

@@ -66,7 +66,7 @@ const ActivitiesDropdown: React.FC<Props> = ({
       left
       parentToggle={handleParentToggle}
       dropdown={(closeDropdown) => (
-        <div className="flex flex-col w-fit max-w-[300px] text-white">
+        <div className="flex flex-col w-fit max-w-[300px] text-[var(--text)]">
           {showSearch && (
             <input
               ref={searchInputRef}
@@ -105,7 +105,7 @@ const ActivitiesDropdown: React.FC<Props> = ({
     >
       <div className="flex items-center justify-between gap-2 px-3 h-10 rounded-md border border-gray-400 w-full">
         <div className="flex flex-col flex-1 items-start transition-all duration-500 justify-center">
-          <small className={value ? "text-white" : "text-gray-400"}>
+          <small className={value ? "text-[var(--text)]" : "text-gray-400"}>
             {value ? `${selected ? selected.label : label}` : label}{" "}
           </small>
         </div>

@@ -19,7 +19,7 @@ function CreateCategoriesSelectionSection({
   const [open, setOpen] = useState(index === 0);
 
   return (
-    <div className="bg-background200 w-full rounded-lg p-4 py-2 flex flex-col mt-3">
+    <div className="bg-[var(--surface-2)]200 w-full rounded-lg p-4 py-2 flex flex-col mt-3">
       <div
         className="w-full items-center justify-between flex cursor-pointer"
         onClick={() => setOpen(!open)}

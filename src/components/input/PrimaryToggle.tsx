@@ -10,14 +10,17 @@ const PrimaryToggle: React.FC<PrimaryToggleProps> = ({ value, onChange }) => {
   return (
     <div
       onClick={() => onChange(!value)}
-      className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors ${
-        value ? "bg-white/90" : "bg-white/20"
-      }`}
+      className="w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors"
+      style={{
+        backgroundColor: value ? "var(--toggle-bg-active)" : "var(--toggle-bg)",
+      }}
     >
       <div
-        className={`w-4 h-4 bg-black rounded-full shadow-md transform transition-transform ${
-          value ? "translate-x-4" : "translate-x-0"
-        }`}
+        className="w-4 h-4 rounded-full shadow-md transform transition-transform"
+        style={{
+          backgroundColor: "var(--toggle-thumb)",
+          transform: value ? "translateX(16px)" : "translateX(0px)",
+        }}
       />
     </div>
   );

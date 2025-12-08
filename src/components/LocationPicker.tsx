@@ -10,6 +10,8 @@ import {
 import type { LatLngExpression, LeafletMouseEvent } from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+const ClickHandler: React.FC = () => null;
+
 interface Suggestion {
   display_name: string;
   lat: string;

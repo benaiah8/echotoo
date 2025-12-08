@@ -1,0 +1,385 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700;800;900&display=swap");
+
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #edbd00;
+  --color-primaryText: #033c40;
+  --color-primary200: #fff0bf;
+  --color-primaryLight: #e5f2eb;
+  --color-secondary: #033c40;
+  --color-tertiary: #8d1514;
+  --color-tertiaryLight: #fbeae9;
+  --color-background: #2d2d35;
+  --color-background200: #1e1f24;
+  --color-backgroundLight: #7d7d7d;
+  --color-outline: #dee0e4;
+  --color-pText: #7b7c80;
+  --color-image: #d9d9d9;
+  --color-purple: #4448a0;
+  --color-purpleLight: #ededf6;
+  --color-blue: #1877f2;
+  --color-blueLight: #f6f9fc;
+  --color-outline: #dee0e4;
+}
+
+:root {
+  font-family: "Poppins", sans-serif;
+  font-weight: 400;
+
+  color-scheme: light dark;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+textarea {
+  resize: none;
+}
+textarea:focus {
+  outline: none;
+}
+
+input:focus {
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 0;
+  height: 0;
+}
+
+input[type="range"]::-ms-thumb {
+  width: 0;
+  height: 0;
+}
+:root {
+  --gutter: 14px; /* << change this once to move everything in/out */
+}
+
+/* single-column max width centered with shared left/right padding */
+.app-container {
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* rail padding for full-bleed sections that still need side padding for text */
+.rail-pad {
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* let media (images/carousels) go edge-to-edge inside a padded column */
+.inset-media {
+  margin-left: calc(var(--gutter) * -1);
+  margin-right: calc(var(--gutter) * -1);
+}
+.scroll-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.scroll-hide::-webkit-scrollbar {
+  /* Chrome/Safari */
+  display: none;
+}
+
+/* -- carousel helpers (global) -- */
+.scroll-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scroll-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* make flex slides never shrink (belt-and-suspenders) */
+.no-shrink > * {
+  flex-shrink: 0;
+}
+
+/* --- Hard-lock a horizontal carousel row --- */
+.carousel-row {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.carousel-slide {
+  flex: 0 0 100% !important; /* each slide = full width */
+  scroll-snap-align: start;
+}
+/* Full-bleed helper: lets children escape the app-container gutters */
+.full-bleed {
+  margin-left: calc(var(--gutter) * -1);
+  margin-right: calc(var(--gutter) * -1);
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+
+/* ===== Theming (light/dark with CSS variables) ===== */
+/* ===== Theming (light/dark with CSS variables) ===== */
+:root {
+  --bg: #0b0b0c;
+  --surface: #151516;
+  --surface-2: #1b1c1e; /* slightly darker than before */
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.7);
+  --border: rgba(255, 255, 255, 0.16);
+  --ring: rgba(255, 255, 255, 0.28);
+  --brand: #f7d047;
+  --danger: #ff5b5b;
+}
+
+.theme-light {
+  --bg: #ffffff;
+  --surface: #f2f3f6; /* darker/warmer so it’s not pure white */
+  --surface-2: #e8eaef; /* card background in light mode */
+  --text: #0b0b0c;
+  --muted: rgba(0, 0, 0, 0.7);
+  --border: rgba(0, 0, 0, 0.2); /* stronger border */
+  --ring: rgba(0, 0, 0, 0.28);
+  --brand: #f7d047; /* keep gold for brand */
+  --muted: rgba(0, 0, 0, 0.68);
+  --border: rgba(0, 0, 0, 0.24);
+}
+
+:root {
+  --brand: #edbd00;
+  --brand-ink: #0b0b0b;
+  --button-primary-bg: #ffffff;
+  --button-primary-text: #000000;
+}
+
+.theme-light {
+  --button-primary-bg: #1a1a1a;
+  --button-primary-text: #ffffff;
+}
+
+/* Tiny utility helpers (keeps JSX tidy) */
+.ui-surface {
+  background: var(--surface);
+}
+.ui-surface-2 {
+  background: var(--surface-2);
+}
+.ui-border {
+  border: 1px solid var(--border);
+}
+.ui-text {
+  color: var(--text);
+}
+.ui-muted {
+  color: var(--muted);
+}
+
+.ui-chip {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text);
+  background: transparent;
+}
+.ui-chip--active {
+  border-color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 12%, transparent);
+  color: var(--brand);
+}
+
+.ui-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+}
+.ui-input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
+}
+
+.ui-btn {
+  width: 100%;
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface-2);
+}
+.ui-btn--primary {
+  background: var(--brand);
+  color: #111;
+  border-color: var(--brand);
+}
+.ui-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.text-xs2 {
+  font-size: 11px;
+  line-height: 1.25rem;
+  color: var(--text);
+}
+.text-muted-xs {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* --- brand logo styles --- */
+.logo-pill {
+  background: var(--brand); /* gold */
+  border: 1px solid var(--brand); /* gold border */
+  border-radius: 12px;
+}
+
+.logo-tint-black img,
+.logo-tint-black svg {
+  filter: brightness(0); /* forces the mark to black */
+}
+
+/* Cards & dividers */
+.ui-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.ui-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+/* Image frames */
+.ui-image {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface); /* shows when image hasn't loaded */
+}
+
+/* ---------- Shared typography + card/divider helpers (APPEND-ONLY) ---------- */
+:root {
+  --fs-xs: 10.5px;
+  --fs-sm: 12px;
+  --fs-md: 13.5px; /* good for captions */
+  --fs-lg: 15px;
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+}
+
+html,
+body,
+#root {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* tiny text utilities you can add in JSX */
+.t-xs {
+  font-size: var(--fs-xs);
+}
+.t-sm {
+  font-size: var(--fs-sm);
+}
+.t-md {
+  font-size: var(--fs-md);
+}
+.t-lg {
+  font-size: var(--fs-lg);
+}
+.t-muted {
+  color: var(--muted);
+}
+
+/* reusable card + divider for feed + hangout tiles */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+.card-ghost {
+  background: var(--surface-2);
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+}
+
+/* Avatar anonymous message animation */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
+}
+
+/* Universal page content padding system */
+.page-content {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.page-content-wide {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.page-content-narrow {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* App container for proper mobile layout */
+.app-container {
+  max-width: 100%;
+  overflow-x: hidden;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+@media (min-width: 640px) {
+  .app-container {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-container {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+}

@@ -1,4 +1,5 @@
-import  { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { getAvailableTags } from "../../api/queries/getPublicFeed";
 
 // 🔘 Reusable Category Button
 function CategoryButton({
@@ -13,8 +14,10 @@ function CategoryButton({
   return (
     <button
       onClick={() => onClick(category)}
-      className={`py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap ${
-        isSelected ? "bg-white text-black" : "bg-background200 text-white"
+      className={`py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap border ${
+        isSelected
+          ? "bg-white text-black border-white"
+          : "text-[var(--text)] bg-transparent border-white/25 hover:hover:bg-[rgba(255,255,255,0.08)]"
       }`}
     >
       {category}
@@ -23,40 +26,90 @@ function CategoryButton({
 }
 
 // 📦 Main Component
-function HomeCategorySection() {
-  const categories = [
-    "Family",
-    "Dining", // fixed spelling
-    "Dinner",
-    "Date",
-    "Hangout",
-    "Gaming",
-    "Outdoor",
-    "Fitness",
-    "Learning",
-  ];
+function HomeCategorySection({
+  selected = [],
+  onTagsChange,
+  onClear,
+}: {
+  selected?: string[];
+  onTagsChange?: (tags: string[]) => void;
+  onClear?: () => void;
+} = {}) {
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [internalSelected, setInternalSelected] = useState<string[]>(selected);
 
-  const [selected, setSelected] = useState<string[]>([]);
+  // Load available tags from posts
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        setLoading(true);
+        const availableTags = await getAvailableTags();
+        setCategories(availableTags);
+      } catch (error) {
+        console.error("Error loading available tags:", error);
+        setCategories([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadTags();
+  }, []);
+
+  // Sync with external state
+  useEffect(() => {
+    setInternalSelected(selected);
+  }, [selected]);
 
   // 🔍 Split selected and unselected
   const selectedCategories = useMemo(
-    () => categories.filter((c) => selected.includes(c)),
-    [categories, selected]
+    () => categories.filter((c) => internalSelected.includes(c)),
+    [categories, internalSelected]
   );
   const unselectedCategories = useMemo(
-    () => categories.filter((c) => !selected.includes(c)),
-    [categories, selected]
+    () => categories.filter((c) => !internalSelected.includes(c)),
+    [categories, internalSelected]
   );
 
   // 🔁 Toggle category
   const toggleCategory = (cat: string) => {
-    setSelected((prev) =>
-      prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
-    );
+    const newSelected = internalSelected.includes(cat)
+      ? internalSelected.filter((c) => c !== cat)
+      : [...internalSelected, cat];
+    setInternalSelected(newSelected);
+    onTagsChange?.(newSelected);
   };
 
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="w-full rounded-lg overflow-hidden">
+        <div className="flex items-center w-full gap-2">
+          <div className="flex gap-2">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="py-1 px-3 rounded-md bg-[var(--text)]/10 animate-pulse"
+                style={{
+                  width: `${60 + Math.random() * 40}px`,
+                  height: "24px",
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't render anything if no categories are available
+  if (categories.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="w-full bg-background rounded-lg p-2 mt-2 overflow-hidden">
+    <div className="w-full rounded-lg overflow-hidden">
       <div className="flex items-center w-full gap-1">
         {/* 📌 Selected Categories (left-aligned, max 50%) */}
         <div className="flex gap-1 rounded flex-shrink-0 max-w-[40%] overflow-x-auto scroll-hide pr-2">
@@ -81,6 +134,16 @@ function HomeCategorySection() {
             />
           ))}
         </div>
+
+        {/* 🗑️ Clear Button */}
+        {selectedCategories.length > 0 && onClear && (
+          <button
+            onClick={onClear}
+            className="ml-2 py-1 px-3 rounded-md text-[10px] font-medium bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors whitespace-nowrap"
+          >
+            Clear All
+          </button>
+        )}
       </div>
     </div>
   );

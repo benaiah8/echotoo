@@ -69,7 +69,7 @@ const DatePickerHeader: React.FC<DatePickerHeaderProps> = ({
   }, [isYearPickerOpen]);
 
   return (
-    <div className="flex items-center justify-between bg-black px-4 py-2 text-sm relative">
+    <div className="flex items-center justify-between bg-[var(--surface)] px-4 py-2 text-sm relative">
       {!hide || hide !== "first" ? (
         <button
           onClick={() =>
@@ -100,17 +100,36 @@ const DatePickerHeader: React.FC<DatePickerHeaderProps> = ({
         </div>
 
         {isYearPickerOpen && (
-          <div className="absolute top-8 left-1/2 transform -translate-x-1/2 bg-white shadow-lg scroll-hide rounded-md max-h-40 overflow-y-auto w-24 z-10">
+          <div
+            className="absolute top-8 left-1/2 transform -translate-x-1/2 shadow-lg scroll-hide rounded-md max-h-40 overflow-y-auto w-24 z-10"
+            style={{
+              backgroundColor: "var(--surface)",
+              border: "1px solid var(--border)",
+            }}
+          >
             {years.map((year) => (
               <div
                 key={year}
                 ref={year === month.year() ? selectedYearRef : null}
                 onClick={() => handleYearSelect(year)}
-                className={`px-4 py-2 text-center cursor-pointer transition-all ${
-                  year === month.year()
-                    ? "bg-primary text-white"
-                    : "hover:bg-primaryLight"
-                }`}
+                className="px-4 py-2 text-center cursor-pointer transition-all text-[var(--text)]"
+                style={{
+                  backgroundColor:
+                    year === month.year() ? "var(--brand)" : "transparent",
+                  color:
+                    year === month.year() ? "var(--brand-ink)" : "var(--text)",
+                }}
+                onMouseEnter={(e) => {
+                  if (year !== month.year()) {
+                    e.currentTarget.style.backgroundColor =
+                      "var(--calendar-hover-bg)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (year !== month.year()) {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                  }
+                }}
               >
                 {year}
               </div>
