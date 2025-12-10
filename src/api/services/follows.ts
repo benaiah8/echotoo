@@ -179,6 +179,62 @@ export async function getFollowStatus(
   }
 }
 
+/**
+ * Batch check follow statuses for multiple users
+ * More efficient than checking one by one
+ */
+export async function getBatchFollowStatuses(
+  viewerProfileId: string,
+  targetProfileIds: string[]
+): Promise<{ [targetId: string]: "none" | "following" | "friends" }> {
+  try {
+    if (!viewerProfileId || targetProfileIds.length === 0) {
+      return {};
+    }
+
+    // Get all follows where viewer follows any of the targets
+    const { data: followingData } = await supabase
+      .from("follows")
+      .select("following_id")
+      .eq("follower_id", viewerProfileId)
+      .in("following_id", targetProfileIds);
+
+    // Get all follows where targets follow the viewer (mutual follows)
+    const { data: followedByData } = await supabase
+      .from("follows")
+      .select("follower_id")
+      .eq("following_id", viewerProfileId)
+      .in("follower_id", targetProfileIds);
+
+    const followingSet = new Set(
+      (followingData || []).map((f) => f.following_id)
+    );
+    const followedBySet = new Set(
+      (followedByData || []).map((f) => f.follower_id)
+    );
+
+    const result: { [targetId: string]: "none" | "following" | "friends" } =
+      {};
+
+    for (const targetId of targetProfileIds) {
+      const isUserFollowing = followingSet.has(targetId);
+      const isFollowedByTarget = followedBySet.has(targetId);
+
+      result[targetId] =
+        isUserFollowing && isFollowedByTarget
+          ? "friends"
+          : isUserFollowing
+          ? "following"
+          : "none";
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Error getting batch follow statuses:", error);
+    return {};
+  }
+}
+
 export async function follow(targetProfileId: string) {
   console.log("=== FOLLOW API CALL START ===");
 

@@ -4,7 +4,6 @@ import { supabase } from "../../lib/supabaseClient";
 import FollowButton from "./FollowButton";
 import Avatar from "./Avatar";
 import { useNavigate } from "react-router-dom";
-import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
 
 interface RSVPUser {
   id: string;
@@ -38,7 +37,6 @@ export default function RSVPListDrawer({
 }: RSVPListDrawerProps) {
   const navigate = useNavigate();
   const [rsvpUsers, setRsvpUsers] = useState<RSVPUser[]>([]);
-  const [loadedUsers, setLoadedUsers] = useState<RSVPUser[]>([]); // Progressive rendering
   const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserRsvp, setCurrentUserRsvp] = useState<string | null>(null);
@@ -125,94 +123,37 @@ export default function RSVPListDrawer({
   const loadRSVPs = async () => {
     setLoading(true);
     try {
-      // Parallel queries: Load RSVPs and current user auth simultaneously
-      const [rsvpResult, authResult] = await Promise.all([
-        supabase
-          .from("rsvp_responses")
-          .select("id, user_id, status")
-          .eq("post_id", postId)
-          .order("created_at", { ascending: false }),
-        currentUser ? supabase.auth.getUser() : Promise.resolve({ data: { user: null }, error: null }),
-      ]);
+      const { data: rsvpData, error } = await supabase
+        .from("rsvp_responses")
+        .select("id, user_id, status")
+        .eq("post_id", postId)
+        .order("created_at", { ascending: false });
 
-      const { data: rsvpData, error } = rsvpResult;
       if (error) {
         console.error(
           `[RSVPListDrawer] Error loading RSVPs for post ${postId}:`,
           error
         );
         setRsvpUsers([]);
-        setLoading(false);
         return;
       }
 
-      // Get user profiles for RSVP users (parallel with current user RSVP check)
+      // Get user profiles for RSVP users
+      // Note: rsvp_responses.user_id is auth user ID, not profile ID
       const authUserIds = (rsvpData || []).map((item: any) => item.user_id);
-      
-      // Check cache first - we need to look up by user_id, so we'll fetch all but cache results
-      const profilePromise = authUserIds.length > 0
-        ? supabase
-            .from("profiles")
-            .select("id, user_id, username, display_name, avatar_url")
-            .in("user_id", authUserIds)
-        : Promise.resolve({ data: [], error: null });
-
-      // Check current user's RSVP status in parallel with profile fetch
-      const currentUserRsvpPromise = currentUser && authResult.data?.user
-        ? supabase
-            .from("rsvp_responses")
-            .select("status")
-            .eq("post_id", postId)
-            .eq("user_id", authResult.data.user.id)
-            .single()
-        : Promise.resolve({ data: null, error: null });
-
-      // Wait for both profile and current user RSVP
-      const [profileResult, currentUserRsvpResult] = await Promise.all([
-        profilePromise,
-        currentUserRsvpPromise,
-      ]);
-
-      // Handle current user RSVP status
-      if (currentUser) {
-        const { data: currentUserRsvpData, error: currentUserError } = currentUserRsvpResult;
-        if (currentUserError && currentUserError.code !== "PGRST116") {
-          console.error("Error loading current user RSVP:", currentUserError);
-        }
-        if (
-          !currentUserRsvpData &&
-          postAuthor &&
-          currentUser.id === postAuthor.id
-        ) {
-          setCurrentUserRsvp("going");
-        } else {
-          setCurrentUserRsvp(currentUserRsvpData?.status || null);
-        }
-      }
-
       let userProfiles: any[] = [];
-      const { data: profilesData, error: profilesError } = profileResult;
-      if (profilesError) {
-        console.error("Error loading profiles:", profilesError);
-      } else {
-        userProfiles = profilesData || [];
-        
-        // Cache the fetched profiles for faster future loads
-        userProfiles.forEach((profile: any) => {
-          setCachedProfile({
-            id: profile.id,
-            user_id: profile.user_id || "",
-            username: profile.username,
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
-            bio: null,
-            xp: null,
-            member_no: null,
-            instagram_url: null,
-            tiktok_url: null,
-            telegram_url: null,
-          });
-        });
+
+      if (authUserIds.length > 0) {
+        const { data: profilesData, error: profilesError } = await supabase
+          .from("profiles")
+          .select("id, user_id, username, display_name, avatar_url")
+          .in("user_id", authUserIds); // Query by user_id (auth user ID)
+
+        if (profilesError) {
+          console.error("Error loading profiles:", profilesError);
+        } else {
+          userProfiles = profilesData || [];
+        }
       }
 
       // Transform the data
@@ -259,19 +200,38 @@ export default function RSVPListDrawer({
       console.log("- allUsers.length:", allUsers.length);
       setRsvpUsers(allUsers);
 
-      // Progressive rendering: show first 3 items immediately, then rest progressively
-      setLoadedUsers([]); // Reset
-      allUsers.forEach((user, index) => {
-        // Show first 3 items immediately, then stagger the rest
-        const delay = index < 3 ? 0 : (index - 3) * 30; // 30ms delay for items after first 3
-        setTimeout(() => {
-          setLoadedUsers((prev) => {
-            // Avoid duplicates
-            if (prev.find((u) => u.id === user.id)) return prev;
-            return [...prev, user];
-          });
-        }, delay);
-      });
+      // Check current user's RSVP status - need to check ALL statuses, not just what's in users array
+      if (currentUser) {
+        // Get current user's auth user ID for RSVP query
+        const {
+          data: { user: authUser },
+        } = await supabase.auth.getUser();
+        if (!authUser) return;
+
+        // Get current user's RSVP status (any status)
+        const { data: currentUserRsvpData, error: currentUserError } =
+          await supabase
+            .from("rsvp_responses")
+            .select("status")
+            .eq("post_id", postId)
+            .eq("user_id", authUser.id) // Use auth user ID
+            .single();
+
+        if (currentUserError && currentUserError.code !== "PGRST116") {
+          console.error("Error loading current user RSVP:", currentUserError);
+        }
+
+        // If no RSVP found, check if current user is the creator
+        if (
+          !currentUserRsvpData &&
+          postAuthor &&
+          currentUser.id === postAuthor.id
+        ) {
+          setCurrentUserRsvp("going"); // Creator is automatically "going"
+        } else {
+          setCurrentUserRsvp(currentUserRsvpData?.status || null);
+        }
+      }
     } catch (error) {
       console.error("Error loading RSVPs:", error);
     } finally {
@@ -322,7 +282,6 @@ export default function RSVPListDrawer({
 
       // console.log("- RSVP response successful, reloading RSVPs");
       // Reload RSVPs
-      setLoadedUsers([]); // Reset progressive rendering
       loadRSVPs();
 
       // Notify parent component of RSVP change
@@ -405,7 +364,7 @@ export default function RSVPListDrawer({
         {!loading && (rsvpUsers.length > 0 || postAuthor) && (
           <div className="space-y-2">
             {/* All RSVP'd users in simple list format */}
-            {loadedUsers.map((user) => {
+            {rsvpUsers.map((user) => {
               const isCurrentUser = currentUser && user.id === currentUser.id;
               const displayUser =
                 isCurrentUser && currentUserProfile ? currentUserProfile : user;

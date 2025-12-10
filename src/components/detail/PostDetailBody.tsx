@@ -55,7 +55,7 @@ export type Post = {
   // tags
   tags?: string[];
 
-  // optional visibility (rendered if present)
+  // optional visibility/anon (rendered if present)
   visibility?: "public" | "friends" | "private";
 
   // optional schedule & RSVP (rendered if present)

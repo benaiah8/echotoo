@@ -12,7 +12,7 @@ interface CachedSavedPosts {
 }
 
 // Helper functions for caching
-function getCachedSavedPosts(userId: string): SavedPostWithDetails[] | null {
+export function getCachedSavedPosts(userId: string): SavedPostWithDetails[] | null {
   try {
     const cached = localStorage.getItem(SAVED_POSTS_CACHE_KEY);
     if (!cached) return null;

@@ -3,7 +3,7 @@ import { supabase } from "../../lib/supabaseClient";
 import FollowButton from "../ui/FollowButton";
 import { useNavigate } from "react-router-dom";
 import CachedAvatar from "../ui/CachedAvatar";
-import { getViewerId } from "../../api/services/follows";
+import { getViewerId, getBatchFollowStatuses } from "../../api/services/follows";
 import { setCachedFollowStatus } from "../../lib/followCache";
 import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
 
@@ -147,13 +147,26 @@ export default function FollowListDrawer({
       });
 
       // Pre-populate follow cache for instant button updates
-      // If viewing our own "following" list, we know we're following all these users
-      if (viewerProfileId && mode === "following" && profileId === viewerProfileId) {
-        // We're viewing our own following list - cache "following" status for all users
-        for (const profileId of ids) {
-          if (profileId !== viewerProfileId) {
-            setCachedFollowStatus(viewerProfileId, profileId, "following");
-          }
+      if (viewerProfileId && allProfiles.length > 0) {
+        // Filter out self from the list
+        const otherProfiles = allProfiles.filter(
+          (p) => p.id !== viewerProfileId
+        );
+
+        if (otherProfiles.length > 0) {
+          // Batch check follow statuses for all users in the list
+          // This is much more efficient than checking one by one
+          const targetIds = otherProfiles.map((p) => p.id);
+          getBatchFollowStatuses(viewerProfileId, targetIds)
+            .then((statuses) => {
+              // Cache all the statuses
+              Object.entries(statuses).forEach(([targetId, status]) => {
+                setCachedFollowStatus(viewerProfileId, targetId, status);
+              });
+            })
+            .catch((error) => {
+              console.error("Error batch checking follow statuses:", error);
+            });
         }
       }
 

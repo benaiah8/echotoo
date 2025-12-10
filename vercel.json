@@ -1,8 +1,9 @@
 {
+  "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/"
+      "source": "/((?!.*\\.[a-zA-Z0-9]+$).*)",
+      "destination": "/index.html"
     }
   ]
 }

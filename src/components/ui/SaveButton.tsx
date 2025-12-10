@@ -53,7 +53,8 @@ export default function SaveButton({
   }, [postId, authLoading]);
 
   const handleToggleSave = async () => {
-    if (isToggling || isLoading || authLoading) return;
+    // Allow clicking even if still loading initial state, but prevent double-clicks
+    if (isToggling) return;
 
     // Don't allow saving draft posts
     if (postId.startsWith("draft-")) {
@@ -61,11 +62,13 @@ export default function SaveButton({
       return;
     }
 
+    // If still loading initial state, use optimistic default
+    const wasSaved = isSaved ?? false;
+
     setIsToggling(true);
     setIsAnimating(true);
-    const wasSaved = isSaved;
 
-    // Immediate visual feedback
+    // Immediate visual feedback - update UI instantly
     setIsSaved(!wasSaved);
 
     try {
@@ -104,28 +107,19 @@ export default function SaveButton({
     }
   };
 
-  if (isLoading) {
-    return (
-      <button
-        disabled
-        className={`flex items-center gap-1 opacity-50 ${className}`}
-        aria-label="Loading..."
-      >
-        <MdBookmarkBorder size={size} />
-      </button>
-    );
-  }
+  // Show button even while loading - it will be clickable with optimistic updates
+  const displaySaved = isSaved ?? false;
 
   return (
     <button
       onClick={handleToggleSave}
       disabled={isToggling}
       className={`flex items-center gap-1 transition-all duration-200 ${
-        isToggling ? "opacity-50" : ""
+        isToggling ? "opacity-50" : isLoading ? "opacity-70" : ""
       } ${className}`}
-      aria-label={isSaved ? "Unsave post" : "Save post"}
+      aria-label={displaySaved ? "Unsave post" : "Save post"}
     >
-      {isSaved ? (
+      {displaySaved ? (
         <MdBookmark
           size={size}
           className={`text-primary transition-all duration-200 ${

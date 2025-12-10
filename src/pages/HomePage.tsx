@@ -51,7 +51,6 @@ export default function HomePage() {
 
   // main list (respecting viewMode & search)
   const [items, setItems] = useState<FeedItem[]>([]);
-  const [loadedItems, setLoadedItems] = useState<FeedItem[]>([]); // Progressive rendering
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +59,6 @@ export default function HomePage() {
 
   // horizontal rail - single unified rail
   const [hangouts, setHangouts] = useState<FeedItem[]>([]);
-  const [loadedHangouts, setLoadedHangouts] = useState<FeedItem[]>([]); // Progressive rendering
   const [hangoutsLoading, setHangoutsLoading] = useState(false);
 
   // "other things you might like" (only when searching)
@@ -162,17 +160,6 @@ export default function HomePage() {
 
             // Show cached data immediately
             setItems(cachedData);
-            // Progressive rendering: show first 3 items immediately, then rest
-            setLoadedItems([]);
-            cachedData.forEach((item, index) => {
-              const delay = index < 3 ? 0 : (index - 3) * 30;
-              setTimeout(() => {
-                setLoadedItems((prev) => {
-                  if (prev.find((i) => i.id === item.id)) return prev;
-                  return [...prev, item];
-                });
-              }, delay);
-            });
             setLoading(false);
 
             // Prefetch related data for cached posts in background
@@ -195,17 +182,6 @@ export default function HomePage() {
                   feedOptions
                 );
                 setItems(updatedData);
-                // Progressive rendering for fresh data
-                setLoadedItems([]);
-                updatedData.forEach((item, index) => {
-                  const delay = index < 3 ? 0 : (index - 3) * 30;
-                  setTimeout(() => {
-                    setLoadedItems((prev) => {
-                      if (prev.find((i) => i.id === item.id)) return prev;
-                      return [...prev, item];
-                    });
-                  }, delay);
-                });
                 setHasMore(updatedData.length >= PAGE_SIZE);
               }
             } catch (error) {
@@ -260,17 +236,6 @@ export default function HomePage() {
           // first page replaces the list
           // console.log("[HomePage] Setting items:", data);
           setItems(data);
-          // Progressive rendering: show items as they load
-          setLoadedItems([]);
-          data.forEach((item, index) => {
-            const delay = index < 3 ? 0 : (index - 3) * 30;
-            setTimeout(() => {
-              setLoadedItems((prev) => {
-                if (prev.find((i) => i.id === item.id)) return prev;
-                return [...prev, item];
-              });
-            }, delay);
-          });
           setHasMore(data.length >= PAGE_SIZE);
           setError(null);
 
@@ -316,16 +281,6 @@ export default function HomePage() {
         } else {
           // subsequent pages append
           setItems((prev) => [...prev, ...data]);
-          // Progressive rendering for paginated items
-          const currentLength = items.length;
-          data.forEach((item, index) => {
-            setTimeout(() => {
-              setLoadedItems((prev) => {
-                if (prev.find((i) => i.id === item.id)) return prev;
-                return [...prev, item];
-              });
-            }, index * 30);
-          });
           if (data.length < PAGE_SIZE) setHasMore(false);
         }
       } catch (e: any) {
@@ -576,19 +531,7 @@ export default function HomePage() {
               finalPosts = prioritizedPosts;
             }
 
-            const finalHangouts = finalPosts.slice(0, 8);
-            setHangouts(finalHangouts);
-            // Progressive rendering for hangouts
-            setLoadedHangouts([]);
-            finalHangouts.forEach((item, index) => {
-              const delay = index < 3 ? 0 : (index - 3) * 40;
-              setTimeout(() => {
-                setLoadedHangouts((prev) => {
-                  if (prev.find((i) => i.id === item.id)) return prev;
-                  return [...prev, item];
-                });
-              }, delay);
-            });
+            setHangouts(finalPosts.slice(0, 8));
           }
         } finally {
           if (!cancelled) setHangoutsLoading(false);
@@ -754,7 +697,7 @@ export default function HomePage() {
           {/* HORIZONTAL RAIL AT TOP - shows mixed recent content */}
           {viewMode === "all" && (
             <div className="w-full max-w-[640px] mx-auto px-0">
-              <HomeHangoutSection items={loadedHangouts.length > 0 ? loadedHangouts : hangouts} loading={hangoutsLoading} />
+              <HomeHangoutSection items={hangouts} loading={hangoutsLoading} />
             </div>
           )}
 
@@ -764,7 +707,7 @@ export default function HomePage() {
 
             <HomePostsSection
               viewMode={viewMode}
-              items={loadedItems.length > 0 ? loadedItems : items} // Use progressively loaded items
+              items={items}
               loading={loading}
               loadingMore={loadingMore}
               hasActiveFilters={hasActiveFilters}
@@ -772,7 +715,7 @@ export default function HomePage() {
               tagFallbackLoading={tagFallbackLoading}
               showTagFallback={showTagFallback}
               selectedTags={selectedTags}
-              hangouts={loadedHangouts.length > 0 ? loadedHangouts : hangouts} // Use progressively loaded hangouts
+              hangouts={hangouts}
               hangoutsLoading={hangoutsLoading}
             />
 

@@ -404,6 +404,8 @@ export default function Post({
               postId={postId}
               authorId={authorId}
               postType={type}
+              caption={caption}
+              postImageUrl={images && images.length > 0 ? images[0] : null}
               postAuthor={
                 author
                   ? {

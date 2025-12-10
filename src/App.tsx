@@ -2,7 +2,7 @@ import "./App.css";
 import GlobalErrorHandler from "./wrappers/GlobalErrorHandler";
 import AppRouter from "./router/AppRouter";
 import * as Paths from "./router/Paths";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
 import { setAuthUser } from "./reducers/authReducer";
 import { supabase } from "./lib/supabaseClient";
@@ -15,9 +15,11 @@ import InstallAppButton from "./components/InstallAppButton"; // PWA: Install ap
 import OnboardingWrapper from "./components/onboarding/OnboardingWrapper";
 import { dbg, dumpAuthEnv } from "./lib/authDebug";
 import { store } from "./app/store";
+import AnimatedLogo from "./components/ui/AnimatedLogo";
 
 function App() {
   const dispatch = useDispatch();
+  const [showSplash, setShowSplash] = useState(true);
 
   if (process.env.NODE_ENV !== "production") {
     // @ts-ignore
@@ -56,6 +58,14 @@ function App() {
 
   return (
     <GlobalErrorHandler>
+      {/* Animated Logo Splash Screen */}
+      {showSplash && (
+        <AnimatedLogo
+          duration={3000}
+          onComplete={() => setShowSplash(false)}
+        />
+      )}
+
       {/* Router MUST wrap BottomTab and all route content */}
       <BrowserRouter>
         <div className="app-shell">

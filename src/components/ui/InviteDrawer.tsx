@@ -36,40 +36,73 @@ export default function InviteDrawer({
   const [loading, setLoading] = useState(false);
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
   const [selectedUsersData, setSelectedUsersData] = useState<User[]>([]);
-  const [showFriendsOnly, setShowFriendsOnly] = useState(false);
-  const [friends, setFriends] = useState<User[]>([]);
+  const [showFollowersOnly, setShowFollowersOnly] = useState(false);
+  const [followers, setFollowers] = useState<User[]>([]);
   const [sendingInvites, setSendingInvites] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const closingRef = useRef(false);
 
-  // Load friends when component mounts
-  const loadFriends = async () => {
+  // Load followers when component mounts
+  const loadFollowers = async () => {
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
 
-      // TODO: Replace with actual friends query when friends system is implemented
-      // For now, get recent users as placeholder
-      const { data, error } = await supabase
+      // Get current user's profile id
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (profileError || !profile) {
+        console.error("Failed to get current user profile:", profileError);
+        return;
+      }
+
+      // Get all users who follow the current user
+      // follows table: follower_id follows following_id
+      // So we want: follower_id where following_id = current user's profile id
+      const { data: followsData, error: followsError } = await supabase
+        .from("follows")
+        .select("follower_id")
+        .eq("following_id", profile.id);
+
+      if (followsError) {
+        console.error("Failed to load followers:", followsError);
+        return;
+      }
+
+      if (!followsData || followsData.length === 0) {
+        setFollowers([]);
+        return;
+      }
+
+      // Get profile details for all followers
+      const followerProfileIds = followsData.map((f) => f.follower_id);
+      const { data: followersData, error: followersError } = await supabase
         .from("profiles")
         .select("id, user_id, username, display_name, avatar_url")
-        .neq("user_id", user.id)
-        .limit(10);
+        .in("id", followerProfileIds);
 
-      if (error) throw error;
-      setFriends(data || []);
+      if (followersError) {
+        console.error("Failed to load follower profiles:", followersError);
+        return;
+      }
+
+      setFollowers(followersData || []);
     } catch (error) {
-      console.error("Failed to load friends:", error);
+      console.error("Failed to load followers:", error);
     }
   };
 
   // Load users based on search query
   const loadUsers = async () => {
     if (!searchQuery.trim()) {
-      if (showFriendsOnly) {
-        setUsers(friends);
+      if (showFollowersOnly) {
+        setUsers(followers);
       } else {
         setUsers([]);
       }
@@ -93,14 +126,13 @@ export default function InviteDrawer({
           `username.ilike.%${searchQuery}%,display_name.ilike.%${searchQuery}%`
         );
 
-      if (showFriendsOnly) {
-        // Filter to only show friends (for now, just limit results)
-        // TODO: Add proper friends filtering when friends system is implemented
-        const friendIds = friends.map((f) => f.user_id);
-        if (friendIds.length > 0) {
-          query = query.in("user_id", friendIds);
+      if (showFollowersOnly) {
+        // Filter to only show followers
+        const followerUserIds = followers.map((f) => f.user_id);
+        if (followerUserIds.length > 0) {
+          query = query.in("user_id", followerUserIds);
         } else {
-          query = query.limit(0); // No friends to show
+          query = query.limit(0); // No followers to show
         }
       }
 
@@ -118,12 +150,12 @@ export default function InviteDrawer({
   useEffect(() => {
     const timeoutId = setTimeout(loadUsers, 300);
     return () => clearTimeout(timeoutId);
-  }, [searchQuery, showFriendsOnly, friends]);
+  }, [searchQuery, showFollowersOnly, followers]);
 
-  // Load friends when component mounts
+  // Load followers when component mounts
   useEffect(() => {
     if (isOpen) {
-      loadFriends();
+      loadFollowers();
     }
   }, [isOpen]);
 
@@ -152,7 +184,7 @@ export default function InviteDrawer({
       } else {
         newSet.add(userId);
         // Add to selectedUsersData (avoid duplicates)
-        const allUsers = [...users, ...friends];
+        const allUsers = [...users, ...followers];
         const user = allUsers.find((u) => u.user_id === userId);
         if (user) {
           setSelectedUsersData((prevData) => {
@@ -168,19 +200,19 @@ export default function InviteDrawer({
     });
   };
 
-  const handleSelectAllFriends = () => {
-    if (showFriendsOnly && friends.length > 0) {
-      const allFriendIds = new Set(friends.map((f) => f.user_id));
+  const handleSelectAllFollowers = () => {
+    if (showFollowersOnly && followers.length > 0) {
+      const allFollowerIds = new Set(followers.map((f) => f.user_id));
       const currentlySelected = new Set(selectedUsers);
 
-      // If all friends are selected, deselect all
-      if (friends.every((f) => currentlySelected.has(f.user_id))) {
+      // If all followers are selected, deselect all
+      if (followers.every((f) => currentlySelected.has(f.user_id))) {
         setSelectedUsers(new Set());
         setSelectedUsersData([]);
       } else {
-        // Select all friends
-        setSelectedUsers(allFriendIds);
-        setSelectedUsersData(friends);
+        // Select all followers
+        setSelectedUsers(allFollowerIds);
+        setSelectedUsersData(followers);
       }
     }
   };
@@ -315,42 +347,42 @@ export default function InviteDrawer({
             </div>
           </div>
 
-          {/* Friends Toggle and Select All */}
+          {/* Followers Toggle and Select All */}
           <div className="mt-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="text-xs text-[var(--text)]/60">
-                Friends Only
+                Followers
               </span>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  setShowFriendsOnly(!showFriendsOnly);
+                  setShowFollowersOnly(!showFollowersOnly);
                 }}
                 className={`relative w-8 h-4 rounded-full transition-colors ${
-                  showFriendsOnly
+                  showFollowersOnly
                     ? "bg-yellow-400"
                     : "bg-[var(--surface)] border border-[var(--border)]"
                 }`}
               >
                 <div
                   className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
-                    showFriendsOnly ? "translate-x-4" : "translate-x-0.5"
+                    showFollowersOnly ? "translate-x-4" : "translate-x-0.5"
                   }`}
                 />
               </button>
             </div>
 
-            {showFriendsOnly && friends.length > 0 && (
+            {showFollowersOnly && followers.length > 0 && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  handleSelectAllFriends();
+                  handleSelectAllFollowers();
                 }}
                 className="px-3 py-1 text-xs bg-[var(--surface)] text-[var(--text)] rounded-full border border-[var(--border)] hover:bg-[var(--surface)]/80 transition"
               >
-                {friends.every((f) => selectedUsers.has(f.user_id))
+                {followers.every((f) => selectedUsers.has(f.user_id))
                   ? "Deselect All"
                   : "Select All"}
               </button>

@@ -1,7 +1,5 @@
 import React from "react";
-
-// Import the Echotoo logo directly
-import echo2logoUrl from "../../assets/echo2logo.svg";
+import { getOwlLogoPath } from "../../lib/assets";
 
 type LogoProps = {
   size?: number; // square px
@@ -27,18 +25,17 @@ export default function Logo({
         height: size,
         borderRadius: rounded,
         background: "transparent",
-        border: "1px solid var(--border-contrast)", // Use high contrast border for light/dark mode
         display: "grid",
         placeItems: "center",
         cursor: onClick ? "pointer" : "default",
       }}
     >
       <img
-        src={echo2logoUrl}
+        src={getOwlLogoPath()}
         alt={alt}
         style={{
-          width: Math.round(size * 0.85), // 85% of container size to leave space for border
-          height: Math.round(size * 0.85),
+          width: size,
+          height: size,
           objectFit: "contain",
           pointerEvents: "none",
         }}

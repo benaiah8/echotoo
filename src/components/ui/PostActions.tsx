@@ -4,6 +4,7 @@ import LikeButton from "./LikeButton";
 import SaveButton from "./SaveButton";
 import FollowButton from "./FollowButton";
 import RSVPComponent from "./RSVPComponent";
+import ShareDrawer from "./ShareDrawer";
 import { useNavigate } from "react-router-dom";
 import { Paths } from "../../router/Paths";
 import { useState, useEffect } from "react";
@@ -17,6 +18,8 @@ interface PostActionsProps {
   authorId?: string;
   className?: string;
   postType?: "experience" | "hangout";
+  caption?: string | null;
+  postImageUrl?: string | null;
   postAuthor?: {
     id: string;
     username?: string | null;
@@ -31,11 +34,14 @@ export default function PostActions({
   authorId,
   className = "",
   postType,
+  caption,
+  postImageUrl,
   postAuthor,
 }: PostActionsProps) {
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const [commentCount, setCommentCount] = useState(0);
+  const [showShareDrawer, setShowShareDrawer] = useState(false);
   const authState = useSelector((state: RootState) => state.auth);
   const isAuthenticated = !!authState?.user;
   const authLoading = authState?.loading ?? true;
@@ -54,10 +60,8 @@ export default function PostActions({
   }, [postId]);
 
   const handleCommentClick = () => {
-    // Wait for auth loading to complete
-    if (authLoading) return;
-
-    if (!isAuthenticated) {
+    // Check auth immediately, but don't block if still loading
+    if (!authLoading && !isAuthenticated) {
       dispatch(setAuthModal(true));
       return;
     }
@@ -87,41 +91,15 @@ export default function PostActions({
     }, 500); // Increased timeout for better reliability
   };
 
-  const handleShareClick = async () => {
-    // Wait for auth loading to complete
-    if (authLoading) return;
-
-    if (!isAuthenticated) {
+  const handleShareClick = () => {
+    // Check auth immediately, but don't block if still loading
+    if (!authLoading && !isAuthenticated) {
       dispatch(setAuthModal(true));
       return;
     }
 
-    try {
-      // Get the current URL for the post
-      const postUrl = window.location.href;
-      const shareData = {
-        title: `Check out this ${
-          postType === "hangout" ? "hangout" : "experience"
-        }`,
-        url: postUrl,
-      };
-
-      // Try to use the Web Share API if available
-      if (
-        navigator.share &&
-        navigator.canShare &&
-        navigator.canShare(shareData)
-      ) {
-        await navigator.share(shareData);
-      } else {
-        // Fallback: copy to clipboard
-        await navigator.clipboard.writeText(postUrl);
-        // You could add a toast notification here if you have one
-        console.log("Link copied to clipboard");
-      }
-    } catch (error) {
-      console.error("Error sharing:", error);
-    }
+    // Open share drawer
+    setShowShareDrawer(true);
   };
 
   return (
@@ -176,6 +154,19 @@ export default function PostActions({
           </div>
         )}
       </div>
+
+      {/* Share Drawer */}
+      <ShareDrawer
+        isOpen={showShareDrawer}
+        onClose={() => setShowShareDrawer(false)}
+        postId={postId}
+        postType={postType || "experience"}
+        caption={caption ?? null}
+        postImageUrl={postImageUrl}
+        creatorName={postAuthor?.display_name || undefined}
+        creatorHandle={postAuthor?.username ? `@${postAuthor.username}` : undefined}
+        creatorAvatarUrl={postAuthor?.avatar_url || undefined}
+      />
     </div>
   );
 }

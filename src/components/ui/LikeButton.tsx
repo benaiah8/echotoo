@@ -62,7 +62,8 @@ export default function LikeButton({
   }, [likeCount]);
 
   const handleToggleLike = async () => {
-    if (isToggling || isLoading || authLoading) return;
+    // Allow clicking even if still loading initial state, but prevent double-clicks
+    if (isToggling) return;
 
     // Don't allow liking draft posts
     if (postId.startsWith("draft-")) {
@@ -70,11 +71,13 @@ export default function LikeButton({
       return;
     }
 
+    // If still loading initial state, use optimistic default
+    const wasLiked = isLiked ?? false;
+
     setIsToggling(true);
     setIsAnimating(true);
-    const wasLiked = isLiked;
 
-    // Immediate visual feedback
+    // Immediate visual feedback - update UI instantly
     setIsLiked(!wasLiked);
     const newCount = wasLiked
       ? Math.max(0, currentCount - 1)
@@ -124,29 +127,19 @@ export default function LikeButton({
     }
   };
 
-  if (isLoading) {
-    return (
-      <button
-        disabled
-        className={`flex items-center gap-1 opacity-50 ${className}`}
-        aria-label="Loading..."
-      >
-        <MdFavoriteBorder size={size} />
-        {showCount && <span className="text-sm">{currentCount}</span>}
-      </button>
-    );
-  }
+  // Show button even while loading - it will be clickable with optimistic updates
+  const displayLiked = isLiked ?? false;
 
   return (
     <button
       onClick={handleToggleLike}
       disabled={isToggling}
       className={`flex items-center gap-1 transition-all duration-200 ${
-        isToggling ? "opacity-50" : ""
+        isToggling ? "opacity-50" : isLoading ? "opacity-70" : ""
       } ${className}`}
-      aria-label={isLiked ? "Unlike post" : "Like post"}
+      aria-label={displayLiked ? "Unlike post" : "Like post"}
     >
-      {isLiked ? (
+      {displayLiked ? (
         <MdFavorite
           size={size}
           className={`text-red-500 transition-all duration-200 ${

@@ -119,8 +119,9 @@ export default function FollowButton({
           }
         }
 
-        // Check if it's self (with both IDs)
-        if (me === targetProfileId || me === targetId || targetProfileId === targetId) {
+        // Check if it's self - only compare viewer ID with target profile ID
+        // targetProfileId === targetId is always true when targetId is already a profile ID, so we don't check that
+        if (me === targetProfileId) {
           setFollowStatus("self");
           setInitializing(false);
           return;
