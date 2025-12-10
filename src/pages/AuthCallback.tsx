@@ -22,6 +22,16 @@ export default function AuthCallback() {
     const run = async () => {
       dumpAuthEnv();
 
+      // Log the actual URL being used for debugging
+      console.log("[AuthCallback] Current URL:", {
+        href: window.location.href,
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: window.location.hash,
+        isPWA: window.matchMedia("(display-mode: standalone)").matches,
+      });
+
       // Parse URL for provider errors (both search params and hash)
       const url = new URL(window.location.href);
       const err =
@@ -68,12 +78,16 @@ export default function AuthCallback() {
           }
           if (error) {
             console.error("[AuthCallback] exchange failed:", error);
+            console.error("[AuthCallback] Current URL that failed:", window.location.href);
+            console.error("[AuthCallback] Make sure this redirect URL is in Supabase:", `${window.location.origin}/auth/callback`);
             dbg("AuthCallback:exchange_error", {
               message: error.message,
               status: error.status,
+              currentUrl: window.location.href,
+              redirectUrl: `${window.location.origin}/auth/callback`,
             });
-            setError(`Sign-in error: ${error.message}`);
-            setTimeout(() => finish("/"), 3000);
+            setError(`Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`);
+            setTimeout(() => finish("/"), 5000);
             return;
           }
         } catch (e: any) {
