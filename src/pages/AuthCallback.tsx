@@ -1,5 +1,5 @@
 // src/pages/AuthCallback.tsx
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { dbg, dumpAuthEnv } from "../lib/authDebug";
@@ -7,6 +7,7 @@ import { dbg, dumpAuthEnv } from "../lib/authDebug";
 export default function AuthCallback() {
   const nav = useNavigate();
   const loc = useLocation();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let finished = false;
@@ -35,14 +36,16 @@ export default function AuthCallback() {
           "error_description"
         );
       if (err || errCode || errDesc) {
+        const errorMsg = errDesc || err || "Authentication failed";
         dbg("AuthCallback:provider_error", {
           err,
           errCode,
           errDesc,
           href: window.location.href,
         });
-        // You can show a toast/UI here if you like
-        return finish("/"); // bounce home; user is not signed in
+        setError(errorMsg);
+        setTimeout(() => finish("/"), 3000);
+        return;
       }
 
       // 1) Already have a session? Done.
@@ -54,12 +57,31 @@ export default function AuthCallback() {
       if (s0.session) return finish();
 
       // 2) If PKCE code present, try manual exchange.
-      if (loc.search.includes("code=")) {
-        const { error } = await supabase.auth.exchangeCodeForSession(
-          window.location.href
-        );
-        if (!error) return finish();
-        console.warn("[AuthCallback] exchange failed:", error?.message);
+      if (loc.search.includes("code=") || loc.hash.includes("code=")) {
+        try {
+          const { data, error } = await supabase.auth.exchangeCodeForSession(
+            window.location.href
+          );
+          if (!error && data?.session) {
+            dbg("AuthCallback:exchange_success", { userId: data.session.user?.id });
+            return finish();
+          }
+          if (error) {
+            console.error("[AuthCallback] exchange failed:", error);
+            dbg("AuthCallback:exchange_error", {
+              message: error.message,
+              status: error.status,
+            });
+            setError(`Sign-in error: ${error.message}`);
+            setTimeout(() => finish("/"), 3000);
+            return;
+          }
+        } catch (e: any) {
+          console.error("[AuthCallback] exchange exception:", e);
+          setError(`Sign-in error: ${e?.message || "Unknown error"}`);
+          setTimeout(() => finish("/"), 3000);
+          return;
+        }
       }
 
       // 3) Otherwise rely on automatic parsing (implicit flow).
@@ -72,11 +94,12 @@ export default function AuthCallback() {
         if (session) finish();
       });
 
-      // 4) Hard stop after 2.5s to avoid spinner purgatory.
+      // 4) Hard stop after 5s to avoid spinner purgatory.
       const timer = setTimeout(() => {
         dbg("AuthCallback:timeoutFallback");
-        finish("/");
-      }, 2500);
+        setError("Sign-in is taking longer than expected. Redirecting...");
+        setTimeout(() => finish("/"), 2000);
+      }, 5000);
 
       return () => {
         clearTimeout(timer);
@@ -91,8 +114,15 @@ export default function AuthCallback() {
   }, [nav, loc.search]);
 
   return (
-    <div className="w-full min-h-[40vh] flex items-center justify-center text-[var(--text)]/80">
-      Finishing sign-in…
+    <div className="w-full min-h-[40vh] flex flex-col items-center justify-center text-[var(--text)]/80 px-4">
+      {error ? (
+        <>
+          <div className="text-red-500 mb-4">⚠️ {error}</div>
+          <div className="text-sm text-[var(--text)]/60">Redirecting...</div>
+        </>
+      ) : (
+        <div>Finishing sign-in…</div>
+      )}
     </div>
   );
 }

@@ -163,16 +163,18 @@ self.addEventListener("fetch", (event) => {
 
   // Check for Supabase and Auth patterns
   const isSupabaseHost = url.hostname.endsWith("supabase.co");
-  const isAuthPath = url.pathname.startsWith("/auth/v1/");
+  const isAuthPath = url.pathname.startsWith("/auth/v1/") || url.pathname.includes("/auth/");
   const hasAuthParams =
     url.search.includes("access_token") ||
     url.search.includes("code") ||
     url.search.includes("error") ||
     url.search.includes("error_code") ||
+    url.search.includes("error_description") ||
     url.hash.includes("access_token") ||
-    url.hash.includes("code");
+    url.hash.includes("code") ||
+    url.hash.includes("error");
   const isAuthCallback = url.pathname.startsWith("/auth/callback") || url.pathname === "/auth/callback";
-  const isOAuthCallback = url.search.includes("code=") || url.hash.includes("code=");
+  const isOAuthCallback = url.search.includes("code=") || url.hash.includes("code=") || url.search.includes("state=");
 
   // Never handle development assets, auth-related requests, or Supabase requests
   if (
