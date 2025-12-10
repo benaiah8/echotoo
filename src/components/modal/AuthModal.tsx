@@ -128,12 +128,21 @@ const AuthModal = () => {
   const handleGoogle = async () => {
     try {
       setLoading(true);
+      // Use full URL for PWA compatibility
+      const redirectUrl = `${window.location.origin}/auth/callback`;
       dbg("Google:start", {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: redirectUrl,
+        isPWA: window.matchMedia("(display-mode: standalone)").matches,
       });
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { 
+          redirectTo: redirectUrl,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
       });
       dbg("Google:returned", { ok: !error, error: error?.message });
       if (error) throw error;
