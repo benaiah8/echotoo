@@ -182,6 +182,10 @@ function BottomTab() {
     localStorage.getItem("my_display_name") || null
   );
 
+  // Helper to determine if user should see Avatar (immediate + accurate check)
+  // Uses localStorage for immediate display on app load, falls back to authedId for accuracy
+  const shouldShowAvatar = localStorage.getItem("my_user_id") || authedId;
+
   const [hidden, setHidden] = useState(false);
   const lastY = useRef<number>(
     typeof window !== "undefined" ? window.scrollY : 0
@@ -191,7 +195,9 @@ function BottomTab() {
   useEffect(() => {
     let on = true;
     (async () => {
-      if (!authedId) {
+      // Only clear if truly logged out (not just during initial async load)
+      // This prevents flicker when authedId is temporarily null during initial load
+      if (!authedId && !localStorage.getItem("my_user_id")) {
         setAvatarUrl(null);
         setDisplayName(null);
         localStorage.removeItem("my_avatar_url");
@@ -423,8 +429,12 @@ function BottomTab() {
         ),
     },
     {
-      icon: avatarUrl ? (
-        <Avatar url={avatarUrl} name={displayName || " "} size={28} />
+      icon: shouldShowAvatar ? (
+        <Avatar
+          url={avatarUrl || undefined}
+          name={displayName || " "}
+          size={28}
+        />
       ) : (
         <BsPersonFill />
       ),
@@ -466,14 +476,14 @@ function BottomTab() {
                       : "border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
                   }`}
                 >
-                  {/* Special wrapper for Avatar to ensure proper centering */}
-                  {index === 4 ? (
+                  {/* Special wrapper for Avatar to ensure proper centering - only apply when Avatar is present */}
+                  {index === 4 && shouldShowAvatar ? (
                     // Profile icon (Avatar) - use special wrapper to fix inline-block alignment issue
                     <div className="bottom-tab-avatar-wrapper flex items-center justify-center w-full h-full">
                       {item.icon}
                     </div>
                   ) : (
-                    // Regular icons
+                    // Regular icons (including BsPersonFill when not logged in)
                     <div className="flex items-center justify-center">
                       {item.icon}
                     </div>
