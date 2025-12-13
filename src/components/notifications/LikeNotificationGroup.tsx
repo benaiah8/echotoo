@@ -31,7 +31,17 @@ export default function LikeNotificationGroup({
   showGoToPostButton = true,
 }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const unreadCount = notifications.filter((n) => !n.is_read).length;
+  // Exclude declined follow requests from unread count
+  const unreadCount = notifications.filter((n) => {
+    if (!n.is_read) {
+      // Don't count declined follow requests as unread
+      if (n.type === "follow" && n.additional_data?.follow_request_status === "declined") {
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }).length;
 
   // Group notifications by post (entity_id)
   const notificationsByPost = useMemo(() => {

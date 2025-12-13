@@ -1,6 +1,7 @@
 // src/api/services/posts.ts
 import { supabase } from "../../lib/supabaseClient";
 import { createPostNotifications } from "./notifications";
+import { retry } from "../../lib/retry";
 
 export type PostType = "experience" | "hangout";
 
@@ -92,14 +93,29 @@ export async function publishDraft(postId: string) {
 }
 
 export async function getPost(id: string) {
-  const { data, error } = await supabase
-    .from("posts")
-    .select("*")
-    .eq("id", id)
-    .single();
+  // [OPTIMIZATION: Phase 7.2] Add retry logic to database query
+  // Why: Handles transient network failures gracefully, improves reliability
+  const result = await retry(
+    async () => {
+      const { data, error } = await supabase
+        .from("posts")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-  if (error) throw error;
-  return data;
+      if (error) throw error;
+      return data;
+    },
+    {
+      maxRetries: 3,
+      initialDelay: 1000,
+      onRetry: (attempt, err) => {
+        console.log(`[getPost] Retry attempt ${attempt} for post ${id}:`, err);
+      },
+    }
+  );
+
+  return result;
 }
 
 export async function deletePost(id: string) {
@@ -137,29 +153,47 @@ export async function getPostForEdit(id: string) {
   if (sessErr) throw sessErr;
   if (!session) throw new Error("Not authenticated");
 
-  // Get post data
-  const { data: post, error: postError } = await supabase
-    .from("posts")
-    .select("*")
-    .eq("id", id)
-    .single();
+  // [OPTIMIZATION: Phase 7.2] Add retry logic to database queries
+  // Why: Handles transient network failures gracefully, improves reliability
+  const result = await retry(
+    async () => {
+      // Get post data
+      const { data: post, error: postError } = await supabase
+        .from("posts")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-  if (postError) throw postError;
-  if (post.author_id !== session.user.id) {
-    throw new Error("You can only edit your own posts");
-  }
+      if (postError) throw postError;
+      if (post.author_id !== session.user.id) {
+        throw new Error("You can only edit your own posts");
+      }
 
-  // Get activities data
-  const { data: activities, error: activitiesError } = await supabase
-    .from("activities")
-    .select("*")
-    .eq("post_id", id)
-    .order("order_idx", { ascending: true });
+      // Get activities data
+      const { data: activities, error: activitiesError } = await supabase
+        .from("activities")
+        .select("*")
+        .eq("post_id", id)
+        .order("order_idx", { ascending: true });
 
-  if (activitiesError) throw activitiesError;
+      if (activitiesError) throw activitiesError;
 
-  return {
-    post,
-    activities: activities || [],
-  };
+      return {
+        post,
+        activities: activities || [],
+      };
+    },
+    {
+      maxRetries: 3,
+      initialDelay: 1000,
+      onRetry: (attempt, err) => {
+        console.log(
+          `[getPostForEdit] Retry attempt ${attempt} for post ${id}:`,
+          err
+        );
+      },
+    }
+  );
+
+  return result;
 }

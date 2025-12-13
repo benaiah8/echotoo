@@ -1,26 +1,47 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useTransition } from "react";
 import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreated } from "../../api/queries/getUserPostsCreated";
 import {
-  getLikedPostsWithDetails,
   getLikedPostsWithDetailsForUser,
   LikedPostWithDetails,
 } from "../../api/services/likes";
-import Post from "../../components/Post";
 import ProgressivePost from "../../components/ProgressivePost";
 import PostSkeleton from "../../components/skeletons/PostSkeleton";
+import LazyList from "../../components/ui/LazyList";
 import {
   getCachedProfilePosts,
-  updateProfilePostsCache,
+  setCachedProfilePosts,
   preloadProfilePostImages,
+  clearCachedProfilePosts,
 } from "../../lib/profilePostsCache";
+import {
+  requestManager,
+  cancelContextRequests,
+} from "../../lib/requestManager";
+import { getViewerId } from "../../api/services/follows";
 
 /**
- * ProfilePostsSection for OTHER profiles - no Saved tab, separate caching
+ * OtherProfilePostsSection - Posts section for OTHER profiles
+ * - Always uses profile.user_id for caching (consistent)
+ * - Implements stale-while-revalidate (show cache immediately, fetch fresh in background)
+ * - Only caches first 5 posts
+ * - Prepped for lazy loading (structure ready, implementation later)
+ * - No Saved tab (only Created and Interacted)
+ * - Checks access for private accounts
  */
-export default function OtherProfilePostsSection() {
+interface OtherProfilePostsSectionProps {
+  hasAccess?: boolean | null; // null = checking, true = has access, false = no access
+}
+
+export default function OtherProfilePostsSection({ hasAccess = null }: OtherProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted">("created");
+
+  // React 19: useTransition for non-urgent tab switching
+  const [isPending, startTransition] = useTransition();
+
+  // Use profile.user_id consistently (not profile.id)
+  const userId = profile?.user_id || "";
 
   const [created, setCreated] = useState<
     {
@@ -37,8 +58,22 @@ export default function OtherProfilePostsSection() {
   const [loading, setLoading] = useState(false);
   const [likedLoading, setLikedLoading] = useState(false);
 
+  // Refs to track abort controllers for cancellation
+  const createdRequestRef = useRef<AbortController | null>(null);
+  const likedRequestRef = useRef<AbortController | null>(null);
+
+  // Check if viewer has access (approved follower or public account)
+  const viewerHasAccess = profile ? (!profile.is_private || hasAccess === true) : false;
+
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
+    if (!userId) return;
+
+    // Cancel all requests when profile changes
+    cancelContextRequests(`profile-${userId}`);
+    createdRequestRef.current?.abort();
+    likedRequestRef.current?.abort();
+
     // Clear state immediately when profile changes
     setCreated([]);
     setLiked([]);
@@ -47,131 +82,240 @@ export default function OtherProfilePostsSection() {
 
     return () => {
       // Additional cleanup on unmount
-      setCreated([]);
-      setLiked([]);
-      setLoading(false);
-      setLikedLoading(false);
+      createdRequestRef.current?.abort();
+      likedRequestRef.current?.abort();
+      cancelContextRequests(`profile-${userId}`);
     };
-  }, [profile?.id]);
+  }, [userId]);
 
-  // Load cached data immediately for other profile
+  // STALE-WHILE-REVALIDATE: Load cached data immediately for instant display
   useEffect(() => {
-    if (profile?.id) {
-      const cachedData = getCachedProfilePosts(profile.id, "created");
-      if (cachedData && cachedData.length > 0) {
+    if (!userId) return;
+
+    // Load created posts cache using user_id
+    const cachedCreated = getCachedProfilePosts(userId, "created");
+    if (cachedCreated && cachedCreated.length > 0) {
         console.log(
-          "[OtherProfilePostsSection] Using cached created posts:",
-          cachedData.length
+        "[OtherProfilePostsSection] Using cached created posts (stale-while-revalidate):",
+        cachedCreated.length
         );
-        setCreated(cachedData as any);
-        preloadProfilePostImages(cachedData as any);
+      setCreated(cachedCreated as any);
+      preloadProfilePostImages(cachedCreated as any);
       } else {
         setLoading(true);
       }
-    }
-  }, [profile?.id]);
 
-  // Load created posts for other profile - fetch in background to check for new posts
+    // Load interacted posts cache using user_id
+    const cachedInteracted = getCachedProfilePosts(userId, "interacted");
+    if (cachedInteracted && cachedInteracted.length > 0) {
+      console.log(
+        "[OtherProfilePostsSection] Using cached interacted posts (stale-while-revalidate):",
+        cachedInteracted.length
+      );
+      setLiked(cachedInteracted as any);
+    }
+  }, [userId]);
+
+  // Load created posts - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
-    if (!profile?.id || tab !== "created") return;
+    if (!userId || tab !== "created" || !viewerHasAccess) {
+      createdRequestRef.current?.abort();
+      cancelContextRequests(`profile-${userId}-created`);
+      return;
+    }
+
+    // Cancel other tab requests when switching to created
+    likedRequestRef.current?.abort();
+    cancelContextRequests(`profile-${userId}-liked`);
 
     const loadCreatedPosts = async () => {
       try {
+        const abortController = new AbortController();
+        createdRequestRef.current = abortController;
+
         console.log(
-          "[OtherProfilePostsSection] Checking for new created posts:",
+          "[OtherProfilePostsSection] Fetching fresh created posts (background):",
           {
-            profileId: profile.id,
-            profileUserId: profile.user_id,
+            userId,
             tab,
           }
         );
 
-        // Fetch fresh posts in background (don't block UI if we have cache)
-        const { data, error } = await getUserPostsCreated(
-          profile.user_id, // Use user_id (auth user ID) instead of profile.id
+        // Fetch fresh posts in background (stale-while-revalidate)
+        const result = await requestManager.execute(
+          `profile-${userId}-created`,
+          async (signal: AbortSignal) => {
+            const res = await getUserPostsCreated(
+              userId,
           0,
-          20, // Fetch more posts to catch any new ones
+              20, // Fetch more to catch new posts
           false, // includeDrafts = false for other profiles
           false // isOwner = false for other profiles
+            );
+            if (signal.aborted) throw new Error("Aborted");
+            return res;
+          },
+          "high"
         );
 
-        console.log("[OtherProfilePostsSection] Fresh posts result:", {
-          dataLength: data?.length,
-          error,
-        });
+        if (abortController.signal.aborted) return;
 
-        if (error) {
-          console.error("Error loading created posts:", error);
+        if (result.error) {
+          console.error("Error loading created posts:", result.error);
+          if (!abortController.signal.aborted) {
           setLoading(false);
+          }
           return;
         }
 
-        // Update cache with fresh data - this will merge new posts with cached ones
-        const updatedPosts = updateProfilePostsCache(
-          profile.id,
-          "created",
-          data || []
-        );
+        const postsData = result.data?.data || [];
 
-        // Only update state if we got new posts (updateProfilePostsCache returns merged list)
-        setCreated(updatedPosts as any);
+        if (!abortController.signal.aborted) {
+          // Update cache with fresh data (only first 5)
+          setCachedProfilePosts(userId, "created", postsData.slice(0, 5));
+          preloadProfilePostImages(postsData.slice(0, 5) as any);
+
+          // Update state with fresh data
+          setCreated(postsData as any);
         setLoading(false);
-      } catch (error) {
+        }
+      } catch (error: any) {
+        if (error.name !== "AbortError") {
         console.error("Error loading created posts:", error);
         setLoading(false);
+        }
       }
     };
 
     loadCreatedPosts();
-  }, [profile?.id, tab]);
+  }, [userId, tab, viewerHasAccess]);
 
-  // Load liked posts for other profile
+  // Load liked posts - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
-    if (!profile?.id || tab !== "interacted") return;
+    if (!userId || tab !== "interacted" || !viewerHasAccess) {
+      likedRequestRef.current?.abort();
+      cancelContextRequests(`profile-${userId}-liked`);
+      return;
+    }
 
+    // Cancel other tab requests when switching to interacted
+    createdRequestRef.current?.abort();
+    cancelContextRequests(`profile-${userId}-created`);
+
+    // Check cache first (already done in initial load)
+    const cachedInteracted = getCachedProfilePosts(userId, "interacted");
+    if (cachedInteracted && cachedInteracted.length > 0 && liked.length === 0) {
+      setLiked(cachedInteracted as any);
+      setLikedLoading(false);
+    }
+
+    // Fetch fresh data in background (stale-while-revalidate)
     const loadLikedPosts = async () => {
       setLikedLoading(true);
       try {
+        const abortController = new AbortController();
+        likedRequestRef.current = abortController;
+
+        console.log(
+          "[OtherProfilePostsSection] Fetching fresh liked posts (background):",
+          {
+            userId,
+            tab,
+          }
+        );
+
+        const result = await requestManager.execute(
+          `profile-${userId}-liked`,
+          async (signal: AbortSignal) => {
         // For other profiles, get their liked posts using their user_id
-        const { data: likedPosts, error } =
-          await getLikedPostsWithDetailsForUser(profile.user_id);
-        if (error) {
-          console.error("Error loading liked posts:", error);
+            const res = await getLikedPostsWithDetailsForUser(userId);
+            if (signal.aborted) throw new Error("Aborted");
+            return res;
+          },
+          "high"
+        );
+
+        if (abortController.signal.aborted) return;
+
+        if (result.error) {
+          console.error("Error loading liked posts:", result.error);
+          if (liked.length === 0) {
           setLiked([]);
+          }
         } else {
-          setLiked(likedPosts || []);
+          let freshLiked = result.data?.data || [];
+          
+          // [OPTIMIZATION: Phase 1 - Privacy Filter] Use centralized privacy filter utility
+          // Why: Eliminates code duplication, ensures consistent filtering, uses caching and batching
+          if (freshLiked.length > 0) {
+            const viewerProfileId = await getViewerId();
+            const { filterPostsByPrivacy } = await import("../../lib/postPrivacyFilter");
+            freshLiked = await filterPostsByPrivacy(freshLiked, viewerProfileId);
+          }
+          
+          setLiked(freshLiked);
+          // Update cache (only first 5)
+          setCachedProfilePosts(userId, "interacted", freshLiked.slice(0, 5));
         }
-      } catch (error) {
+      } catch (error: any) {
+        if (error.name !== "AbortError") {
         console.error("Error loading liked posts:", error);
+          if (liked.length === 0) {
         setLiked([]);
+          }
+        }
       } finally {
+        if (!likedRequestRef.current?.signal.aborted) {
         setLikedLoading(false);
+        }
       }
     };
 
     loadLikedPosts();
-  }, [profile?.id, tab]);
+  }, [userId, tab, liked.length, viewerHasAccess]);
 
-  // Theme-aware tab styling - FIXED: Same height for all tabs, active tab is smaller
+  // Theme-aware tab styling
   const base =
     "px-2 py-1 rounded-full text-xs border transition-all duration-200 flex items-center justify-center";
   const active = "bg-[var(--text)] text-[var(--bg)] border-[var(--text)]";
   const inactive =
     "bg-transparent text-[var(--text)]/80 border-[var(--border)] hover:border-[var(--text)]/40";
 
+  // If account is private and viewer doesn't have access, show message
+  if (profile?.is_private && hasAccess === false) {
+    return (
+      <section className="w-full max-w-[640px] mx-auto px-3">
+        <div className="py-8 text-center">
+          <div className="text-lg font-semibold text-[var(--text)] mb-2">
+            This account is private
+          </div>
+          <div className="text-sm text-[var(--text)]/70">
+            Follow to see their posts
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="w-full max-w-[640px] mx-auto px-3">
       {/* Tab Navigation */}
       <div className="flex items-center justify-center gap-2 pt-4">
         <button
-          className={`${base} ${tab === "created" ? active : inactive}`}
-          onClick={() => setTab("created")}
+          className={`${base} ${tab === "created" ? active : inactive} ${
+            isPending ? "opacity-70" : ""
+          }`}
+          onClick={() => startTransition(() => setTab("created"))}
+          disabled={isPending}
         >
           Created
         </button>
         <button
-          className={`${base} ${tab === "interacted" ? active : inactive}`}
-          onClick={() => setTab("interacted")}
+          className={`${base} ${tab === "interacted" ? active : inactive} ${
+            isPending ? "opacity-70" : ""
+          }`}
+          onClick={() => startTransition(() => setTab("interacted"))}
+          disabled={isPending}
         >
           Interacted
         </button>
@@ -182,7 +326,7 @@ export default function OtherProfilePostsSection() {
       <div className="py-4">
         {tab === "created" && (
           <>
-            {loading && (
+            {loading && created.length === 0 && (
               <div className="flex flex-col gap-2">
                 {[...Array(3)].map((_, i) => (
                   <PostSkeleton key={i} />
@@ -197,24 +341,25 @@ export default function OtherProfilePostsSection() {
               </div>
             )}
 
-            {/* UNIFIED POSTS LIST - show both hangouts and experiences as full-width posts with progressive loading */}
+            {/* POSTS LIST - Prepped for lazy loading (implementation later) */}
             {!loading && created.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {created.map((p: any) => (
+              <LazyList
+                items={created}
+                renderItem={(p: any) => (
                   <ProgressivePost
                     key={p.id}
                     postId={p.id}
                     caption={p.caption}
                     createdAt={p.created_at}
-                    authorId={profile?.user_id || ""}
+                    authorId={userId}
                     author={{
-                      id: profile?.user_id || "",
+                      id: userId,
                       username: profile?.username || null,
                       display_name: profile?.display_name || null,
                       avatar_url: profile?.avatar_url || null,
                     }}
                     type={p.type}
-                    isOwner={false} // Always false for other profiles
+                    isOwner={false}
                     onDelete={() => {}} // No delete for other profiles
                     status={p.status || "published"}
                     isDraft={false} // No drafts for other profiles
@@ -223,15 +368,21 @@ export default function OtherProfilePostsSection() {
                     anonymousAvatar={p.anonymous_avatar || null}
                     selectedDates={p.selected_dates || null}
                   />
-                ))}
-              </div>
+                )}
+                bufferBefore={0}
+                bufferAfter={1}
+                rootMargin="100px"
+                loadingComponent={<PostSkeleton />}
+                enabled={true}
+                className="flex flex-col gap-2"
+              />
             )}
           </>
         )}
 
         {tab === "interacted" && (
           <>
-            {likedLoading && (
+            {likedLoading && liked.length === 0 && (
               <div className="flex flex-col gap-2">
                 {[...Array(3)].map((_, i) => (
                   <PostSkeleton key={i} />
@@ -245,10 +396,11 @@ export default function OtherProfilePostsSection() {
               </div>
             )}
 
-            {/* UNIFIED LIKED POSTS LIST - show both hangouts and experiences as full-width posts with progressive loading */}
-            {!likedLoading && liked.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {liked.map((l) => (
+            {/* LIKED POSTS LIST - Prepped for lazy loading (implementation later) */}
+            {liked.length > 0 && (
+              <LazyList
+                items={liked}
+                renderItem={(l: LikedPostWithDetails) => (
                   <ProgressivePost
                     key={l.posts.id}
                     postId={l.posts.id}
@@ -262,14 +414,20 @@ export default function OtherProfilePostsSection() {
                       avatar_url: l.posts.profiles.avatar_url,
                     }}
                     type={l.posts.type}
-                    isOwner={false} // Liked posts are not owned by the current user
-                    status="published" // Liked posts are always published
+                    isOwner={false}
+                    status="published"
                     isAnonymous={l.posts.is_anonymous || false}
                     anonymousName={(l.posts as any).anonymous_name}
                     anonymousAvatar={(l.posts as any).anonymous_avatar}
                   />
-                ))}
-              </div>
+                )}
+                bufferBefore={0}
+                bufferAfter={1}
+                rootMargin="100px"
+                loadingComponent={<PostSkeleton />}
+                enabled={!likedLoading}
+                className="flex flex-col gap-2"
+              />
             )}
           </>
         )}

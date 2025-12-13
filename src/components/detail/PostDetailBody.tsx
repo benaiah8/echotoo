@@ -251,7 +251,6 @@ export default function PostDetailBody({
                 postId={post.id}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
-                onInvite={handleInvite}
                 isDraft={isDraft}
               />
             )}

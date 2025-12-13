@@ -2,6 +2,11 @@ import React, { useState, useEffect } from "react";
 import { FaBell, FaBellSlash } from "react-icons/fa";
 import { supabase } from "../../lib/supabaseClient";
 import toast from "react-hot-toast";
+import { getViewerId } from "../../api/services/follows";
+import {
+  getCachedNotificationSettings,
+  setCachedNotificationSettings,
+} from "../../lib/notificationSettingsCache";
 
 type Props = {
   targetId: string; // profile id to toggle notifications for
@@ -18,7 +23,7 @@ export default function NotificationBell({
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(false); // Start as false for immediate display
 
-  // Load initial notification status
+  // Load cached notification settings immediately, then fetch fresh
   useEffect(() => {
     if (!isFollowing) {
       setIsEnabled(false);
@@ -26,12 +31,66 @@ export default function NotificationBell({
       return;
     }
 
-    const loadNotificationStatus = async () => {
+    (async () => {
+      // Try to get viewer profile ID from localStorage first (fast, synchronous)
+      const storedProfileId = localStorage.getItem("my_profile_id");
+      let viewerProfileId: string | null = null;
+      let cachedEnabled: boolean | null = null;
+
+      if (storedProfileId) {
+        // Use stored profile ID to check cache immediately
+        viewerProfileId = storedProfileId;
+
+        // Load cached settings immediately (synchronous, instant)
+        cachedEnabled = getCachedNotificationSettings(viewerProfileId, targetId);
+        if (cachedEnabled !== null) {
+          console.log(
+            "[NotificationBell] Using cached notification settings (instant):",
+            cachedEnabled
+          );
+          setIsEnabled(cachedEnabled);
+          setInitializing(false);
+        } else {
+          setInitializing(true);
+        }
+      } else {
+        // No stored profile ID, need to fetch it
+        setInitializing(true);
+      }
+
+      // Fetch viewer profile ID if not stored (or verify stored one is correct)
+      const fetchedViewerId = await getViewerId();
+
+      // Update stored profile ID if we got a new one
+      if (fetchedViewerId && fetchedViewerId !== storedProfileId) {
+        localStorage.setItem("my_profile_id", fetchedViewerId);
+      }
+
+      const finalViewerId = fetchedViewerId || viewerProfileId;
+
+      if (!finalViewerId) {
+        setInitializing(false);
+        return;
+      }
+
+      // If we didn't have cached settings with stored ID, check cache again with fetched ID
+      if (cachedEnabled === null && finalViewerId !== viewerProfileId) {
+        cachedEnabled = getCachedNotificationSettings(finalViewerId, targetId);
+        if (cachedEnabled !== null) {
+          setIsEnabled(cachedEnabled);
+          setInitializing(false);
+        }
+      }
+
+      // Fetch fresh settings in background
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!user) {
+          setInitializing(false);
+          return;
+        }
 
         // Get current user's profile ID
         const { data: profile } = await supabase
@@ -40,7 +99,10 @@ export default function NotificationBell({
           .eq("user_id", user.id)
           .single();
 
-        if (!profile?.id) return;
+        if (!profile?.id) {
+          setInitializing(false);
+          return;
+        }
 
         // Check if notifications are enabled for this user
         const { data: notificationSettings } = await supabase
@@ -50,69 +112,78 @@ export default function NotificationBell({
           .eq("target_user_id", targetId)
           .single();
 
-        setIsEnabled(notificationSettings?.enabled ?? true); // Default to enabled when following
+        const freshEnabled = notificationSettings?.enabled ?? true; // Default to enabled when following
+
+        // Cache the fresh settings
+        setCachedNotificationSettings(profile.id, targetId, freshEnabled);
+        setIsEnabled(freshEnabled);
       } catch (error) {
         console.error("Error loading notification status:", error);
-        setIsEnabled(true); // Default to enabled
+        // Keep cached settings if available, otherwise default to enabled
+        if (cachedEnabled === null) {
+          setIsEnabled(true);
+        }
       } finally {
         setInitializing(false);
       }
-    };
-
-    loadNotificationStatus();
+    })();
   }, [targetId, isFollowing]);
 
   const toggleNotifications = async () => {
     if (loading || !isFollowing) return;
 
     setLoading(true);
+    const previousEnabled = isEnabled;
+    
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
+      const viewerId = await getViewerId();
+      if (!viewerId) {
         toast.error("Please sign in to manage notifications");
+        setLoading(false);
         return;
       }
 
-      // Get current user's profile ID
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", user.id)
-        .single();
+      const newEnabled = !isEnabled;
+      
+      // Update UI immediately (optimistic update)
+      setIsEnabled(newEnabled);
+      // Update cache immediately
+      setCachedNotificationSettings(viewerId, targetId, newEnabled);
 
-      if (!profile?.id) {
-        toast.error("Profile not found");
-        return;
-      }
-
-      if (isEnabled) {
-        // Disable notifications
-        const { error } = await supabase
-          .from("notification_settings")
-          .delete()
-          .eq("user_id", profile.id)
-          .eq("target_user_id", targetId);
-
-        if (error) throw error;
-        setIsEnabled(false);
-        toast.success("Notifications disabled");
-      } else {
+      if (newEnabled) {
         // Enable notifications
         const { error } = await supabase.from("notification_settings").upsert({
-          user_id: profile.id,
+          user_id: viewerId,
           target_user_id: targetId,
           enabled: true,
         });
 
-        if (error) throw error;
-        setIsEnabled(true);
+        if (error) {
+          throw error;
+        }
         toast.success("Notifications enabled");
+      } else {
+        // Disable notifications
+        const { error } = await supabase
+          .from("notification_settings")
+          .delete()
+          .eq("user_id", viewerId)
+          .eq("target_user_id", targetId);
+
+        if (error) {
+          throw error;
+        }
+        toast.success("Notifications disabled");
       }
     } catch (error) {
       console.error("Error toggling notifications:", error);
       toast.error("Failed to update notification settings");
+      // Rollback on error
+      setIsEnabled(previousEnabled);
+      const viewerId = await getViewerId();
+      if (viewerId) {
+        setCachedNotificationSettings(viewerId, targetId, previousEnabled);
+      }
     } finally {
       setLoading(false);
     }

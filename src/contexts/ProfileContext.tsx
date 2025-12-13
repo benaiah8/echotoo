@@ -13,6 +13,8 @@ export type Profile = {
   instagram_url?: string | null;
   tiktok_url?: string | null;
   telegram_url?: string | null;
+  is_private?: boolean; // Whether account is private (requires approval to see posts)
+  social_media_public?: boolean; // Whether social media links are visible publicly even when account is private
 };
 
 type Ctx = {

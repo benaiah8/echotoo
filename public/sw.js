@@ -1,6 +1,6 @@
 // public/sw.js
 // Echotoo PWA: Service worker for caching static assets and reducing bandwidth
-const APP_VERSION = "v13"; // Update this version number when deploying new features
+const APP_VERSION = "v14"; // Update this version number when deploying new features
 const STATIC_CACHE = `static-${APP_VERSION}`;
 const IMAGE_CACHE = `images-${APP_VERSION}`;
 const API_CACHE = `api-${APP_VERSION}`;

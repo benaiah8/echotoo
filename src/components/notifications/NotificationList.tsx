@@ -105,6 +105,12 @@ export default function NotificationList({ className = "" }: Props) {
     );
   };
 
+  const handleInviteAccepted = (postId: string) => {
+    // Dispatch custom event to refresh interacted posts
+    const event = new CustomEvent("invite:accepted", { detail: { postId } });
+    window.dispatchEvent(event);
+  };
+
   const handleMarkAllAsRead = async () => {
     if (notifications.some((n) => !n.is_read)) {
       try {
@@ -147,7 +153,17 @@ export default function NotificationList({ className = "" }: Props) {
     }
   })();
 
-  const unreadCount = notifications.filter((n) => !n.is_read).length;
+  // Exclude declined follow requests from unread count
+  const unreadCount = notifications.filter((n) => {
+    if (!n.is_read) {
+      // Don't count declined follow requests as unread
+      if (n.type === "follow" && n.additional_data?.follow_request_status === "declined") {
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }).length;
 
   if (loading) {
     return (
@@ -259,6 +275,7 @@ export default function NotificationList({ className = "" }: Props) {
                     notification={notification}
                     onMarkAsRead={handleMarkAsRead}
                     showGoToPostButton={true}
+                    onInviteAccepted={handleInviteAccepted}
                   />
                 </div>
               );

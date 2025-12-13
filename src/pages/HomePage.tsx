@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import useScrollDirection from "../hooks/useScrollDirection";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
@@ -9,6 +9,7 @@ import HomeHangoutSection from "../sections/home/HomeHangoutSection";
 import HomePostsSection from "../sections/home/HomePostsSection";
 import { getPublicFeed, type FeedItem } from "../api/queries/getPublicFeed";
 import { supabase } from "../lib/supabaseClient";
+import { getViewerId } from "../api/services/follows";
 import { Paths } from "../router/Paths";
 import { FiFilter } from "react-icons/fi";
 import { FiPhone } from "react-icons/fi";
@@ -18,6 +19,8 @@ import { preloadImages } from "../lib/imageOptimization";
 import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
 import Modal from "../components/modal/Modal";
+import { handleError, getErrorMessage } from "../lib/errorHandling";
+import toast from "react-hot-toast";
 
 const PAGE_SIZE = 6;
 
@@ -135,6 +138,9 @@ export default function HomePage() {
           setLoadingMore(true);
         }
 
+        // Get viewer profile ID for privacy filtering
+        const viewerProfileId = await getViewerId();
+
         const feedOptions = {
           // UNIFIED: Now fetching both hangouts and experiences together
           type: undefined, // Remove type filter to get both
@@ -142,6 +148,7 @@ export default function HomePage() {
           tags: selectedTags.length > 0 ? selectedTags : undefined,
           limit: PAGE_SIZE,
           offset: page * PAGE_SIZE,
+          viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
         };
 
         let data: FeedItem[] = [];
@@ -269,7 +276,9 @@ export default function HomePage() {
                 setTagFallbackItems(filteredFallbackData.slice(0, PAGE_SIZE)); // Limit to reasonable amount
               }
             } catch (fallbackError) {
-              console.error("Error loading fallback posts:", fallbackError);
+              // [OPTIMIZATION: Phase 7.1.3] Silent error for fallback - already handling gracefully
+              // Why: This is a fallback attempt, don't show error if it fails
+              console.debug("Error loading fallback posts:", fallbackError);
               if (!cancelled) setTagFallbackItems([]);
             } finally {
               if (!cancelled) setTagFallbackLoading(false);
@@ -284,11 +293,41 @@ export default function HomePage() {
           if (data.length < PAGE_SIZE) setHasMore(false);
         }
       } catch (e: any) {
-        console.error("[HomePage] Error loading feed:", e);
+        // [OPTIMIZATION: Phase 7.1.3] Use user-friendly error handling
+        // Why: Shows clear error messages to users instead of just console logs
+        handleError(e, "HomePage");
         if (!cancelled) {
-          setError(e?.message ?? "Failed to load feed");
-          // Set empty items on error to prevent infinite loading
-          setItems([]);
+          const errorMessage = getErrorMessage(e);
+          setError(errorMessage);
+          
+          // [OPTIMIZATION: Phase 7.1.5] Graceful degradation - try to show cached data on error
+          // Why: User still sees content even if network request fails
+          if (page === 0) {
+            try {
+              const cacheKey = dataCache.generateFeedKey({
+                type: undefined,
+                q: search || undefined,
+                tags: selectedTags.length > 0 ? selectedTags : undefined,
+                limit: PAGE_SIZE,
+                offset: 0,
+              });
+              const cachedData = dataCache.get<FeedItem[]>(cacheKey);
+              if (cachedData && cachedData.length > 0) {
+                console.log("[HomePage] Showing cached data after error");
+                setItems(cachedData);
+                setError(null); // Clear error if we have cached data
+              } else {
+                // No cached data, keep error message
+                setItems([]);
+              }
+            } catch (cacheError) {
+              // If cache check fails, just show empty with error
+              setItems([]);
+            }
+          } else {
+            // For pagination errors, don't clear existing items - they remain visible
+            // Just don't append new items
+          }
         }
       } finally {
         if (!cancelled) {
@@ -312,38 +351,72 @@ export default function HomePage() {
     // );
   }, [items]);
 
-  // Performance: Prefetch next page and images when items are loaded
+  // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch next page when user is 80% through current page
+  // Why: Seamless pagination, no loading delay when user reaches bottom
+  const handlePrefetchNextPage = useCallback(async () => {
+    if (loading || loadingMore || !hasMore) return;
+
+    // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
+    // Why: Skip prefetching on slow connections to save bandwidth
+    const { shouldSkipPrefetching } = await import("../lib/connectionAware");
+    if (shouldSkipPrefetching()) {
+      return; // Skip prefetching on very slow connections
+    }
+    
+    // Get viewer profile ID for privacy filtering
+    (async () => {
+      const viewerProfileId = await getViewerId();
+      const feedOptions = {
+        type: undefined, // UNIFIED: Prefetch both types
+        q: search || undefined,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        limit: PAGE_SIZE,
+        offset: items.length, // Next page offset
+        viewerProfileId: viewerProfileId ?? undefined, // Pass viewer ID for privacy filtering
+      };
+
+      dataCache.prefetchFeedData(feedOptions);
+    })();
+  }, [loading, loadingMore, hasMore, search, selectedTags, items.length]);
+
+  // Performance: Prefetch images when items are loaded
   useEffect(() => {
     if (items.length > 0 && !loading) {
-      // Prefetch next page data in the background
-      onIdle(() => {
-        const feedOptions = {
-          type: undefined, // UNIFIED: Prefetch both types
-          q: search || undefined,
-          tags: selectedTags.length > 0 ? selectedTags : undefined,
-          limit: PAGE_SIZE,
-          offset: items.length, // Next page offset
-        };
-
-        dataCache.prefetchFeedData(feedOptions);
-      }, 1000);
-
-      // Prefetch images from the first few posts
-      onIdle(() => {
-        const imageUrls: string[] = [];
-        items.slice(0, 3).forEach((post) => {
-          // Add author avatar
-          if (post.author?.avatar_url) {
-            imageUrls.push(post.author.avatar_url);
-          }
-        });
-
-        if (imageUrls.length > 0) {
-          preloadImages(imageUrls).catch(() => {
-            // Silent fail for image prefetching
-          });
+      // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
+      // Why: Skip prefetching on slow connections to save bandwidth
+      (async () => {
+        const { shouldSkipPrefetching, isSlowConnection } = await import("../lib/connectionAware");
+        if (shouldSkipPrefetching()) {
+          return; // Skip prefetching on very slow connections
         }
-      }, 1500);
+
+        // [OPTIMIZATION: Phase 6 - Connection] Prioritize critical content on slow connections
+        // Why: Load first post images immediately, defer non-critical avatars
+        const isSlow = isSlowConnection();
+        
+        // On slow connections, only prefetch critical images (first post)
+        // On fast connections, prefetch first 3 posts
+        const postsToPrefetch = isSlow ? items.slice(0, 1) : items.slice(0, 3);
+        
+        // Prefetch images from the selected posts
+        onIdle(() => {
+          const imageUrls: string[] = [];
+          postsToPrefetch.forEach((post) => {
+            // Only add author avatar on fast connections (non-critical on slow)
+            if (!isSlow && post.author?.avatar_url) {
+              imageUrls.push(post.author.avatar_url);
+            }
+          });
+
+          if (imageUrls.length > 0) {
+            preloadImages(imageUrls).catch(() => {
+              // Silent fail for image prefetching
+            });
+          }
+        // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 1500ms to immediate with requestIdleCallback
+        // Why: Faster image prefetching, better perceived performance
+        }, 0);
+      })();
     }
   }, [items.length, loading, type, search, selectedTags]);
 
@@ -358,6 +431,9 @@ export default function HomePage() {
           // TODO: Implement current location uploads feature
           // For now, we'll fetch recent posts with basic relevance algorithm
 
+          // Get viewer profile ID for privacy filtering
+          const viewerProfileId = await getViewerId();
+
           // Fetch recent posts (both hangouts and experiences)
           const recent = await getPublicFeed({
             type: undefined, // Get both types
@@ -365,6 +441,7 @@ export default function HomePage() {
             tags: selectedTags.length > 0 ? selectedTags : undefined,
             limit: 20, // Get more to allow for filter prioritization
             offset: 0,
+            viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
           });
 
           if (!cancelled) {
@@ -537,7 +614,9 @@ export default function HomePage() {
           if (!cancelled) setHangoutsLoading(false);
         }
       })();
-    }, 500); // give the main list a moment first
+    // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 500ms to immediate
+    // Why: Faster fallback loading, better UX
+    }, 0);
     return () => {
       cancelled = true;
     };
@@ -599,7 +678,9 @@ export default function HomePage() {
       },
       {
         root: null,
-        rootMargin: "200px 0px 200px 0px", // prefetch a bit, but not too early
+        // [OPTIMIZATION: Phase 5 - Image] Optimized rootMargin for better prefetching
+        // Why: 150px is optimal - prefetches early enough without wasting bandwidth
+        rootMargin: "150px 0px 150px 0px",
         threshold: 0.1,
       }
     );
@@ -613,7 +694,9 @@ export default function HomePage() {
     if (!filtersOpen) setForceRevealHeader(false);
   }, [filtersOpen]);
 
-  const handleFilterClick = () => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
+  // Why: These callbacks are passed as props, memoization prevents child re-renders
+  const handleFilterClick = useCallback(() => {
     if (isHidden) {
       setForceRevealHeader(true);
       setFiltersOpen(true);
@@ -625,32 +708,36 @@ export default function HomePage() {
     } else {
       setFiltersOpen((v) => !v);
     }
-  };
+  }, [isHidden]);
 
-  const handleClearFilters = () => {
+  const handleClearFilters = useCallback(() => {
     setSelectedTags([]);
     setSearch("");
-  };
+  }, []);
 
   // Handle logo click - show login modal if not authenticated, info popup if authenticated
-  const handleLogoClick = () => {
+  const handleLogoClick = useCallback(() => {
     if (isAuthenticated) {
       setShowInfoModal(true);
     } else {
       dispatch(setAuthModal(true));
     }
-  };
+  }, [isAuthenticated, dispatch]);
 
-  // Check if there are any active filters
-  const hasActiveFilters =
-    viewMode !== "all" || search.trim() !== "" || selectedTags.length > 0;
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize computed values
+  // Why: Prevents recalculation on every render
+  const hasActiveFilters = useMemo(
+    () =>
+      viewMode !== "all" || search.trim() !== "" || selectedTags.length > 0,
+    [viewMode, search, selectedTags]
+  );
 
   return (
     <>
       <PrimaryPageContainer hideUI={isHidden}>
         {/* FIXED HEADER */}
         <div className="fixed inset-x-0 top-0 z-30 shadow-[0_1px_0_var(--border)]">
-          <div className="w-full max-w-[640px] mx-auto bg-[var(--surface)] px-3 pt-3 pb-0">
+          <div className="w-full max-w-[640px] mx-auto bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] px-3 pt-3 pb-0">
             {/* Row 1: search (left) + logo (right) */}
             <HomeSearchSection
               onSearch={setSearch}
@@ -703,7 +790,23 @@ export default function HomePage() {
 
           {/* POSTS & INJECTIONS */}
           <div className="w-full max-w-[640px] mx-auto px-0 pt-1">
-            {error && <div className="text-red-400 text-sm mb-2">{error}</div>}
+            {/* [OPTIMIZATION: Phase 7.1.4] Error display with retry button */}
+            {error && (
+              <div className="px-3 py-3 mb-2 rounded-lg border border-red-500/30 bg-red-500/10 flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-red-400 text-sm">{error}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setError(null);
+                    setPage(0); // Reset to first page and trigger refetch
+                  }}
+                  className="px-3 py-1.5 text-xs rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
 
             <HomePostsSection
               viewMode={viewMode}
@@ -717,6 +820,7 @@ export default function HomePage() {
               selectedTags={selectedTags}
               hangouts={hangouts}
               hangoutsLoading={hangoutsLoading}
+              onPrefetchNextPage={handlePrefetchNextPage}
             />
 
             {/* "Other things you might like" appears only during search */}

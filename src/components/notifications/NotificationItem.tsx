@@ -6,12 +6,14 @@ import { formatDistanceToNow } from "date-fns";
 import Avatar from "../ui/Avatar";
 import { Paths, profileByUsername } from "../../router/Paths";
 import InviteNotificationItem from "./InviteNotificationItem";
+import FollowRequestNotificationItem from "./FollowRequestNotificationItem";
 
 interface Props {
   notification: NotificationWithActor;
   onMarkAsRead: (id: string) => void;
   compact?: boolean;
   showGoToPostButton?: boolean;
+  onInviteAccepted?: (postId: string) => void; // NEW: callback when invite is accepted
 }
 
 const getNotificationText = (notification: NotificationWithActor): string => {
@@ -35,6 +37,17 @@ const getNotificationText = (notification: NotificationWithActor): string => {
     case "saved":
       return `${actorName} saved your post`;
     case "rsvp":
+      // Check if this is an invite acceptance
+      const inviteStatus = notification.additional_data?.status;
+      const postCaption = notification.additional_data?.post_caption || "an event";
+      const postType = notification.additional_data?.post_type || "hangout";
+      
+      if (inviteStatus === "accepted") {
+        return `${actorName} accepted your invite to ${postType === "hangout" ? "a hangout" : "an experience"}`;
+      } else if (inviteStatus === "declined") {
+        return `${actorName} declined your invite to ${postType === "hangout" ? "a hangout" : "an experience"}`;
+      }
+      // Fallback to generic RSVP text
       return `${actorName} RSVP'd to your event`;
     case "post":
       return `${actorName} posted a new ${notification.entity_type}`;
@@ -85,6 +98,7 @@ export default function NotificationItem({
   onMarkAsRead,
   compact = false,
   showGoToPostButton = true,
+  onInviteAccepted,
 }: Props) {
   // Use specialized component for invite notifications
   if (notification.type === "invite") {
@@ -94,6 +108,19 @@ export default function NotificationItem({
         onMarkAsRead={onMarkAsRead}
         compact={compact}
         showGoToPostButton={showGoToPostButton}
+        onInviteAccepted={onInviteAccepted}
+      />
+    );
+  }
+
+  // Use specialized component for follow request notifications
+  // Check if this is a follow request (has follow_request_status in additional_data)
+  if (notification.type === "follow" && notification.additional_data?.follow_request_status) {
+    return (
+      <FollowRequestNotificationItem
+        notification={notification}
+        onMarkAsRead={onMarkAsRead}
+        compact={compact}
       />
     );
   }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import { getPublicFeed, type FeedItem } from "../api/queries/getPublicFeed";
+import { getViewerId } from "../api/services/follows";
 
 export default function FeedTestPage() {
   const [items, setItems] = useState<FeedItemExtended[]>([]);
@@ -17,7 +18,12 @@ export default function FeedTestPage() {
     (async () => {
       try {
         setLoading(true);
-        const data = await getPublicFeed({ limit: 20 });
+        // Get viewer profile ID for privacy filtering
+        const viewerProfileId = await getViewerId();
+        const data = await getPublicFeed({ 
+          limit: 20,
+          viewerProfileId: viewerProfileId || undefined,
+        });
         setItems(data as unknown as FeedItemExtended[]);
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load feed");

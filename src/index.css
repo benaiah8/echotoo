@@ -64,6 +64,13 @@
   ); /* Light yellow background for special dates */
   --date-highlight-text: var(--text); /* Text color for highlighted dates */
   --gutter: 14px;
+
+  /* Frosted glass effect variables (dark theme) */
+  --glass-bg: rgba(21, 21, 22, 0.4); /* Semi-transparent dark background - further reduced intensity */
+  --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
+  --glass-active-bg: rgba(255, 255, 255, 0.15); /* Active indicator background (square) */
+  --glass-active-shadow: 0 4px 12px rgba(255, 255, 255, 0.1); /* Lighter drop shadow for active indicator (dark mode) */
+  --glass-active-border: rgba(255, 255, 255, 0.4); /* More prominent white-ish border for active indicator (dark mode) */
 }
 
 .theme-light {
@@ -126,6 +133,13 @@
     0.2
   ); /* Slightly more opaque yellow for light mode */
   --date-highlight-text: var(--text); /* Text color for highlighted dates */
+
+  /* Frosted glass effect variables (light theme) */
+  --glass-bg: rgba(242, 243, 246, 0.45); /* Semi-transparent light background - further reduced intensity */
+  --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
+  --glass-active-bg: rgba(255, 255, 255, 0.9); /* Active indicator background (square) - more opaque in light mode */
+  --glass-active-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); /* Darker drop shadow for active indicator (light mode) */
+  --glass-active-border: rgba(0, 0, 0, 0.25); /* More prominent dark border for active indicator (light mode) */
 }
 
 html,
@@ -233,4 +247,27 @@ input:focus {
 
 .animate-slide-in-right {
   animation: slide-in-right 0.3s ease-out;
+}
+
+/* Tooltip animation */
+@keyframes fadeInSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Bottom tab Avatar alignment fix */
+.bottom-tab-avatar-wrapper {
+  line-height: 0;
+  font-size: 0;
+}
+
+.bottom-tab-avatar-wrapper > div > div {
+  display: block !important;
+  vertical-align: middle;
 }

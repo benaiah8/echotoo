@@ -28,7 +28,7 @@ export default function FollowButton({
 }: Props) {
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [followStatus, setFollowStatus] = useState<
-    "none" | "following" | "friends" | "self" | null
+    "none" | "pending" | "following" | "friends" | "self" | null
   >(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [initializing, setInitializing] = useState(true);
@@ -137,7 +137,10 @@ export default function FollowButton({
             .then((actualStatus) => {
               if (!cancelled && actualStatus !== cachedStatus) {
                 setFollowStatus(actualStatus);
-                setCachedFollowStatus(me, targetProfileId, actualStatus);
+                // Only cache non-pending statuses
+                if (actualStatus !== "pending" && me) {
+                  setCachedFollowStatus(me, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+                }
               }
             })
             .catch(() => {
@@ -148,8 +151,8 @@ export default function FollowButton({
 
         // No cache - fetch actual status
         const status = await getFollowStatus(me, targetProfileId);
-        if (me) {
-          setCachedFollowStatus(me, targetProfileId, status);
+        if (me && status !== "pending") {
+          setCachedFollowStatus(me, targetProfileId, status as "none" | "following" | "friends" | "self");
         }
 
         if (!cancelled) {
@@ -182,7 +185,9 @@ export default function FollowButton({
         // Refresh follow status when this user's follow status changes elsewhere
         getFollowStatus(viewerId, targetId).then((status) => {
           setFollowStatus(status);
-          setCachedFollowStatus(viewerId, targetId, status);
+          if (status !== "pending") {
+            setCachedFollowStatus(viewerId, targetId, status as "none" | "following" | "friends" | "self");
+          }
         });
       }
     };
@@ -297,39 +302,33 @@ export default function FollowButton({
         setIsProcessing(false);
         clearTimeout(safetyTimeout);
 
-        // Verify the actual status and update if needed
+        // [OPTIMIZATION: Phase 2 - Performance] Optimistic update with immediate cache update
+        // Why: Instant UI feedback, verify status in background without blocking UI
         if (viewerId) {
-          clearCachedFollowStatus(viewerId, targetProfileId);
+          // Optimistically update cache and UI immediately
+          const optimisticStatus = wasFollowing ? "none" : "following";
+          setCachedFollowStatus(viewerId, targetProfileId, optimisticStatus);
+          setFollowStatus(optimisticStatus);
+          onChange?.(!wasFollowing);
 
-          // Get the actual status after a brief delay to ensure DB consistency
-          setTimeout(async () => {
-            try {
-              const actualStatus = await getFollowStatus(
-                viewerId,
-                targetProfileId
-              );
-              console.log("[FollowButton] Refreshed status:", actualStatus);
-              setFollowStatus(actualStatus);
-              setCachedFollowStatus(viewerId, targetProfileId, actualStatus);
-
-              // Update onChange if status changed from what we optimistically set
-              const optimisticWasFollowing = !wasFollowing;
-              const actualIsFollowing =
-                actualStatus === "following" || actualStatus === "friends";
-
-              console.log("[FollowButton] Status comparison:", {
-                optimisticWasFollowing,
-                actualIsFollowing,
-                finalStatus: actualStatus,
-              });
-
-              if (optimisticWasFollowing !== actualIsFollowing) {
+          // Verify actual status in background (non-blocking)
+          getFollowStatus(viewerId, targetProfileId)
+            .then((actualStatus) => {
+              // Only update if different from optimistic
+              if (actualStatus !== optimisticStatus) {
+                setFollowStatus(actualStatus);
+                if (actualStatus !== "pending") {
+                  setCachedFollowStatus(viewerId, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+                }
+                const actualIsFollowing =
+                  actualStatus === "following" || actualStatus === "friends";
                 onChange?.(actualIsFollowing);
               }
-            } catch (error) {
-              console.error("Error refreshing follow status:", error);
-            }
-          }, 300); // Reduced delay for faster update
+            })
+            .catch((error) => {
+              console.error("Error verifying follow status:", error);
+              // Keep optimistic update on error
+            });
 
           // Dispatch event for other components
           window.dispatchEvent(

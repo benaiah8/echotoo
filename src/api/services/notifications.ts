@@ -28,6 +28,18 @@ export async function getNotifications(
 
   const notifications = (data || []) as Notification[];
 
+  // Debug: Log invite notifications
+  const inviteNotifications = notifications.filter((n) => n.type === "invite");
+  if (inviteNotifications.length > 0) {
+    console.log(`Found ${inviteNotifications.length} invite notifications:`, inviteNotifications.map((n) => ({
+      id: n.id,
+      type: n.type,
+      user_id: n.user_id,
+      actor_id: n.actor_id,
+      invite_direction: (n.additional_data as any)?.invite_direction,
+    })));
+  }
+
   // Get unique actor IDs
   const actorIds = notifications
     .map((n) => n.actor_id)
@@ -48,14 +60,35 @@ export async function getNotifications(
         acc[profile.user_id] = profile;
         return acc;
       }, {} as Record<string, any>);
+      
+      // Debug: Log missing actor profiles for invite notifications
+      const missingActors = inviteNotifications
+        .filter((n) => n.actor_id && !actors[n.actor_id])
+        .map((n) => n.actor_id);
+      if (missingActors.length > 0) {
+        console.warn("Missing actor profiles for invite notifications:", missingActors);
+      }
     }
   }
 
   // Combine notifications with actor data
-  return notifications.map((notification) => ({
+  const result = notifications.map((notification) => ({
     ...notification,
     actor: notification.actor_id ? actors[notification.actor_id] || null : null,
   }));
+
+  // Debug: Log final invite notifications with actor data
+  const finalInviteNotifications = result.filter((n) => n.type === "invite");
+  if (finalInviteNotifications.length > 0) {
+    console.log(`Returning ${finalInviteNotifications.length} invite notifications with actor data:`, finalInviteNotifications.map((n) => ({
+      id: n.id,
+      type: n.type,
+      actor: n.actor ? { user_id: n.actor.user_id, username: n.actor.username } : null,
+      invite_direction: (n.additional_data as any)?.invite_direction,
+    })));
+  }
+
+  return result;
 }
 
 /**

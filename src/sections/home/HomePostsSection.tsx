@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import HomeHangoutSection from "./HomeHangoutSection";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Post from "../../components/Post";
@@ -19,6 +19,8 @@ interface Props {
   hangoutsLoading?: boolean;
   // to know if we have tag filters active
   selectedTags?: string[];
+  // [OPTIMIZATION: Phase 4 - Prefetch] Callback for prefetching next page
+  onPrefetchNextPage?: () => Promise<void>;
 }
 
 const INJECT_EVERY = 8;
@@ -35,7 +37,38 @@ export default function HomePostsSection({
   hangouts = [],
   hangoutsLoading,
   selectedTags = [],
+  onPrefetchNextPage,
 }: Props) {
+  // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch next page when user is 80% through current page
+  // Why: Seamless pagination, no loading delay when user reaches bottom
+  const containerRef = useRef<HTMLDivElement>(null);
+  const prefetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (!containerRef.current || !onPrefetchNextPage || items.length === 0 || prefetchedRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // When 80% of the container is visible, prefetch next page
+        if (entries[0].intersectionRatio >= 0.8) {
+          prefetchedRef.current = true;
+          // Use requestIdleCallback for non-blocking prefetch
+          if (typeof window.requestIdleCallback === 'function') {
+            requestIdleCallback(onPrefetchNextPage, { timeout: 2000 });
+          } else {
+            setTimeout(onPrefetchNextPage, 0);
+          }
+        }
+      },
+      { threshold: 0.8 } // Trigger when 80% visible
+    );
+
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [items.length, onPrefetchNextPage]);
   // Show appropriate items based on viewMode
   const hangoutItems = items.filter(
     (p: FeedItem) => String(p.type).toLowerCase() === "hangout"
@@ -81,7 +114,7 @@ export default function HomePostsSection({
 
   return (
     // NOTE: px-3 here realigns posts with the header/search and bottom bar
-    <div className="flex flex-col w-full px-3 gap-4 mt-4">
+    <div ref={containerRef} className="flex flex-col w-full px-3 gap-4 mt-4">
       {/* Show skeleton only when no posts are available yet */}
       {loading &&
         displayItems.length === 0 &&

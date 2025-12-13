@@ -16,6 +16,8 @@ import OnboardingWrapper from "./components/onboarding/OnboardingWrapper";
 import { dbg, dumpAuthEnv } from "./lib/authDebug";
 import { store } from "./app/store";
 import AnimatedLogo from "./components/ui/AnimatedLogo";
+import { setupCacheInvalidationListeners } from "./lib/cacheInvalidation";
+import { networkRecovery } from "./lib/networkRecovery";
 
 function App() {
   const dispatch = useDispatch();
@@ -31,6 +33,14 @@ function App() {
 
   useEffect(() => {
     applyTheme(getInitialTheme());
+
+    // [OPTIMIZATION: Phase 3 - Event] Setup event-based cache invalidation
+    // Why: Automatically invalidates related caches when profile or follow status changes
+    setupCacheInvalidationListeners();
+
+    // [OPTIMIZATION: Phase 7.1.6] Initialize network recovery
+    // Why: Automatically retries failed requests when network comes back online
+    // Note: networkRecovery singleton is initialized automatically
 
     dumpAuthEnv();
 
@@ -53,6 +63,8 @@ function App() {
 
     return () => {
       sub.subscription.unsubscribe();
+      // Cleanup network recovery on unmount
+      networkRecovery.destroy();
     };
   }, [dispatch]);
 

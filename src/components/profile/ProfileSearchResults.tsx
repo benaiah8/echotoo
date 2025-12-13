@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   searchProfiles,
   type ProfileSearchRow,
@@ -6,6 +6,113 @@ import {
 import Avatar from "../ui/Avatar";
 import FollowButton from "../ui/FollowButton";
 import { Link, useNavigate } from "react-router-dom";
+import { getViewerId } from "../../api/services/follows";
+import {
+  getCachedFollowStatus,
+  setCachedFollowStatus,
+} from "../../lib/followStatusCache";
+
+// [OPTIMIZATION: Phase 6.2 - React] Memoized search result item component
+// Why: Prevents unnecessary re-renders when other items in the list change
+type ProfileSearchResultItemProps = {
+  profile: ProfileSearchRow;
+  onNavigate: (slug: string) => void;
+  onFollowChange: (profileId: string, nowFollowing: boolean) => void;
+};
+
+const ProfileSearchResultItem = React.memo(function ProfileSearchResultItem({
+  profile,
+  onNavigate,
+  onFollowChange,
+}: ProfileSearchResultItemProps) {
+  const startY = useRef<number | null>(null);
+  const moved = useRef(false);
+
+  const handleClick = () => {
+    if (moved.current) return; // treat as scroll, not a click
+    const slug = profile.username || profile.id;
+    onNavigate(slug);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-3 p-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer select-none"
+      onMouseDown={(e) => {
+        startY.current = e.clientY;
+        moved.current = false;
+      }}
+      onMouseMove={(e) => {
+        if (
+          startY.current !== null &&
+          Math.abs(e.clientY - startY.current) > 6
+        ) {
+          moved.current = true;
+        }
+      }}
+      onMouseUp={() => {
+        startY.current = null;
+      }}
+      onTouchStart={(e) => {
+        startY.current = e.touches[0].clientY;
+        moved.current = false;
+      }}
+      onTouchMove={(e) => {
+        if (
+          startY.current !== null &&
+          Math.abs(e.touches[0].clientY - startY.current) > 6
+        ) {
+          moved.current = true;
+        }
+      }}
+      onTouchEnd={() => {
+        startY.current = null;
+      }}
+      onClick={handleClick}
+    >
+      <Link to={`/u/${profile.username || profile.id}`} className="shrink-0">
+        <Avatar
+          url={profile.avatar_url || undefined}
+          name={profile.display_name || profile.username || "User"}
+          size={40}
+        />
+      </Link>
+
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-semibold truncate">
+          {profile.display_name || "Unnamed"}
+        </div>
+        <div className="text-[11px] text-[var(--text)]/60 truncate">
+          @{profile.username || "user"}{" "}
+          {profile.member_no ? (
+            <span className="ml-1 text-[var(--text)]/40">
+              • Nº {profile.member_no}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div onClick={(e) => e.stopPropagation()}>
+        <FollowButton
+          targetId={profile.id}
+          className="text-[11px] h-6 min-w-[70px] px-2"
+          onChange={(nowFollowing) => {
+            onFollowChange(profile.id, nowFollowing);
+          }}
+        />
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if profile data changes
+  return (
+    prevProps.profile.id === nextProps.profile.id &&
+    prevProps.profile.username === nextProps.profile.username &&
+    prevProps.profile.display_name === nextProps.profile.display_name &&
+    prevProps.profile.avatar_url === nextProps.profile.avatar_url &&
+    prevProps.profile.member_no === nextProps.profile.member_no &&
+    prevProps.profile.you_follow === nextProps.profile.you_follow
+  );
+});
 
 export default function ProfileSearchResults({
   query,
@@ -19,8 +126,6 @@ export default function ProfileSearchResults({
   const [rows, setRows] = useState<ProfileSearchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const startY = useRef<number | null>(null);
-  const moved = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -29,6 +134,54 @@ export default function ProfileSearchResults({
       const r = await searchProfiles(query, viewerId || undefined);
       if (mounted) setRows(r);
       setLoading(false);
+
+      // [OPTIMIZATION: Phase 2 - Batch] Batch prefetch follow status for search results
+      // Why: Single API call instead of loop with individual calls, faster and more efficient
+      if (r.length > 0 && viewerId) {
+        // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
+        // Why: Skip prefetching on slow connections to save bandwidth
+        (async () => {
+          const { shouldSkipPrefetching } = await import("../../lib/connectionAware");
+          if (!shouldSkipPrefetching()) {
+            const prefetchFollowStatuses = async () => {
+              try {
+                const currentViewerId = await getViewerId();
+                if (!currentViewerId) return;
+
+                // Prefetch for first 10 results (most likely to be clicked)
+                const profilesToPrefetch = r.slice(0, 10);
+                
+                // Filter out already cached profiles
+                const uncachedProfiles = profilesToPrefetch.filter(profile => {
+                  const cached = getCachedFollowStatus(currentViewerId, profile.id);
+                  return !cached;
+                });
+
+                if (uncachedProfiles.length === 0) return;
+
+                // [OPTIMIZATION: Phase 2 - Batch] Batch fetch all follow statuses at once
+                // Why: Single API call for all profiles instead of sequential calls
+                const { getBatchFollowStatuses } = await import("../../api/services/follows");
+                const followStatuses = await getBatchFollowStatuses(
+                  currentViewerId,
+                  uncachedProfiles.map(p => p.id)
+                );
+
+                // Cache all statuses
+                Object.entries(followStatuses).forEach(([profileId, status]) => {
+                  setCachedFollowStatus(currentViewerId, profileId, status);
+                });
+              } catch (error) {
+                // Silent fail for prefetching
+                console.debug("Failed to prefetch follow statuses:", error);
+              }
+            };
+
+            // Prefetch immediately (non-blocking)
+            prefetchFollowStatuses();
+          }
+        })();
+      }
     })();
     return () => {
       mounted = false;
@@ -46,6 +199,28 @@ export default function ProfileSearchResults({
     window.addEventListener("follow:changed", rerun);
     return () => window.removeEventListener("follow:changed", rerun);
   }, []);
+
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
+  // Why: These callbacks are passed to memoized child components
+  const handleNavigate = useCallback(
+    (slug: string) => {
+      navigate(`/u/${slug}`);
+      onClose?.();
+    },
+    [navigate, onClose]
+  );
+
+  const handleFollowChange = useCallback(
+    (profileId: string, nowFollowing: boolean) => {
+      // Update the local state when follow status changes
+      setRows((rows) =>
+        rows.map((x) =>
+          x.id === profileId ? { ...x, you_follow: nowFollowing } : x
+        )
+      );
+    },
+    []
+  );
 
   if (!query) return null;
 
@@ -92,89 +267,14 @@ export default function ProfileSearchResults({
           )}
 
           <div className="flex flex-col gap-2">
-            {rows.map((r) => {
-              return (
-                <div
-                  key={r.id}
-                  className="flex items-center gap-3 p-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer select-none"
-                  onMouseDown={(e) => {
-                    startY.current = e.clientY;
-                    moved.current = false;
-                  }}
-                  onMouseMove={(e) => {
-                    if (
-                      startY.current !== null &&
-                      Math.abs(e.clientY - startY.current) > 6
-                    ) {
-                      moved.current = true;
-                    }
-                  }}
-                  onMouseUp={() => {
-                    startY.current = null;
-                  }}
-                  onTouchStart={(e) => {
-                    startY.current = e.touches[0].clientY;
-                    moved.current = false;
-                  }}
-                  onTouchMove={(e) => {
-                    if (
-                      startY.current !== null &&
-                      Math.abs(e.touches[0].clientY - startY.current) > 6
-                    ) {
-                      moved.current = true;
-                    }
-                  }}
-                  onTouchEnd={() => {
-                    startY.current = null;
-                  }}
-                  onClick={() => {
-                    if (moved.current) return; // treat as scroll, not a click
-                    const slug = r.username || r.id;
-                    navigate(`/u/${slug}`);
-                    onClose?.();
-                  }}
-                >
-                  <Link to={`/u/${r.username || r.id}`} className="shrink-0">
-                    <Avatar
-                      url={r.avatar_url || undefined}
-                      name={r.display_name || r.username || "User"}
-                      size={40}
-                    />
-                  </Link>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-semibold truncate">
-                      {r.display_name || "Unnamed"}
-                    </div>
-                    <div className="text-[11px] text-[var(--text)]/60 truncate">
-                      @{r.username || "user"}{" "}
-                      {r.member_no ? (
-                        <span className="ml-1 text-[var(--text)]/40">
-                          • Nº {r.member_no}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <FollowButton
-                      targetId={r.id}
-                      className="text-[11px] h-6 min-w-[70px] px-2"
-                      onChange={(nowFollowing) => {
-                        // Update the local state when follow status changes
-                        setRows((rows) =>
-                          rows.map((x) =>
-                            x.id === r.id
-                              ? { ...x, you_follow: nowFollowing }
-                              : x
-                          )
-                        );
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            {rows.map((r) => (
+              <ProfileSearchResultItem
+                key={r.id}
+                profile={r}
+                onNavigate={handleNavigate}
+                onFollowChange={handleFollowChange}
+              />
+            ))}
           </div>
         </div>
       </div>

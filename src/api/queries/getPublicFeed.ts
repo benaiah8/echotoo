@@ -5,6 +5,7 @@ import {
   cacheFeedResult,
   getCachedFeedResult,
 } from "../../lib/dataCache";
+import { retry } from "../../lib/retry";
 
 export type FeedItem = {
   id: string;
@@ -23,6 +24,7 @@ export type FeedItem = {
     username: string | null;
     display_name: string | null;
     avatar_url: string | null;
+    is_private?: boolean | null;
   } | null;
 };
 
@@ -32,6 +34,7 @@ export type FeedOptions = {
   tags?: string[];
   limit?: number;
   offset?: number;
+  viewerProfileId?: string; // Optional: viewer's profile ID for privacy filtering
 };
 
 export async function getPublicFeed(
@@ -66,7 +69,7 @@ export async function getPublicFeed(
        tags,
        author_id,
          author:profiles!author_id(
-        id, username, display_name, avatar_url
+        id, username, display_name, avatar_url, is_private
   )
 `
     )
@@ -94,22 +97,86 @@ export async function getPublicFeed(
 
   // console.log("[getPublicFeed] About to execute query...");
 
-  // First, let's try a simple test query to see if the table is accessible at all
-  try {
-    const { data: testData, error: testError } = await supabase
-      .from("posts")
-      .select("id")
-      .limit(1);
-    // console.log("[getPublicFeed] Test query result:", {
-    //   testData,
-    //   testError,
-    //   testLength: testData?.length,
-    // });
-  } catch (testErr) {
-    console.error("[getPublicFeed] Test query failed:", testErr);
-  }
+  // [OPTIMIZATION: Phase 7.2] Add retry logic to database query
+  // Why: Handles transient network failures gracefully, improves reliability
+  // [FIX] Build query inside retry function - Supabase query builders should be fresh for each retry attempt
+  let data: any[] | null = null;
+  let error: any = null;
 
-  const { data, error } = await query;
+  try {
+    const result = await retry(
+      async () => {
+        // Build query fresh for each retry attempt
+        let retryQuery = supabase
+          .from("posts")
+          .select(
+            `
+            id,
+             type,
+             caption,
+             is_anonymous,
+             anonymous_name,
+             anonymous_avatar,
+             created_at,
+             selected_dates,
+             tags,
+             author_id,
+               author:profiles!author_id(
+                id, username, display_name, avatar_url, is_private
+          )
+        `
+          )
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
+
+        if (type) {
+          retryQuery = retryQuery.eq("type", type);
+        }
+        if (q && q.trim()) {
+          retryQuery = retryQuery.ilike("caption", `%${q.trim()}%`);
+        }
+        if (tags && tags.length > 0) {
+          retryQuery = retryQuery.overlaps("tags", tags);
+        }
+
+        const { data: retryData, error: retryError } = await retryQuery;
+        if (retryError) {
+          throw retryError; // Retry will catch and retry this
+        }
+        return retryData;
+      },
+      {
+        maxRetries: 3,
+        initialDelay: 1000,
+        onRetry: (attempt, err) => {
+          console.log(
+            `[getPublicFeed] Retry attempt ${attempt} after error:`,
+            err
+          );
+        },
+      }
+    );
+    data = result;
+  } catch (retryError: any) {
+    error = retryError;
+    console.error("[getPublicFeed] Query failed after retries:", retryError);
+
+    // [OPTIMIZATION: Phase 7.5] Graceful degradation: return cached data on error
+    // Why: User still sees content even if network request fails
+    if (offset === 0) {
+      const cacheKey = dataCache.generateFeedKey(opts);
+      const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
+      if (cachedData) {
+        console.log(
+          "[getPublicFeed] Returning cached data after query failure"
+        );
+        return cachedData;
+      }
+    }
+
+    // If no cached data available, throw the error
+    throw error;
+  }
 
   // console.log("[getPublicFeed] Query result:", {
   //   data,
@@ -117,13 +184,15 @@ export async function getPublicFeed(
   //   dataLength: data?.length,
   // });
 
-  if (error) {
-    console.error("[getPublicFeed] Query error:", error);
-    throw error;
-  }
-
-  const rawData = (data ?? []) as unknown as FeedItemWithDates[];
+  let rawData = (data ?? []) as unknown as FeedItemWithDates[];
   // console.log("[getPublicFeed] Raw data:", rawData, "length:", rawData.length);
+
+  // [OPTIMIZATION: Phase 1 - Privacy Filter] Use centralized privacy filter utility
+  // Why: Eliminates code duplication, ensures consistent filtering, uses caching and batching
+  if (rawData.length > 0) {
+    const { filterPostsByPrivacy } = await import("../../lib/postPrivacyFilter");
+    rawData = await filterPostsByPrivacy(rawData, opts.viewerProfileId);
+  }
 
   // Apply smart sorting for better user experience
   const sortedData = sortFeedItems(rawData);
