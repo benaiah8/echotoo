@@ -181,7 +181,9 @@ export default function NotificationGroup({
                               "Someone"}
                             {notification.type === "like" && " liked your post"}
                             {notification.type === "follow" &&
-                              " started following you"}
+                              (notification.additional_data?.follow_request_status
+                                ? " requested to follow you"
+                                : " started following you")}
                             {notification.type === "comment" &&
                               " commented on your post"}
                             {notification.type === "invite" && " invited you"}

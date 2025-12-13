@@ -249,12 +249,14 @@ export default function FollowButton({
     }
 
     const previousStatus = followStatus;
+    // Include "pending" status so users can cancel pending requests
     const wasFollowing =
-      followStatus === "following" || followStatus === "friends";
+      followStatus === "following" || followStatus === "friends" || followStatus === "pending";
 
     // INSTANT UI UPDATE - show processing state immediately
     setIsProcessing(true);
     setHasError(false);
+    // When pending, clicking should cancel (unfollow), not follow again
     setCurrentAction(wasFollowing ? "unfollow" : "follow");
 
     // Safety timeout to prevent infinite loading
@@ -290,7 +292,9 @@ export default function FollowButton({
 
         const errorMessage =
           result.error.message ||
-          (wasFollowing ? "Couldn't unfollow" : "Couldn't follow");
+          (wasFollowing 
+            ? "Couldn't cancel request" 
+            : "Couldn't follow");
         toast.error(errorMessage);
         setHasError(true);
         setIsProcessing(false);
@@ -306,6 +310,7 @@ export default function FollowButton({
         // Why: Instant UI feedback, verify status in background without blocking UI
         if (viewerId) {
           // Optimistically update cache and UI immediately
+          // If wasFollowing (including pending), set to "none". Otherwise set to "following"
           const optimisticStatus = wasFollowing ? "none" : "following";
           setCachedFollowStatus(viewerId, targetProfileId, optimisticStatus);
           setFollowStatus(optimisticStatus);
@@ -413,10 +418,11 @@ export default function FollowButton({
   const getButtonText = () => {
     if (hasError) return "Try again";
     if (isProcessing && currentAction) {
-      return currentAction === "follow" ? "Following..." : "Unfollowing...";
+      return currentAction === "follow" ? "Following..." : followStatus === "pending" ? "Canceling..." : "Unfollowing...";
     }
     if (followStatus === "friends") return "Friends";
     if (followStatus === "following") return "Following";
+    if (followStatus === "pending") return "Requested";
     return "Follow";
   };
 

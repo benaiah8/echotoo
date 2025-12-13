@@ -802,16 +802,23 @@ export async function unfollow(targetProfileId: string) {
 
     console.log("Attempting to unfollow profile:", targetProfileId);
 
-    // Check current follow status
-    const currentStatus = await isFollowing(me, targetProfileId);
-    console.log("Current follow status before unfollow:", currentStatus);
+    // Check if any follow relationship exists (pending, approved, or declined)
+    // This allows canceling pending requests, not just unfollowing approved follows
+    const { data: followRelationship, error: fetchError } = await supabase
+      .from("follows")
+      .select("status")
+      .eq("follower_id", me)
+      .eq("following_id", targetProfileId)
+      .maybeSingle();
 
-    if (!currentStatus) {
-      console.log("Not following this user");
+    console.log("Follow relationship check before unfollow:", { followRelationship, fetchError });
+
+    if (!followRelationship) {
+      console.log("No follow relationship found");
       return { error: null };
     }
 
-    // Delete the follow relationship
+    // Delete the follow relationship (works for pending, approved, or declined statuses)
     const { error: deleteError } = await supabase
       .from("follows")
       .delete()
@@ -826,6 +833,69 @@ export async function unfollow(targetProfileId: string) {
     }
 
     console.log("Unfollow successful");
+
+    // If this was a pending request, clean up related notifications
+    if (followRelationship?.status === "pending") {
+      try {
+        // Get user IDs for notification cleanup
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, id")
+          .in("id", [me, targetProfileId]);
+
+        const followerUser = profiles?.find((p) => p.id === me);
+        const followingUser = profiles?.find((p) => p.id === targetProfileId);
+
+        if (followerUser?.user_id && followingUser?.user_id) {
+          // Delete notifications related to this canceled follow request
+          // Delete both the "sent" (requester receives) and "received" (owner receives) notifications
+          // We delete notifications where:
+          // 1. Owner receives: user_id = followingUser, actor_id = followerUser, type = follow
+          // 2. Requester receives: user_id = followerUser, actor_id = followingUser, type = follow
+          
+          // Delete notification for account owner (received request)
+          await supabase
+            .from("notifications")
+            .delete()
+            .eq("type", "follow")
+            .eq("entity_type", "profile")
+            .eq("user_id", followingUser.user_id)
+            .eq("actor_id", followerUser.user_id);
+
+          // Delete notification for requester (sent request)
+          await supabase
+            .from("notifications")
+            .delete()
+            .eq("type", "follow")
+            .eq("entity_type", "profile")
+            .eq("user_id", followerUser.user_id)
+            .eq("actor_id", followingUser.user_id);
+
+          console.log("Cleaned up follow request notifications");
+        }
+      } catch (notificationError) {
+        // Don't fail unfollow if notification cleanup fails
+        console.error("Error cleaning up notifications:", notificationError);
+      }
+    }
+
+    // Clear caches after successful unfollow
+    try {
+      const { clearCachedFollowStatus } = await import("../../lib/followStatusCache");
+      const { clearCachedFollowRequestStatus } = await import("../../lib/followRequestStatusCache");
+      
+      // Clear follow status cache (clears all relationships for this profile)
+      clearCachedFollowStatus(me);
+      
+      // Clear follow request status cache if it was a pending request
+      if (followRelationship?.status === "pending") {
+        clearCachedFollowRequestStatus(me, targetProfileId);
+      }
+    } catch (cacheError) {
+      console.error("Error clearing cache:", cacheError);
+      // Don't fail unfollow if cache clear fails
+    }
+
     return { error: null };
   } catch (error) {
     console.error("Unfollow exception:", error);

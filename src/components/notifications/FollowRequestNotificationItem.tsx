@@ -303,7 +303,7 @@ export default function FollowRequestNotificationItem({
   // Determine notification text based on direction
   const notificationText = requestDirection === "sent"
     ? `You followed ${actorName} - Waiting for approval`
-    : `${actorName} started following you`;
+    : `${actorName} requested to follow you`;
 
   const linkTo = notification.actor?.username
     ? profileByUsername(notification.actor.username)
