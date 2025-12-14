@@ -537,8 +537,9 @@ export default function OtherProfilePage() {
     const previousStatus = followStatus;
 
     try {
-      if (followStatus === "following" || followStatus === "friends") {
-        // Unfollow
+      // [FIX] Include "pending" in unfollow condition so "Requested" button can cancel
+      if (followStatus === "following" || followStatus === "friends" || followStatus === "pending") {
+        // Unfollow or cancel pending request
         const newStatus: FollowStatus = "none";
         setFollowStatus(newStatus);
         // Update cache immediately
@@ -582,30 +583,52 @@ export default function OtherProfilePage() {
             // Silent fail - cache will refresh on next view
           });
       } else {
-        // Follow
-        const newStatus: FollowStatus = "following"; // Will update to "friends" if mutual
-        setFollowStatus(newStatus);
-        // Update cache immediately
-        if (viewerId) {
-          setCachedFollowStatus(viewerId, profile.id, newStatus);
+        // Follow - [FIX] Use profile.is_private (already loaded) to set correct optimistic status
+        // No extra API call needed - this is instant and doesn't slow down public accounts
+        const isPrivateAccount = profile.is_private === true;
+        // For private accounts, set to "pending". For public, set to "following"
+        const optimisticStatus: FollowStatus = isPrivateAccount ? "pending" : "following";
+        
+        setFollowStatus(optimisticStatus);
+        
+        // Don't cache pending status
+        if (viewerId && optimisticStatus !== "pending") {
+          setCachedFollowStatus(viewerId, profile.id, optimisticStatus);
         }
 
-        const { error } = await doFollow(profile.id);
-        if (error) {
+        const result = await doFollow(profile.id);
+        if (result.error) {
           // Rollback on error
           setFollowStatus(previousStatus || "none");
           if (viewerId) {
             setCachedFollowStatus(viewerId, profile.id, previousStatus || "none");
           }
-          throw error;
+          throw result.error;
         }
 
-        // Check if it's mutual (friends) after follow
-        if (viewerId) {
-          const updatedStatus = await getFollowStatus(viewerId, profile.id);
-          setFollowStatus(updatedStatus);
-          setCachedFollowStatus(viewerId, profile.id, updatedStatus);
+        // [FIX] Use the actual status returned from API to prevent flickering
+        const apiStatus = (result as any).status;
+        let actualStatus: FollowStatus;
+        
+        if (apiStatus === "pending") {
+          actualStatus = "pending";
+        } else if (apiStatus === "approved") {
+          // Check if it's mutual (friends) - only for approved follows
+          if (viewerId) {
+            const updatedStatus = await getFollowStatus(viewerId, profile.id);
+            actualStatus = updatedStatus;
+            if (updatedStatus !== "pending") {
+              setCachedFollowStatus(viewerId, profile.id, updatedStatus);
+            }
+          } else {
+            actualStatus = "following";
+          }
+        } else {
+          // Fallback to optimistic status
+          actualStatus = optimisticStatus;
         }
+
+        setFollowStatus(actualStatus);
 
         // Update follow counts cache for both profiles after follow
         // Update UI counts immediately (optimistic update)
@@ -808,20 +831,23 @@ export default function OtherProfilePage() {
                       <div className="mt-3 w-full flex justify-center">
                         <div className="flex items-center gap-2">
                           <button
-                            disabled={busy || followStatus === "pending"}
+                            disabled={busy}
                             onClick={onToggleFollow}
-                            className={`h-6 px-2 rounded-md text-xs border transition-opacity ${
+                            className={`h-6 px-2 rounded-md text-xs border transition-opacity inline-flex items-center justify-center ${
                               followStatus === "following" || followStatus === "friends"
                                 ? "bg-white text-black border-white"
                                 : followStatus === "pending"
-                                ? "bg-[var(--text)]/10 text-[var(--text)]/50 border-[var(--border)] cursor-not-allowed"
+                                ? "bg-[var(--text)]/10 text-[var(--text)]/50 border-[var(--border)]"
                                 : "border-[var(--border)] text-[var(--text)]"
-                            } ${followStatusLoading ? "opacity-70" : ""}`}
+                            } ${followStatusLoading ? "opacity-70" : ""} ${busy ? "cursor-wait" : "cursor-pointer"}`}
                           >
                             {followStatusLoading && followStatus === null ? (
                               <span className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
                             ) : followStatus === "pending" ? (
-                              "Requested"
+                              <>
+                                <span>Requested</span>
+                                <FiLock size={12} className="ml-1" />
+                              </>
                             ) : followStatus === "friends" ? (
                               "Friends"
                             ) : followStatus === "following" ? (

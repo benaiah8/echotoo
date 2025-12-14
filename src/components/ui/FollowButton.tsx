@@ -14,6 +14,7 @@ import {
 import toast from "react-hot-toast";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
+import { FiLock } from "react-icons/fi";
 
 type Props = {
   targetId: string; // profile id to follow/unfollow
@@ -306,44 +307,76 @@ export default function FollowButton({
         setIsProcessing(false);
         clearTimeout(safetyTimeout);
 
-        // [OPTIMIZATION: Phase 2 - Performance] Optimistic update with immediate cache update
-        // Why: Instant UI feedback, verify status in background without blocking UI
+        // [FIX: Use actual status from API] Use returned status to prevent flickering
+        // Why: API returns the actual status (pending/approved), so we use that instead of guessing
         if (viewerId) {
-          // Optimistically update cache and UI immediately
-          // If wasFollowing (including pending), set to "none". Otherwise set to "following"
-          const optimisticStatus = wasFollowing ? "none" : "following";
-          setCachedFollowStatus(viewerId, targetProfileId, optimisticStatus);
-          setFollowStatus(optimisticStatus);
-          onChange?.(!wasFollowing);
+          let actualStatus: "none" | "pending" | "following" | "friends" | "self" | null = null;
+          
+          if (wasFollowing) {
+            // Unfollow: status is now "none"
+            actualStatus = "none";
+          } else {
+            // Follow: use status returned from API (pending for private, following/approved for public)
+            // The API returns status: "pending" or "approved"
+            // We need to map "approved" to "following" and keep "pending" as is
+            const apiStatus = (result as any).status;
+            if (apiStatus === "pending") {
+              actualStatus = "pending";
+            } else if (apiStatus === "approved") {
+              // For approved follows, check if mutual to determine "following" vs "friends"
+              // For now, set to "following" - it will be corrected by the verification check
+              actualStatus = "following";
+            } else if (apiStatus === "self") {
+              actualStatus = "self";
+            } else {
+              // Fallback: default to "following" if status not provided
+              actualStatus = "following";
+            }
+          }
 
-          // Verify actual status in background (non-blocking)
-          getFollowStatus(viewerId, targetProfileId)
-            .then((actualStatus) => {
-              // Only update if different from optimistic
-              if (actualStatus !== optimisticStatus) {
-                setFollowStatus(actualStatus);
-                if (actualStatus !== "pending") {
-                  setCachedFollowStatus(viewerId, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+          // Update cache and UI immediately with actual status
+          if (actualStatus) {
+            // Only cache non-pending and non-self statuses
+            if (actualStatus !== "pending" && actualStatus !== "self") {
+              setCachedFollowStatus(viewerId, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+            }
+            setFollowStatus(actualStatus);
+            // Type assertion to help TypeScript understand the possible values
+            const statusForComparison = actualStatus as "none" | "pending" | "following" | "friends" | "self";
+            const isFollowingStatus = (statusForComparison === "following" || statusForComparison === "friends");
+            onChange?.(isFollowingStatus);
+          }
+
+          // Verify actual status in background (non-blocking) to check for mutual follows
+          if (actualStatus) {
+            getFollowStatus(viewerId, targetProfileId)
+              .then((verifiedStatus) => {
+                // Only update if different (e.g., if it's mutual and should be "friends")
+                if (verifiedStatus !== actualStatus) {
+                  setFollowStatus(verifiedStatus);
+                  if (verifiedStatus !== "pending") {
+                    setCachedFollowStatus(viewerId, targetProfileId, verifiedStatus as "none" | "following" | "friends" | "self");
+                  }
+                  const verifiedIsFollowing =
+                    verifiedStatus === "following" || verifiedStatus === "friends";
+                  onChange?.(verifiedIsFollowing);
                 }
-                const actualIsFollowing =
-                  actualStatus === "following" || actualStatus === "friends";
-                onChange?.(actualIsFollowing);
-              }
-            })
-            .catch((error) => {
-              console.error("Error verifying follow status:", error);
-              // Keep optimistic update on error
-            });
+              })
+              .catch((error) => {
+                console.error("Error verifying follow status:", error);
+                // Keep the status from API on error
+              });
 
-          // Dispatch event for other components
-          window.dispatchEvent(
-            new CustomEvent("follow:changed", {
-              detail: {
-                targetId: targetProfileId,
-                nowFollowing: !wasFollowing,
-              },
-            })
-          );
+            // Dispatch event for other components
+            window.dispatchEvent(
+              new CustomEvent("follow:changed", {
+                detail: {
+                  targetId: targetProfileId,
+                  nowFollowing: !wasFollowing,
+                },
+              })
+            );
+          }
         }
       }
     } catch (error) {
@@ -426,6 +459,19 @@ export default function FollowButton({
     return "Follow";
   };
 
+  const getButtonContent = () => {
+    const text = getButtonText();
+    if (followStatus === "pending" && !isProcessing) {
+      return (
+        <>
+          <span>{text}</span>
+          <FiLock size={12} className="ml-1" />
+        </>
+      );
+    }
+    return <span>{text}</span>;
+  };
+
   const disabledClass =
     (!isProcessing && initializing) || (!isProcessing && isSelfOrGuest)
       ? "opacity-60 cursor-not-allowed"
@@ -445,8 +491,8 @@ export default function FollowButton({
       }}
       aria-label={getButtonText()}
     >
-      <span className="transition-all duration-200 ease-out">
-        {getButtonText()}
+      <span className="transition-all duration-200 ease-out inline-flex items-center">
+        {getButtonContent()}
       </span>
 
       {/* Loading spinner when processing */}
