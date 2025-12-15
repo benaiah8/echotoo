@@ -215,7 +215,7 @@ export default function RSVPListDrawer({
             .select("status")
             .eq("post_id", postId)
             .eq("user_id", authUser.id) // Use auth user ID
-            .single();
+            .maybeSingle(); // Use maybeSingle to handle 0 rows gracefully (prevents 406 errors)
 
         if (currentUserError && currentUserError.code !== "PGRST116") {
           console.error("Error loading current user RSVP:", currentUserError);

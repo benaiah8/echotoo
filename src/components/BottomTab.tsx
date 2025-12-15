@@ -205,6 +205,11 @@ function BottomTab() {
         return;
       }
 
+      // Guard: Don't query if authedId is null (prevents 400 errors with user_id=eq.null)
+      if (!authedId) {
+        return; // Use cached values if available, but don't make invalid query
+      }
+
       const { data, error } = await supabase
         .from("profiles")
         .select("avatar_url, display_name")
