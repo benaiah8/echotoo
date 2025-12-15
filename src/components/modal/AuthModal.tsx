@@ -128,12 +128,39 @@ const AuthModal = () => {
   const handleGoogle = async () => {
     try {
       setLoading(true);
+      // Use full URL for PWA compatibility
+      const redirectUrl = `${window.location.origin}/auth/callback`;
+      const isPWA = window.matchMedia("(display-mode: standalone)").matches || 
+                    (window.navigator as any).standalone === true ||
+                    document.referrer.includes('android-app://');
+      
+      console.log("[AuthModal] Google sign-in starting:", {
+        redirectUrl,
+        origin: window.location.origin,
+        fullUrl: window.location.href,
+        isPWA,
+        userAgent: navigator.userAgent,
+      });
+      
+      // Show the redirect URL to user for Supabase configuration
+      if (isPWA) {
+        console.warn("[AuthModal] PWA detected! Make sure this URL is in Supabase redirect URLs:", redirectUrl);
+      }
+      
       dbg("Google:start", {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: redirectUrl,
+        isPWA,
+        origin: window.location.origin,
       });
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { 
+          redirectTo: redirectUrl,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
       });
       dbg("Google:returned", { ok: !error, error: error?.message });
       if (error) throw error;
@@ -141,7 +168,9 @@ const AuthModal = () => {
     } catch (e: any) {
       dbg("Google:catch", { error: e?.message });
       setLoading(false);
-      toast.error(e?.message ?? "Google sign-in failed");
+      const errorMsg = e?.message ?? "Google sign-in failed";
+      console.error("[AuthModal] Google sign-in error:", errorMsg);
+      toast.error(`${errorMsg}. Check console for redirect URL.`);
     }
   };
 

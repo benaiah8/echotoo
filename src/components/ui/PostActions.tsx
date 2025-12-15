@@ -27,6 +27,7 @@ interface PostActionsProps {
     avatar_url?: string | null;
     is_anonymous?: boolean;
   };
+  onInvite?: () => void; // NEW: callback for invite action
 }
 
 export default function PostActions({
@@ -37,6 +38,7 @@ export default function PostActions({
   caption,
   postImageUrl,
   postAuthor,
+  onInvite,
 }: PostActionsProps) {
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -166,6 +168,7 @@ export default function PostActions({
         creatorName={postAuthor?.display_name || undefined}
         creatorHandle={postAuthor?.username ? `@${postAuthor.username}` : undefined}
         creatorAvatarUrl={postAuthor?.avatar_url || undefined}
+        onInvite={onInvite}
       />
     </div>
   );

@@ -1,6 +1,19 @@
 // Avatar cache to reduce egress
 const AVATAR_CACHE_KEY = "avatar_cache";
-const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+const BASE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours (base duration)
+
+// [OPTIMIZATION: Phase 6 - Connection] Get cache duration based on connection speed
+// Why: Longer cache duration on slow connections to reduce network requests
+function getCacheDuration(): number {
+  try {
+    const { getCacheDurationMultiplier } = require("./connectionAware");
+    const multiplier = getCacheDurationMultiplier();
+    return BASE_CACHE_DURATION * multiplier;
+  } catch {
+    // Fallback if connectionAware not available
+    return BASE_CACHE_DURATION;
+  }
+}
 
 interface CachedAvatar {
   url: string;
@@ -23,7 +36,8 @@ export function getCachedAvatar(userId: string): string | null {
     if (!avatarData) return null;
 
     const now = Date.now();
-    if (now - avatarData.timestamp < CACHE_DURATION) {
+    // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
+    if (now - avatarData.timestamp < getCacheDuration()) {
       return avatarData.url;
     }
 
@@ -58,4 +72,19 @@ export function preloadAvatar(url: string): void {
 
   const img = new Image();
   img.src = url;
+}
+
+// [OPTIMIZATION: Phase 3 - Cache] Clear cached avatar for a specific user
+// Why: Allows cache invalidation when avatar changes
+export function clearCachedAvatar(userId: string): void {
+  try {
+    const cached = localStorage.getItem(AVATAR_CACHE_KEY);
+    if (!cached) return;
+
+    const parsed: AvatarCache = JSON.parse(cached);
+    delete parsed[userId];
+    localStorage.setItem(AVATAR_CACHE_KEY, JSON.stringify(parsed));
+  } catch (error) {
+    console.error("Error clearing cached avatar:", error);
+  }
 }

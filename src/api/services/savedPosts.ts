@@ -284,7 +284,7 @@ export async function getSavedPosts(): Promise<{
     console.log("Found posts:", posts);
 
     // Combine saved posts with post details
-    const result = savedPosts
+    let result = savedPosts
       .map((savedPost) => {
         const post = posts?.find((p) => p.id === savedPost.post_id);
         return {
@@ -297,6 +297,15 @@ export async function getSavedPosts(): Promise<{
       .filter((item) => item.posts); // Filter out any posts that weren't found
 
     console.log("Final result:", result);
+
+    // [OPTIMIZATION: Phase 1 - Privacy Filter] Filter saved posts by privacy
+    // Why: Hide saved posts from private accounts that viewer can't access
+    if (result.length > 0) {
+      const { filterPostsByPrivacy } = await import("../../lib/postPrivacyFilter");
+      const { getViewerId } = await import("./follows");
+      const viewerProfileId = await getViewerId();
+      result = await filterPostsByPrivacy(result, viewerProfileId);
+    }
 
     // Cache the result
     setCachedSavedPosts(user.id, result as unknown as SavedPostWithDetails[]);

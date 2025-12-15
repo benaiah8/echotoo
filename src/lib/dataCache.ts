@@ -17,10 +17,14 @@ class DataCache {
   }
 
   set<T>(key: string, data: T, ttlMs: number = 5 * 60 * 1000): void {
+    // [OPTIMIZATION: Phase 6 - Connection] Adjust TTL based on connection speed
+    // Why: Longer cache duration on slow connections to reduce network requests
+    const adjustedTtl = this.getAdjustedTtl(ttlMs);
+    
     const entry = {
       data,
       timestamp: Date.now(),
-      ttl: ttlMs,
+      ttl: adjustedTtl,
     };
 
     this.cache.set(key, entry);
@@ -59,6 +63,19 @@ class DataCache {
     }
 
     return null;
+  }
+
+  // [OPTIMIZATION: Phase 6 - Connection] Get adjusted TTL based on connection speed
+  // Why: Longer cache duration on slow connections
+  private getAdjustedTtl(baseTtl: number): number {
+    try {
+      const { getCacheDurationMultiplier } = require("./connectionAware");
+      const multiplier = getCacheDurationMultiplier();
+      return baseTtl * multiplier;
+    } catch {
+      // Fallback if connectionAware not available
+      return baseTtl;
+    }
   }
 
   private loadFromLocalStorage(): void {

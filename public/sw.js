@@ -1,6 +1,6 @@
 // public/sw.js
 // Echotoo PWA: Service worker for caching static assets and reducing bandwidth
-const APP_VERSION = "v12"; // Update this version number when deploying new features
+const APP_VERSION = "v14"; // Update this version number when deploying new features
 const STATIC_CACHE = `static-${APP_VERSION}`;
 const IMAGE_CACHE = `images-${APP_VERSION}`;
 const API_CACHE = `api-${APP_VERSION}`;
@@ -163,12 +163,18 @@ self.addEventListener("fetch", (event) => {
 
   // Check for Supabase and Auth patterns
   const isSupabaseHost = url.hostname.endsWith("supabase.co");
-  const isAuthPath = url.pathname.startsWith("/auth/v1/");
+  const isAuthPath = url.pathname.startsWith("/auth/v1/") || url.pathname.includes("/auth/");
   const hasAuthParams =
     url.search.includes("access_token") ||
     url.search.includes("code") ||
-    url.hash.includes("access_token");
-  const isAuthCallback = url.pathname.startsWith("/auth/callback");
+    url.search.includes("error") ||
+    url.search.includes("error_code") ||
+    url.search.includes("error_description") ||
+    url.hash.includes("access_token") ||
+    url.hash.includes("code") ||
+    url.hash.includes("error");
+  const isAuthCallback = url.pathname.startsWith("/auth/callback") || url.pathname === "/auth/callback";
+  const isOAuthCallback = url.search.includes("code=") || url.hash.includes("code=") || url.search.includes("state=");
 
   // Never handle development assets, auth-related requests, or Supabase requests
   if (
@@ -176,6 +182,7 @@ self.addEventListener("fetch", (event) => {
     isAuthPath ||
     hasAuthParams ||
     isAuthCallback ||
+    isOAuthCallback ||
     isSupabaseHost
   ) {
     return; // Let browser handle these requests normally

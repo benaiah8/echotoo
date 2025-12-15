@@ -114,8 +114,87 @@ export async function sendInvites(
 
     if (error) {
       console.error("Insert error:", error);
-    } else {
-      console.log("Successfully inserted invites:", data);
+      return {
+        data: null,
+        error,
+        alreadyInvited: alreadyInvitedIds,
+      };
+    }
+
+    // Invites inserted successfully
+    console.log("Successfully inserted invites:", data);
+    
+    // Create notifications for sent invites (for the inviter)
+    // This happens even if notification creation fails (don't fail invite creation)
+    if (data && data.length > 0) {
+      try {
+        // Get post details for notifications
+        const { data: postData, error: postDataError } = await supabase
+          .from("posts")
+          .select("caption, type")
+          .eq("id", postId)
+          .single();
+
+        if (postDataError) {
+          console.error("Error fetching post data for notifications:", postDataError);
+        }
+
+        // Get invitee profile IDs for actor info
+        const inviteeUserIds = data.map((invite) => invite.invitee_id);
+        const { data: inviteeProfiles, error: profilesError } = await supabase
+          .from("profiles")
+          .select("user_id, username, display_name, avatar_url")
+          .in("user_id", inviteeUserIds);
+
+        if (profilesError) {
+          console.error("Error fetching invitee profiles for notifications:", profilesError);
+        }
+
+        const inviteeMap = new Map(
+          inviteeProfiles?.map((p) => [p.user_id, p]) || []
+        );
+
+        // Create sent invite notifications for the inviter
+        const sentInviteNotifications = data.map((invite) => {
+          const inviteeProfile = inviteeMap.get(invite.invitee_id);
+          return {
+            user_id: user.id, // The inviter (current user)
+            actor_id: invite.invitee_id, // The invitee (person being invited)
+            type: "invite" as const,
+            entity_type: (postData?.type || "hangout") as "hangout" | "experience",
+            entity_id: postId,
+            additional_data: {
+              post_id: postId,
+              invite_id: invite.id,
+              post_type: postData?.type || "hangout",
+              post_caption: postData?.caption || null,
+              invite_direction: "sent", // Mark as sent invite
+            },
+            is_read: false,
+          };
+        });
+
+        console.log("Creating sent invite notifications:", sentInviteNotifications.length, "notifications");
+
+        // Insert sent invite notifications
+        const { data: insertedNotifications, error: notificationError } = await supabase
+          .from("notifications")
+          .insert(sentInviteNotifications)
+          .select();
+
+        if (notificationError) {
+          console.error("Error creating sent invite notifications:", notificationError);
+          console.error("Notification error details:", JSON.stringify(notificationError, null, 2));
+        } else {
+          console.log("Successfully created sent invite notifications:", insertedNotifications?.length || 0);
+          if (insertedNotifications && insertedNotifications.length > 0) {
+            console.log("Sample notification:", JSON.stringify(insertedNotifications[0], null, 2));
+          }
+        }
+      } catch (notificationCreationError) {
+        // Don't fail invite creation if notification creation fails
+        console.error("Exception during notification creation:", notificationCreationError);
+      }
     }
 
     return {
@@ -190,11 +269,11 @@ export async function getReceivedInvites(): Promise<{
 }
 
 /**
- * Update invite status (accept/decline)
+ * Update invite status (accept/decline/pending)
  */
 export async function updateInviteStatus(
   inviteId: string,
-  status: "accepted" | "declined"
+  status: "accepted" | "declined" | "pending"
 ): Promise<{ data: Invite | null; error: any }> {
   try {
     const {
@@ -214,6 +293,15 @@ export async function updateInviteStatus(
   } catch (error) {
     return { data: null, error };
   }
+}
+
+/**
+ * Revert invite status back to pending (undo accept/decline)
+ */
+export async function revertInviteToPending(
+  inviteId: string
+): Promise<{ data: Invite | null; error: any }> {
+  return updateInviteStatus(inviteId, "pending");
 }
 
 /**
@@ -350,6 +438,30 @@ export async function declineInvite(
       .eq("id", inviteId)
       .eq("invitee_id", user.id) // Security: only invitee can decline
       .select("*")
+      .single();
+
+    return { data, error };
+  } catch (error) {
+    return { data: null, error };
+  }
+}
+
+/**
+ * Get invite by ID (to check status)
+ */
+export async function getInviteById(
+  inviteId: string
+): Promise<{ data: Invite | null; error: any }> {
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { data: null, error: new Error("Not authenticated") };
+
+    const { data, error } = await supabase
+      .from("invites")
+      .select("*")
+      .eq("id", inviteId)
       .single();
 
     return { data, error };

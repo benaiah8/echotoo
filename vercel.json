@@ -1,8 +1,11 @@
 {
-  "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/((?!.*\\.[a-zA-Z0-9]+$).*)",
+      "source": "/auth/callback",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]

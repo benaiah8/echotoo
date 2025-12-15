@@ -110,7 +110,8 @@ export const getCommentsForPost = async (
       return [];
     }
 
-    // Get author profiles for all comments
+    // [OPTIMIZATION: Phase 2 - Batch] Batch fetch all comment author profiles in one query
+    // Why: Single database query instead of multiple sequential queries, much faster
     const authorIds = [...new Set(comments.map((c) => c.author_id))];
     console.log("Author IDs:", authorIds); // Debug log
 

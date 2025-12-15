@@ -13,6 +13,10 @@ interface ProfileCacheEntry {
   instagram_url: string | null;
   tiktok_url: string | null;
   telegram_url: string | null;
+  // [OPTIMIZATION: Phase 1 - Cache] Privacy settings cached in profile cache
+  // Why: Instant display of privacy status without flicker, prevents "Sign in" message
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
   timestamp: number;
 }
 
@@ -24,11 +28,25 @@ interface UsernameCache {
   [username: string]: string; // username -> profile ID mapping
 }
 
-const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for profile data
+const BASE_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes for profile data (base duration)
 const CACHE_KEY = "profile_cache";
 const USERNAME_CACHE_KEY = "profile_username_cache";
 
-// Get cached profile data
+// [OPTIMIZATION: Phase 6 - Connection] Get cache duration based on connection speed
+// Why: Longer cache duration on slow connections to reduce network requests
+function getCacheDuration(): number {
+  try {
+    const { getCacheDurationMultiplier } = require("./connectionAware");
+    const multiplier = getCacheDurationMultiplier();
+    return BASE_CACHE_DURATION * multiplier;
+  } catch {
+    // Fallback if connectionAware not available
+    return BASE_CACHE_DURATION;
+  }
+}
+
+// [OPTIMIZATION: Phase 1 - Cache] Get cached profile data including privacy settings
+// Why: Instant display of profile data and privacy status without database queries
 export function getCachedProfile(profileId: string): {
   id: string;
   user_id: string;
@@ -41,6 +59,8 @@ export function getCachedProfile(profileId: string): {
   instagram_url: string | null;
   tiktok_url: string | null;
   telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
 } | null {
   try {
     const cacheStr = localStorage.getItem(CACHE_KEY);
@@ -52,7 +72,8 @@ export function getCachedProfile(profileId: string): {
     if (!entry) return null;
 
     // Check if cache is expired
-    if (Date.now() - entry.timestamp > CACHE_DURATION) {
+    // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
+    if (Date.now() - entry.timestamp > getCacheDuration()) {
       // Remove expired entry
       delete cache[profileId];
       localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
@@ -71,6 +92,8 @@ export function getCachedProfile(profileId: string): {
       instagram_url: entry.instagram_url,
       tiktok_url: entry.tiktok_url,
       telegram_url: entry.telegram_url,
+      is_private: entry.is_private,
+      social_media_public: entry.social_media_public,
     };
   } catch (error) {
     console.error("Error reading profile cache:", error);
@@ -98,7 +121,8 @@ function setUsernameCache(usernameCache: UsernameCache): void {
   }
 }
 
-// Set cached profile data
+// [OPTIMIZATION: Phase 1 - Cache] Set cached profile data including privacy settings
+// Why: Caches privacy settings for instant display and prevents flicker
 export function setCachedProfile(profileData: {
   id: string;
   user_id: string;
@@ -111,6 +135,8 @@ export function setCachedProfile(profileData: {
   instagram_url: string | null;
   tiktok_url: string | null;
   telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
 }): void {
   try {
     const cacheStr = localStorage.getItem(CACHE_KEY);
@@ -206,7 +232,8 @@ export function getProfileCached(usernameOrId: string): {
 
     for (const [id, entry] of Object.entries(cache)) {
       // Check if cache is expired
-      if (Date.now() - entry.timestamp > CACHE_DURATION) {
+      // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
+    if (Date.now() - entry.timestamp > getCacheDuration()) {
         continue;
       }
 
@@ -237,7 +264,8 @@ export function getProfileCached(usernameOrId: string): {
   }
 }
 
-// Cache a profile (alias for setCachedProfile for backward compatibility)
+// [OPTIMIZATION: Phase 1 - Cache] Cache a profile (alias for setCachedProfile for backward compatibility)
+// Why: Maintains backward compatibility while supporting privacy settings caching
 export function primeProfileCache(profileData: {
   id: string;
   user_id: string;
@@ -250,6 +278,8 @@ export function primeProfileCache(profileData: {
   instagram_url: string | null;
   tiktok_url: string | null;
   telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
 }): void {
   setCachedProfile(profileData);
 }
@@ -259,7 +289,8 @@ export function invalidateProfile(profileId: string): void {
   clearCachedProfile(profileId);
 }
 
-// Batch cache multiple profiles
+// [OPTIMIZATION: Phase 1 - Cache] Batch cache multiple profiles including privacy settings
+// Why: Efficiently caches multiple profiles at once, including privacy status
 export function setCachedProfiles(
   profiles: Array<{
     id: string;
@@ -273,6 +304,8 @@ export function setCachedProfiles(
     instagram_url: string | null;
     tiktok_url: string | null;
     telegram_url: string | null;
+    is_private?: boolean | null;
+    social_media_public?: boolean | null;
   }>
 ): void {
   try {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { MdMoreHoriz, MdEdit, MdDelete, MdPersonAdd } from "react-icons/md";
+import { MdMoreHoriz, MdEdit, MdDelete } from "react-icons/md";
 import toast from "react-hot-toast";
 import { deletePost } from "../../api/services/posts";
 
@@ -7,7 +7,6 @@ interface PostMenuProps {
   postId: string;
   onEdit?: () => void;
   onDelete?: () => void;
-  onInvite?: () => void; // NEW: invite callback
   className?: string;
   variant?: "default" | "boxed"; // NEW: variant for different styling
   isDraft?: boolean; // NEW: whether this is a draft post
@@ -17,7 +16,6 @@ export default function PostMenu({
   postId,
   onEdit,
   onDelete,
-  onInvite,
   className = "",
   variant = "default",
   isDraft = false,
@@ -57,13 +55,6 @@ export default function PostMenu({
     setShowDeleteModal(true);
   };
 
-  const handleInvite = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setIsOpen(false);
-    onInvite?.();
-  };
-
   const confirmDelete = async () => {
     try {
       await deletePost(postId);
@@ -98,15 +89,6 @@ export default function PostMenu({
       {/* Dropdown menu */}
       {isOpen && (
         <div className="absolute right-0 top-8 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg py-1 min-w-[120px] z-50">
-          {onInvite && !isDraft && (
-            <button
-              onClick={handleInvite}
-              className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center gap-2"
-            >
-              <MdPersonAdd size={16} />
-              Invite
-            </button>
-          )}
           <button
             onClick={handleEdit}
             className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center gap-2"

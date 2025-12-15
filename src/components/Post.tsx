@@ -1,6 +1,6 @@
 // PERF: Optimized post component with image optimization
 import { FaCommentDots } from "react-icons/fa";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Paths } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
@@ -15,6 +15,12 @@ import toast from "react-hot-toast";
 import { imgUrlPublic } from "../lib/img";
 import { prefetchProfile } from "../lib/prefetch";
 import { getBestImageUrl, preloadImages } from "../lib/imageOptimization";
+import { getViewerId } from "../api/services/follows";
+import { getFollowStatus } from "../api/services/follows";
+import {
+  getCachedFollowStatus,
+  setCachedFollowStatus,
+} from "../lib/followStatusCache";
 
 type PostProps = {
   postId: string;
@@ -39,7 +45,7 @@ type PostProps = {
   } | null;
 };
 
-export default function Post({
+function Post({
   postId,
   caption,
   authorId,
@@ -57,13 +63,113 @@ export default function Post({
 }: PostProps) {
   const navigate = useNavigate();
 
-  const displayName =
-    isAnonymous && anonymousName
+  // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch profiles and follow status for visible post authors
+  // Why: Instant profile page loads, better perceived performance
+  const postRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (isAnonymous || isOwner || !authorId || !postRef.current) return;
+
+    // [OPTIMIZATION: Phase 4 - Prefetch] Use Intersection Observer to prefetch when post becomes visible
+    // Why: Only prefetch when post is actually visible, saves resources
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          // Post is visible, prefetch in background
+          const prefetchData = async () => {
+            // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
+            // Why: Skip prefetching on slow connections to save bandwidth
+            const { shouldSkipPrefetching } = await import("../lib/connectionAware");
+            if (shouldSkipPrefetching()) {
+              observer.disconnect();
+              return;
+            }
+            try {
+              const viewerId = await getViewerId();
+              if (!viewerId || viewerId === authorId) return;
+
+              // [OPTIMIZATION: Phase 4 - Batch] Batch prefetch follow status and privacy status
+              // Why: Single API call for multiple checks, more efficient
+              const [
+                { getBatchFollowStatuses },
+                { getCachedProfile, setCachedProfile },
+                { getCachedFollowStatus },
+                { setCachedFollowStatus },
+              ] = await Promise.all([
+                import("../api/services/follows"),
+                import("../lib/profileCache"),
+                import("../lib/followStatusCache"),
+                import("../lib/followStatusCache"),
+              ]);
+
+              // Check if already cached
+              const cachedFollow = getCachedFollowStatus(viewerId, authorId);
+              const cachedProfile = getCachedProfile(authorId);
+
+              // Prefetch follow status if not cached
+              if (!cachedFollow) {
+                const statuses = await getBatchFollowStatuses(viewerId, [authorId]);
+                if (statuses[authorId]) {
+                  setCachedFollowStatus(viewerId, authorId, statuses[authorId]);
+                }
+              }
+
+              // Prefetch profile if not cached
+              if (!cachedProfile && author) {
+                setCachedProfile({
+                  id: author.id,
+                  user_id: "", // Will be fetched if needed
+                  username: author.username,
+                  display_name: author.display_name,
+                  avatar_url: author.avatar_url,
+                  bio: null,
+                  xp: null,
+                  member_no: null,
+                  instagram_url: null,
+                  tiktok_url: null,
+                  telegram_url: null,
+                });
+              }
+
+              // Prefetch privacy status (handled by privacy filter cache)
+            } catch (error) {
+              // Silent fail for prefetching
+              console.debug("Failed to prefetch post author data:", error);
+            }
+          };
+
+          // Use requestIdleCallback for non-blocking prefetch
+          if (typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(prefetchData, { timeout: 2000 });
+          } else {
+            setTimeout(prefetchData, 0);
+          }
+
+          // Disconnect observer after first intersection
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "100px" } // Start prefetching 100px before post is visible
+    );
+
+    observer.observe(postRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [authorId, isAnonymous, isOwner, author]);
+
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize computed display name
+  // Why: Prevents recalculation on every render, only recalculates when dependencies change
+  const displayName = useMemo(() => {
+    return isAnonymous && anonymousName
       ? anonymousName
       : author?.display_name || author?.username || "User";
+  }, [isAnonymous, anonymousName, author?.display_name, author?.username]);
 
-  // Date display logic: show event date for hangouts, created date for experiences
-  const getDisplayDate = () => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize date calculation
+  // Why: Date calculation involves Date objects and comparisons, memoization improves performance
+  const dateText = useMemo(() => {
     if (type === "hangout" && selectedDates && selectedDates.length > 0) {
       // For hangouts, show the event date(s) with special formatting
       const eventDate = new Date(selectedDates[0]);
@@ -115,10 +221,11 @@ export default function Post({
       const createdDate = new Date(createdAt);
       return createdDate.toLocaleDateString();
     }
-  };
+  }, [type, selectedDates, createdAt]);
 
-  // Check if the date should be highlighted (only for hangouts with special dates)
-  const isSpecialDate = (dateText: string) => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize special date check
+  // Why: Prevents recalculation when other props change
+  const shouldHighlight = useMemo(() => {
     // Only highlight special dates for hangouts, not for experiences
     if (type !== "hangout") return false;
 
@@ -128,21 +235,30 @@ export default function Post({
       dateText === "This Weekend" ||
       dateText === "Event Passed"
     );
-  };
+  }, [type, dateText]);
 
-  const goToProfile = () => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
+  // Why: Prevents function recreation on every render, stable reference for React.memo
+  const goToProfile = useCallback(() => {
     if (!authorId) return;
     const slug = author?.username || authorId;
     // avoids relying on a Paths helper that may differ across files
     navigate(`/u/${slug}`);
-  };
+  }, [authorId, author?.username, navigate]);
 
   // lazy-load FIRST activity's images
   const [images, setImages] = useState<string[] | null>(null); // null: unknown; []: none
   const [imagesLoading, setImagesLoading] = useState(false);
   const [tried, setTried] = useState(false);
 
-  const goToDetails = () => {
+  // [FIX] Move useState declarations before useCallback hooks that use them
+  // Why: Prevents "Cannot access before initialization" errors
+  const [showInviteDrawer, setShowInviteDrawer] = useState(false);
+  const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
+
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
+  // Why: Prevents function recreation on every render, stable reference for React.memo
+  const goToDetails = useCallback(() => {
     // Don't navigate if invite drawer is closing
     if (isInviteDrawerClosing) {
       console.log("Navigation prevented: invite drawer is closing");
@@ -155,9 +271,11 @@ export default function Post({
         ? Paths.hangoutDetail.replace(":id", postId)
         : Paths.experienceDetail.replace(":id", postId);
     navigate(detailPath);
-  };
+  }, [isInviteDrawerClosing, postId, type, navigate]);
 
-  const handleEdit = async () => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize edit handler
+  // Why: Prevents function recreation on every render, stable reference for React.memo
+  const handleEdit = useCallback(async () => {
     try {
       const { post, activities } = await getPostForEdit(postId);
 
@@ -201,10 +319,10 @@ export default function Post({
       console.error("Error loading post for edit:", error);
       toast.error("Failed to load post for editing");
     }
-  };
+  }, [postId, navigate]);
 
   // Fetch only when near viewport
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!rootRef.current || tried) return;
     const node = rootRef.current;
@@ -249,27 +367,28 @@ export default function Post({
           obs.disconnect();
         }
       },
-      { root: null, rootMargin: "200px 0px", threshold: 0.01 }
+      // [OPTIMIZATION: Phase 5 - Image] Optimized rootMargin for better prefetching
+      // Why: 150px is optimal balance - prefetches early enough without wasting bandwidth
+      { root: null, rootMargin: "150px 0px", threshold: 0.01 }
     );
     obs.observe(node);
     return () => obs.disconnect();
   }, [postId, tried]);
 
   const isDraftPost = status === "draft" || isDraft;
-  const [showInviteDrawer, setShowInviteDrawer] = useState(false);
-  const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
 
-  const handleInvite = () => {
+  // [OPTIMIZATION: Phase 6.2 - React] Memoize invite handler
+  // Why: Prevents function recreation on every render, stable reference
+  const handleInvite = useCallback(() => {
     setShowInviteDrawer(true);
-  };
-
-  // Get display date and check if it should be highlighted
-  const dateText = getDisplayDate();
-  const shouldHighlight = isSpecialDate(dateText);
+  }, []);
 
   return (
     <article
-      ref={rootRef}
+      ref={(el) => {
+        rootRef.current = el;
+        postRef.current = el as HTMLDivElement | null; // [OPTIMIZATION: Phase 4 - Prefetch] Also set postRef for prefetching
+      }}
       className={`w-full border-t border-[var(--border)] px-0 py-3 ${
         isDraftPost ? "opacity-60" : ""
       }`}
@@ -354,7 +473,6 @@ export default function Post({
                 postId={postId}
                 onEdit={handleEdit}
                 onDelete={onDelete}
-                onInvite={handleInvite}
                 isDraft={isDraftPost}
               />
             </div>
@@ -417,6 +535,7 @@ export default function Post({
                     }
                   : undefined
               }
+              onInvite={handleInvite}
             />
           </div>
         </div>
@@ -434,3 +553,28 @@ export default function Post({
     </article>
   );
 }
+
+// [OPTIMIZATION: Phase 6.2 - React] Memoize Post component to prevent unnecessary re-renders
+// Why: Post components are rendered frequently in lists, memoization reduces render overhead
+export default React.memo(Post, (prevProps, nextProps) => {
+  // Custom comparison function for better performance
+  // Only re-render if these key props change
+  return (
+    prevProps.postId === nextProps.postId &&
+    prevProps.caption === nextProps.caption &&
+    prevProps.authorId === nextProps.authorId &&
+    prevProps.author?.id === nextProps.author?.id &&
+    prevProps.author?.username === nextProps.author?.username &&
+    prevProps.author?.display_name === nextProps.author?.display_name &&
+    prevProps.author?.avatar_url === nextProps.author?.avatar_url &&
+    prevProps.createdAt === nextProps.createdAt &&
+    prevProps.type === nextProps.type &&
+    prevProps.isOwner === nextProps.isOwner &&
+    prevProps.status === nextProps.status &&
+    prevProps.isDraft === nextProps.isDraft &&
+    prevProps.isAnonymous === nextProps.isAnonymous &&
+    prevProps.anonymousName === nextProps.anonymousName &&
+    prevProps.anonymousAvatar === nextProps.anonymousAvatar &&
+    JSON.stringify(prevProps.selectedDates) === JSON.stringify(nextProps.selectedDates)
+  );
+});

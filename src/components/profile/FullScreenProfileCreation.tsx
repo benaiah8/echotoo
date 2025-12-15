@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../../lib/supabaseClient";
 import { uploadToCloudinary } from "../../api/services/cloudinaryUpload";
 import { useNavigate } from "react-router-dom";
@@ -11,6 +12,18 @@ type Props = {
   profileId: string;
   isFirstTime?: boolean;
   onComplete?: () => void;
+  initialProfileData?: {
+    display_name: string | null;
+    username: string | null;
+    bio: string | null;
+    avatar_url: string | null;
+    instagram_url: string | null;
+    tiktok_url: string | null;
+    telegram_url: string | null;
+    member_no: number | null;
+    is_private?: boolean | null;
+    social_media_public?: boolean | null;
+  };
 };
 
 const rotatingWords = [
@@ -27,6 +40,7 @@ export default function FullScreenProfileCreation({
   profileId,
   isFirstTime = false,
   onComplete,
+  initialProfileData,
 }: Props) {
   const navigate = useNavigate();
   const authState = useSelector((state: RootState) => state.auth);
@@ -49,30 +63,72 @@ export default function FullScreenProfileCreation({
   const [userNumber, setUserNumber] = useState<number>(0);
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
   const [isWordVisible, setIsWordVisible] = useState(true);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [socialMediaPublic, setSocialMediaPublic] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    
+    // Pre-populate immediately with initialProfileData if available (instant)
+    if (initialProfileData) {
+      console.log("[FullScreenProfileCreation] Using initial profile data for instant pre-population");
+      setDisplayName(initialProfileData.display_name ?? "");
+      setUsername(initialProfileData.username ?? "");
+      setOrigUsername(initialProfileData.username ?? null);
+      setBio(initialProfileData.bio ?? "");
+      setAvatarUrl(initialProfileData.avatar_url ?? "");
+      setInstagramUrl(initialProfileData.instagram_url ?? "");
+      setTiktokUrl(initialProfileData.tiktok_url ?? "");
+      setTelegramUrl(initialProfileData.telegram_url ?? "");
+      setUserNumber(initialProfileData.member_no ?? 0);
+      setIsPrivate(initialProfileData.is_private ?? false);
+      setSocialMediaPublic(initialProfileData.social_media_public ?? false);
+    }
+    
+    // Fetch fresh data in background to ensure we have the latest
     (async () => {
       setError(null);
-      const { data } = await supabase
-        .from("profiles")
-        .select(
-          "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_number"
-        )
-        .eq("id", profileId)
-        .maybeSingle();
-      setDisplayName(data?.display_name ?? "");
-      setUsername(data?.username ?? "");
-      setOrigUsername(data?.username ?? null);
-      // Set default bio if empty
-      setBio(data?.bio ?? "");
-      setAvatarUrl(data?.avatar_url ?? "");
-      setInstagramUrl(data?.instagram_url ?? "");
-      setTiktokUrl(data?.tiktok_url ?? "");
-      setTelegramUrl(data?.telegram_url ?? "");
-      setUserNumber(data?.member_number ?? 0);
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("profiles")
+          .select(
+            "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_number, is_private, social_media_public"
+          )
+          .eq("id", profileId)
+          .maybeSingle();
+        
+        if (fetchError) {
+          console.error("[FullScreenProfileCreation] Error fetching profile data:", fetchError);
+          // Don't show error to user if we have initialProfileData (they can still edit)
+          if (!initialProfileData) {
+            setError("Failed to load profile data. Please try again.");
+          }
+          return;
+        }
+        
+        // Update with fresh data (only if different from initial data or if no initial data)
+        if (data) {
+          setDisplayName(data.display_name ?? "");
+          setUsername(data.username ?? "");
+          setOrigUsername(data.username ?? null);
+          setBio(data.bio ?? "");
+          setAvatarUrl(data.avatar_url ?? "");
+          setInstagramUrl(data.instagram_url ?? "");
+          setTiktokUrl(data.tiktok_url ?? "");
+          setTelegramUrl(data.telegram_url ?? "");
+          setUserNumber(data.member_number ?? 0);
+          setIsPrivate(data.is_private ?? false);
+          setSocialMediaPublic(data.social_media_public ?? false);
+        }
+      } catch (e) {
+        console.error("[FullScreenProfileCreation] Unexpected error fetching profile:", e);
+        if (!initialProfileData) {
+          setError("Failed to load profile data. Please try again.");
+        }
+      }
     })();
-  }, [open, profileId]);
+  }, [open, profileId, initialProfileData]);
 
   // Word rotation effect
   useEffect(() => {
@@ -188,7 +244,7 @@ export default function FullScreenProfileCreation({
 
       // Username cooldown removed - users can change username anytime for now
 
-      // Update profile
+      // Update profile (excluding privacy settings - handled separately)
       const patch: any = {
         display_name: displayName.trim(),
         username: username.trim(),
@@ -209,6 +265,19 @@ export default function FullScreenProfileCreation({
 
       if (upErr) throw upErr;
 
+      // Update privacy settings using the dedicated function (handles auto-approve logic)
+      const { updateProfilePrivacy } = await import("../../api/services/follows");
+      try {
+        const privacyError = await updateProfilePrivacy(profileId, isPrivate, socialMediaPublic);
+        if (privacyError.error) {
+          console.error("Error updating privacy settings:", privacyError.error);
+          // Don't fail the save if privacy update fails, but log it
+        }
+      } catch (privacyErr) {
+        console.error("Exception updating privacy settings:", privacyErr);
+        // Don't fail the save if privacy update fails
+      }
+
       // Mark as onboarded
       try {
         localStorage.setItem(`onboarded_${profileId}`, "1");
@@ -221,6 +290,39 @@ export default function FullScreenProfileCreation({
         if (username) localStorage.setItem("my_username", username.trim());
       } catch {}
 
+      // [OPTIMIZATION: Phase 1 - Cache] Update cache immediately with new data (prevents "Sign in" message)
+      // Why: Shows updated profile data instantly, including privacy settings, without flicker
+      const { setCachedProfile } = await import("../../lib/profileCache");
+      const { getViewerId } = await import("../../api/services/follows");
+      const viewerId = await getViewerId();
+      
+      if (viewerId) {
+        // Fetch the updated profile to get all fields (including xp, member_no, privacy settings, etc.)
+        const { data: updatedProfile } = await supabase
+          .from("profiles")
+          .select("id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public")
+          .eq("id", profileId)
+          .single();
+        
+        if (updatedProfile) {
+          // [OPTIMIZATION: Phase 1 - Cache] Update cache immediately with fresh data including privacy settings
+          // Why: Instant display of updated privacy status, prevents flicker
+          setCachedProfile({
+            ...updatedProfile,
+            member_no: updatedProfile.member_no ?? null,
+            is_private: updatedProfile.is_private ?? null,
+            social_media_public: updatedProfile.social_media_public ?? null,
+          } as any);
+          
+          // Update avatar cache
+          const { setCachedAvatar, preloadAvatar } = await import("../../lib/avatarCache");
+          if (updatedProfile.avatar_url) {
+            setCachedAvatar(updatedProfile.user_id, updatedProfile.avatar_url);
+            preloadAvatar(updatedProfile.avatar_url);
+          }
+        }
+      }
+
       // Tell the rest of the app to refresh this profile
       window.dispatchEvent(
         new CustomEvent("profile:updated", { detail: { id: profileId } })
@@ -229,11 +331,10 @@ export default function FullScreenProfileCreation({
       // Close the modal
       onClose();
 
+      // DON'T navigate away - stay on profile page
       // If first time, call onComplete to trigger onboarding flow
       if (isFirstTime && onComplete) {
         onComplete();
-      } else if (!isFirstTime) {
-        navigate("/");
       }
     } catch (e: any) {
       setError(e.message || "Something went wrong.");
@@ -452,6 +553,81 @@ export default function FullScreenProfileCreation({
                 </div>
               </div>
             </div>
+
+            {/* Privacy Settings */}
+            <div className="pt-4 border-t border-[var(--border)]">
+              <label className="block text-sm font-medium text-[var(--text)] mb-3">
+                Privacy
+              </label>
+
+              <div className="space-y-4">
+                {/* Private Account Toggle */}
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-[var(--text)] mb-1">
+                      Private Account
+                    </div>
+                    <div className="text-xs text-[var(--text)]/70">
+                      When private, only approved followers can see your posts
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newIsPrivate = !isPrivate;
+                      setIsPrivate(newIsPrivate);
+                      // When enabling private account, default social media toggle to ON
+                      if (newIsPrivate && !socialMediaPublic) {
+                        setSocialMediaPublic(true);
+                      }
+                    }}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      isPrivate
+                        ? "bg-[var(--brand)]"
+                        : "bg-[var(--text)]/20"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        isPrivate ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Show Social Media Links Toggle */}
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-[var(--text)] mb-1">
+                      {isPrivate ? "Show Social Media Links" : "Show Social Media Links"}
+                    </div>
+                    <div className="text-xs text-[var(--text)]/70">
+                      {isPrivate
+                        ? "Allow everyone to see your social links, even if account is private"
+                        : "Social media links are always visible on public accounts"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSocialMediaPublic(!socialMediaPublic)}
+                    disabled={!isPrivate}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      !isPrivate
+                        ? "bg-[var(--text)]/10 opacity-50 cursor-not-allowed"
+                        : socialMediaPublic
+                        ? "bg-[var(--brand)]"
+                        : "bg-[var(--text)]/20"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        socialMediaPublic ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -460,7 +636,13 @@ export default function FullScreenProfileCreation({
           <button
             className="w-full py-3 rounded-lg bg-[var(--brand)] text-[var(--brand-ink)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
             disabled={!canSave || saving}
-            onClick={save}
+            onClick={() => {
+              if (!isFirstTime) {
+                setShowSaveConfirm(true);
+              } else {
+                save(); // No confirmation for first-time users
+              }
+            }}
           >
             {saving
               ? "Saving..."
@@ -470,6 +652,43 @@ export default function FullScreenProfileCreation({
           </button>
         </div>
       </div>
+      
+      {/* Save Confirmation Modal */}
+      {showSaveConfirm && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-[var(--surface)]/80"
+            onClick={() => setShowSaveConfirm(false)}
+          />
+          <div className="relative bg-[var(--surface-2)] border border-[var(--border)] rounded-lg p-4 max-w-sm w-full mx-4 z-[61]">
+            <h3 className="text-lg font-semibold text-[var(--text)] mb-2">
+              Save Changes?
+            </h3>
+            <p className="text-sm text-[var(--text)]/70 mb-4">
+              Are you sure you want to save these changes to your profile?
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowSaveConfirm(false)}
+                className="px-4 py-2 text-sm rounded-lg border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowSaveConfirm(false);
+                  save();
+                }}
+                disabled={saving}
+                className="px-4 py-2 text-sm rounded-lg bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

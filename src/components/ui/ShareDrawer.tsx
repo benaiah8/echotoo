@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MdShare, MdClose } from "react-icons/md";
+import { MdShare, MdClose, MdPersonAdd } from "react-icons/md";
 import { FaInstagram } from "react-icons/fa";
 import InstagramStoryGenerator from "./InstagramStoryGenerator";
 import toast from "react-hot-toast";
@@ -14,6 +14,7 @@ interface ShareDrawerProps {
   creatorName?: string;
   creatorHandle?: string;
   creatorAvatarUrl?: string | null;
+  onInvite?: () => void; // NEW: callback for invite action
 }
 
 export default function ShareDrawer({
@@ -26,10 +27,18 @@ export default function ShareDrawer({
   creatorName,
   creatorHandle,
   creatorAvatarUrl,
+  onInvite,
 }: ShareDrawerProps) {
   const [showStoryGenerator, setShowStoryGenerator] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleInvite = () => {
+    if (onInvite) {
+      onInvite();
+      onClose();
+    }
+  };
 
   const handleCopyLink = async () => {
     try {
@@ -89,26 +98,40 @@ export default function ShareDrawer({
 
           {/* Share Options */}
           <div className="p-4">
-            <div className="grid grid-cols-2 gap-4">
-              {/* Instagram Stories */}
+            <div className="flex gap-4">
+              {/* Instagram Stories - Large button on left */}
               <button
                 onClick={() => setShowStoryGenerator(true)}
-                className="flex flex-col items-center gap-3 p-6 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 transition text-white"
+                className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 transition text-white flex-1"
               >
                 <FaInstagram size={32} />
                 <span className="font-semibold text-sm">Instagram Stories</span>
               </button>
 
-              {/* Web Share / Copy Link */}
-              <button
-                onClick={handleWebShare}
-                className="flex flex-col items-center gap-3 p-6 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 transition border border-[var(--border)]"
-              >
-                <MdShare size={32} className="text-[var(--text)]" />
-                <span className="font-semibold text-sm text-[var(--text)]">
-                  {typeof navigator.share === "function" ? "Share" : "Copy Link"}
-                </span>
-              </button>
+              {/* Share and Invite - Stacked on right */}
+              <div className="flex flex-col gap-2 flex-1">
+                {/* Share button */}
+                <button
+                  onClick={handleWebShare}
+                  className="flex flex-col items-center justify-center gap-2 py-4 px-4 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 transition border border-[var(--border)]"
+                >
+                  <MdShare size={24} className="text-[var(--text)]" />
+                  <span className="font-semibold text-xs text-[var(--text)]">
+                    {typeof navigator.share === "function" ? "Share" : "Copy Link"}
+                  </span>
+                </button>
+
+                {/* Invite button */}
+                {onInvite && (
+                  <button
+                    onClick={handleInvite}
+                    className="flex flex-col items-center justify-center gap-2 py-4 px-4 rounded-xl bg-yellow-500 hover:bg-yellow-600 transition text-black"
+                  >
+                    <MdPersonAdd size={24} />
+                    <span className="font-semibold text-xs">Invite</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

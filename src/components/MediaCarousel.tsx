@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { optimizeImageUrl } from "../lib/imageOptimization";
 import { imgUrlPublic } from "../lib/img";
+import ProgressiveImage from "./ui/ProgressiveImage";
 
 type Props = {
   images: string[];
@@ -147,17 +148,24 @@ export default function MediaCarousel({
                 ref={(el) => setSlideRef(el, i)}
                 className="min-w-full h-full snap-start bg-[var(--surface)] grid place-items-center"
               >
-                <img
+                {/* [OPTIMIZATION: Phase 5 - Image] Use ProgressiveImage for blur-up placeholder */}
+                {/* Why: Shows low-quality immediately, loads high-quality in background, smooth transition */}
+                <ProgressiveImage
                   src={imageUrl}
                   alt=""
                   className={`${imgFit} select-none`}
-                  draggable={false}
-                  loading="lazy"
-                  decoding="async"
-                  onClick={() => enableLightbox && setOpen(true)}
+                  viewportWidth={800}
+                  rootMargin="150px"
                   onError={() => handleImageError(i)}
-                  style={{ cursor: enableLightbox ? "zoom-in" : "default" }}
                 />
+                {/* Click handler overlay */}
+                {enableLightbox && (
+                  <div
+                    className="absolute inset-0 cursor-zoom-in"
+                    onClick={() => setOpen(true)}
+                    aria-label="View full size"
+                  />
+                )}
               </div>
             );
           })}

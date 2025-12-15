@@ -3,15 +3,26 @@ import { Profile } from "../../contexts/ProfileContext";
 
 interface SocialMediaLinksProps {
   profile: Profile | null;
-  isOwn?: boolean;
   loading?: boolean;
+  showSocialMedia?: boolean; // If false, don't render. If true or undefined, check privacy settings
 }
 
 const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
   profile,
-  isOwn = false,
   loading = false,
+  showSocialMedia = true, // Default to true for backward compatibility
 }) => {
+  // Determine if social media should be shown
+  // Show if: explicitly set to false (don't show), OR
+  //         account is public OR (private AND social_media_public is true)
+  const shouldShow = showSocialMedia && profile && (
+    !profile.is_private || profile.social_media_public
+  );
+
+  // If explicitly hidden or no profile, don't render
+  if (!showSocialMedia || !profile || !shouldShow) {
+    return null;
+  }
   const socialLinks = [
     {
       platform: "Instagram",

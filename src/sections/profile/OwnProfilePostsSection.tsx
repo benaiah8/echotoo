@@ -3,7 +3,6 @@ import { useLocation } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { useProfile } from "../../contexts/ProfileContext";
 import { selectUserId } from "../../selectors/authSelectors";
-import { RootState } from "../../app/store";
 import { getUserPostsCreated } from "../../api/queries/getUserPostsCreated";
 import {
   getSavedPosts,
@@ -33,21 +32,25 @@ import {
 } from "../../lib/requestManager";
 
 /**
- * ProfilePostsSection for OWN profile - always cached, includes Saved tab
+ * OwnProfilePostsSection - Posts section for OWN profile
+ * - Always uses profile.user_id for caching (consistent)
+ * - Implements stale-while-revalidate (show cache immediately, fetch fresh in background)
+ * - Only caches first 5 posts
+ * - Prepped for lazy loading (structure ready, implementation later)
  */
 export default function OwnProfilePostsSection() {
   const { profile } = useProfile();
   const location = useLocation();
-  const [tab, setTab] = useState<
-    "created" | "interacted" | "bookmarked" | "saved"
-  >("created");
+  const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
 
   // React 19: useTransition for non-urgent tab switching
   const [isPending, startTransition] = useTransition();
 
-  // Get current user ID immediately from Redux for ownership comparison
-  // Using memoized selector to prevent unnecessary re-renders
+  // Get current user ID from Redux
   const currentUserId = useSelector(selectUserId);
+
+  // Use profile.user_id consistently (not profile.id)
+  const userId = profile?.user_id || "";
 
   const [created, setCreated] = useState<
     {
@@ -61,12 +64,10 @@ export default function OwnProfilePostsSection() {
   >([]);
   const [saved, setSaved] = useState<SavedPostWithDetails[]>([]);
   const [liked, setLiked] = useState<LikedPostWithDetails[]>([]);
-  const [bookmarked, setBookmarked] = useState<LikedPostWithDetails[]>([]); // Duplicate of liked for now
 
-  const [loading, setLoading] = useState(false);
-  const [savedLoading, setSavedLoading] = useState(false);
-  const [likedLoading, setLikedLoading] = useState(false);
-  const [bookmarkedLoading, setBookmarkedLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // Start as true to show skeletons initially
+  const [savedLoading, setSavedLoading] = useState(true); // Start as true to show skeletons initially
+  const [likedLoading, setLikedLoading] = useState(true); // Start as true to show skeletons initially
 
   // Pagination state
   const [createdPage, setCreatedPage] = useState(0);
@@ -79,8 +80,10 @@ export default function OwnProfilePostsSection() {
 
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
+    if (!userId) return;
+
     // Cancel all requests when profile changes
-    cancelContextRequests(`profile-${profile?.id}`);
+    cancelContextRequests(`profile-${userId}`);
     createdRequestRef.current?.abort();
     likedRequestRef.current?.abort();
     savedRequestRef.current?.abort();
@@ -100,9 +103,100 @@ export default function OwnProfilePostsSection() {
       createdRequestRef.current?.abort();
       likedRequestRef.current?.abort();
       savedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile?.id}`);
+      cancelContextRequests(`profile-${userId}`);
     };
-  }, [profile?.id]);
+  }, [userId]);
+
+  // Get drafts from localStorage (for unsaved local drafts)
+  const getDraftsFromStorage = () => {
+    try {
+      const draftMeta = localStorage.getItem("draftMeta");
+      const draftActivities = localStorage.getItem("draftActivities");
+
+      const hasMeta =
+        draftMeta && draftMeta !== "{}" && draftMeta.trim() !== "";
+      const hasActivities =
+        draftActivities &&
+        draftActivities !== "[]" &&
+        draftActivities.trim() !== "";
+
+      if (hasMeta || hasActivities) {
+        const meta = hasMeta ? JSON.parse(draftMeta) : {};
+        const activities = hasActivities ? JSON.parse(draftActivities) : [];
+
+        const draftPost = {
+          id: "draft-" + Date.now(),
+          caption: meta.caption || "Untitled draft",
+          created_at: new Date().toISOString(),
+          type: "experience",
+          status: "draft",
+          activities: activities || [],
+          meta: meta,
+          isDraft: true,
+        };
+
+        return [draftPost];
+      }
+      return [];
+    } catch (error) {
+      console.error("Failed to load drafts:", error);
+      return [];
+    }
+  };
+
+  // STALE-WHILE-REVALIDATE: Load cached data immediately for instant display
+  useEffect(() => {
+    if (!userId) return;
+
+    // Load created posts cache using user_id
+    const cachedCreated = getCachedProfilePosts(userId, "created");
+    if (cachedCreated && cachedCreated.length > 0) {
+      console.log(
+        "[OwnProfilePostsSection] Using cached created posts (stale-while-revalidate):",
+        cachedCreated.length
+      );
+      setCreated(cachedCreated as any);
+      // [OPTIMIZATION: Phase 6 - Connection] Prioritize critical content on slow connections
+      // Why: Load first post images immediately, defer later posts
+      (async () => {
+        const { isSlowConnection } = await import("../../lib/connectionAware");
+        const isSlow = isSlowConnection();
+        // On slow connections, only preload first post (critical)
+        // On fast connections, preload all cached posts
+        const postsToPreload = isSlow
+          ? cachedCreated.slice(0, 1)
+          : cachedCreated;
+        preloadProfilePostImages(postsToPreload as any);
+      })();
+      setLoading(false); // Show cached data immediately
+    } else {
+      setLoading(true); // Show skeletons while fetching
+    }
+
+    // Load saved posts from cache SYNCHRONOUSLY (instant)
+    if (currentUserId) {
+      const cachedSaved = getCachedSavedPosts(currentUserId);
+      if (cachedSaved && cachedSaved.length > 0) {
+        console.log(
+          "[OwnProfilePostsSection] Using cached saved posts (stale-while-revalidate):",
+          cachedSaved.length
+        );
+        setSaved(cachedSaved);
+        setSavedLoading(false);
+      }
+    }
+
+    // Load interacted posts cache using user_id
+    const cachedInteracted = getCachedProfilePosts(userId, "interacted");
+    if (cachedInteracted && cachedInteracted.length > 0) {
+      console.log(
+        "[OwnProfilePostsSection] Using cached interacted posts (stale-while-revalidate):",
+        cachedInteracted.length
+      );
+      setLiked(cachedInteracted as any);
+      setLikedLoading(false); // Show cached data immediately
+    }
+  }, [userId, currentUserId]);
 
   // Infinite scroll handler
   const handleScroll = () => {
@@ -123,212 +217,19 @@ export default function OwnProfilePostsSection() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [tab, hasMoreCreated, loading]);
 
-  const getDraftsFromStorage = () => {
-    try {
-      // Get draft data from localStorage (for unsaved local drafts)
-      const draftMeta = localStorage.getItem("draftMeta");
-      const draftActivities = localStorage.getItem("draftActivities");
-
-      // Check if we have any draft data
-      const hasMeta =
-        draftMeta && draftMeta !== "{}" && draftMeta.trim() !== "";
-      const hasActivities =
-        draftActivities &&
-        draftActivities !== "[]" &&
-        draftActivities.trim() !== "";
-
-      if (hasMeta || hasActivities) {
-        const meta = hasMeta ? JSON.parse(draftMeta) : {};
-        const activities = hasActivities ? JSON.parse(draftActivities) : [];
-
-        // Create a mock draft post object
-        const draftPost = {
-          id: "draft-" + Date.now(), // Temporary ID for draft
-          caption: meta.caption || "Untitled draft",
-          created_at: new Date().toISOString(),
-          type: "experience", // Default type
-          status: "draft",
-          activities: activities || [],
-          meta: meta,
-          isDraft: true, // Flag to identify as draft
-        };
-
-        return [draftPost];
-      }
-      return [];
-    } catch (error) {
-      console.error("Failed to load drafts:", error);
-      return [];
-    }
-  };
-
-  // Load cached data immediately for own profile
+  // Load created posts - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
-    if (profile?.id) {
-      // Load created posts cache
-      const cachedData = getCachedProfilePosts(profile.id, "created");
-      if (cachedData && cachedData.length > 0) {
-        console.log(
-          "[OwnProfilePostsSection] Using cached created posts:",
-          cachedData.length
-        );
-        setCreated(cachedData as any);
-        preloadProfilePostImages(cachedData as any);
-      } else {
-        setLoading(true);
-      }
-
-      // Load saved posts from cache SYNCHRONOUSLY (instant, no async delay)
-      const currentUserId = localStorage.getItem("my_user_id");
-      if (currentUserId) {
-        const cachedSaved = getCachedSavedPosts(currentUserId);
-        if (cachedSaved && cachedSaved.length > 0) {
-          console.log(
-            "[OwnProfilePostsSection] Loaded saved posts from cache INSTANTLY:",
-            cachedSaved.length
-          );
-          setSaved(cachedSaved);
-          setSavedLoading(false);
-        } else {
-          // No cache, but don't show loading if we're not on saved tab
-          if (tab !== "saved") {
-            setSavedLoading(false);
-          }
-        }
-      }
-
-      // Also fetch fresh data in background (but don't block UI)
-      const loadSavedPostsBackground = async () => {
-        try {
-          const { data: savedPosts } = await getSavedPosts();
-          if (savedPosts) {
-            setSaved(savedPosts);
-            setSavedLoading(false);
-          }
-        } catch (error) {
-          console.error("Error loading saved posts:", error);
-          setSavedLoading(false);
-        }
-      };
-      // Load in background without blocking
-      loadSavedPostsBackground();
-
-      // Preload interacted (liked) posts in background - LOW priority (only if not on interacted tab)
-      if (tab !== "interacted") {
-        const loadLikedPostsBackground = async () => {
-          try {
-            const abortController = new AbortController();
-            likedRequestRef.current = abortController;
-
-            // Delay to not block initial render
-            await new Promise((resolve) => setTimeout(resolve, 500));
-
-            if (abortController.signal.aborted) return;
-
-            const result = await requestManager.execute(
-              `profile-${profile.id}-liked-preload`,
-              async (signal: AbortSignal) => {
-                const res = await getLikedPostsWithDetails();
-                if (signal.aborted) throw new Error("Aborted");
-                return res;
-              },
-              "low" // Low priority for background preload
-            );
-
-            if (result.error) {
-              console.error("Error preloading liked posts:", result.error);
-            } else if (!abortController.signal.aborted && result.data) {
-              const likedPosts = result.data.data || [];
-              setLiked(likedPosts);
-              console.log(
-                "[OwnProfilePostsSection] Preloaded liked posts in background:",
-                likedPosts.length
-              );
-            }
-          } catch (error: any) {
-            if (error.name !== "AbortError") {
-              console.error("Error preloading liked posts:", error);
-            }
-          }
-        };
-
-        loadLikedPostsBackground();
-      }
-
-      // Preload saved posts in background - LOW priority (only if not on saved tab)
-      if (tab !== "saved") {
-        const loadSavedPostsBackground = async () => {
-          try {
-            // Check cache first (instant)
-            const currentUserId = localStorage.getItem("my_user_id");
-            if (currentUserId) {
-              const cachedSaved = getCachedSavedPosts(currentUserId);
-              if (cachedSaved && cachedSaved.length > 0) {
-                setSaved(cachedSaved);
-                console.log(
-                  "[OwnProfilePostsSection] Preloaded saved posts from cache:",
-                  cachedSaved.length
-                );
-                return;
-              }
-            }
-
-            // Delay to not block initial render
-            await new Promise((resolve) => setTimeout(resolve, 800));
-
-            const abortController = new AbortController();
-            savedRequestRef.current = abortController;
-
-            if (abortController.signal.aborted) return;
-
-            const result = await requestManager.execute(
-              `profile-${profile.id}-saved-preload`,
-              async (signal: AbortSignal) => {
-                const res = await getSavedPosts();
-                if (signal.aborted) throw new Error("Aborted");
-                return res;
-              },
-              "low" // Low priority for background preload
-            );
-
-            if (result.error) {
-              console.error("Error preloading saved posts:", result.error);
-            } else if (!abortController.signal.aborted && result.data) {
-              const savedPosts = result.data.data || [];
-              setSaved(savedPosts);
-              console.log(
-                "[OwnProfilePostsSection] Preloaded saved posts in background:",
-                savedPosts.length
-              );
-            }
-          } catch (error: any) {
-            if (error.name !== "AbortError") {
-              console.error("Error preloading saved posts:", error);
-            }
-          }
-        };
-
-        loadSavedPostsBackground();
-      }
-    }
-  }, [profile?.id]);
-
-  // Load created posts for own profile - HIGH priority when tab is active
-  useEffect(() => {
-    if (!profile?.id || tab !== "created") {
-      // Cancel created posts request if switching away
+    if (!userId || tab !== "created") {
       createdRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile?.id}-created`);
+      cancelContextRequests(`profile-${userId}-created`);
       return;
     }
 
     // Cancel other tab requests when switching to created
-    if (tab === "created") {
-      likedRequestRef.current?.abort();
-      savedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile.id}-liked`);
-      cancelContextRequests(`profile-${profile.id}-saved`);
-    }
+    likedRequestRef.current?.abort();
+    savedRequestRef.current?.abort();
+    cancelContextRequests(`profile-${userId}-liked`);
+    cancelContextRequests(`profile-${userId}-saved`);
 
     const loadCreatedPosts = async () => {
       try {
@@ -336,10 +237,9 @@ export default function OwnProfilePostsSection() {
         createdRequestRef.current = abortController;
 
         console.log(
-          "[OwnProfilePostsSection] Loading created posts (HIGH priority):",
+          "[OwnProfilePostsSection] Fetching fresh created posts (background):",
           {
-            profileId: profile.id,
-            profileUserId: profile.user_id,
+            userId,
             tab,
             page: createdPage,
           }
@@ -349,12 +249,12 @@ export default function OwnProfilePostsSection() {
         const POSTS_PER_PAGE = 10;
         const from = createdPage * POSTS_PER_PAGE;
 
-        // Fetch fresh posts with HIGH priority
+        // Fetch fresh posts in background (stale-while-revalidate)
         const result = await requestManager.execute(
-          `profile-${profile.id}-created-${createdPage}`,
+          `profile-${userId}-created-${createdPage}`,
           async (signal: AbortSignal) => {
             const res = await getUserPostsCreated(
-              profile.user_id,
+              userId,
               from,
               POSTS_PER_PAGE,
               true, // includeDrafts
@@ -363,16 +263,10 @@ export default function OwnProfilePostsSection() {
             if (signal.aborted) throw new Error("Aborted");
             return res;
           },
-          "high" // HIGH priority for active tab
+          "high"
         );
 
         if (abortController.signal.aborted) return;
-
-        console.log("[OwnProfilePostsSection] Fresh posts result:", {
-          dataLength: result.data?.data?.length,
-          error: result.error,
-          page: createdPage,
-        });
 
         if (result.error) {
           console.error("Error loading created posts:", result.error);
@@ -389,16 +283,30 @@ export default function OwnProfilePostsSection() {
         const postsData = result.data?.data || [];
         const newPosts = [...localStorageDrafts, ...postsData];
 
-        // Only update state if not aborted
         if (!abortController.signal.aborted) {
+          // Update cache with fresh data (only first 5)
           if (createdPage === 0) {
-            // First page: replace all
+            setCachedProfilePosts(userId, "created", newPosts.slice(0, 5));
+            // [OPTIMIZATION: Phase 6 - Connection] Prioritize critical content on slow connections
+            // Why: Load first post images immediately, defer later posts
+            (async () => {
+              const { isSlowConnection } = await import(
+                "../../lib/connectionAware"
+              );
+              const isSlow = isSlowConnection();
+              // On slow connections, only preload first post (critical)
+              // On fast connections, preload first 5 posts
+              const postsToPreload = isSlow
+                ? newPosts.slice(0, 1)
+                : newPosts.slice(0, 5);
+              preloadProfilePostImages(postsToPreload as any);
+            })();
+          }
+
+          // Update state
+          if (createdPage === 0) {
             setCreated(newPosts as any);
-            // Update cache
-            updateProfilePostsCache(profile.id, "created", newPosts);
-            // No progressive loading needed - LazyList handles it
           } else {
-            // Subsequent pages: append
             setCreated((prev) => [...prev, ...newPosts] as any);
           }
 
@@ -415,87 +323,70 @@ export default function OwnProfilePostsSection() {
     };
 
     loadCreatedPosts();
-  }, [profile?.id, tab, createdPage]);
+  }, [userId, tab, createdPage]);
 
-  // Load saved posts - HIGH priority when tab is active, instant from cache
+  // Load saved posts - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
-    if (!profile?.id || tab !== "saved") {
-      // Cancel saved posts request if switching away
+    if (!userId || tab !== "saved") {
       savedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile?.id}-saved`);
+      cancelContextRequests(`profile-${userId}-saved`);
       return;
     }
 
     // Cancel other tab requests when switching to saved
-    if (tab === "saved") {
-      createdRequestRef.current?.abort();
-      likedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile.id}-created`);
-      cancelContextRequests(`profile-${profile.id}-liked`);
-      cancelContextRequests(`profile-${profile.id}-bookmarked`);
-    }
+    createdRequestRef.current?.abort();
+    likedRequestRef.current?.abort();
+    cancelContextRequests(`profile-${userId}-created`);
+    cancelContextRequests(`profile-${userId}-liked`);
 
-    // Check cache synchronously first (instant)
-    const currentUserId = localStorage.getItem("my_user_id");
+    // Check cache synchronously first (already done in initial load, but refresh if needed)
     if (currentUserId) {
       const cachedSaved = getCachedSavedPosts(currentUserId);
-      if (cachedSaved && cachedSaved.length > 0) {
-        console.log(
-          "[OwnProfilePostsSection] Using cached saved posts INSTANTLY:",
-          cachedSaved.length
-        );
+      if (cachedSaved && cachedSaved.length > 0 && saved.length === 0) {
         setSaved(cachedSaved);
         setSavedLoading(false);
-        // Still fetch fresh data in background
-        requestManager
-          .execute(
-            `profile-${profile.id}-saved-refresh`,
-            async (signal: AbortSignal) => {
-              const res = await getSavedPosts();
-              if (signal.aborted) throw new Error("Aborted");
-              return res;
-            },
-            "medium"
-          )
-          .then((result) => {
-            if (result.data?.data) {
-              setSaved(result.data.data);
-            }
-          })
-          .catch(() => {});
-        return;
       }
     }
 
-    // Otherwise, load them with HIGH priority
+    // Fetch fresh data in background (stale-while-revalidate)
     const loadSavedPosts = async () => {
+      if (!currentUserId) {
+        setSavedLoading(false);
+        return;
+      }
+
       setSavedLoading(true);
       try {
         const abortController = new AbortController();
         savedRequestRef.current = abortController;
 
         const result = await requestManager.execute(
-          `profile-${profile.id}-saved`,
+          `profile-${userId}-saved`,
           async (signal: AbortSignal) => {
             const res = await getSavedPosts();
             if (signal.aborted) throw new Error("Aborted");
             return res;
           },
-          "high" // HIGH priority for active tab
+          "high"
         );
 
         if (abortController.signal.aborted) return;
 
         if (result.error) {
           console.error("Error loading saved posts:", result.error);
-          setSaved([]);
+          if (saved.length === 0) {
+            setSaved([]);
+          }
         } else {
-          setSaved(result.data?.data || []);
+          const freshSaved = result.data?.data || [];
+          setSaved(freshSaved);
         }
       } catch (error: any) {
         if (error.name !== "AbortError") {
           console.error("Error loading saved posts:", error);
-          setSaved([]);
+          if (saved.length === 0) {
+            setSaved([]);
+          }
         }
       } finally {
         if (!savedRequestRef.current?.signal.aborted) {
@@ -505,51 +396,86 @@ export default function OwnProfilePostsSection() {
     };
 
     loadSavedPosts();
-  }, [profile?.id, tab]);
+  }, [userId, tab, currentUserId, saved.length]);
 
-  // Load liked posts for own profile - HIGH priority when tab is active
+  // Listen for invite accepted events to refresh interacted posts
   useEffect(() => {
-    if (!profile?.id || tab !== "interacted") {
-      // Cancel liked posts request if switching away
+    const handleInviteAccepted = () => {
+      // If we're on the interacted tab, refresh the posts
+      if (tab === "interacted" && userId) {
+        // Clear cache and force reload
+        clearCachedProfilePosts(userId, "interacted");
+        // Cancel current request
+        likedRequestRef.current?.abort();
+        cancelContextRequests(`profile-${userId}-liked`);
+        // Clear current data and reload
+        setLiked([]);
+        setLikedLoading(true);
+
+        // Force reload by fetching fresh data
+        (async () => {
+          try {
+            const result = await requestManager.execute(
+              `profile-${userId}-liked-refresh`,
+              async (signal: AbortSignal) => {
+                const res = await getLikedPostsWithDetails();
+                if (signal.aborted) throw new Error("Aborted");
+                return res;
+              },
+              "high"
+            );
+
+            if (result.error) {
+              console.error("Error refreshing liked posts:", result.error);
+            } else {
+              const freshLiked = result.data?.data || [];
+              setLiked(freshLiked);
+              // Update cache (only first 5)
+              setCachedProfilePosts(
+                userId,
+                "interacted",
+                freshLiked.slice(0, 5)
+              );
+            }
+          } catch (error: any) {
+            if (error.name !== "AbortError") {
+              console.error("Error refreshing liked posts:", error);
+            }
+          } finally {
+            setLikedLoading(false);
+          }
+        })();
+      }
+    };
+
+    window.addEventListener("invite:accepted", handleInviteAccepted);
+    return () => {
+      window.removeEventListener("invite:accepted", handleInviteAccepted);
+    };
+  }, [tab, userId]);
+
+  // Load interacted (liked) posts - STALE-WHILE-REVALIDATE pattern
+  useEffect(() => {
+    if (!userId || tab !== "interacted") {
       likedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile?.id}-liked`);
+      cancelContextRequests(`profile-${userId}-liked`);
       return;
     }
 
     // Cancel other tab requests when switching to interacted
-    if (tab === "interacted") {
-      createdRequestRef.current?.abort();
-      savedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile.id}-created`);
-      cancelContextRequests(`profile-${profile.id}-saved`);
-    }
+    createdRequestRef.current?.abort();
+    savedRequestRef.current?.abort();
+    cancelContextRequests(`profile-${userId}-created`);
+    cancelContextRequests(`profile-${userId}-saved`);
 
-    // If we already have liked posts from background preload, use them instantly
-    if (liked.length > 0) {
+    // Check cache first (already done in initial load)
+    const cachedInteracted = getCachedProfilePosts(userId, "interacted");
+    if (cachedInteracted && cachedInteracted.length > 0 && liked.length === 0) {
+      setLiked(cachedInteracted as any);
       setLikedLoading(false);
-      // Still fetch fresh data in background with lower priority
-      requestManager
-        .execute(
-          `profile-${profile.id}-liked-refresh`,
-          async (signal: AbortSignal) => {
-            const res = await getLikedPostsWithDetails();
-            if (signal.aborted) throw new Error("Aborted");
-            return res;
-          },
-          "medium" // Medium priority for background refresh
-        )
-        .then((result) => {
-          if (result.data?.data) {
-            setLiked(result.data.data);
-          }
-        })
-        .catch(() => {
-          // Ignore aborted errors
-        });
-      return;
     }
 
-    // Otherwise, load them with HIGH priority
+    // Fetch fresh data in background (stale-while-revalidate)
     const loadLikedPosts = async () => {
       setLikedLoading(true);
       try {
@@ -557,27 +483,34 @@ export default function OwnProfilePostsSection() {
         likedRequestRef.current = abortController;
 
         const result = await requestManager.execute(
-          `profile-${profile.id}-liked`,
+          `profile-${userId}-liked`,
           async (signal: AbortSignal) => {
             const res = await getLikedPostsWithDetails();
             if (signal.aborted) throw new Error("Aborted");
             return res;
           },
-          "high" // HIGH priority for active tab
+          "high"
         );
 
         if (abortController.signal.aborted) return;
 
         if (result.error) {
           console.error("Error loading liked posts:", result.error);
-          setLiked([]);
+          if (liked.length === 0) {
+            setLiked([]);
+          }
         } else {
-          setLiked(result.data?.data || []);
+          const freshLiked = result.data?.data || [];
+          setLiked(freshLiked);
+          // Update cache (only first 5)
+          setCachedProfilePosts(userId, "interacted", freshLiked.slice(0, 5));
         }
       } catch (error: any) {
         if (error.name !== "AbortError") {
           console.error("Error loading liked posts:", error);
-          setLiked([]);
+          if (liked.length === 0) {
+            setLiked([]);
+          }
         }
       } finally {
         if (!likedRequestRef.current?.signal.aborted) {
@@ -587,52 +520,14 @@ export default function OwnProfilePostsSection() {
     };
 
     loadLikedPosts();
-  }, [profile?.id, tab]);
-
-  // Load bookmarked posts - duplicate of interacted (not connected to anything yet)
-  useEffect(() => {
-    if (!profile?.id || tab !== "bookmarked") {
-      // Cancel bookmarked posts request if switching away
-      cancelContextRequests(`profile-${profile?.id}-bookmarked`);
-      return;
-    }
-
-    // Cancel other tab requests when switching to bookmarked
-    if (tab === "bookmarked") {
-      createdRequestRef.current?.abort();
-      likedRequestRef.current?.abort();
-      savedRequestRef.current?.abort();
-      cancelContextRequests(`profile-${profile.id}-created`);
-      cancelContextRequests(`profile-${profile.id}-liked`);
-      cancelContextRequests(`profile-${profile.id}-saved`);
-    }
-
-    const loadBookmarkedPosts = async () => {
-      try {
-        setBookmarkedLoading(true);
-        // For now, just duplicate the liked posts logic
-        // TODO: Connect to actual bookmarks API
-        const result = await getLikedPostsWithDetails();
-        if (result.error) {
-          console.error("Error loading bookmarked posts:", result.error);
-          setBookmarkedLoading(false);
-          return;
-        }
-        setBookmarked(result.data || []);
-        setBookmarkedLoading(false);
-      } catch (error) {
-        console.error("Error loading bookmarked posts:", error);
-        setBookmarkedLoading(false);
-      }
-    };
-
-    loadBookmarkedPosts();
-  }, [profile?.id, tab]);
+  }, [userId, tab, liked.length]);
 
   const handlePostDelete = async (postId: string) => {
     try {
       await supabase.from("posts").delete().eq("id", postId);
       setCreated((prev) => prev.filter((p) => p.id !== postId));
+      // Clear cache for created posts
+      clearCachedProfilePosts(userId, "created");
       toast.success("Post deleted successfully");
     } catch (error) {
       console.error("Error deleting post:", error);
@@ -640,7 +535,7 @@ export default function OwnProfilePostsSection() {
     }
   };
 
-  // Theme-aware tab styling - FIXED: Same height for all tabs, active tab is smaller
+  // Theme-aware tab styling
   const base =
     "px-2 py-1 rounded-full text-xs border transition-all duration-200 flex items-center justify-center";
   const active = "bg-[var(--text)] text-[var(--bg)] border-[var(--text)]";
@@ -649,7 +544,7 @@ export default function OwnProfilePostsSection() {
 
   return (
     <section className="w-full max-w-[640px] mx-auto px-3">
-      {/* Tab Navigation */}
+      {/* Tab Navigation - Always visible (static) */}
       <div className="flex items-center justify-center gap-2 pt-4">
         <button
           className={`${base} ${tab === "created" ? active : inactive} ${
@@ -680,11 +575,11 @@ export default function OwnProfilePostsSection() {
         </button>
       </div>
 
-      {/* Content */}
+      {/* Content - Only this section shows loading skeletons */}
       <div className="py-4">
         {tab === "created" && (
           <>
-            {loading && (
+            {loading && created.length === 0 && (
               <div className="flex flex-col gap-2">
                 {[...Array(3)].map((_, i) => (
                   <PostSkeleton key={i} />
@@ -698,7 +593,7 @@ export default function OwnProfilePostsSection() {
               </div>
             )}
 
-            {/* UNIFIED POSTS LIST - viewport lazy loading */}
+            {/* POSTS LIST - Prepped for lazy loading (implementation later) */}
             {!loading && created.length > 0 && (
               <LazyList
                 items={created}
@@ -708,15 +603,15 @@ export default function OwnProfilePostsSection() {
                       postId={p.id}
                       caption={p.caption}
                       createdAt={p.created_at}
-                      authorId={profile?.user_id || ""}
+                      authorId={userId}
                       author={{
-                        id: profile?.user_id || "",
+                        id: userId,
                         username: profile?.username || null,
                         display_name: profile?.display_name || null,
                         avatar_url: profile?.avatar_url || null,
                       }}
                       type={p.type}
-                      isOwner={true} // Always true for own profile
+                      isOwner={true}
                       onDelete={() => handlePostDelete(p.id)}
                       status={p.status || "published"}
                       isDraft={p.isDraft || false}
@@ -740,7 +635,7 @@ export default function OwnProfilePostsSection() {
 
         {tab === "interacted" && (
           <>
-            {likedLoading && (
+            {likedLoading && liked.length === 0 && (
               <div className="flex flex-col gap-2">
                 {[...Array(3)].map((_, i) => (
                   <PostSkeleton key={i} />
@@ -754,7 +649,7 @@ export default function OwnProfilePostsSection() {
               </div>
             )}
 
-            {/* UNIFIED LIKED POSTS LIST - viewport lazy loading */}
+            {/* LIKED POSTS LIST - Prepped for lazy loading (implementation later) */}
             {liked.length > 0 && (
               <LazyList
                 items={liked}
@@ -772,8 +667,8 @@ export default function OwnProfilePostsSection() {
                       avatar_url: l.posts.profiles.avatar_url,
                     }}
                     type={l.posts.type}
-                    isOwner={false} // Liked posts are not owned by the current user
-                    status="published" // Liked posts are always published
+                    isOwner={false}
+                    status="published"
                     isAnonymous={l.posts.is_anonymous || false}
                     anonymousName={(l.posts as any).anonymous_name}
                     anonymousAvatar={(l.posts as any).anonymous_avatar}
@@ -790,61 +685,9 @@ export default function OwnProfilePostsSection() {
           </>
         )}
 
-        {tab === "bookmarked" && (
-          <>
-            {bookmarkedLoading && (
-              <div className="flex flex-col gap-2">
-                {[...Array(3)].map((_, i) => (
-                  <PostSkeleton key={i} />
-                ))}
-              </div>
-            )}
-
-            {!bookmarkedLoading && bookmarked.length === 0 && (
-              <div className="text-center text-sm text-[var(--text)]/70 py-10">
-                No bookmarked posts yet.
-              </div>
-            )}
-
-            {/* UNIFIED BOOKMARKED POSTS LIST - viewport lazy loading */}
-            {bookmarked.length > 0 && (
-              <LazyList
-                items={bookmarked}
-                renderItem={(l: LikedPostWithDetails) => (
-                  <ProgressivePost
-                    key={l.posts.id}
-                    postId={l.posts.id}
-                    caption={l.posts.caption}
-                    createdAt={l.posts.created_at}
-                    authorId={l.posts.author_id}
-                    author={{
-                      id: l.posts.author_id,
-                      username: l.posts.profiles.username,
-                      display_name: l.posts.profiles.display_name,
-                      avatar_url: l.posts.profiles.avatar_url,
-                    }}
-                    type={l.posts.type}
-                    isOwner={false} // Bookmarked posts are not owned by the current user
-                    status="published" // Bookmarked posts are always published
-                    isAnonymous={l.posts.is_anonymous || false}
-                    anonymousName={(l.posts as any).anonymous_name}
-                    anonymousAvatar={(l.posts as any).anonymous_avatar}
-                  />
-                )}
-                bufferBefore={0}
-                bufferAfter={1}
-                rootMargin="100px"
-                loadingComponent={<PostSkeleton />}
-                enabled={!bookmarkedLoading}
-                className="flex flex-col gap-2"
-              />
-            )}
-          </>
-        )}
-
         {tab === "saved" && (
           <>
-            {savedLoading && (
+            {savedLoading && saved.length === 0 && (
               <div className="flex flex-col gap-2">
                 {[...Array(3)].map((_, i) => (
                   <PostSkeleton key={i} />
@@ -858,7 +701,7 @@ export default function OwnProfilePostsSection() {
               </div>
             )}
 
-            {/* UNIFIED SAVED POSTS LIST - viewport lazy loading */}
+            {/* SAVED POSTS LIST - Prepped for lazy loading (implementation later) */}
             {saved.length > 0 && (
               <LazyList
                 items={saved}
@@ -877,8 +720,8 @@ export default function OwnProfilePostsSection() {
                       avatar_url: (s.posts as any).profiles?.avatar_url || null,
                     }}
                     type={s.posts.type}
-                    isOwner={false} // Saved posts are not owned by the current user
-                    status="published" // Saved posts are always published
+                    isOwner={false}
+                    status="published"
                     isAnonymous={s.posts.is_anonymous || false}
                     anonymousName={(s.posts as any).anonymous_name}
                     anonymousAvatar={(s.posts as any).anonymous_avatar}

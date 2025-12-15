@@ -12,7 +12,8 @@ import PreviewPage from "../pages/PreviewPage";
 import ExperiencePage from "../pages/ExperiencePage";
 import HangoutPage from "../pages/HangoutPage";
 import NotificationPage from "../pages/NotificationPage";
-import ProfilePage from "../pages/ProfilePage";
+import OwnProfilePage from "../pages/OwnProfilePage";
+import OtherProfilePage from "../pages/OtherProfilePage";
 import FeedTestPage from "../pages/FeedTestPage";
 import AuthCallback from "../pages/AuthCallback";
 
@@ -32,10 +33,10 @@ export default function AppRouter() {
       <Route path={Paths.hangoutDetail} element={<HangoutPage />} />
 
       <Route path={Paths.notification} element={<NotificationPage />} />
-      <Route path={Paths.profile} element={<ProfilePage />} />
+      <Route path={Paths.profile} element={<OwnProfilePage />} />
       <Route path={Paths.feedTest} element={<FeedTestPage />} />
-      <Route path={Paths.user} element={<ProfilePage />} />
-      <Route path={Paths.profileMe} element={<ProfilePage />} />
+      <Route path={Paths.user} element={<OtherProfilePage />} />
+      <Route path={Paths.profileMe} element={<OwnProfilePage />} />
       <Route path={Paths.me} element={<Navigate to="/u/me" replace />} />
 
       <Route path="/auth/callback" element={<AuthCallback />} />

@@ -2,13 +2,18 @@ import { BsPersonFill } from "react-icons/bs";
 import { FaHome } from "react-icons/fa";
 import { IoGameController, IoNotifications } from "react-icons/io5";
 import { RiAddBoxFill } from "react-icons/ri";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../router/Paths";
 import AuthModal from "./modal/AuthModal";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 import { useEffect, useState, useRef } from "react";
 import Avatar from "./ui/Avatar";
+import {
+  getCachedAvatar,
+  setCachedAvatar,
+  preloadAvatar,
+} from "../lib/avatarCache";
 import { supabase } from "../lib/supabaseClient";
 import { getUnreadNotificationCount } from "../api/services/notifications";
 import { dbg } from "../lib/authDebug";
@@ -17,6 +22,7 @@ import { isDraftDirty, discardAllDrafts, hasAnyDraftData } from "../lib/drafts";
 function BottomTab() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [myHandle, setMyHandle] = useState<string>(
     localStorage.getItem("my_username") || ""
@@ -158,12 +164,27 @@ function BottomTab() {
   const authUser = useSelector((s: any) => s.auth?.user || null);
 
   // Bottom tab avatar + initial (display_name)
+  // Try to get from avatarCache first, then fallback to localStorage
+  const getInitialAvatarUrl = () => {
+    // Try to get user_id from auth to check cache
+    const cachedUserId = authUser?.id;
+    if (cachedUserId) {
+      const cached = getCachedAvatar(cachedUserId);
+      if (cached) return cached;
+    }
+    // Fallback to localStorage
+    return localStorage.getItem("my_avatar_url") || null;
+  };
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
-    localStorage.getItem("my_avatar_url") || null
+    getInitialAvatarUrl()
   );
   const [displayName, setDisplayName] = useState<string | null>(
     localStorage.getItem("my_display_name") || null
   );
+
+  // Helper to determine if user should see Avatar (immediate + accurate check)
+  // Uses localStorage for immediate display on app load, falls back to authedId for accuracy
+  const shouldShowAvatar = localStorage.getItem("my_user_id") || authedId;
 
   const [hidden, setHidden] = useState(false);
   const lastY = useRef<number>(
@@ -174,12 +195,19 @@ function BottomTab() {
   useEffect(() => {
     let on = true;
     (async () => {
-      if (!authedId) {
+      // Only clear if truly logged out (not just during initial async load)
+      // This prevents flicker when authedId is temporarily null during initial load
+      if (!authedId && !localStorage.getItem("my_user_id")) {
         setAvatarUrl(null);
         setDisplayName(null);
         localStorage.removeItem("my_avatar_url");
         localStorage.removeItem("my_display_name");
         return;
+      }
+
+      // Guard: Don't query if authedId is null (prevents 400 errors with user_id=eq.null)
+      if (!authedId) {
+        return; // Use cached values if available, but don't make invalid query
       }
 
       const { data, error } = await supabase
@@ -196,9 +224,11 @@ function BottomTab() {
       setAvatarUrl(url);
       setDisplayName(name);
 
-      // cache for next mount to avoid flicker
-      if (url) {
-        localStorage.setItem("my_avatar_url", url);
+      // Cache avatar using avatarCache (for reuse everywhere)
+      if (url && authedId) {
+        setCachedAvatar(authedId, url);
+        preloadAvatar(url);
+        localStorage.setItem("my_avatar_url", url); // Keep for backward compatibility
       } else {
         localStorage.removeItem("my_avatar_url");
       }
@@ -239,8 +269,14 @@ function BottomTab() {
       setDisplayName(name);
 
       try {
-        if (url) localStorage.setItem("my_avatar_url", url);
-        else localStorage.removeItem("my_avatar_url");
+        // Cache avatar using avatarCache (for reuse everywhere)
+        if (url && authedId) {
+          setCachedAvatar(authedId, url);
+          preloadAvatar(url);
+          localStorage.setItem("my_avatar_url", url); // Keep for backward compatibility
+        } else {
+          localStorage.removeItem("my_avatar_url");
+        }
         if (name) localStorage.setItem("my_display_name", name);
         else localStorage.removeItem("my_display_name");
 
@@ -292,13 +328,50 @@ function BottomTab() {
   const toGames = (Paths as any).games ?? (Paths as any).game ?? null; // may not exist yet
 
   const goProfile = () => {
-    const handle = (
-      localStorage.getItem("my_username") ||
-      myHandle ||
-      ""
-    ).trim();
-    navigate(handle ? `/u/${handle}` : "/u/me"); // prefer pretty URL
+    // Always navigate to own profile page (not /u/:username)
+    navigate(Paths.profile);
   };
+
+  // [FROSTED GLASS] Determine which icon is active based on current route
+  const getActiveIconIndex = (): number | null => {
+    const path = location.pathname;
+
+    // Home icon (index 0)
+    if (path === Paths.home || path === "/") return 0;
+
+    // Games icon (index 1) - check if games route exists and matches
+    if (
+      toGames &&
+      (path === toGames ||
+        path.startsWith("/games") ||
+        path.startsWith("/game"))
+    )
+      return 1;
+
+    // Create icon (index 2) - match all create routes
+    if (path.startsWith("/create")) return 2;
+
+    // Notifications icon (index 3)
+    if (
+      path === Paths.notification ||
+      path.startsWith("/notifications") ||
+      path.startsWith("/notification")
+    )
+      return 3;
+
+    // Profile icon (index 4) - match own profile or other user profiles
+    if (
+      path === Paths.profile ||
+      path === Paths.profileMe ||
+      path === "/u/me" ||
+      path.startsWith("/u/")
+    )
+      return 4;
+
+    return null;
+  };
+
+  const activeIconIndex = getActiveIconIndex();
 
   const tryNavigateAwayFromCreate = (go: () => void) => {
     const inCreate = location.pathname.startsWith("/create");
@@ -361,8 +434,12 @@ function BottomTab() {
         ),
     },
     {
-      icon: avatarUrl ? (
-        <Avatar url={avatarUrl} name={displayName || " "} size={28} />
+      icon: shouldShowAvatar ? (
+        <Avatar
+          url={avatarUrl || undefined}
+          name={displayName || " "}
+          size={28}
+        />
       ) : (
         <BsPersonFill />
       ),
@@ -377,7 +454,7 @@ function BottomTab() {
       data-bottomtab
       className={[
         "fixed left-0 right-0 bottom-0 z-40 border-t border-[var(--border)]",
-        "bg-[var(--surface)]/95 backdrop-blur-md",
+        "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
         "transition-transform duration-300",
         hidden ? "translate-y-[110%]" : "translate-y-0",
       ].join(" ")}
@@ -385,17 +462,41 @@ function BottomTab() {
       <AuthModal />
 
       <div className="max-w-[640px] mx-auto px-[var(--gutter)]">
-        <div className="py-2 flex px-4 items-center justify-between">
-          {menu.map((item, index) => (
-            <button
-              key={index}
-              onClick={item.onClick}
-              className="p-2 text-[var(--text)] text-[24px] rounded-md hover:hover:bg-[rgba(255,255,255,0.08)] transition-colors"
-              aria-label={`tab-${index}`}
-            >
-              {item.icon}
-            </button>
-          ))}
+        <div className="pt-2 pb-2 flex px-4 items-center justify-between min-h-[50px]">
+          {menu.map((item, index) => {
+            const isActive = activeIconIndex === index;
+
+            return (
+              <button
+                key={index}
+                onClick={item.onClick}
+                className="relative text-[var(--text)] text-[24px] transition-all flex items-center justify-center"
+                aria-label={`tab-${index}`}
+              >
+                {/* Always use consistent container size to prevent layout jumping - reduced from w-14 h-14 to w-12 h-12 */}
+                <div
+                  className={`flex items-center justify-center w-12 h-12 rounded-lg transition-all ${
+                    isActive
+                      ? "bg-[var(--glass-active-bg)] backdrop-blur-[var(--glass-blur)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
+                      : "border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
+                  }`}
+                >
+                  {/* Special wrapper for Avatar to ensure proper centering - only apply when Avatar is present */}
+                  {index === 4 && shouldShowAvatar ? (
+                    // Profile icon (Avatar) - use special wrapper to fix inline-block alignment issue
+                    <div className="bottom-tab-avatar-wrapper flex items-center justify-center w-full h-full">
+                      {item.icon}
+                    </div>
+                  ) : (
+                    // Regular icons (including BsPersonFill when not logged in)
+                    <div className="flex items-center justify-center">
+                      {item.icon}
+                    </div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 

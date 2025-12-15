@@ -25,10 +25,23 @@ interface ProfilePostsCache {
   [key: string]: ProfilePostsCacheEntry<any>;
 }
 
-const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
-const MAX_CACHE_SIZE = 10; // Cache first 10 posts for each tab
+const BASE_CACHE_DURATION = 10 * 60 * 1000; // 10 minutes (base duration)
+const MAX_CACHE_SIZE = 5; // Cache only first 5 posts for each tab
 const CACHE_KEY = "profile_posts_cache";
 const CACHE_VERSION = 1;
+
+// [OPTIMIZATION: Phase 6 - Connection] Get cache duration based on connection speed
+// Why: Longer cache duration on slow connections to reduce network requests
+function getCacheDuration(): number {
+  try {
+    const { getCacheDurationMultiplier } = require("./connectionAware");
+    const multiplier = getCacheDurationMultiplier();
+    return BASE_CACHE_DURATION * multiplier;
+  } catch {
+    // Fallback if connectionAware not available
+    return BASE_CACHE_DURATION;
+  }
+}
 
 // Helper function to generate cache key for profile posts
 function generateProfilePostsKey(
@@ -57,7 +70,8 @@ export function getCachedProfilePosts<T>(
     const now = Date.now();
     if (
       entry.userId === userId &&
-      now - entry.timestamp < CACHE_DURATION &&
+      // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
+      now - entry.timestamp < getCacheDuration() &&
       entry.version === CACHE_VERSION
     ) {
       console.log(
