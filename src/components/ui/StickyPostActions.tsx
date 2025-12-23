@@ -6,17 +6,21 @@ import FollowButton from "./FollowButton";
 import { useState, useEffect } from "react";
 import { getCommentCount } from "../../api/services/comments";
 import { supabase } from "../../lib/supabaseClient";
+import { type BatchLoadResult } from "../../lib/batchDataLoader";
 
 interface StickyPostActionsProps {
   postId: string;
   authorId?: string; // This is auth user ID, we need to convert to profile ID
   className?: string;
+  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
+  batchedData?: BatchLoadResult | null;
 }
 
 export default function StickyPostActions({
   postId,
   authorId,
   className = "",
+  batchedData,
 }: StickyPostActionsProps) {
   const [commentCount, setCommentCount] = useState(0);
   const [authorProfileId, setAuthorProfileId] = useState<string | null>(null);
@@ -107,14 +111,25 @@ export default function StickyPostActions({
             <button className="flex items-center gap-1" aria-label="Share">
               <MdShare size={22} />
             </button>
-            <LikeButton postId={postId} size={22} />
-            <SaveButton postId={postId} size={22} />
+            <LikeButton
+              postId={postId}
+              size={22}
+              isLiked={batchedData?.likeStatuses.get(postId)}
+            />
+            <SaveButton
+              postId={postId}
+              size={22}
+              isSaved={batchedData?.saveStatuses.get(postId)}
+            />
           </div>
 
           {/* Right side: Follow button */}
           {authorProfileId && (
             <div className="h-7 min-w-[92px] flex items-center justify-center">
-              <FollowButton targetId={authorProfileId} />
+              <FollowButton
+                targetId={authorProfileId}
+                followStatus={batchedData?.followStatuses.get(authorProfileId)}
+              />
             </div>
           )}
         </div>

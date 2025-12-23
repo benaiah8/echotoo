@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { getPostForEdit, deletePost } from "../../api/services/posts";
 import toast from "react-hot-toast";
+import { type BatchLoadResult } from "../../lib/batchDataLoader";
 
 // ---- Types the component will accept (all extras are optional) ----
 export type Post = {
@@ -104,9 +105,12 @@ function Chip({ children }: { children: React.ReactNode }) {
 export default function PostDetailBody({
   post,
   isPreview = false,
+  batchedData,
 }: {
   post: Post;
   isPreview?: boolean;
+  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
+  batchedData?: BatchLoadResult | null;
 }) {
   const navigate = useNavigate();
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -200,6 +204,7 @@ export default function PostDetailBody({
       <StickyPostActions
         postId={post.id}
         authorId={!anon ? post.author_id : undefined}
+        batchedData={batchedData}
       />
 
       {/* HERO CAROUSEL (contain, lightbox) */}
@@ -294,6 +299,7 @@ export default function PostDetailBody({
               postId={post.id}
               capacity={post.rsvp_capacity}
               className=""
+              rsvpData={batchedData?.rsvpData.get(post.id)}
               align="left"
               postAuthor={{
                 id: post.author_id,

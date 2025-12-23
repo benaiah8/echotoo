@@ -5,6 +5,7 @@ import {
   setCachedAvatar,
   preloadAvatar,
 } from "../lib/avatarCache";
+import { type BatchLoadResult } from "../lib/batchDataLoader";
 
 interface ProgressivePostProps {
   postId: string;
@@ -26,6 +27,8 @@ interface ProgressivePostProps {
   anonymousName?: string | null;
   anonymousAvatar?: string | null;
   selectedDates?: any;
+  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
+  batchedData?: BatchLoadResult | null;
 }
 
 export default function ProgressivePost(props: ProgressivePostProps) {
@@ -71,6 +74,7 @@ export default function ProgressivePost(props: ProgressivePostProps) {
     <Post
       {...props}
       author={progressiveAuthor}
+      batchedData={props.batchedData}
       // Add any other props for progressive loading
     />
   );

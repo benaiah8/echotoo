@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { useSelector, useDispatch } from "react-redux";
 import useScrollDirection from "../hooks/useScrollDirection";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
@@ -7,7 +13,12 @@ import HomeCategorySection from "../sections/home/HomeCategorySection";
 import HomeViewToggleSection from "../sections/home/HomeViewToggleSection";
 import HomeHangoutSection from "../sections/home/HomeHangoutSection";
 import HomePostsSection from "../sections/home/HomePostsSection";
-import { getPublicFeed, type FeedItem } from "../api/queries/getPublicFeed";
+import {
+  getPublicFeed,
+  getPublicFeedOptimized,
+  type FeedItem,
+  type FeedOptions,
+} from "../api/queries/getPublicFeed";
 import { supabase } from "../lib/supabaseClient";
 import { getViewerId } from "../api/services/follows";
 import { Paths } from "../router/Paths";
@@ -23,6 +34,10 @@ import { handleError, getErrorMessage } from "../lib/errorHandling";
 import toast from "react-hot-toast";
 
 const PAGE_SIZE = 6;
+
+// Feature flag: Enable optimized PostgreSQL function
+// Set to false to use the original getPublicFeed function
+const USE_OPTIMIZED_FEED = true;
 
 // Defer work until the browser is idle (fallback to timeout)
 const onIdle = (cb: () => void, timeout = 600) => {
@@ -60,9 +75,27 @@ export default function HomePage() {
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
 
+  // Track if we've already passed initial items to prevent unnecessary re-renders
+  // Set it synchronously so ProgressiveFeed gets it on mount
+  const initialItemsRef = useRef<FeedItem[] | undefined>(undefined);
+
+  // Update ref synchronously when items change (not in useEffect)
+  if (items.length > 0 && !initialItemsRef.current) {
+    initialItemsRef.current = items;
+  }
+
+  // FIX: Clear initialItemsRef when viewMode changes to prevent wrong type items
+  useEffect(() => {
+    initialItemsRef.current = undefined;
+  }, [viewMode]);
+
+  // [PHASE 1-4] Removed batchedData state - PostgreSQL function provides all data in FeedItem
+
   // horizontal rail - single unified rail
   const [hangouts, setHangouts] = useState<FeedItem[]>([]);
   const [hangoutsLoading, setHangoutsLoading] = useState(false);
+  // [PHASE 1-4] Removed hangoutsBatchedData - PostgreSQL provides all data in FeedItem
+  // [OPTIMIZATION: Phase 2 - Progressive] Track previous rail items for slow connection fallback
 
   // "other things you might like" (only when searching)
   const [fallbackItems, setFallbackItems] = useState<FeedItem[]>([]);
@@ -118,6 +151,13 @@ export default function HomePage() {
 
   // load a page for main list
   useEffect(() => {
+    // [PHASE 1] Skip legacy loading when ProgressiveFeed is active
+    // Why: ProgressiveFeed handles all loading, legacy code causes competing API calls
+    const useProgressiveFeed = true; // Matches the prop passed to HomePostsSection
+    if (useProgressiveFeed) {
+      return; // Skip entire legacy loading logic
+    }
+
     let cancelled = false;
     (async () => {
       try {
@@ -169,19 +209,22 @@ export default function HomePage() {
             setItems(cachedData);
             setLoading(false);
 
-            // Prefetch related data for cached posts in background
+            // [OPTIMIZATION: Phase 1 - Batch] Removed - PostgreSQL function provides all data in FeedItem
+            // Prefetch via dataCache (for caching)
             try {
               await dataCache.prefetchRelatedData(cachedData);
-            } catch (error) {
+            } catch (prefetchError) {
               console.warn(
                 "[HomePage] Failed to prefetch related data for cached posts:",
-                error
+                prefetchError
               );
             }
 
             // Now fetch fresh data in the background
             try {
-              const freshData = await getPublicFeed(feedOptions);
+              const freshData = USE_OPTIMIZED_FEED
+                ? await getPublicFeedOptimized(feedOptions)
+                : await getPublicFeed(feedOptions);
               if (!cancelled) {
                 // Update cache with fresh data (handles new posts intelligently)
                 const updatedData = await dataCache.updateFeedCache(
@@ -207,18 +250,26 @@ export default function HomePage() {
         //   feedOptions
         // );
 
-        data = await getPublicFeed(feedOptions);
+        data = USE_OPTIMIZED_FEED
+          ? await getPublicFeedOptimized(feedOptions)
+          : await getPublicFeed(feedOptions);
 
         // Cache the data for future use and prefetch related data
         if (page === 0) {
           const cacheKey = dataCache.generateFeedKey(feedOptions);
           dataCache.set(cacheKey, data, 10 * 60 * 1000); // 10 minutes TTL
 
-          // Prefetch related data in background
-          try {
-            await dataCache.prefetchRelatedData(data);
-          } catch (error) {
-            console.warn("[HomePage] Failed to prefetch related data:", error);
+          // [OPTIMIZATION: Phase 1 - Batch] Removed - PostgreSQL function provides all data in FeedItem
+          // Prefetch via dataCache (for caching)
+          if (!cancelled) {
+            try {
+              await dataCache.prefetchRelatedData(data);
+            } catch (prefetchError) {
+              console.warn(
+                "[HomePage] Failed to prefetch related data:",
+                prefetchError
+              );
+            }
           }
         }
 
@@ -260,13 +311,21 @@ export default function HomePage() {
 
             try {
               // Load more posts without tag filter to show as "other posts"
-              const fallbackData = await getPublicFeed({
-                type: undefined, // UNIFIED: Get both types for fallback
-                q: search || undefined,
-                // No tag filter for fallback - show all posts
-                limit: PAGE_SIZE * 2, // Load more to account for filtering out duplicates
-                offset: 0,
-              });
+              const fallbackData = USE_OPTIMIZED_FEED
+                ? await getPublicFeedOptimized({
+                    type: undefined, // UNIFIED: Get both types for fallback
+                    q: search || undefined,
+                    // No tag filter for fallback - show all posts
+                    limit: PAGE_SIZE * 2, // Load more to account for filtering out duplicates
+                    offset: 0,
+                  })
+                : await getPublicFeed({
+                    type: undefined, // UNIFIED: Get both types for fallback
+                    q: search || undefined,
+                    // No tag filter for fallback - show all posts
+                    limit: PAGE_SIZE * 2, // Load more to account for filtering out duplicates
+                    offset: 0,
+                  });
               if (!cancelled) {
                 // Filter out posts that are already in the main results to avoid duplicates
                 const mainPostIds = new Set(data.map((item) => item.id));
@@ -299,7 +358,7 @@ export default function HomePage() {
         if (!cancelled) {
           const errorMessage = getErrorMessage(e);
           setError(errorMessage);
-          
+
           // [OPTIMIZATION: Phase 7.1.5] Graceful degradation - try to show cached data on error
           // Why: User still sees content even if network request fails
           if (page === 0) {
@@ -362,7 +421,7 @@ export default function HomePage() {
     if (shouldSkipPrefetching()) {
       return; // Skip prefetching on very slow connections
     }
-    
+
     // Get viewer profile ID for privacy filtering
     (async () => {
       const viewerProfileId = await getViewerId();
@@ -385,7 +444,9 @@ export default function HomePage() {
       // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
       // Why: Skip prefetching on slow connections to save bandwidth
       (async () => {
-        const { shouldSkipPrefetching, isSlowConnection } = await import("../lib/connectionAware");
+        const { shouldSkipPrefetching, isSlowConnection } = await import(
+          "../lib/connectionAware"
+        );
         if (shouldSkipPrefetching()) {
           return; // Skip prefetching on very slow connections
         }
@@ -393,11 +454,11 @@ export default function HomePage() {
         // [OPTIMIZATION: Phase 6 - Connection] Prioritize critical content on slow connections
         // Why: Load first post images immediately, defer non-critical avatars
         const isSlow = isSlowConnection();
-        
+
         // On slow connections, only prefetch critical images (first post)
         // On fast connections, prefetch first 3 posts
         const postsToPrefetch = isSlow ? items.slice(0, 1) : items.slice(0, 3);
-        
+
         // Prefetch images from the selected posts
         onIdle(() => {
           const imageUrls: string[] = [];
@@ -413,8 +474,8 @@ export default function HomePage() {
               // Silent fail for image prefetching
             });
           }
-        // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 1500ms to immediate with requestIdleCallback
-        // Why: Faster image prefetching, better perceived performance
+          // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 1500ms to immediate with requestIdleCallback
+          // Why: Faster image prefetching, better perceived performance
         }, 0);
       })();
     }
@@ -435,14 +496,23 @@ export default function HomePage() {
           const viewerProfileId = await getViewerId();
 
           // Fetch recent posts (both hangouts and experiences)
-          const recent = await getPublicFeed({
-            type: undefined, // Get both types
-            q: search || undefined,
-            tags: selectedTags.length > 0 ? selectedTags : undefined,
-            limit: 20, // Get more to allow for filter prioritization
-            offset: 0,
-            viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
-          });
+          const recent = USE_OPTIMIZED_FEED
+            ? await getPublicFeedOptimized({
+                type: undefined, // Get both types
+                q: search || undefined,
+                tags: selectedTags.length > 0 ? selectedTags : undefined,
+                limit: 20, // Get more to allow for filter prioritization
+                offset: 0,
+                viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
+              })
+            : await getPublicFeed({
+                type: undefined, // Get both types
+                q: search || undefined,
+                tags: selectedTags.length > 0 ? selectedTags : undefined,
+                limit: 20, // Get more to allow for filter prioritization
+                offset: 0,
+                viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
+              });
 
           if (!cancelled) {
             // Filter-based prioritization algorithm:
@@ -608,14 +678,16 @@ export default function HomePage() {
               finalPosts = prioritizedPosts;
             }
 
-            setHangouts(finalPosts.slice(0, 8));
+            const hangoutsToShow = finalPosts.slice(0, 8);
+            setHangouts(hangoutsToShow);
+            // [PHASE 1-4] Removed batch loading - PostgreSQL function provides all data in FeedItem
           }
         } finally {
           if (!cancelled) setHangoutsLoading(false);
         }
       })();
-    // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 500ms to immediate
-    // Why: Faster fallback loading, better UX
+      // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 500ms to immediate
+      // Why: Faster fallback loading, better UX
     }, 0);
     return () => {
       cancelled = true;
@@ -633,11 +705,17 @@ export default function HomePage() {
       try {
         setFallbackLoading(true);
         const primary = new Set(items.map((p) => p.id));
-        const others = await getPublicFeed({
-          type: undefined, // UNIFIED: Get both types for fallback
-          limit: 12,
-          offset: 0,
-        });
+        const others = USE_OPTIMIZED_FEED
+          ? await getPublicFeedOptimized({
+              type: undefined, // UNIFIED: Get both types for fallback
+              limit: 12,
+              offset: 0,
+            })
+          : await getPublicFeed({
+              type: undefined, // UNIFIED: Get both types for fallback
+              limit: 12,
+              offset: 0,
+            });
 
         const filtered = others.filter((p) => !primary.has(p.id));
         if (!cancelled) setFallbackItems(filtered);
@@ -727,8 +805,7 @@ export default function HomePage() {
   // [OPTIMIZATION: Phase 6.2 - React] Memoize computed values
   // Why: Prevents recalculation on every render
   const hasActiveFilters = useMemo(
-    () =>
-      viewMode !== "all" || search.trim() !== "" || selectedTags.length > 0,
+    () => viewMode !== "all" || search.trim() !== "" || selectedTags.length > 0,
     [viewMode, search, selectedTags]
   );
 
@@ -784,7 +861,60 @@ export default function HomePage() {
           {/* HORIZONTAL RAIL AT TOP - shows mixed recent content */}
           {viewMode === "all" && (
             <div className="w-full max-w-[640px] mx-auto px-0">
-              <HomeHangoutSection items={hangouts} loading={hangoutsLoading} />
+              <HomeHangoutSection
+                items={hangouts}
+                loading={hangoutsLoading}
+                batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
+                // [OPTIMIZATION: Phase 2 - Progressive] Progressive loading for horizontal rail
+                useProgressiveLoading={true}
+                loadItems={useCallback(
+                  async (offset: number, limit: number) => {
+                    const viewerProfileId = await getViewerId();
+                    const feedOptions: FeedOptions = {
+                      type: "hangout" as const, // FIX: Filter at PostgreSQL level
+                      q: search || undefined,
+                      tags: selectedTags.length > 0 ? selectedTags : undefined,
+                      limit,
+                      offset,
+                      viewerProfileId: viewerProfileId || undefined,
+                    };
+                    // FIX: No need to filter, PostgreSQL already returns hangouts only
+                    return USE_OPTIMIZED_FEED
+                      ? await getPublicFeedOptimized(feedOptions)
+                      : await getPublicFeed(feedOptions);
+                  },
+                  [search, selectedTags]
+                )}
+                initialItems={hangouts.length > 0 ? hangouts : undefined}
+                getCachedItems={useCallback(() => {
+                  // Cache key for horizontal rail
+                  const feedOptions = {
+                    type: "hangout", // Already filtered at PostgreSQL level
+                    q: search || undefined,
+                    tags: selectedTags.length > 0 ? selectedTags : undefined,
+                    limit: 20,
+                    offset: 0,
+                  };
+                  const cacheKey = dataCache.generateFeedKey(feedOptions);
+                  const cached = dataCache.get<FeedItem[]>(cacheKey);
+                  // FIX: No need to filter, cache already contains only hangouts
+                  return Array.isArray(cached) ? cached : null;
+                }, [search, selectedTags])}
+                setCachedItems={useCallback(
+                  (items: FeedItem[]) => {
+                    const feedOptions = {
+                      type: "hangout",
+                      q: search || undefined,
+                      tags: selectedTags.length > 0 ? selectedTags : undefined,
+                      limit: 20,
+                      offset: 0,
+                    };
+                    const cacheKey = dataCache.generateFeedKey(feedOptions);
+                    dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
+                  },
+                  [search, selectedTags]
+                )}
+              />
             </div>
           )}
 
@@ -810,7 +940,7 @@ export default function HomePage() {
 
             <HomePostsSection
               viewMode={viewMode}
-              items={items}
+              items={items} // Legacy mode - will be phased out
               loading={loading}
               loadingMore={loadingMore}
               hasActiveFilters={hasActiveFilters}
@@ -821,6 +951,73 @@ export default function HomePage() {
               hangouts={hangouts}
               hangoutsLoading={hangoutsLoading}
               onPrefetchNextPage={handlePrefetchNextPage}
+              batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
+              // [OPTIMIZATION: Phase 2 - Progressive] Progressive feed props
+              useProgressiveFeed={true} // Enable progressive rendering
+              loadItems={useCallback(
+                async (offset: number, limit: number) => {
+                  const viewerProfileId = await getViewerId();
+                  const feedOptions: FeedOptions = {
+                    // FIX: Pass type filter to PostgreSQL for server-side filtering
+                    type:
+                      viewMode === "hangouts"
+                        ? ("hangout" as const)
+                        : viewMode === "experiences"
+                        ? ("experience" as const)
+                        : undefined, // "all" = undefined (get both types)
+                    q: search || undefined,
+                    tags: selectedTags.length > 0 ? selectedTags : undefined,
+                    limit,
+                    offset,
+                    viewerProfileId: viewerProfileId || undefined,
+                  };
+                  return USE_OPTIMIZED_FEED
+                    ? await getPublicFeedOptimized(feedOptions)
+                    : await getPublicFeed(feedOptions);
+                },
+                [search, selectedTags, viewMode] // FIX: Add viewMode to dependencies
+              )}
+              initialItems={initialItemsRef.current || []} // Ensure array, not undefined
+              getCachedItems={useCallback(() => {
+                // Use dataCache directly (sync operation)
+                const feedOptions = {
+                  // FIX: Include type filter in cache key (matches loadItems)
+                  type:
+                    viewMode === "hangouts"
+                      ? "hangout"
+                      : viewMode === "experiences"
+                      ? "experience"
+                      : undefined,
+                  q: search || undefined,
+                  tags: selectedTags.length > 0 ? selectedTags : undefined,
+                  limit: PAGE_SIZE,
+                  offset: 0,
+                };
+                const cacheKey = dataCache.generateFeedKey(feedOptions);
+                const cached = dataCache.get<FeedItem[]>(cacheKey);
+                // Ensure we return an array or null (not undefined or other types)
+                return Array.isArray(cached) ? cached : null;
+              }, [search, selectedTags, viewMode])} // FIX: Add viewMode to dependencies
+              setCachedItems={useCallback(
+                (items: FeedItem[]) => {
+                  const feedOptions = {
+                    // FIX: Include type filter in cache key (matches loadItems)
+                    type:
+                      viewMode === "hangouts"
+                        ? "hangout"
+                        : viewMode === "experiences"
+                        ? "experience"
+                        : undefined,
+                    q: search || undefined,
+                    tags: selectedTags.length > 0 ? selectedTags : undefined,
+                    limit: PAGE_SIZE,
+                    offset: 0,
+                  };
+                  const cacheKey = dataCache.generateFeedKey(feedOptions);
+                  dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
+                },
+                [search, selectedTags, viewMode] // FIX: Add viewMode to dependencies
+              )}
             />
 
             {/* "Other things you might like" appears only during search */}

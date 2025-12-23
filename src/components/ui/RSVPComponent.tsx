@@ -1,5 +1,5 @@
 // src/components/ui/RSVPComponent.tsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import Avatar from "./Avatar";
 import RSVPListDrawer from "./RSVPListDrawer";
@@ -8,6 +8,7 @@ import { useDispatch } from "react-redux";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { imgUrlPublic } from "../../lib/img";
 import { getCachedRSVPData, setCachedRSVPData } from "../../lib/rsvpCache";
+import { type RSVPData } from "../../lib/batchDataLoader";
 
 interface RSVPUser {
   id: string;
@@ -30,6 +31,8 @@ interface RSVPComponentProps {
     avatar_url?: string | null;
     is_anonymous?: boolean;
   };
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded RSVP data from batch loader
+  rsvpData?: RSVPData;
 }
 
 export default function RSVPComponent({
@@ -38,6 +41,7 @@ export default function RSVPComponent({
   className = "",
   align = "right", // Default to right for backward compatibility
   postAuthor,
+  rsvpData: initialRsvpData, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded RSVP data
 }: RSVPComponentProps) {
   const dispatch = useDispatch();
   const [rsvpUsers, setRsvpUsers] = useState<RSVPUser[]>([]);
@@ -46,6 +50,8 @@ export default function RSVPComponent({
   const [currentUserRsvp, setCurrentUserRsvp] = useState<string | null>(null);
   const [isToggling, setIsToggling] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const componentRef = useRef<HTMLDivElement>(null);
+  const hasLoadedRef = useRef(false);
 
   // Get current user and their profile
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -112,16 +118,68 @@ export default function RSVPComponent({
     getCurrentUser();
   }, []);
 
-  // Load RSVP data
+  // [OPTIMIZATION: Lazy Loading] Load RSVP data - lazy load when visible (like images)
   useEffect(() => {
-    if (currentUser) {
+    // If data is provided, use it immediately (no API call, no lazy loading needed)
+    if (initialRsvpData !== undefined && currentUser) {
+      hasLoadedRef.current = true;
       loadRSVPs();
+      return;
     }
-  }, [postId, currentUser]);
+
+    // Lazy load: Only make API call when component is visible (like images)
+    // This prevents blocking new posts from loading
+    if (!currentUser || !componentRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !hasLoadedRef.current) {
+          hasLoadedRef.current = true;
+          loadRSVPs();
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "100px" } // Load 100px before visible (similar to images which use 150px)
+    );
+
+    observer.observe(componentRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [postId, currentUser, initialRsvpData]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
   const loadRSVPs = async () => {
     setLoading(true);
     try {
+      // [OPTIMIZATION: Phase 1 - Batch] Use batched data if provided
+      // CRITICAL FIX: Check !== undefined instead of truthy check
+      // This prevents API calls when rsvp_data is null (non-hangout posts)
+      if (initialRsvpData !== undefined && currentUser) {
+        // If rsvp_data is null (non-hangout post), set empty state and return
+        if (initialRsvpData === null) {
+          setRsvpUsers([]);
+          setCurrentUserRsvp(null);
+          setLoading(false);
+          setIsInitialized(true);
+          return;
+        }
+
+        // Filter out creator from batched users
+        const filteredUsers = initialRsvpData.users.filter((user) => {
+          if (postAuthor && user.id === postAuthor.id) {
+            return false;
+          }
+          return true;
+        });
+
+        setRsvpUsers(filteredUsers);
+        setCurrentUserRsvp(initialRsvpData.currentUserStatus);
+        setLoading(false);
+        setIsInitialized(true);
+        return; // Skip query if we have batched data
+      }
+
       // Try to get cached RSVP data first
       const cachedRSVP = getCachedRSVPData(postId);
       if (cachedRSVP && currentUser) {
@@ -399,6 +457,7 @@ export default function RSVPComponent({
   if (postAuthor?.is_anonymous) {
     return (
       <div
+        ref={componentRef}
         className={`flex items-center ${
           align === "left" ? "justify-start" : "justify-end"
         } ${className}`}
@@ -412,6 +471,7 @@ export default function RSVPComponent({
   if (!capacity || capacity <= 0) {
     return (
       <div
+        ref={componentRef}
         className={`flex items-center ${
           align === "left" ? "justify-start" : "justify-end"
         } ${className}`}
@@ -424,6 +484,7 @@ export default function RSVPComponent({
   return (
     <>
       <div
+        ref={componentRef}
         className={`flex items-center ${
           align === "left" ? "justify-start" : "justify-end"
         } ${className}`}

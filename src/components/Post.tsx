@@ -1,6 +1,12 @@
 // PERF: Optimized post component with image optimization
 import { FaCommentDots } from "react-icons/fa";
-import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { Paths } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
@@ -21,6 +27,8 @@ import {
   getCachedFollowStatus,
   setCachedFollowStatus,
 } from "../lib/followStatusCache";
+import { type BatchLoadResult } from "../lib/batchDataLoader";
+import { type FeedItem } from "../api/queries/getPublicFeed";
 
 type PostProps = {
   postId: string;
@@ -35,6 +43,10 @@ type PostProps = {
   anonymousName?: string | null; // NEW: anonymous name for anonymous posts
   anonymousAvatar?: string | null; // NEW: anonymous avatar for anonymous posts
   selectedDates?: string[] | null; // NEW: event dates for hangouts
+  // [OPTIMIZATION: Phase 1 - PostgreSQL] Full FeedItem with PostgreSQL data
+  post?: FeedItem;
+  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components (fallback for backward compatibility)
+  batchedData?: BatchLoadResult | null;
 
   authorId: string; // profile id (for FollowButton)
   author: {
@@ -60,13 +72,15 @@ function Post({
   anonymousName = null, // Default to null for backward compatibility
   anonymousAvatar = null, // Default to null for backward compatibility
   selectedDates = null, // Default to null for backward compatibility
+  post, // [OPTIMIZATION: Phase 1 - PostgreSQL] Full FeedItem with PostgreSQL data
+  batchedData, // [OPTIMIZATION: Phase 1 - Batch] Fallback for backward compatibility
 }: PostProps) {
   const navigate = useNavigate();
 
   // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch profiles and follow status for visible post authors
   // Why: Instant profile page loads, better perceived performance
   const postRef = useRef<HTMLDivElement>(null);
-  
+
   useEffect(() => {
     if (isAnonymous || isOwner || !authorId || !postRef.current) return;
 
@@ -79,7 +93,9 @@ function Post({
           const prefetchData = async () => {
             // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
             // Why: Skip prefetching on slow connections to save bandwidth
-            const { shouldSkipPrefetching } = await import("../lib/connectionAware");
+            const { shouldSkipPrefetching } = await import(
+              "../lib/connectionAware"
+            );
             if (shouldSkipPrefetching()) {
               observer.disconnect();
               return;
@@ -108,7 +124,9 @@ function Post({
 
               // Prefetch follow status if not cached
               if (!cachedFollow) {
-                const statuses = await getBatchFollowStatuses(viewerId, [authorId]);
+                const statuses = await getBatchFollowStatuses(viewerId, [
+                  authorId,
+                ]);
                 if (statuses[authorId]) {
                   setCachedFollowStatus(viewerId, authorId, statuses[authorId]);
                 }
@@ -139,7 +157,7 @@ function Post({
           };
 
           // Use requestIdleCallback for non-blocking prefetch
-          if (typeof window.requestIdleCallback === 'function') {
+          if (typeof window.requestIdleCallback === "function") {
             window.requestIdleCallback(prefetchData, { timeout: 2000 });
           } else {
             setTimeout(prefetchData, 0);
@@ -535,6 +553,8 @@ function Post({
                     }
                   : undefined
               }
+              post={post}
+              batchedData={batchedData}
               onInvite={handleInvite}
             />
           </div>
@@ -575,6 +595,7 @@ export default React.memo(Post, (prevProps, nextProps) => {
     prevProps.isAnonymous === nextProps.isAnonymous &&
     prevProps.anonymousName === nextProps.anonymousName &&
     prevProps.anonymousAvatar === nextProps.anonymousAvatar &&
-    JSON.stringify(prevProps.selectedDates) === JSON.stringify(nextProps.selectedDates)
+    JSON.stringify(prevProps.selectedDates) ===
+      JSON.stringify(nextProps.selectedDates)
   );
 });

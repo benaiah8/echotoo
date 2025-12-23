@@ -1,4 +1,11 @@
-import { useEffect, useState, useMemo, useRef, useTransition } from "react";
+import {
+  useEffect,
+  useState,
+  useMemo,
+  useRef,
+  useTransition,
+  useCallback,
+} from "react";
 import { useLocation } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { useProfile } from "../../contexts/ProfileContext";
@@ -30,6 +37,7 @@ import {
   requestManager,
   cancelContextRequests,
 } from "../../lib/requestManager";
+import { loadBatchData, type BatchLoadResult } from "../../lib/batchDataLoader";
 
 /**
  * OwnProfilePostsSection - Posts section for OWN profile
@@ -73,10 +81,80 @@ export default function OwnProfilePostsSection() {
   const [createdPage, setCreatedPage] = useState(0);
   const [hasMoreCreated, setHasMoreCreated] = useState(true);
 
+  // [OPTIMIZATION: Phase 1 - Batch] Store batched data for components
+  const [batchedData, setBatchedData] = useState<BatchLoadResult | null>(null);
+
   // Refs to track abort controllers for cancellation
   const createdRequestRef = useRef<AbortController | null>(null);
   const likedRequestRef = useRef<AbortController | null>(null);
   const savedRequestRef = useRef<AbortController | null>(null);
+
+  // [OPTIMIZATION: Phase 1 - Batch] Helper to load batch data for posts
+  const loadBatchDataForPosts = useCallback(
+    async (posts: any[]) => {
+      if (!currentUserId || posts.length === 0) return;
+
+      try {
+        // Get current user profile ID
+        const { data: currentUserProfile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("user_id", currentUserId)
+          .maybeSingle();
+
+        if (!currentUserProfile) return;
+
+        // Extract data from posts for batch loading
+        // Handle different post structures: created posts have direct fields, saved/liked have nested posts
+        const postIds = posts
+          .map((post) => {
+            return post.id || post.posts?.id;
+          })
+          .filter(Boolean);
+
+        // Extract author IDs
+        const authorIds = [
+          ...new Set(
+            posts
+              .map((post) => {
+                // Created posts: all by userId (own profile)
+                if (post.author_id) return post.author_id;
+                // Saved/liked posts: get from nested posts object
+                if (post.posts?.author_id) return post.posts.author_id;
+                // Fallback to userId for own profile
+                return userId;
+              })
+              .filter(Boolean)
+          ),
+        ];
+
+        const hangoutPostIds = posts
+          .filter((post) => {
+            const postType = post.type || post.posts?.type;
+            return postType === "hangout";
+          })
+          .map((post) => post.id || post.posts?.id)
+          .filter(Boolean);
+
+        // Load batch data
+        const batchResult = await loadBatchData({
+          postIds,
+          authorIds,
+          hangoutPostIds,
+          currentUserId,
+          currentProfileId: currentUserProfile.id,
+        });
+
+        setBatchedData(batchResult);
+      } catch (error) {
+        console.warn(
+          "[OwnProfilePostsSection] Failed to load batch data:",
+          error
+        );
+      }
+    },
+    [currentUserId, userId]
+  );
 
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
@@ -306,8 +384,19 @@ export default function OwnProfilePostsSection() {
           // Update state
           if (createdPage === 0) {
             setCreated(newPosts as any);
+            // [OPTIMIZATION: Phase 1 - Batch] Load batch data for created posts
+            loadBatchDataForPosts(newPosts).catch(() => {
+              // Silent fail - batch loading is optional
+            });
           } else {
-            setCreated((prev) => [...prev, ...newPosts] as any);
+            setCreated((prev) => {
+              const updated = [...prev, ...newPosts] as any;
+              // [OPTIMIZATION: Phase 1 - Batch] Reload batch data for all posts
+              loadBatchDataForPosts(updated).catch(() => {
+                // Silent fail - batch loading is optional
+              });
+              return updated;
+            });
           }
 
           setHasMoreCreated(postsData.length === POSTS_PER_PAGE);
@@ -380,6 +469,8 @@ export default function OwnProfilePostsSection() {
         } else {
           const freshSaved = result.data?.data || [];
           setSaved(freshSaved);
+          // [OPTIMIZATION: Phase 1 - Batch] Load batch data for saved posts
+          loadBatchDataForPosts(freshSaved);
         }
       } catch (error: any) {
         if (error.name !== "AbortError") {
@@ -436,6 +527,8 @@ export default function OwnProfilePostsSection() {
                 "interacted",
                 freshLiked.slice(0, 5)
               );
+              // [OPTIMIZATION: Phase 1 - Batch] Load batch data for liked posts
+              loadBatchDataForPosts(freshLiked);
             }
           } catch (error: any) {
             if (error.name !== "AbortError") {
@@ -619,6 +712,7 @@ export default function OwnProfilePostsSection() {
                       anonymousName={p.anonymous_name || null}
                       anonymousAvatar={p.anonymous_avatar || null}
                       selectedDates={p.selected_dates || null}
+                      batchedData={batchedData}
                     />
                   </div>
                 )}
@@ -670,6 +764,7 @@ export default function OwnProfilePostsSection() {
                     isOwner={false}
                     status="published"
                     isAnonymous={l.posts.is_anonymous || false}
+                    batchedData={batchedData}
                     anonymousName={(l.posts as any).anonymous_name}
                     anonymousAvatar={(l.posts as any).anonymous_avatar}
                   />
@@ -722,6 +817,7 @@ export default function OwnProfilePostsSection() {
                     type={s.posts.type}
                     isOwner={false}
                     status="published"
+                    batchedData={batchedData}
                     isAnonymous={s.posts.is_anonymous || false}
                     anonymousName={(s.posts as any).anonymous_name}
                     anonymousAvatar={(s.posts as any).anonymous_avatar}

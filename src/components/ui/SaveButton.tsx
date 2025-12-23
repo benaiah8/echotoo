@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MdBookmark, MdBookmarkBorder } from "react-icons/md";
 import {
   savePost,
@@ -13,12 +13,15 @@ interface SaveButtonProps {
   postId: string;
   className?: string;
   size?: number;
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded save status from batch loader
+  isSaved?: boolean;
 }
 
 export default function SaveButton({
   postId,
   className = "",
   size = 22,
+  isSaved: initialIsSaved, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
 }: SaveButtonProps) {
   const [isSaved, setIsSaved] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -26,31 +29,60 @@ export default function SaveButton({
   const [isAnimating, setIsAnimating] = useState(false);
   const authState = useSelector((state: RootState) => state.auth);
   const authLoading = authState?.loading ?? true;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const hasLoadedRef = useRef(false);
 
-  // Check if post is saved on mount, but wait for auth to finish loading
+  // [OPTIMIZATION: Lazy Loading] Check if post is saved - lazy load when visible (like images)
   useEffect(() => {
+    // [OPTIMIZATION: Phase 1 - Batch] Use batched data if provided (immediate, no API call)
+    if (initialIsSaved !== undefined) {
+      setIsSaved(initialIsSaved);
+      setIsLoading(false);
+      hasLoadedRef.current = true;
+      return;
+    }
+
     // Don't check until auth is done loading
     if (authLoading) return;
-    const checkSavedStatus = async () => {
-      // Skip checking for draft posts (they have invalid UUIDs)
-      if (postId.startsWith("draft-")) {
-        setIsSaved(false);
-        setIsLoading(false);
-        return;
-      }
 
-      const { data, error } = await isPostSaved(postId);
-      if (error) {
-        console.error("Error checking saved status:", error);
-        setIsSaved(false);
-      } else {
-        setIsSaved(data);
-      }
-      setIsLoading(false);
+    // Lazy load: Only make API call when button is visible (like images)
+    // This prevents blocking new posts from loading
+    if (!buttonRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !hasLoadedRef.current) {
+          hasLoadedRef.current = true;
+          const checkSavedStatus = async () => {
+            // Skip checking for draft posts (they have invalid UUIDs)
+            if (postId.startsWith("draft-")) {
+              setIsSaved(false);
+              setIsLoading(false);
+              return;
+            }
+
+            const { data, error } = await isPostSaved(postId);
+            if (error) {
+              console.error("Error checking saved status:", error);
+              setIsSaved(false);
+            } else {
+              setIsSaved(data);
+            }
+            setIsLoading(false);
+          };
+          checkSavedStatus();
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "100px" } // Load 100px before visible (similar to images which use 150px)
+    );
+
+    observer.observe(buttonRef.current);
+
+    return () => {
+      observer.disconnect();
     };
-
-    checkSavedStatus();
-  }, [postId, authLoading]);
+  }, [postId, authLoading, initialIsSaved]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
   const handleToggleSave = async () => {
     // Allow clicking even if still loading initial state, but prevent double-clicks
@@ -112,6 +144,7 @@ export default function SaveButton({
 
   return (
     <button
+      ref={buttonRef}
       onClick={handleToggleSave}
       disabled={isToggling}
       className={`flex items-center gap-1 transition-all duration-200 ${
