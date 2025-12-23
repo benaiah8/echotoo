@@ -20,12 +20,15 @@ type Props = {
   targetId: string; // profile id to follow/unfollow
   className?: string;
   onChange?: (nowFollowing: boolean) => void;
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status from batch loader
+  followStatus?: "none" | "pending" | "following" | "friends" | null;
 };
 
 export default function FollowButton({
   targetId,
   className = "",
   onChange,
+  followStatus: initialFollowStatus, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
 }: Props) {
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [followStatus, setFollowStatus] = useState<
@@ -46,9 +49,28 @@ export default function FollowButton({
 
     const loadFollowStatus = async () => {
       try {
+        // [OPTIMIZATION: Phase 1 - Batch] Use batched data if provided
+        if (initialFollowStatus !== undefined) {
+          setFollowStatus(initialFollowStatus);
+          setInitializing(false);
+          // OPTIMIZATION: Skip getViewerId() call if followStatus is already provided
+          // PostgreSQL function already handles "self" check, so we don't need to verify
+          // Load viewerId lazily only when user interacts with the button (for follow/unfollow actions)
+          // Try to get from cache first (non-blocking)
+          try {
+            const cachedMyProfileId = localStorage.getItem("my_profile_id");
+            if (cachedMyProfileId) {
+              setViewerId(cachedMyProfileId);
+            }
+          } catch (e) {
+            // Silent fail, will load lazily when needed
+          }
+          return;
+        }
+
         // Try to get viewer ID from cache first (instant check for "It's you, silly!")
         let me: string | null = null;
-        
+
         // Check localStorage for cached profile ID (set on login)
         try {
           const cachedMyProfileId = localStorage.getItem("my_profile_id");
@@ -71,7 +93,7 @@ export default function FollowButton({
           me = await getViewerId();
           if (cancelled) return;
           setViewerId(me);
-          
+
           // Cache the profile ID for future instant checks
           if (me) {
             try {
@@ -93,7 +115,7 @@ export default function FollowButton({
         let targetProfileId = targetId;
         const cachedProfileIdKey = `profile_id_${targetId}`;
         const cachedProfileId = localStorage.getItem(cachedProfileIdKey);
-        
+
         if (cachedProfileId) {
           targetProfileId = cachedProfileId;
         } else {
@@ -140,7 +162,11 @@ export default function FollowButton({
                 setFollowStatus(actualStatus);
                 // Only cache non-pending statuses
                 if (actualStatus !== "pending" && me) {
-                  setCachedFollowStatus(me, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+                  setCachedFollowStatus(
+                    me,
+                    targetProfileId,
+                    actualStatus as "none" | "following" | "friends" | "self"
+                  );
                 }
               }
             })
@@ -153,7 +179,11 @@ export default function FollowButton({
         // No cache - fetch actual status
         const status = await getFollowStatus(me, targetProfileId);
         if (me && status !== "pending") {
-          setCachedFollowStatus(me, targetProfileId, status as "none" | "following" | "friends" | "self");
+          setCachedFollowStatus(
+            me,
+            targetProfileId,
+            status as "none" | "following" | "friends" | "self"
+          );
         }
 
         if (!cancelled) {
@@ -187,7 +217,11 @@ export default function FollowButton({
         getFollowStatus(viewerId, targetId).then((status) => {
           setFollowStatus(status);
           if (status !== "pending") {
-            setCachedFollowStatus(viewerId, targetId, status as "none" | "following" | "friends" | "self");
+            setCachedFollowStatus(
+              viewerId,
+              targetId,
+              status as "none" | "following" | "friends" | "self"
+            );
           }
         });
       }
@@ -245,14 +279,46 @@ export default function FollowButton({
   const onToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
 
-    if (isProcessing || !viewerId || followStatus === "self") {
+    if (isProcessing || followStatus === "self") {
+      return;
+    }
+
+    // Lazy load viewerId if not already loaded (from cache or previous load)
+    let currentViewerId = viewerId;
+    if (!currentViewerId) {
+      // Try cache first
+      try {
+        const cachedMyProfileId = localStorage.getItem("my_profile_id");
+        if (cachedMyProfileId) {
+          currentViewerId = cachedMyProfileId;
+          setViewerId(cachedMyProfileId);
+        } else {
+          // Load from API (only when user clicks, acceptable delay)
+          currentViewerId = await getViewerId();
+          if (currentViewerId) {
+            setViewerId(currentViewerId);
+            try {
+              localStorage.setItem("my_profile_id", currentViewerId);
+            } catch (e) {
+              // Silent fail
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error loading viewer ID:", error);
+      }
+    }
+
+    if (!currentViewerId) {
       return;
     }
 
     const previousStatus = followStatus;
     // Include "pending" status so users can cancel pending requests
     const wasFollowing =
-      followStatus === "following" || followStatus === "friends" || followStatus === "pending";
+      followStatus === "following" ||
+      followStatus === "friends" ||
+      followStatus === "pending";
 
     // INSTANT UI UPDATE - show processing state immediately
     setIsProcessing(true);
@@ -293,9 +359,7 @@ export default function FollowButton({
 
         const errorMessage =
           result.error.message ||
-          (wasFollowing 
-            ? "Couldn't cancel request" 
-            : "Couldn't follow");
+          (wasFollowing ? "Couldn't cancel request" : "Couldn't follow");
         toast.error(errorMessage);
         setHasError(true);
         setIsProcessing(false);
@@ -309,9 +373,15 @@ export default function FollowButton({
 
         // [FIX: Use actual status from API] Use returned status to prevent flickering
         // Why: API returns the actual status (pending/approved), so we use that instead of guessing
-        if (viewerId) {
-          let actualStatus: "none" | "pending" | "following" | "friends" | "self" | null = null;
-          
+        if (currentViewerId) {
+          let actualStatus:
+            | "none"
+            | "pending"
+            | "following"
+            | "friends"
+            | "self"
+            | null = null;
+
           if (wasFollowing) {
             // Unfollow: status is now "none"
             actualStatus = "none";
@@ -338,27 +408,47 @@ export default function FollowButton({
           if (actualStatus) {
             // Only cache non-pending and non-self statuses
             if (actualStatus !== "pending" && actualStatus !== "self") {
-              setCachedFollowStatus(viewerId, targetProfileId, actualStatus as "none" | "following" | "friends" | "self");
+              setCachedFollowStatus(
+                currentViewerId,
+                targetProfileId,
+                actualStatus as "none" | "following" | "friends" | "self"
+              );
             }
             setFollowStatus(actualStatus);
             // Type assertion to help TypeScript understand the possible values
-            const statusForComparison = actualStatus as "none" | "pending" | "following" | "friends" | "self";
-            const isFollowingStatus = (statusForComparison === "following" || statusForComparison === "friends");
+            const statusForComparison = actualStatus as
+              | "none"
+              | "pending"
+              | "following"
+              | "friends"
+              | "self";
+            const isFollowingStatus =
+              statusForComparison === "following" ||
+              statusForComparison === "friends";
             onChange?.(isFollowingStatus);
           }
 
           // Verify actual status in background (non-blocking) to check for mutual follows
           if (actualStatus) {
-            getFollowStatus(viewerId, targetProfileId)
+            getFollowStatus(currentViewerId, targetProfileId)
               .then((verifiedStatus) => {
                 // Only update if different (e.g., if it's mutual and should be "friends")
                 if (verifiedStatus !== actualStatus) {
                   setFollowStatus(verifiedStatus);
-                  if (verifiedStatus !== "pending") {
-                    setCachedFollowStatus(viewerId, targetProfileId, verifiedStatus as "none" | "following" | "friends" | "self");
+                  if (verifiedStatus !== "pending" && viewerId) {
+                    setCachedFollowStatus(
+                      viewerId,
+                      targetProfileId,
+                      verifiedStatus as
+                        | "none"
+                        | "following"
+                        | "friends"
+                        | "self"
+                    );
                   }
                   const verifiedIsFollowing =
-                    verifiedStatus === "following" || verifiedStatus === "friends";
+                    verifiedStatus === "following" ||
+                    verifiedStatus === "friends";
                   onChange?.(verifiedIsFollowing);
                 }
               })
@@ -451,7 +541,11 @@ export default function FollowButton({
   const getButtonText = () => {
     if (hasError) return "Try again";
     if (isProcessing && currentAction) {
-      return currentAction === "follow" ? "Following..." : followStatus === "pending" ? "Canceling..." : "Unfollowing...";
+      return currentAction === "follow"
+        ? "Following..."
+        : followStatus === "pending"
+        ? "Canceling..."
+        : "Unfollowing...";
     }
     if (followStatus === "friends") return "Friends";
     if (followStatus === "following") return "Following";

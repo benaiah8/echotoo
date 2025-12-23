@@ -14,6 +14,8 @@ interface Props {
   compact?: boolean;
   showGoToPostButton?: boolean;
   onInviteAccepted?: (postId: string) => void; // NEW: callback when invite is accepted
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status for follow request notifications
+  batchedFollowStatus?: "none" | "pending" | "following" | "friends";
 }
 
 const getNotificationText = (notification: NotificationWithActor): string => {
@@ -39,13 +41,18 @@ const getNotificationText = (notification: NotificationWithActor): string => {
     case "rsvp":
       // Check if this is an invite acceptance
       const inviteStatus = notification.additional_data?.status;
-      const postCaption = notification.additional_data?.post_caption || "an event";
+      const postCaption =
+        notification.additional_data?.post_caption || "an event";
       const postType = notification.additional_data?.post_type || "hangout";
-      
+
       if (inviteStatus === "accepted") {
-        return `${actorName} accepted your invite to ${postType === "hangout" ? "a hangout" : "an experience"}`;
+        return `${actorName} accepted your invite to ${
+          postType === "hangout" ? "a hangout" : "an experience"
+        }`;
       } else if (inviteStatus === "declined") {
-        return `${actorName} declined your invite to ${postType === "hangout" ? "a hangout" : "an experience"}`;
+        return `${actorName} declined your invite to ${
+          postType === "hangout" ? "a hangout" : "an experience"
+        }`;
       }
       // Fallback to generic RSVP text
       return `${actorName} RSVP'd to your event`;
@@ -99,6 +106,7 @@ export default function NotificationItem({
   compact = false,
   showGoToPostButton = true,
   onInviteAccepted,
+  batchedFollowStatus,
 }: Props) {
   // Use specialized component for invite notifications
   if (notification.type === "invite") {
@@ -115,12 +123,16 @@ export default function NotificationItem({
 
   // Use specialized component for follow request notifications
   // Check if this is a follow request (has follow_request_status in additional_data)
-  if (notification.type === "follow" && notification.additional_data?.follow_request_status) {
+  if (
+    notification.type === "follow" &&
+    notification.additional_data?.follow_request_status
+  ) {
     return (
       <FollowRequestNotificationItem
         notification={notification}
         onMarkAsRead={onMarkAsRead}
         compact={compact}
+        initialFollowStatus={batchedFollowStatus}
       />
     );
   }

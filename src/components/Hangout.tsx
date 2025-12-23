@@ -27,6 +27,9 @@ type Props = {
   avatarUrl?: string | null; // author avatar
   authorId?: string; // author user ID for RSVP component
   isAnonymous?: boolean; // if author is anonymous
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded statuses from batch loader
+  isSaved?: boolean;
+  followStatus?: "none" | "pending" | "following" | "friends" | null;
 };
 
 export default function Hangout({
@@ -44,6 +47,8 @@ export default function Hangout({
   status = "published", // Default to published for backward compatibility
   selectedDates = null, // Default to null for backward compatibility
   type = "hangout", // Default to hangout for backward compatibility
+  isSaved, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded save status
+  followStatus, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status
 }: Props) {
   const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -180,6 +185,7 @@ export default function Hangout({
             postId={id}
             className="grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
             size={18}
+            isSaved={isSaved} // [OPTIMIZATION: Phase 1 - Batch] Pass batched save status
           />
         </div>
 
@@ -329,12 +335,14 @@ export default function Hangout({
                 <FollowButton
                   targetId={authorId}
                   className="text-xs h-5 min-w-[60px] px-2"
+                  followStatus={followStatus} // [OPTIMIZATION: Phase 1 - Batch] Pass batched follow status
                 />
               ) : (
                 // Show Follow button for hangouts too in horizontal rail
                 <FollowButton
                   targetId={authorId}
                   className="text-xs h-5 min-w-[60px] px-2"
+                  followStatus={followStatus} // [OPTIMIZATION: Phase 1 - Batch] Pass batched follow status
                 />
               )
             ) : (

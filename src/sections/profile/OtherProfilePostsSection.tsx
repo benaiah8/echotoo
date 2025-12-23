@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useTransition } from "react";
+import { useEffect, useState, useRef, useTransition, useCallback } from "react";
 import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreated } from "../../api/queries/getUserPostsCreated";
 import {
@@ -19,6 +19,10 @@ import {
   cancelContextRequests,
 } from "../../lib/requestManager";
 import { getViewerId } from "../../api/services/follows";
+import { loadBatchData, type BatchLoadResult } from "../../lib/batchDataLoader";
+import { supabase } from "../../lib/supabaseClient";
+import { useSelector } from "react-redux";
+import { selectUserId } from "../../selectors/authSelectors";
 
 /**
  * OtherProfilePostsSection - Posts section for OTHER profiles
@@ -33,7 +37,9 @@ interface OtherProfilePostsSectionProps {
   hasAccess?: boolean | null; // null = checking, true = has access, false = no access
 }
 
-export default function OtherProfilePostsSection({ hasAccess = null }: OtherProfilePostsSectionProps = {}) {
+export default function OtherProfilePostsSection({
+  hasAccess = null,
+}: OtherProfilePostsSectionProps) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted">("created");
 
@@ -58,12 +64,86 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
   const [loading, setLoading] = useState(false);
   const [likedLoading, setLikedLoading] = useState(false);
 
+  // [OPTIMIZATION: Phase 1 - Batch] Store batched data for components
+  const [batchedData, setBatchedData] = useState<BatchLoadResult | null>(null);
+
+  // Get current user ID for batch loading
+  const currentUserId = useSelector(selectUserId);
+
   // Refs to track abort controllers for cancellation
   const createdRequestRef = useRef<AbortController | null>(null);
   const likedRequestRef = useRef<AbortController | null>(null);
 
   // Check if viewer has access (approved follower or public account)
-  const viewerHasAccess = profile ? (!profile.is_private || hasAccess === true) : false;
+  const viewerHasAccess = profile
+    ? !profile.is_private || hasAccess === true
+    : false;
+
+  // [OPTIMIZATION: Phase 1 - Batch] Helper to load batch data for posts
+  const loadBatchDataForPosts = useCallback(
+    async (posts: any[]) => {
+      if (!currentUserId || posts.length === 0) return;
+
+      try {
+        // Get current user profile ID
+        const { data: currentUserProfile } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("user_id", currentUserId)
+          .maybeSingle();
+
+        if (!currentUserProfile) return;
+
+        // Extract data from posts for batch loading
+        const postIds = posts
+          .map((post) => {
+            return post.id || post.posts?.id;
+          })
+          .filter(Boolean);
+
+        // Extract author IDs
+        const authorIds = [
+          ...new Set(
+            posts
+              .map((post) => {
+                // Created posts: by userId (profile being viewed)
+                if (post.author_id) return post.author_id;
+                // Liked posts: get from nested posts object
+                if (post.posts?.author_id) return post.posts.author_id;
+                // Fallback to userId
+                return userId;
+              })
+              .filter(Boolean)
+          ),
+        ];
+
+        const hangoutPostIds = posts
+          .filter((post) => {
+            const postType = post.type || post.posts?.type;
+            return postType === "hangout";
+          })
+          .map((post) => post.id || post.posts?.id)
+          .filter(Boolean);
+
+        // Load batch data
+        const batchResult = await loadBatchData({
+          postIds,
+          authorIds,
+          hangoutPostIds,
+          currentUserId,
+          currentProfileId: currentUserProfile.id,
+        });
+
+        setBatchedData(batchResult);
+      } catch (error) {
+        console.warn(
+          "[OtherProfilePostsSection] Failed to load batch data:",
+          error
+        );
+      }
+    },
+    [currentUserId, userId]
+  );
 
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
@@ -101,6 +181,10 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
         );
       setCreated(cachedCreated as any);
       preloadProfilePostImages(cachedCreated as any);
+      // [OPTIMIZATION: Phase 1 - Batch] Load batch data for cached posts
+      loadBatchDataForPosts(cachedCreated).catch(() => {
+        // Silent fail - batch loading is optional
+      });
       } else {
         setLoading(true);
       }
@@ -113,8 +197,12 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
         cachedInteracted.length
       );
       setLiked(cachedInteracted as any);
+      // [OPTIMIZATION: Phase 1 - Batch] Load batch data for cached posts
+      loadBatchDataForPosts(cachedInteracted).catch(() => {
+        // Silent fail - batch loading is optional
+      });
     }
-  }, [userId]);
+  }, [userId, loadBatchDataForPosts]);
 
   // Load created posts - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
@@ -177,6 +265,10 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
 
           // Update state with fresh data
           setCreated(postsData as any);
+          // [OPTIMIZATION: Phase 1 - Batch] Load batch data for created posts
+          loadBatchDataForPosts(postsData).catch(() => {
+            // Silent fail - batch loading is optional
+          });
         setLoading(false);
         }
       } catch (error: any) {
@@ -249,13 +341,22 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
           // Why: Eliminates code duplication, ensures consistent filtering, uses caching and batching
           if (freshLiked.length > 0) {
             const viewerProfileId = await getViewerId();
-            const { filterPostsByPrivacy } = await import("../../lib/postPrivacyFilter");
-            freshLiked = await filterPostsByPrivacy(freshLiked, viewerProfileId);
+            const { filterPostsByPrivacy } = await import(
+              "../../lib/postPrivacyFilter"
+            );
+            freshLiked = await filterPostsByPrivacy(
+              freshLiked,
+              viewerProfileId
+            );
           }
           
           setLiked(freshLiked);
           // Update cache (only first 5)
           setCachedProfilePosts(userId, "interacted", freshLiked.slice(0, 5));
+          // [OPTIMIZATION: Phase 1 - Batch] Load batch data for liked posts
+          loadBatchDataForPosts(freshLiked).catch(() => {
+            // Silent fail - batch loading is optional
+          });
         }
       } catch (error: any) {
         if (error.name !== "AbortError") {
@@ -362,6 +463,7 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
                     isOwner={false}
                     onDelete={() => {}} // No delete for other profiles
                     status={p.status || "published"}
+                    batchedData={batchedData}
                     isDraft={false} // No drafts for other profiles
                     isAnonymous={p.is_anonymous || false}
                     anonymousName={p.anonymous_name || null}
@@ -416,6 +518,7 @@ export default function OtherProfilePostsSection({ hasAccess = null }: OtherProf
                     type={l.posts.type}
                     isOwner={false}
                     status="published"
+                    batchedData={batchedData}
                     isAnonymous={l.posts.is_anonymous || false}
                     anonymousName={(l.posts as any).anonymous_name}
                     anonymousAvatar={(l.posts as any).anonymous_avatar}

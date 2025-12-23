@@ -12,6 +12,10 @@ import NotificationItem from "./NotificationItem";
 import NotificationFilter from "./NotificationFilter";
 import NotificationPermissionBanner from "./NotificationPermissionBanner";
 import { toast } from "react-hot-toast";
+import {
+  getBatchFollowStatuses,
+  getViewerId,
+} from "../../api/services/follows";
 
 interface Props {
   className?: string;
@@ -32,6 +36,12 @@ export default function NotificationList({ className = "" }: Props) {
     const filterParam = searchParams.get("filter");
     return (filterParam as NotificationType | "all") || "all";
   });
+
+  // [OPTIMIZATION: Phase 1 - Batch] Store batched follow statuses for follow request notifications
+  // Why: Batch load all follow statuses at once instead of individual queries per notification
+  const [batchedFollowStatuses, setBatchedFollowStatuses] = useState<
+    Record<string, "none" | "pending" | "following" | "friends">
+  >({});
 
   const loadNotifications = async (offset = 0, append = false) => {
     try {
@@ -64,6 +74,107 @@ export default function NotificationList({ className = "" }: Props) {
   useEffect(() => {
     loadNotifications();
   }, []);
+
+  // [OPTIMIZATION: Phase 1 - Batch] Batch load follow statuses for all follow request notifications
+  // Why: Reduces N individual API calls to 1 batched call, saves egress and improves performance
+  useEffect(() => {
+    const batchLoadFollowStatuses = async () => {
+      // Find all follow request notifications
+      const followRequestNotifications = notifications.filter(
+        (n) =>
+          n.type === "follow" &&
+          n.additional_data?.follow_request_status &&
+          n.additional_data?.follower_profile_id &&
+          n.additional_data?.following_profile_id
+      );
+
+      if (followRequestNotifications.length === 0) {
+        setBatchedFollowStatuses({});
+        return;
+      }
+
+      try {
+        const viewerProfileId = await getViewerId();
+        if (!viewerProfileId) return;
+
+        // Collect all unique profile IDs that need follow status checks
+        // For follow requests, we need to check status between follower and following
+        const profileIdsToCheck = new Set<string>();
+
+        followRequestNotifications.forEach((notification) => {
+          const followerProfileId =
+            notification.additional_data?.follower_profile_id;
+          const followingProfileId =
+            notification.additional_data?.following_profile_id;
+
+          if (followerProfileId && followingProfileId) {
+            // We need to check status from viewer's perspective
+            // If viewer is the following (account owner), check status with follower
+            // If viewer is the follower (requester), check status with following
+            if (viewerProfileId === followingProfileId) {
+              profileIdsToCheck.add(followerProfileId);
+            } else if (viewerProfileId === followerProfileId) {
+              profileIdsToCheck.add(followingProfileId);
+            }
+          }
+        });
+
+        if (profileIdsToCheck.size === 0) return;
+
+        // Batch load all follow statuses
+        const followStatuses = await getBatchFollowStatuses(
+          viewerProfileId,
+          Array.from(profileIdsToCheck)
+        );
+
+        // Create a map keyed by notification ID for easy lookup
+        const statusMap: Record<
+          string,
+          "none" | "pending" | "following" | "friends"
+        > = {};
+
+        followRequestNotifications.forEach((notification) => {
+          const followerProfileId =
+            notification.additional_data?.follower_profile_id;
+          const followingProfileId =
+            notification.additional_data?.following_profile_id;
+
+          if (followerProfileId && followingProfileId) {
+            let status:
+              | "none"
+              | "pending"
+              | "following"
+              | "friends"
+              | undefined;
+
+            if (viewerProfileId === followingProfileId) {
+              // Received request: check status with follower
+              status = followStatuses[followerProfileId];
+            } else if (viewerProfileId === followerProfileId) {
+              // Sent request: check status with following
+              status = followStatuses[followingProfileId];
+            }
+
+            if (status) {
+              statusMap[notification.id] = status;
+            }
+          }
+        });
+
+        setBatchedFollowStatuses(statusMap);
+      } catch (error) {
+        console.warn(
+          "[NotificationList] Failed to batch load follow statuses:",
+          error
+        );
+        // Silent fail - components will fall back to individual queries
+      }
+    };
+
+    if (notifications.length > 0) {
+      batchLoadFollowStatuses();
+    }
+  }, [notifications]);
 
   // Listen for filter reset events from bottom tab
   useEffect(() => {
@@ -157,7 +268,10 @@ export default function NotificationList({ className = "" }: Props) {
   const unreadCount = notifications.filter((n) => {
     if (!n.is_read) {
       // Don't count declined follow requests as unread
-      if (n.type === "follow" && n.additional_data?.follow_request_status === "declined") {
+      if (
+        n.type === "follow" &&
+        n.additional_data?.follow_request_status === "declined"
+      ) {
         return false;
       }
       return true;
@@ -276,6 +390,12 @@ export default function NotificationList({ className = "" }: Props) {
                     onMarkAsRead={handleMarkAsRead}
                     showGoToPostButton={true}
                     onInviteAccepted={handleInviteAccepted}
+                    batchedFollowStatus={
+                      notification.type === "follow" &&
+                      notification.additional_data?.follow_request_status
+                        ? batchedFollowStatuses[notification.id]
+                        : undefined
+                    }
                   />
                 </div>
               );

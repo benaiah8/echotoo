@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MdFavorite, MdFavoriteBorder } from "react-icons/md";
 import { likePost, unlikePost, isPostLiked } from "../../api/services/likes";
 import toast from "react-hot-toast";
@@ -12,6 +12,8 @@ interface LikeButtonProps {
   showCount?: boolean;
   likeCount?: number;
   onLikeChange?: (isLiked: boolean, newCount: number) => void;
+  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded like status from batch loader
+  isLiked?: boolean;
 }
 
 export default function LikeButton({
@@ -21,6 +23,7 @@ export default function LikeButton({
   showCount = false,
   likeCount = 0,
   onLikeChange,
+  isLiked: initialIsLiked, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
 }: LikeButtonProps) {
   const [isLiked, setIsLiked] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -29,32 +32,60 @@ export default function LikeButton({
   const [isAnimating, setIsAnimating] = useState(false);
   const authState = useSelector((state: RootState) => state.auth);
   const authLoading = authState?.loading ?? true;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const hasLoadedRef = useRef(false);
 
-  // Check if post is liked on mount, but wait for auth to finish loading
+  // [OPTIMIZATION: Lazy Loading] Check if post is liked - lazy load when visible (like images)
   useEffect(() => {
+    // [OPTIMIZATION: Phase 1 - Batch] Use batched data if provided (immediate, no API call)
+    if (initialIsLiked !== undefined) {
+      setIsLiked(initialIsLiked);
+      setIsLoading(false);
+      hasLoadedRef.current = true;
+      return;
+    }
+
     // Don't check until auth is done loading
     if (authLoading) return;
 
-    const checkLikedStatus = async () => {
-      // Skip checking for draft posts (they have invalid UUIDs)
-      if (postId.startsWith("draft-")) {
-        setIsLiked(false);
-        setIsLoading(false);
-        return;
-      }
+    // Lazy load: Only make API call when button is visible (like images)
+    // This prevents blocking new posts from loading
+    if (!buttonRef.current) return;
 
-      const { data, error } = await isPostLiked(postId);
-      if (error) {
-        console.error("Error checking liked status:", error);
-        setIsLiked(false);
-      } else {
-        setIsLiked(data);
-      }
-      setIsLoading(false);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !hasLoadedRef.current) {
+          hasLoadedRef.current = true;
+          const checkLikedStatus = async () => {
+            // Skip checking for draft posts (they have invalid UUIDs)
+            if (postId.startsWith("draft-")) {
+              setIsLiked(false);
+              setIsLoading(false);
+              return;
+            }
+
+            const { data, error } = await isPostLiked(postId);
+            if (error) {
+              console.error("Error checking liked status:", error);
+              setIsLiked(false);
+            } else {
+              setIsLiked(data);
+            }
+            setIsLoading(false);
+          };
+          checkLikedStatus();
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "100px" } // Load 100px before visible (similar to images which use 150px)
+    );
+
+    observer.observe(buttonRef.current);
+
+    return () => {
+      observer.disconnect();
     };
-
-    checkLikedStatus();
-  }, [postId, authLoading]);
+  }, [postId, authLoading, initialIsLiked]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
   // Update count when prop changes
   useEffect(() => {
@@ -132,6 +163,7 @@ export default function LikeButton({
 
   return (
     <button
+      ref={buttonRef}
       onClick={handleToggleLike}
       disabled={isToggling}
       className={`flex items-center gap-1 transition-all duration-200 ${

@@ -20,7 +20,7 @@ class DataCache {
     // [OPTIMIZATION: Phase 6 - Connection] Adjust TTL based on connection speed
     // Why: Longer cache duration on slow connections to reduce network requests
     const adjustedTtl = this.getAdjustedTtl(ttlMs);
-    
+
     const entry = {
       data,
       timestamp: Date.now(),
@@ -181,8 +181,8 @@ class DataCache {
       await this.prefetchRelatedData(newPosts);
     }
 
-    if (!cachedData || cachedData.length === 0) {
-      // No cached data, just cache the new data
+    if (!cachedData || !Array.isArray(cachedData) || cachedData.length === 0) {
+      // No cached data or invalid format, just cache the new data
       this.set(currentKey, newPosts, 10 * 60 * 1000); // 10 minutes TTL
       return newPosts;
     }
@@ -214,12 +214,15 @@ class DataCache {
     return cachedData;
   }
 
-  // Prefetch related data for posts (follow status, RSVP, profiles)
+  // [OPTIMIZATION: Phase 1 - Batch] Prefetch related data for posts using batch loader
+  // Why: Replaces individual queries per post with batched queries, reducing ~50 queries to ~5-8
   async prefetchRelatedData(posts: any[]): Promise<void> {
     try {
-      // Import cache functions dynamically to avoid circular dependencies
+      if (!posts || !Array.isArray(posts) || posts.length === 0) return;
+
+      // Import cache functions and batch loader dynamically to avoid circular dependencies
       const { getCachedFollowStatus, setCachedFollowStatus } = await import(
-        "./followCache"
+        "./followStatusCache"
       );
       const { getCachedRSVPData, setCachedRSVPData } = await import(
         "./rsvpCache"
@@ -228,6 +231,7 @@ class DataCache {
         "./profileCache"
       );
       const { supabase } = await import("../lib/supabaseClient");
+      const { loadBatchData } = await import("./batchDataLoader");
 
       // Get current user for follow status checks
       const {
@@ -237,189 +241,87 @@ class DataCache {
 
       if (!currentUserId) return;
 
-      // Test RSVP table access first
-      try {
-        const { data: testData, error: testError } = await supabase
-          .from("rsvp_responses")
-          .select("id")
-          .limit(1);
-
-        if (testError) {
-          console.error(
-            "[DataCache] RSVP table access test failed:",
-            testError
-          );
-          // Skip RSVP prefetching if table is not accessible
-          return;
-        }
-      } catch (testErr) {
-        console.error("[DataCache] RSVP table access test exception:", testErr);
-        return;
-      }
-
       // Get profile ID for current user
       const { data: currentUserProfile } = await supabase
         .from("profiles")
         .select("id")
         .eq("user_id", currentUserId)
-        .single();
+        .maybeSingle();
 
       if (!currentUserProfile) return;
 
-      // Prefetch follow statuses for all post authors
-      const authorIds = [...new Set(posts.map((post) => post.author_id))];
-
-      for (const authorId of authorIds) {
-        if (authorId !== currentUserProfile.id) {
-          const cachedFollowStatus = getCachedFollowStatus(
-            currentUserProfile.id,
-            authorId
-          );
-          if (!cachedFollowStatus) {
-            try {
-              const { count, error: followError } = await supabase
-                .from("follows")
-                .select("*", { count: "exact", head: true })
-                .eq("follower_id", currentUserProfile.id)
-                .eq("following_id", authorId);
-
-              if (followError) {
-                console.error(
-                  `[DataCache] Follow query error for author ${authorId}:`,
-                  followError
-                );
-                continue; // Skip this author if follow query fails
-              }
-
-              const status = (count ?? 0) > 0 ? "following" : "none";
-              setCachedFollowStatus(currentUserProfile.id, authorId, status);
-            } catch (error) {
-              console.error(
-                `[DataCache] Follow prefetch error for author ${authorId}:`,
-                error
-              );
-            }
-          }
-        }
-      }
-
-      // Prefetch RSVP data for hangout posts
-      const hangoutPosts = posts.filter((post) => post.type === "hangout");
-
-      for (const post of hangoutPosts) {
-        const cachedRSVP = getCachedRSVPData(post.id);
-        if (!cachedRSVP) {
-          try {
-            // Get RSVP responses
-            const { data: rsvpData, error: rsvpDataError } = await supabase
-              .from("rsvp_responses")
-              .select("id, user_id, status")
-              .eq("post_id", post.id)
-              .eq("status", "going")
-              .order("created_at", { ascending: false })
-              .limit(10);
-
-            if (rsvpDataError) {
-              console.error(
-                `[DataCache] RSVP data query error for post ${post.id}:`,
-                rsvpDataError
-              );
-              continue; // Skip this post if RSVP query fails
-            }
-
-            if (rsvpData && rsvpData.length > 0) {
-              // Get user profiles for RSVP users
-              const authUserIds = rsvpData.map((item) => item.user_id);
-              const { data: profilesData, error: profilesError } =
-                await supabase
-                  .from("profiles")
-                  .select("id, user_id, username, display_name, avatar_url")
-                  .in("user_id", authUserIds);
-
-              if (profilesError) {
-                console.error(
-                  `[DataCache] Profiles query error for RSVP users:`,
-                  profilesError
-                );
-                continue; // Skip this post if profiles query fails
-              }
-
-              const users = rsvpData.map((item) => {
-                const profile = profilesData?.find(
-                  (p) => p.user_id === item.user_id
-                );
-                return {
-                  id: profile?.id || item.user_id,
-                  username: profile?.username || null,
-                  display_name: profile?.display_name || null,
-                  avatar_url: profile?.avatar_url || null,
-                  status: item.status,
-                  created_at: new Date().toISOString(), // Use current time as fallback
-                };
-              });
-
-              // Get current user's RSVP status
-              const { data: currentUserRsvpData, error: rsvpError } =
-                await supabase
-                  .from("rsvp_responses")
-                  .select("status")
-                  .eq("post_id", post.id)
-                  .eq("user_id", currentUserId)
-                  .maybeSingle(); // Use maybeSingle instead of single to avoid errors when no data exists
-
-              if (rsvpError) {
-                console.error(
-                  `[DataCache] RSVP query error for post ${post.id}:`,
-                  rsvpError
-                );
-                // Continue without RSVP data rather than failing
-              }
-
-              setCachedRSVPData(
-                post.id,
-                users,
-                currentUserRsvpData?.status || null
-              );
-            }
-          } catch (error) {
-            console.warn("Failed to prefetch RSVP data:", error);
-          }
-        }
-      }
-
-      // Prefetch profile data for all authors
-      const profileIds = [
-        ...new Set(posts.map((post) => post.author?.id).filter(Boolean)),
+      // Extract data from posts for batch loading
+      const postIds = posts.map((post) => post.id).filter(Boolean);
+      const authorIds = [
+        ...new Set(
+          posts.map((post) => post.author_id || post.author?.id).filter(Boolean)
+        ),
       ];
+      const hangoutPostIds = posts
+        .filter((post) => post.type === "hangout")
+        .map((post) => post.id)
+        .filter(Boolean);
 
-      for (const profileId of profileIds) {
-        const cachedProfile = getCachedProfile(profileId);
-        if (!cachedProfile) {
-          try {
-            const { data: profileData } = await supabase
-              .from("profiles")
-              .select(
-                "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url"
-              )
-              .eq("id", profileId)
-              .single();
+      // Check what's already cached to optimize batch loading
+      // We'll still pass all IDs to batch loader, but skip caching if already cached
+      const uncachedHangoutPostIds: string[] = [];
 
-            if (profileData) {
-              setCachedProfile(profileData);
-            }
-          } catch (error) {
-            console.warn("Failed to prefetch profile data:", error);
-          }
+      // Check RSVP cache (only check RSVP since it's the most expensive)
+      for (const postId of hangoutPostIds) {
+        const cached = getCachedRSVPData(postId);
+        if (!cached) {
+          uncachedHangoutPostIds.push(postId);
         }
       }
+
+      // Use batch loader to fetch all data
+      // Note: Batch loader is efficient even if some data is cached - it batches queries
+      // We pass all IDs and let batch loader handle it, then we update caches
+      const batchResult = await loadBatchData({
+        postIds: postIds, // All post IDs (for like/save status - no cache yet)
+        authorIds: authorIds, // All author IDs (for follow status and profiles)
+        hangoutPostIds: hangoutPostIds, // All hangout post IDs (batch loader handles efficiently)
+        currentUserId: currentUserId,
+        currentProfileId: currentUserProfile.id,
+      });
+
+      // Update follow status cache (only if not already cached)
+      batchResult.followStatuses.forEach((status, authorId) => {
+        if (authorId !== currentUserProfile.id) {
+          const cached = getCachedFollowStatus(currentUserProfile.id, authorId);
+          if (!cached) {
+            setCachedFollowStatus(currentUserProfile.id, authorId, status);
+          }
+        }
+      });
+
+      // Update RSVP cache (only if not already cached)
+      batchResult.rsvpData.forEach((rsvpData, postId) => {
+        const cached = getCachedRSVPData(postId);
+        if (!cached) {
+          setCachedRSVPData(postId, rsvpData.users, rsvpData.currentUserStatus);
+        }
+      });
+
+      // Update profile cache (only if not already cached)
+      batchResult.profiles.forEach((profile, profileId) => {
+        const cached = getCachedProfile(profileId);
+        if (!cached) {
+          setCachedProfile(profile);
+        }
+      });
+
+      // Note: Like and save statuses are returned in batchResult but not cached yet
+      // Components will use them directly from the batch result when we integrate in Step 4
 
       console.log(
         "[DataCache] Successfully prefetched related data for",
         posts.length,
-        "posts"
+        "posts using batch loader"
       );
     } catch (error) {
       console.warn("[DataCache] Failed to prefetch related data:", error);
+      // Don't throw - allow app to continue even if prefetching fails
     }
   }
 

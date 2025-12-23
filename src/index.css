@@ -221,6 +221,22 @@ input:focus {
   border-radius: 16px;
 }
 
+/* Progressive feed animation - simple fade-in, no delays */
+/* Items appear naturally as they're added to DOM */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.feed-item {
+  animation: fadeIn 0.2s ease-out;
+  animation-fill-mode: both;
+}
+
 /* Logo utilities */
 .logo-pill {
   background: var(--brand);

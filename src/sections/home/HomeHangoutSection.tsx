@@ -1,5 +1,8 @@
+import { useCallback } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Hangout from "../../components/Hangout";
+import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import ProgressiveHorizontalRail from "../../components/ProgressiveHorizontalRail";
 
 /** Some feeds include extra fields; make them optional here */
 type FeedItemExtended = FeedItem & {
@@ -13,15 +16,32 @@ type Props = {
   items: any[]; // keep your existing item typing
   loading?: boolean; // <-- add this
   onDelete?: (postId: string) => void; // NEW: callback when hangout is deleted
+  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
+  batchedData?: BatchLoadResult | null;
+  // [OPTIMIZATION: Phase 2 - Progressive] Progressive loading props
+  useProgressiveLoading?: boolean; // Whether to use progressive loading
+  loadItems?: (offset: number, limit: number) => Promise<FeedItem[]>; // Load function
+  initialItems?: FeedItem[]; // Initial items
+  getCachedItems?: () => FeedItem[] | null; // Cache getter
+  setCachedItems?: (items: FeedItem[]) => void; // Cache setter
+  previousRailItems?: FeedItem[]; // Previous rail items for slow connection fallback
 };
 
 export default function HomeHangoutSection({
   items = [],
   loading,
   onDelete,
+  batchedData,
+  useProgressiveLoading = false,
+  loadItems,
+  initialItems,
+  getCachedItems,
+  setCachedItems,
+  previousRailItems = [],
 }: Props) {
   // Skeleton while loading (horizontal cards)
-  if (loading) {
+  // Don't return early when progressive loading is enabled - let ProgressiveHorizontalRail handle its own loading state
+  if (loading && !useProgressiveLoading) {
     return (
       <div className="mt-2 -mx-3 px-3">
         <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-hide">
@@ -98,6 +118,75 @@ export default function HomeHangoutSection({
     );
   }
 
+  // [OPTIMIZATION: Phase 2 - Progressive] Render function for progressive mode
+  const renderHangout = useCallback(
+    (p: FeedItemExtended, index: number) => {
+      const authorHandle = p.is_anonymous
+        ? p.anonymous_name || "Anonymous"
+        : p.author?.display_name || p.author?.username || "Unknown";
+      const avatarUrl = p.author?.avatar_url ?? null;
+
+      return (
+        <Hangout
+          key={p.id}
+          id={p.id}
+          caption={p.caption || "Untitled hangout"}
+          createdAt={p.created_at}
+          authorHandle={authorHandle}
+          avatarUrl={avatarUrl}
+          authorId={p.author_id}
+          isAnonymous={p.is_anonymous || false}
+          capacity={20}
+          isOwner={p.isOwner || false}
+          onDelete={() => onDelete?.(p.id)}
+          status={p.status || "published"}
+          selectedDates={p.selected_dates}
+          type={p.type}
+          isSaved={batchedData?.saveStatuses.get(p.id)}
+          followStatus={batchedData?.followStatuses.get(p.author_id)}
+        />
+      );
+    },
+    [batchedData, onDelete]
+  );
+
+  // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveHorizontalRail if enabled
+  if (useProgressiveLoading && loadItems) {
+    return (
+      <ProgressiveHorizontalRail
+        loadItems={loadItems}
+        renderItem={renderHangout}
+        initialItems={initialItems || items}
+        getCachedItems={getCachedItems}
+        setCachedItems={setCachedItems}
+        loading={loading}
+        visibleItems={3}
+        bufferSize="adaptive"
+        pageSize={4}
+        loadingComponent={
+          <div className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0">
+            <div className="relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3">
+              <div className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg">
+                <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-[var(--text)]/10 animate-pulse" />
+                <div className="flex-1 min-w-0">
+                  <div className="h-3 w-24 rounded bg-[var(--text)]/10 animate-pulse mb-1" />
+                </div>
+              </div>
+              <div className="mt-1 space-y-2">
+                <div className="h-4 w-[92%] rounded bg-[var(--text)]/10 animate-pulse" />
+                <div className="h-4 w-[78%] rounded bg-[var(--text)]/10 animate-pulse" />
+              </div>
+            </div>
+          </div>
+        }
+      />
+    );
+  }
+
+  // Legacy mode: render all items at once
   const data = (items as FeedItemExtended[]) || [];
 
   return (
@@ -128,6 +217,9 @@ export default function HomeHangoutSection({
               status={p.status || "published"} // Default to published if status not available
               selectedDates={p.selected_dates} // Pass selected dates for priority sorting
               type={p.type} // Pass post type for avatar indicator
+              // [OPTIMIZATION: Phase 1 - Batch] Pass batched data for SaveButton and FollowButton
+              isSaved={batchedData?.saveStatuses.get(p.id)}
+              followStatus={batchedData?.followStatuses.get(p.author_id)}
             />
           );
         })}
