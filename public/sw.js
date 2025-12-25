@@ -1,6 +1,6 @@
 // public/sw.js
 // Echotoo PWA: Service worker for caching static assets and reducing bandwidth
-const APP_VERSION = "v14"; // Update this version number when deploying new features
+const APP_VERSION = "v15"; // Update this version number when deploying new features
 const STATIC_CACHE = `static-${APP_VERSION}`;
 const IMAGE_CACHE = `images-${APP_VERSION}`;
 const API_CACHE = `api-${APP_VERSION}`;
@@ -163,6 +163,13 @@ self.addEventListener("fetch", (event) => {
 
   // Check for Supabase and Auth patterns
   const isSupabaseHost = url.hostname.endsWith("supabase.co");
+  // Explicitly check for Supabase API paths (RPC, REST, Auth, Storage)
+  const isSupabaseAPI = isSupabaseHost && (
+    url.pathname.includes("/rest/v1/") ||
+    url.pathname.includes("/rpc/") ||
+    url.pathname.includes("/auth/v1/") ||
+    url.pathname.includes("/storage/v1/")
+  );
   const isAuthPath = url.pathname.startsWith("/auth/v1/") || url.pathname.includes("/auth/");
   const hasAuthParams =
     url.search.includes("access_token") ||
@@ -177,13 +184,16 @@ self.addEventListener("fetch", (event) => {
   const isOAuthCallback = url.search.includes("code=") || url.hash.includes("code=") || url.search.includes("state=");
 
   // Never handle development assets, auth-related requests, or Supabase requests
+  // CRITICAL: Exclude ALL Supabase API calls to prevent service worker interference
+  // The app handles API caching via dataCache, not service worker
   if (
     isDevFile ||
     isAuthPath ||
     hasAuthParams ||
     isAuthCallback ||
     isOAuthCallback ||
-    isSupabaseHost
+    isSupabaseHost ||
+    isSupabaseAPI  // Explicit check for API paths
   ) {
     return; // Let browser handle these requests normally
   }

@@ -1,14 +1,25 @@
 // src/api/services/follows.ts
 import { supabase } from "../../lib/supabaseClient";
 import { retry } from "../../lib/retry";
+import { dataCache } from "../../lib/dataCache";
 
 // Cache for authentication to prevent multiple calls
 let authCache: { userId: string | null; timestamp: number } | null = null;
 const AUTH_CACHE_DURATION = 30 * 1000; // 30 seconds
 
 // Function to clear auth cache (call when auth state changes)
+// [CACHE FIX] Now also clears feed cache to prevent cross-user data leakage
 export function clearAuthCache() {
   authCache = null;
+  // Clear feed cache when auth state changes
+  // This prevents User A's cached feed from being shown to User B
+  // [CACHE FIX] Use static import instead of require() for browser compatibility
+  try {
+    dataCache.clearFeedCache();
+  } catch (error) {
+    console.warn("[clearAuthCache] Failed to clear feed cache:", error);
+    // Don't throw - auth cache clearing should still succeed
+  }
 }
 
 /** Return the viewer's *profile id* (not auth user id). */

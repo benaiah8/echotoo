@@ -8,6 +8,7 @@ import { getPublicFeed } from "../../api/queries/getPublicFeed";
 import { getViewerId } from "../../api/services/follows";
 import { dataCache } from "../../lib/dataCache";
 import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 
 interface Props {
@@ -33,7 +34,10 @@ interface Props {
   batchedData?: BatchLoadResult | null;
   // [OPTIMIZATION: Phase 2 - Progressive] Progressive feed props
   useProgressiveFeed?: boolean; // Whether to use ProgressiveFeed
-  loadItems?: (offset: number, limit: number) => Promise<FeedItem[]>; // Load function for ProgressiveFeed
+  loadItems?: (
+    offset: number,
+    limit: number
+  ) => Promise<FeedItem[] | OffsetAwareLoadResult<FeedItem>>; // Load function for ProgressiveFeed (supports both formats)
   initialItems?: FeedItem[]; // Initial items for ProgressiveFeed
   getCachedItems?: () => FeedItem[] | null; // Cache getter
   setCachedItems?: (items: FeedItem[]) => void; // Cache setter
@@ -42,6 +46,7 @@ interface Props {
     type?: "experience" | "hangout";
     q?: string;
     tags?: string[];
+    currentUserId?: string | null; // Include for feedKey to reset on auth change
   };
 }
 
@@ -79,7 +84,9 @@ export default function HomePostsSection({
   const railLoadItems = useCallback(
     async (offset: number, limit: number) => {
       if (!loadItems) return [];
-      const allItems = await loadItems(offset, limit * 2);
+      const result = await loadItems(offset, limit * 2);
+      // Extract items from result (handles both array and OffsetAwareLoadResult formats)
+      const allItems = Array.isArray(result) ? result : result.items;
       // Filter to hangouts only
       return allItems.filter((item) => item.type === "hangout");
     },
@@ -143,10 +150,15 @@ export default function HomePostsSection({
 
   // getCachedItemsFiltered removed - getCachedItems from HomePage already filters by type
 
-  // Key to reset ProgressiveFeed when filters change
+  // Key to reset ProgressiveFeed when filters or auth change
+  // FIX: Include currentUserId in feedKey so feed reloads when user logs in/out
+  // This ensures ProgressiveFeed remounts and resets internal state (offsetRef, initialLoadCompleteRef)
   const feedKey = useMemo(
-    () => `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}`,
-    [viewMode, selectedTags, feedOptions?.q]
+    () =>
+      `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${
+        feedOptions?.currentUserId || "guest"
+      }`,
+    [viewMode, selectedTags, feedOptions?.q, feedOptions?.currentUserId]
   );
 
   // Legacy mode: prefetch logic
@@ -221,7 +233,7 @@ export default function HomePostsSection({
               ? "No posts match your current filters."
               : "No posts to show right now."
           }
-          pageSize={2} // Small batches (2-3 items) for true progressive loading - efficient and feels progressive
+          pageSize={5} // Increased from 2 to 5 for better performance (fewer API calls, faster loading)
         />
 
         {/* Show fallback posts when tag filters are active */}

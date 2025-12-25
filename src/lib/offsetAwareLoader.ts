@@ -28,6 +28,7 @@
 export interface OffsetAwareLoadResult<T> {
   items: T[];
   consumedOffset: number; // How many offsets were actually consumed by the API
+  count?: number; // Optional: Total count returned by API (for reliable hasMore detection)
 }
 
 export type LoadItemsFunction<T> = (
@@ -186,5 +187,17 @@ export function extractConsumedOffset<T>(
     return result.consumedOffset;
   }
   return result.length;
+}
+
+/**
+ * Helper to extract count (returns undefined if not provided)
+ */
+export function extractCount<T>(
+  result: T[] | OffsetAwareLoadResult<T>
+): number | undefined {
+  if (isOffsetAwareResult(result)) {
+    return result.count;
+  }
+  return undefined;
 }
 

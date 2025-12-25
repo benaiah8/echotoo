@@ -61,9 +61,20 @@ export default function SaveButton({
               return;
             }
 
+            // [AUTH FIX] Skip API call if user is not authenticated (after auth loading completes)
+            // Why: Prevents unnecessary API calls and console errors when logged out
+            if (!authLoading && !authState?.user) {
+              setIsSaved(false);
+              setIsLoading(false);
+              return;
+            }
+
             const { data, error } = await isPostSaved(postId);
             if (error) {
-              console.error("Error checking saved status:", error);
+              // [AUTH FIX] Only log non-authentication errors to reduce console noise
+              if (error?.message !== "Not authenticated") {
+                console.error("Error checking saved status:", error);
+              }
               setIsSaved(false);
             } else {
               setIsSaved(data);

@@ -11,9 +11,30 @@ class DataCache {
   private cache = new Map<string, CacheEntry<any>>();
   private readonly LOCAL_STORAGE_KEY = "echotoo_cache";
   private readonly MAX_CACHE_SIZE = 15; // Maximum number of cached post sets
+  // [PWA FIX] Cache version for invalidation on updates
+  // [CACHE FIX] Bumped to v3 to invalidate old cache without user ID
+  private readonly CACHE_VERSION = "v3";
+  private readonly CACHE_VERSION_KEY = "echotoo_cache_version";
 
   constructor() {
+    this.checkCacheVersion();
     this.loadFromLocalStorage();
+  }
+
+  // [PWA FIX] Check cache version and clear if version changed
+  private checkCacheVersion(): void {
+    try {
+      const storedVersion = localStorage.getItem(this.CACHE_VERSION_KEY);
+      if (storedVersion !== this.CACHE_VERSION) {
+        // Clear all cache on version change
+        this.cache.clear();
+        localStorage.removeItem(this.LOCAL_STORAGE_KEY);
+        localStorage.setItem(this.CACHE_VERSION_KEY, this.CACHE_VERSION);
+        console.log("[DataCache] Cache version changed, cleared cache");
+      }
+    } catch (error) {
+      console.warn("[DataCache] Failed to check cache version:", error);
+    }
   }
 
   set<T>(key: string, data: T, ttlMs: number = 5 * 60 * 1000): void {
@@ -49,16 +70,35 @@ class DataCache {
 
     // If not in memory, try localStorage for feed data
     if (key.startsWith("feed:")) {
-      const stored = this.getFromLocalStorage(key);
-      if (stored) {
-        const isExpired = Date.now() - stored.timestamp > stored.ttl;
-        if (isExpired) {
-          this.removeFromLocalStorage(key);
-          return null;
+      try {
+        const stored = this.getFromLocalStorage(key);
+        if (stored) {
+          const isExpired = Date.now() - stored.timestamp > stored.ttl;
+          if (isExpired) {
+            this.removeFromLocalStorage(key);
+            return null;
+          }
+          // Load back into memory cache
+          this.cache.set(key, stored);
+          return stored.data as T;
         }
-        // Load back into memory cache
-        this.cache.set(key, stored);
-        return stored.data as T;
+      } catch (error) {
+        // PWA FIX: localStorage access might fail in PWA - retry once
+        console.warn("[DataCache] localStorage access failed, retrying:", error);
+        try {
+          // Small delay and retry (PWA might need time to initialize localStorage)
+          const retryStored = this.getFromLocalStorage(key);
+          if (retryStored) {
+            const isExpired = Date.now() - retryStored.timestamp > retryStored.ttl;
+            if (!isExpired) {
+              this.cache.set(key, retryStored);
+              return retryStored.data as T;
+            }
+          }
+        } catch (retryError) {
+          console.warn("[DataCache] Retry also failed:", retryError);
+          // Return null on failure - will fetch from API
+        }
       }
     }
 
@@ -157,18 +197,60 @@ class DataCache {
     this.cache.clear();
   }
 
+  // [CACHE FIX] Clear all feed-related cache entries (both in-memory and localStorage)
+  // Why: Called on auth change to prevent cross-user data leakage
+  clearFeedCache(): void {
+    // Clear in-memory cache entries that start with "feed:"
+    const keysToDelete: string[] = [];
+    this.cache.forEach((_, key) => {
+      if (key.startsWith("feed:")) {
+        keysToDelete.push(key);
+      }
+    });
+    keysToDelete.forEach((key) => this.cache.delete(key));
+
+    // Clear localStorage feed cache
+    try {
+      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
+      if (stored) {
+        const cacheData = JSON.parse(stored);
+        const feedKeys = Object.keys(cacheData).filter((k) =>
+          k.startsWith("feed:")
+        );
+        feedKeys.forEach((key) => {
+          delete cacheData[key];
+        });
+        localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(cacheData));
+        console.log(
+          `[DataCache] Cleared ${feedKeys.length} feed cache entries from localStorage`
+        );
+      }
+    } catch (error) {
+      console.warn("[DataCache] Failed to clear feed cache from localStorage:", error);
+    }
+
+    console.log(
+      `[DataCache] Cleared ${keysToDelete.length} feed cache entries from memory`
+    );
+  }
+
   // Generate cache key from feed options
+  // [CACHE FIX] Now includes viewerProfileId for user-specific caching (security fix)
   generateFeedKey(opts: {
     type?: string;
     q?: string;
     tags?: string[];
     limit?: number;
     offset?: number;
+    viewerProfileId?: string | null; // User-specific cache key (prevents cross-user data leakage)
   }): string {
-    const { type, q, tags, limit, offset } = opts;
+    const { type, q, tags, limit, offset, viewerProfileId } = opts;
+    // Include viewerProfileId in key to prevent cross-user cache pollution
+    // Defaults to "guest" for backward compatibility
+    const userId = viewerProfileId || "guest";
     return `feed:${type || "all"}:${q || ""}:${tags?.join(",") || ""}:${
       limit || 12
-    }:${offset || 0}`;
+    }:${offset || 0}:${userId}`;
   }
 
   // Enhanced cache update that includes related data (follow status, RSVP, profiles)
@@ -176,10 +258,13 @@ class DataCache {
     const currentKey = this.generateFeedKey(currentOpts);
     const cachedData = this.get<any[]>(currentKey);
 
-    // Always prefetch and cache related data for new posts
-    if (newPosts.length > 0) {
-      await this.prefetchRelatedData(newPosts);
-    }
+    // [BATCH LOADER FIX] Disabled prefetchRelatedData - PostgreSQL function already provides all data
+    // Why: Batch loader is no longer needed, PostgreSQL function includes follow_status, is_liked, is_saved, rsvp_data
+    // Components handle their own lazy loading when data is not provided
+    // This prevents unnecessary batch loader calls and reduces console noise
+    // if (newPosts.length > 0) {
+    //   await this.prefetchRelatedData(newPosts);
+    // }
 
     if (!cachedData || !Array.isArray(cachedData) || cachedData.length === 0) {
       // No cached data or invalid format, just cache the new data

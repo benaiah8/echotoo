@@ -364,7 +364,10 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   }
 
   return (
-    <div ref={containerRef as React.RefObject<HTMLDivElement>} className="overflow-x-auto scroll-hide py-2">
+    <div
+      ref={containerRef as React.RefObject<HTMLDivElement>}
+      className="overflow-x-auto scroll-hide py-2"
+    >
       <div className="flex gap-3 w-max rail-pad">
         {/* Render all items - renderItem should return elements with keys */}
         {items.map((item, index) => {

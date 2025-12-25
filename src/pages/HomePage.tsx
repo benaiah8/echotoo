@@ -16,6 +16,7 @@ import HomePostsSection from "../sections/home/HomePostsSection";
 import {
   getPublicFeed,
   getPublicFeedOptimized,
+  getPublicFeedOptimizedWithCount,
   type FeedItem,
   type FeedOptions,
 } from "../api/queries/getPublicFeed";
@@ -209,16 +210,9 @@ export default function HomePage() {
             setItems(cachedData);
             setLoading(false);
 
-            // [OPTIMIZATION: Phase 1 - Batch] Removed - PostgreSQL function provides all data in FeedItem
-            // Prefetch via dataCache (for caching)
-            try {
-              await dataCache.prefetchRelatedData(cachedData);
-            } catch (prefetchError) {
-              console.warn(
-                "[HomePage] Failed to prefetch related data for cached posts:",
-                prefetchError
-              );
-            }
+            // REMOVED: prefetchRelatedData - batch loader no longer needed
+            // PostgreSQL function already provides all data in FeedItem
+            // Components handle their own lazy loading when data is not provided
 
             // Now fetch fresh data in the background
             try {
@@ -254,23 +248,14 @@ export default function HomePage() {
           ? await getPublicFeedOptimized(feedOptions)
           : await getPublicFeed(feedOptions);
 
-        // Cache the data for future use and prefetch related data
+        // Cache the data for future use
         if (page === 0) {
           const cacheKey = dataCache.generateFeedKey(feedOptions);
           dataCache.set(cacheKey, data, 10 * 60 * 1000); // 10 minutes TTL
 
-          // [OPTIMIZATION: Phase 1 - Batch] Removed - PostgreSQL function provides all data in FeedItem
-          // Prefetch via dataCache (for caching)
-          if (!cancelled) {
-            try {
-              await dataCache.prefetchRelatedData(data);
-            } catch (prefetchError) {
-              console.warn(
-                "[HomePage] Failed to prefetch related data:",
-                prefetchError
-              );
-            }
-          }
+          // REMOVED: prefetchRelatedData - batch loader no longer needed
+          // PostgreSQL function already provides all data in FeedItem
+          // Components handle their own lazy loading when data is not provided
         }
 
         // console.log(
@@ -363,12 +348,14 @@ export default function HomePage() {
           // Why: User still sees content even if network request fails
           if (page === 0) {
             try {
+              // [CACHE FIX] Include currentUserId in cache key for user-specific caching
               const cacheKey = dataCache.generateFeedKey({
                 type: undefined,
                 q: search || undefined,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
                 limit: PAGE_SIZE,
                 offset: 0,
+                viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
               });
               const cachedData = dataCache.get<FeedItem[]>(cacheKey);
               if (cachedData && cachedData.length > 0) {
@@ -888,31 +875,35 @@ export default function HomePage() {
                 initialItems={hangouts.length > 0 ? hangouts : undefined}
                 getCachedItems={useCallback(() => {
                   // Cache key for horizontal rail
+                  // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                   const feedOptions = {
                     type: "hangout", // Already filtered at PostgreSQL level
                     q: search || undefined,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit: 20,
                     offset: 0,
+                    viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
                   };
                   const cacheKey = dataCache.generateFeedKey(feedOptions);
                   const cached = dataCache.get<FeedItem[]>(cacheKey);
                   // FIX: No need to filter, cache already contains only hangouts
                   return Array.isArray(cached) ? cached : null;
-                }, [search, selectedTags])}
+                }, [search, selectedTags, currentUserId])} // [CACHE FIX] Add currentUserId to dependencies
                 setCachedItems={useCallback(
                   (items: FeedItem[]) => {
+                    // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                     const feedOptions = {
                       type: "hangout",
                       q: search || undefined,
                       tags: selectedTags.length > 0 ? selectedTags : undefined,
                       limit: 20,
                       offset: 0,
+                      viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
                     };
                     const cacheKey = dataCache.generateFeedKey(feedOptions);
                     dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
                   },
-                  [search, selectedTags]
+                  [search, selectedTags, currentUserId] // [CACHE FIX] Add currentUserId to dependencies
                 )}
               />
             </div>
@@ -971,15 +962,29 @@ export default function HomePage() {
                     offset,
                     viewerProfileId: viewerProfileId || undefined,
                   };
-                  return USE_OPTIMIZED_FEED
-                    ? await getPublicFeedOptimized(feedOptions)
-                    : await getPublicFeed(feedOptions);
+                  if (USE_OPTIMIZED_FEED) {
+                    // Use new function that returns count for reliable hasMore detection
+                    const { items, count } =
+                      await getPublicFeedOptimizedWithCount(feedOptions);
+                    return {
+                      items,
+                      consumedOffset: items.length,
+                      count, // Include count for hasMore detection
+                    };
+                  } else {
+                    const items = await getPublicFeed(feedOptions);
+                    return {
+                      items,
+                      consumedOffset: items.length,
+                    };
+                  }
                 },
                 [search, selectedTags, viewMode] // FIX: Add viewMode to dependencies
               )}
               initialItems={initialItemsRef.current || []} // Ensure array, not undefined
               getCachedItems={useCallback(() => {
                 // Use dataCache directly (sync operation)
+                // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                 const feedOptions = {
                   // FIX: Include type filter in cache key (matches loadItems)
                   type:
@@ -992,14 +997,16 @@ export default function HomePage() {
                   tags: selectedTags.length > 0 ? selectedTags : undefined,
                   limit: PAGE_SIZE,
                   offset: 0,
+                  viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
                 };
                 const cacheKey = dataCache.generateFeedKey(feedOptions);
                 const cached = dataCache.get<FeedItem[]>(cacheKey);
                 // Ensure we return an array or null (not undefined or other types)
                 return Array.isArray(cached) ? cached : null;
-              }, [search, selectedTags, viewMode])} // FIX: Add viewMode to dependencies
+              }, [search, selectedTags, viewMode, currentUserId])} // [CACHE FIX] Add currentUserId to dependencies
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
+                  // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                   const feedOptions = {
                     // FIX: Include type filter in cache key (matches loadItems)
                     type:
@@ -1012,12 +1019,24 @@ export default function HomePage() {
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit: PAGE_SIZE,
                     offset: 0,
+                    viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
                   };
                   const cacheKey = dataCache.generateFeedKey(feedOptions);
                   dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
                 },
-                [search, selectedTags, viewMode] // FIX: Add viewMode to dependencies
+                [search, selectedTags, viewMode, currentUserId] // [CACHE FIX] Add currentUserId to dependencies
               )}
+              feedOptions={{
+                type:
+                  viewMode === "hangouts"
+                    ? "hangout"
+                    : viewMode === "experiences"
+                    ? "experience"
+                    : undefined,
+                q: search || undefined,
+                tags: selectedTags.length > 0 ? selectedTags : undefined,
+                currentUserId: currentUserId || null, // FIX: Include for feedKey to reset on auth change
+              }}
             />
 
             {/* "Other things you might like" appears only during search */}

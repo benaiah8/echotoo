@@ -60,11 +60,12 @@ export async function getPublicFeed(
 ): Promise<FeedItem[]> {
   // console.log("[getPublicFeed] Starting query with opts:", opts);
 
-  const { type, q, tags, limit = 12, offset = 0 } = opts;
+  const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
 
   // Check cache first (only for non-offset queries to avoid pagination issues)
   if (offset === 0) {
-    const cacheKey = dataCache.generateFeedKey(opts);
+    // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
+    const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (cachedData) {
       // console.log("[getPublicFeed] Returning cached data for key:", cacheKey);
@@ -182,7 +183,8 @@ export async function getPublicFeed(
     // [OPTIMIZATION: Phase 7.5] Graceful degradation: return cached data on error
     // Why: User still sees content even if network request fails
     if (offset === 0) {
-      const cacheKey = dataCache.generateFeedKey(opts);
+      // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
+      const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
       const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
       if (cachedData) {
         console.log(
@@ -243,7 +245,8 @@ export async function getPublicFeed(
 
   // Cache the result for first page queries only
   if (offset === 0) {
-    const cacheKey = dataCache.generateFeedKey(opts);
+    // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
+    const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
     cacheFeedResult(cacheKey, finalData, 2 * 60 * 1000); // Cache for 2 minutes
 
     // DISABLED: Prefetching conflicts with ProgressiveFeed's loading mechanism
@@ -262,9 +265,13 @@ export async function getPublicFeed(
  * This function calls the PostgreSQL function `get_feed_with_related_data`
  * which aggregates all related data (follows, likes, saves, RSVPs) in a single query.
  */
-export async function getPublicFeedOptimized(
+/**
+ * Internal function that returns both items and count from PostgreSQL function.
+ * Used by ProgressiveFeed for reliable hasMore detection.
+ */
+export async function getPublicFeedOptimizedWithCount(
   opts: FeedOptions = {}
-): Promise<FeedItem[]> {
+): Promise<{ items: FeedItem[]; count: number }> {
   const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
 
   // Check cache first (only for non-offset queries to avoid pagination issues)
@@ -272,31 +279,60 @@ export async function getPublicFeedOptimized(
     const cacheKey = dataCache.generateFeedKey(opts);
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (cachedData) {
-      return cachedData;
+      // Return cached data with estimated count (use length as fallback)
+      return { items: cachedData, count: cachedData.length };
     }
   }
 
   try {
     // Get current user's auth ID for viewer context
-    // OPTIMIZATION: Get user_id directly from session first (faster, no extra query)
+    // FIX: Add retry logic for PWA - session might not be ready immediately
     let viewerUserId: string | null = null;
+    const maxRetries = 3;
+    const retryDelay = 500; // Start with 500ms
 
-    // Try to get current session first (most common case, no extra query)
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    viewerUserId = session?.user?.id || null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Try to get current session first (most common case, no extra query)
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        viewerUserId = session?.user?.id || null;
 
-    // Only query profiles table if viewerProfileId is provided but we don't have user_id from session
-    // This handles edge cases where profile_id is passed but session is available
-    if (!viewerUserId && viewerProfileId) {
-      // Fallback: Get user_id from profile_id (rare case)
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("user_id")
-        .eq("id", viewerProfileId)
-        .maybeSingle();
-      viewerUserId = profile?.user_id || null;
+        // If we got a session, break out of retry loop
+        if (viewerUserId) break;
+
+        // If no session and we have viewerProfileId, try fallback
+        if (!viewerUserId && viewerProfileId) {
+          // Fallback: Get user_id from profile_id (rare case)
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("user_id")
+            .eq("id", viewerProfileId)
+            .maybeSingle();
+          viewerUserId = profile?.user_id || null;
+          if (viewerUserId) break;
+        }
+
+        // If still no session and not last attempt, wait and retry
+        if (!viewerUserId && attempt < maxRetries - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, retryDelay * (attempt + 1))
+          );
+        }
+      } catch (sessionError) {
+        // If error and not last attempt, wait and retry
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, retryDelay * (attempt + 1))
+          );
+        } else {
+          console.warn(
+            "[getPublicFeedOptimized] Failed to get session after retries:",
+            sessionError
+          );
+        }
+      }
     }
 
     // Call PostgreSQL function
@@ -358,8 +394,10 @@ export async function getPublicFeedOptimized(
     };
 
     if (!result || !result.posts) {
-      console.warn("[getPublicFeedOptimized] Invalid response structure");
-      return [];
+      console.warn(
+        "[getPublicFeedOptimizedWithCount] Invalid response structure"
+      );
+      return { items: [], count: 0 };
     }
 
     // Map to FeedItem format (INCLUDE all PostgreSQL fields)
@@ -394,9 +432,9 @@ export async function getPublicFeedOptimized(
     // Temporary: if sorting removes items, return raw data instead
     if (feedItems.length > 0 && sortedData.length === 0) {
       console.warn(
-        "[getPublicFeedOptimized] Sorting removed all items, returning raw data"
+        "[getPublicFeedOptimizedWithCount] Sorting removed all items, returning raw data"
       );
-      return feedItems;
+      return { items: feedItems, count: result.count };
     }
 
     const finalData = sortedData as FeedItem[];
@@ -412,9 +450,9 @@ export async function getPublicFeedOptimized(
       // dataCache.prefetchFeedData(opts);
     }
 
-    return finalData;
+    return { items: finalData, count: result.count };
   } catch (error) {
-    console.error("[getPublicFeedOptimized] Error:", error);
+    console.error("[getPublicFeedOptimizedWithCount] Error:", error);
 
     // Graceful degradation: return cached data on error
     if (offset === 0) {
@@ -422,14 +460,26 @@ export async function getPublicFeedOptimized(
       const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
       if (cachedData) {
         console.log(
-          "[getPublicFeedOptimized] Returning cached data after error"
+          "[getPublicFeedOptimizedWithCount] Returning cached data after error"
         );
-        return cachedData;
+        // Return cached data with unknown count (will use length check fallback)
+        return { items: cachedData, count: cachedData.length };
       }
     }
 
     throw error;
   }
+}
+
+/**
+ * Public function that returns FeedItem[] for backward compatibility.
+ * Uses getPublicFeedOptimizedWithCount internally but only returns items.
+ */
+export async function getPublicFeedOptimized(
+  opts: FeedOptions = {}
+): Promise<FeedItem[]> {
+  const { items } = await getPublicFeedOptimizedWithCount(opts);
+  return items;
 }
 
 /**

@@ -183,8 +183,11 @@ function BottomTab() {
   );
 
   // Helper to determine if user should see Avatar (immediate + accurate check)
-  // Uses localStorage for immediate display on app load, falls back to authedId for accuracy
-  const shouldShowAvatar = localStorage.getItem("my_user_id") || authedId;
+  // [AVATAR FIX] Check authedId first to ensure avatar hides immediately on logout
+  // Why: When user logs out, authedId becomes null, but localStorage might still have my_user_id
+  // Checking authedId first ensures avatar disappears immediately on logout
+  const shouldShowAvatar =
+    !!authedId && (localStorage.getItem("my_user_id") || authedId);
 
   const [hidden, setHidden] = useState(false);
   const lastY = useRef<number>(

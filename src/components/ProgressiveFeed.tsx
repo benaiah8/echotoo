@@ -32,6 +32,7 @@ import {
   type OffsetAwareLoadResult,
   extractItems,
   extractConsumedOffset,
+  extractCount,
 } from "../lib/offsetAwareLoader";
 
 export interface ProgressiveFeedProps<T> {
@@ -125,6 +126,21 @@ export default function ProgressiveFeed<T extends { id: string }>({
   pageSize = 1, // Default: load one item at a time for true progressive loading
   maxItems = 0,
 }: ProgressiveFeedProps<T>) {
+  // PWA detection: Use centralized utility
+  const isPWA = (() => {
+    try {
+      const { isPWA: detectPWA } = require("../lib/pwaDetection");
+      return detectPWA();
+    } catch {
+      // Fallback if module not available
+      return (
+        typeof window !== "undefined" &&
+        (window.matchMedia("(display-mode: standalone)").matches ||
+          (window.navigator as any).standalone === true ||
+          document.referrer.includes("android-app://"))
+      );
+    }
+  })();
   /**
    * Calculate initial load size - fixed at 5 items
    * User requested: "when first load it should load more and also loading just 3 is little lets load 5 posts"
@@ -221,25 +237,64 @@ export default function ProgressiveFeed<T extends { id: string }>({
     setIsLoadingMore(true);
     setError(null);
 
-    // Safety timeout: Force reset loading state after 15 seconds to prevent stuck state
-    // Increased from 10s to 15s to account for slower network connections
+    // [PWA FIX] Detect PWA context for longer timeout
+    const isPWA = (() => {
+      try {
+        const { isPWA: detectPWA } = require("../lib/pwaDetection");
+        return detectPWA();
+      } catch {
+        // Fallback if module not available
+        return (
+          window.matchMedia("(display-mode: standalone)").matches ||
+          (window.navigator as any).standalone === true
+        );
+      }
+    })();
+
+    // Safety timeout: Force reset loading state after timeout to prevent stuck state
+    // Longer timeout for PWA (20s) to account for slower network connections in PWA context
+    const timeout = isPWA ? 20000 : 15000;
     let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
       if (loadingRef.current) {
         console.warn(
-          "[ProgressiveFeed] loadMore: TIMEOUT - Force resetting loading state after 15s. This usually indicates a slow network or database query."
+          `[ProgressiveFeed] loadMore: TIMEOUT${
+            isPWA ? " (PWA)" : ""
+          } - Force resetting loading state after ${timeout}ms. This usually indicates a slow network or database query.`
         );
         loadingRef.current = false;
         setIsLoadingMore(false);
         timeoutId = null;
       }
-    }, 15000);
+    }, timeout);
 
     try {
-      const loadResult = await loadItems(offsetRef.current, pageSize);
+      // [PWA FIX] Add retry logic for PWA network issues
+      const loadWithRetry = async (
+        attempt = 1
+      ): Promise<T[] | OffsetAwareLoadResult<T>> => {
+        try {
+          return await loadItems(offsetRef.current, pageSize);
+        } catch (error) {
+          // Retry up to 3 times with exponential backoff
+          if (attempt < 3) {
+            const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+            console.warn(
+              `[ProgressiveFeed] Load attempt ${attempt} failed, retrying in ${delay}ms:`,
+              error
+            );
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            return loadWithRetry(attempt + 1);
+          }
+          throw error;
+        }
+      };
 
-      // Extract items and consumed offset (supports both old and new formats)
+      const loadResult = await loadWithRetry();
+
+      // Extract items, consumed offset, and count (supports both old and new formats)
       const newItems = extractItems(loadResult);
       const consumedOffset = extractConsumedOffset(loadResult);
+      const count = extractCount(loadResult);
 
       if (newItems.length === 0) {
         // Simplified: Only set hasMore=false when we definitely reached the end
@@ -262,11 +317,23 @@ export default function ProgressiveFeed<T extends { id: string }>({
           setHasMore(false);
         }
 
+        // OPTIMIZATION: Use count from PostgreSQL function for reliable hasMore detection
+        // If count is available and count < limit, we've reached the end
+        // Otherwise, fallback to length check (for backward compatibility)
+        if (count !== undefined) {
+          if (count < pageSize) {
+            setHasMore(false);
+          }
+        } else if (newItems.length < pageSize) {
+          // Fallback: Use length check if count is not available
+          setHasMore(false);
+        }
+
         // PROGRESSIVE RENDERING: Add items one-by-one for smooth appearance
         // This gives the user immediate feedback as items appear, not all at once
         if (newItems.length > 0) {
-          // Add items one-by-one with longer delays (100ms between each)
-          // Longer delays prevent React from batching updates together
+          // Add items one-by-one with shorter delays (25ms between each)
+          // Shorter delays for faster perceived performance while still preventing React batching
           newItems.forEach((item, index) => {
             const addItem = () => {
               if (index === 0) {
@@ -296,7 +363,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
                 setIsLoadingMore(false);
               } else {
                 // Subsequent items: startTransition (non-urgent, can be batched by React)
-                // But 100ms delay ensures they're in separate event loop ticks
+                // But 25ms delay ensures they're in separate event loop ticks
                 startTransition(() => {
                   setItems((prev) => {
                     // Avoid duplicates - use Map to ensure uniqueness
@@ -324,9 +391,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
               // First item: show immediately
               requestAnimationFrame(addItem);
             } else {
-              // Subsequent items: show with longer delay (100ms between each)
-              // Longer delay prevents React from batching updates
-              setTimeout(addItem, index * 100);
+              // Subsequent items: show with shorter delay (25ms between each)
+              // Shorter delay for faster perceived performance
+              setTimeout(addItem, index * 25);
             }
           });
 
@@ -356,11 +423,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
           setIsLoadingMore(false);
         }
 
-        // If we got fewer items than requested, we might be at the end
-        if (newItems.length < pageSize && consumedOffset < pageSize) {
-          // Got fewer items AND consumed fewer offsets = likely at end
-          setHasMore(false);
-        }
+        // REMOVED: Aggressive hasMore check that was stopping loading prematurely
+        // The existing logic at line 282 (if consumedOffset === 0) already handles
+        // the end case correctly. Removing this prevents false positives where
+        // API returns fewer items than requested but there are still more items.
+        // If there are truly no more items, API will return 0 items and consumedOffset
+        // will be 0, triggering hasMore=false correctly.
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -434,9 +502,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
   });
 
   // Scroll stop detection
+  // PWA FIX: Use longer delay for PWA to account for slower scroll detection
+  const adjustedScrollStopDelay = isPWA
+    ? scrollStopDelay * 1.5
+    : scrollStopDelay;
   const { isStopped } = useScrollStopDetection({
     container: containerRef.current || window,
-    delay: scrollStopDelay,
+    delay: adjustedScrollStopDelay,
     enabled: enableScrollStopDetection,
     onScrollStop: () => {
       shouldLoadRef.current = false;
@@ -477,122 +549,149 @@ export default function ProgressiveFeed<T extends { id: string }>({
       !externalLoading &&
       !initialLoadCompleteRef.current // Prevent running if already completed
     ) {
-      const initialLoadSize = calculateInitialLoadSize();
+      // PWA FIX: Add small delay for PWA to ensure DOM is ready
+      const performInitialLoad = () => {
+        const initialLoadSize = calculateInitialLoadSize();
 
-      loadingRef.current = true;
-      setIsLoadingMore(true);
+        loadingRef.current = true;
+        setIsLoadingMore(true);
 
-      loadItems(0, initialLoadSize)
-        .then((loadResult) => {
-          const newItems = extractItems(loadResult);
-          const consumedOffset = extractConsumedOffset(loadResult);
+        loadItems(0, initialLoadSize)
+          .then((loadResult) => {
+            const newItems = extractItems(loadResult);
+            const consumedOffset = extractConsumedOffset(loadResult);
+            const count = extractCount(loadResult);
 
-          if (newItems.length > 0) {
-            // CRITICAL FIX: Set offset to newItems.length, not consumedOffset
-            // consumedOffset might be 0 or incorrect, but we definitely consumed newItems.length offsets
-            offsetRef.current = newItems.length;
+            if (newItems.length > 0) {
+              // CRITICAL FIX: Set offset to newItems.length, not consumedOffset
+              // consumedOffset might be 0 or incorrect, but we definitely consumed newItems.length offsets
+              offsetRef.current = newItems.length;
 
-            // PROGRESSIVE RENDERING: Add initial items one-by-one for smooth appearance
-            // This gives the user immediate feedback as items appear
-            newItems.forEach((item, index) => {
-              const addItem = () => {
-                if (index === 0) {
-                  // First item: flushSync (immediate, non-batched, forces render)
-                  flushSync(() => {
-                    setItems((prev) => {
-                      // For initial load, we can add items directly (no duplicates yet)
-                      if (prev.length === 0) {
-                        // First item - add just this one
-                        return [item];
-                      } else {
-                        // Subsequent items - merge with existing
-                        const itemsMap = new Map<string, T>();
-                        prev.forEach((existingItem) => {
-                          itemsMap.set(existingItem.id, existingItem);
-                        });
-                        itemsMap.set(item.id, item);
-                        return Array.from(itemsMap.values());
-                      }
-                    });
-                  });
-                  // Reset loading state immediately after first item appears
-                  loadingRef.current = false;
-                  setIsLoadingMore(false);
-                  // Mark initial load as complete (allows IntersectionObserver to fire)
-                  initialLoadCompleteRef.current = true;
-                } else {
-                  // Subsequent items: startTransition (non-urgent, can be batched by React)
-                  // But 100ms delay ensures they're in separate event loop ticks
-                  startTransition(() => {
-                    setItems((prev) => {
-                      // For initial load, we can add items directly (no duplicates yet)
-                      if (prev.length === 0) {
-                        // First item(s) - add all items up to this index
-                        return newItems.slice(0, index + 1);
-                      } else {
-                        // Subsequent items - merge with existing
-                        const itemsMap = new Map<string, T>();
-                        prev.forEach((existingItem) => {
-                          itemsMap.set(existingItem.id, existingItem);
-                        });
-                        itemsMap.set(item.id, item);
-                        return Array.from(itemsMap.values());
-                      }
-                    });
-                  });
+              // OPTIMIZATION: Use count from PostgreSQL function for reliable hasMore detection
+              // If count is available and count < initialLoadSize, we've reached the end
+              // Otherwise, fallback to length check (for backward compatibility)
+              if (count !== undefined) {
+                if (count < initialLoadSize) {
+                  setHasMore(false);
                 }
-              };
-
-              if (index === 0) {
-                // First item: show immediately
-                requestAnimationFrame(addItem);
-              } else {
-                // Subsequent items: show with longer delay (100ms between each)
-                // Longer delay prevents React from batching updates
-                setTimeout(addItem, index * 100);
+              } else if (newItems.length < initialLoadSize) {
+                // Fallback: Use length check if count is not available
+                setHasMore(false);
               }
-            });
 
-            // Update cache asynchronously (non-blocking)
-            // Defer to next tick so it doesn't block progressive rendering
-            if (setCachedItems) {
-              setTimeout(() => {
-                setCachedItems(newItems);
-              }, 0); // Next tick, non-blocking
-            }
+              // PROGRESSIVE RENDERING: Add initial items one-by-one for smooth appearance
+              // This gives the user immediate feedback as items appear
+              newItems.forEach((item, index) => {
+                const addItem = () => {
+                  if (index === 0) {
+                    // First item: flushSync (immediate, non-batched, forces render)
+                    flushSync(() => {
+                      setItems((prev) => {
+                        // For initial load, we can add items directly (no duplicates yet)
+                        if (prev.length === 0) {
+                          // First item - add just this one
+                          return [item];
+                        } else {
+                          // Subsequent items - merge with existing
+                          const itemsMap = new Map<string, T>();
+                          prev.forEach((existingItem) => {
+                            itemsMap.set(existingItem.id, existingItem);
+                          });
+                          itemsMap.set(item.id, item);
+                          return Array.from(itemsMap.values());
+                        }
+                      });
+                    });
+                    // Reset loading state immediately after first item appears
+                    loadingRef.current = false;
+                    setIsLoadingMore(false);
+                    // Mark initial load as complete (allows IntersectionObserver to fire)
+                    initialLoadCompleteRef.current = true;
+                  } else {
+                    // Subsequent items: startTransition (non-urgent, can be batched by React)
+                    // But 25ms delay ensures they're in separate event loop ticks
+                    startTransition(() => {
+                      setItems((prev) => {
+                        // For initial load, we can add items directly (no duplicates yet)
+                        if (prev.length === 0) {
+                          // First item(s) - add all items up to this index
+                          return newItems.slice(0, index + 1);
+                        } else {
+                          // Subsequent items - merge with existing
+                          const itemsMap = new Map<string, T>();
+                          prev.forEach((existingItem) => {
+                            itemsMap.set(existingItem.id, existingItem);
+                          });
+                          itemsMap.set(item.id, item);
+                          return Array.from(itemsMap.values());
+                        }
+                      });
+                    });
+                  }
+                };
 
-            // If we got fewer items than requested, we might be at the end
-            if (newItems.length < initialLoadSize) {
+                if (index === 0) {
+                  // First item: show immediately
+                  requestAnimationFrame(addItem);
+                } else {
+                  // Subsequent items: show with shorter delay (25ms between each)
+                  // Shorter delay for faster perceived performance
+                  setTimeout(addItem, index * 25);
+                }
+              });
+
+              // Update cache asynchronously (non-blocking)
+              // Defer to next tick so it doesn't block progressive rendering
+              if (setCachedItems) {
+                setTimeout(() => {
+                  setCachedItems(newItems);
+                }, 0); // Next tick, non-blocking
+              }
+
+              // REMOVED: Aggressive hasMore check that was stopping loading prematurely
+              // The existing logic at line 282 (if consumedOffset === 0) already handles
+              // the end case correctly. Removing this prevents false positives where
+              // API returns fewer items than requested but there are still more items.
+              // If there are truly no more items, API will return 0 items and consumedOffset
+              // will be 0, triggering hasMore=false correctly.
+            } else {
               setHasMore(false);
+              // No items: reset loading state immediately and mark as complete
+              loadingRef.current = false;
+              setIsLoadingMore(false);
+              initialLoadCompleteRef.current = true;
             }
-          } else {
-            setHasMore(false);
-            // No items: reset loading state immediately and mark as complete
+          })
+          .catch((err) => {
+            const errorMessage =
+              err instanceof Error ? err.message : String(err);
+            setError(errorMessage);
+            console.error("[ProgressiveFeed] Initial load failed:", err);
+            // On error, reset loading state immediately
             loadingRef.current = false;
             setIsLoadingMore(false);
             initialLoadCompleteRef.current = true;
-          }
-        })
-        .catch((err) => {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          setError(errorMessage);
-          console.error("[ProgressiveFeed] Initial load failed:", err);
-          // On error, reset loading state immediately
-          loadingRef.current = false;
-          setIsLoadingMore(false);
-          initialLoadCompleteRef.current = true;
-        })
-        .finally(() => {
-          // CRITICAL FIX: Don't reset loading state here - it's handled in addItem callback
-          // This ensures skeleton stays visible until first item appears
-          // Only mark initial load as complete (allows IntersectionObserver to fire)
-          // Note: loading state will be reset when first item appears (in addItem callback)
-          // or if there are no items (handled in the else block above)
-          if (items.length === 0) {
-            // If no items were added (error case), mark as complete
-            initialLoadCompleteRef.current = true;
-          }
-        });
+          })
+          .finally(() => {
+            // CRITICAL FIX: Don't reset loading state here - it's handled in addItem callback
+            // This ensures skeleton stays visible until first item appears
+            // Only mark initial load as complete (allows IntersectionObserver to fire)
+            // Note: loading state will be reset when first item appears (in addItem callback)
+            // or if there are no items (handled in the else block above)
+            if (items.length === 0) {
+              // If no items were added (error case), mark as complete
+              initialLoadCompleteRef.current = true;
+            }
+          });
+      };
+
+      // PWA FIX: Add small delay for PWA to ensure DOM is ready
+      if (isPWA) {
+        const timer = setTimeout(performInitialLoad, 100); // 100ms delay for PWA
+        return () => clearTimeout(timer);
+      } else {
+        performInitialLoad();
+      }
     } else if (items.length > 0 || initialItems) {
       // If we have items (from cache or initialItems), mark initial load as complete
       initialLoadCompleteRef.current = true;
@@ -633,6 +732,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
       return; // Wait for initial load to complete
     }
 
+    // PWA FIX: Adjust IntersectionObserver parameters for PWA
+    // Larger rootMargin and lower threshold for more reliable triggering in PWA
+    const adjustedRootMargin = isPWA
+      ? `${loadMoreThreshold * 1.5}px` // 50% larger margin for PWA
+      : `${loadMoreThreshold}px`;
+    const adjustedThreshold = isPWA ? 0.05 : 0.1; // Lower threshold for PWA (more sensitive)
+
     const observer = new IntersectionObserver(
       (entries) => {
         // Double-check: Ensure initial load is complete AND not currently loading
@@ -650,8 +756,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
       },
       {
         root: containerRef.current || null,
-        rootMargin: `${loadMoreThreshold}px`,
-        threshold: 0.1,
+        rootMargin: adjustedRootMargin,
+        threshold: adjustedThreshold,
       }
     );
 
