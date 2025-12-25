@@ -14,8 +14,12 @@ export function clearAuthCache() {
   // Clear feed cache when auth state changes
   // This prevents User A's cached feed from being shown to User B
   // [CACHE FIX] Use static import instead of require() for browser compatibility
+  // [OPTIMIZATION: Phase 1 - Storage Abstraction] clearFeedCache is now async
   try {
-    dataCache.clearFeedCache();
+    dataCache.clearFeedCache().catch((error) => {
+      console.warn("[clearAuthCache] Failed to clear feed cache:", error);
+      // Don't throw - auth cache clearing should still succeed
+    });
   } catch (error) {
     console.warn("[clearAuthCache] Failed to clear feed cache:", error);
     // Don't throw - auth cache clearing should still succeed

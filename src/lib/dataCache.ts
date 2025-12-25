@@ -1,11 +1,14 @@
 // src/lib/dataCache.ts
 // Simple in-memory cache with TTL for API responses
+// [OPTIMIZATION: Phase 1 - Storage Abstraction] Now uses unified storage layer
+// [PHASE 2.2] Integrated with SmartCacheValidator for unified cache validation
 
-interface CacheEntry<T> {
-  data: T;
-  timestamp: number;
-  ttl: number;
-}
+import type { StorageManager } from './storage/StorageManager';
+import { getStorageManager } from './storage/StorageManager';
+import { cacheValidator, CACHE_SCHEMA_VERSION, type CacheEntry } from './cacheValidation';
+
+// [PHASE 2.2] Use CacheEntry from cacheValidation for consistency
+// CacheEntry interface is now defined in cacheValidation.ts
 
 class DataCache {
   private cache = new Map<string, CacheEntry<any>>();
@@ -15,10 +18,99 @@ class DataCache {
   // [CACHE FIX] Bumped to v3 to invalidate old cache without user ID
   private readonly CACHE_VERSION = "v3";
   private readonly CACHE_VERSION_KEY = "echotoo_cache_version";
+  
+  // [OPTIMIZATION: Phase 1 - Storage Abstraction] Optional storage manager
+  // If available, uses unified storage layer for better performance and Capacitor support
+  private storageManager: StorageManager | null = null;
+  private useStorageManager: boolean = false;
+  private migrationInProgress: boolean = false; // Track migration to prevent duplicate migrations
 
   constructor() {
     this.checkCacheVersion();
     this.loadFromLocalStorage();
+    this.initializeStorageManager();
+    // [PHASE 2.1] Migrate existing cache data to StorageManager
+    this.migrateLegacyCacheToStorageManager();
+  }
+
+  // [OPTIMIZATION: Phase 1 - Storage Abstraction] Initialize storage manager if available
+  private initializeStorageManager(): void {
+    try {
+      this.storageManager = getStorageManager();
+      this.useStorageManager = true;
+      console.log('[DataCache] Using unified storage layer');
+    } catch {
+      // Storage manager not initialized yet, use legacy mode
+      this.useStorageManager = false;
+    }
+  }
+
+  // [PHASE 2.1] Migrate existing localStorage cache to StorageManager
+  // Why: One-time migration to move data to unified storage for better performance
+  private async migrateLegacyCacheToStorageManager(): Promise<void> {
+    if (!this.useStorageManager || !this.storageManager || this.migrationInProgress) {
+      return;
+    }
+
+    // Check if migration already completed
+    try {
+      const migrationFlag = localStorage.getItem('echotoo_cache_migrated_to_storage_manager');
+      if (migrationFlag === 'true') {
+        return; // Already migrated
+      }
+    } catch {
+      // Ignore errors checking migration flag
+    }
+
+    this.migrationInProgress = true;
+
+    try {
+      // Get all feed cache entries from localStorage
+      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
+      if (!stored) {
+        return; // No data to migrate
+      }
+
+      const cacheData = JSON.parse(stored);
+      const feedKeys = Object.keys(cacheData).filter((k) => k.startsWith("feed:"));
+
+      if (feedKeys.length === 0) {
+        return; // No feed data to migrate
+      }
+
+      console.log(`[DataCache] Migrating ${feedKeys.length} feed cache entries to StorageManager`);
+
+      // Migrate each feed entry to StorageManager
+      let migratedCount = 0;
+      for (const key of feedKeys) {
+        try {
+          const entry = cacheData[key];
+          if (entry && entry.data && entry.timestamp && entry.ttl) {
+            // Check if expired - skip expired entries
+            const isExpired = Date.now() - entry.timestamp > entry.ttl;
+            if (!isExpired) {
+              // Store in StorageManager
+              await this.storageManager!.set(key, entry, entry.ttl);
+              migratedCount++;
+            }
+          }
+        } catch (error) {
+          console.warn(`[DataCache] Failed to migrate key ${key}:`, error);
+          // Continue with other keys
+        }
+      }
+
+      // Mark migration as complete
+      if (migratedCount > 0) {
+        localStorage.setItem('echotoo_cache_migrated_to_storage_manager', 'true');
+        console.log(`[DataCache] Successfully migrated ${migratedCount} feed cache entries to StorageManager`);
+      }
+    } catch (error) {
+      console.warn('[DataCache] Cache migration failed:', error);
+      // Continue with legacy mode if migration fails
+    } finally {
+      this.migrationInProgress = false;
+    }
   }
 
   // [PWA FIX] Check cache version and clear if version changed
@@ -38,26 +130,42 @@ class DataCache {
   }
 
   set<T>(key: string, data: T, ttlMs: number = 5 * 60 * 1000): void {
-    // [OPTIMIZATION: Phase 6 - Connection] Adjust TTL based on connection speed
-    // Why: Longer cache duration on slow connections to reduce network requests
-    const adjustedTtl = this.getAdjustedTtl(ttlMs);
+    // [PHASE 2.2] Use SmartCacheValidator for TTL management
+    // If ttlMs is provided, use it; otherwise, infer from key type
+    let adjustedTtl = ttlMs;
+    if (key.startsWith('feed:')) {
+      // Use SmartCacheValidator for feed data
+      adjustedTtl = cacheValidator.getTTL('feed');
+    } else {
+      // [OPTIMIZATION: Phase 6 - Connection] Adjust TTL based on connection speed
+      // Why: Longer cache duration on slow connections to reduce network requests
+      adjustedTtl = this.getAdjustedTtl(ttlMs);
+    }
 
-    const entry = {
-      data,
-      timestamp: Date.now(),
-      ttl: adjustedTtl,
-    };
+    // [PHASE 2.2] Create entry with schema version
+    const entry = cacheValidator.createEntry(data, adjustedTtl, CACHE_SCHEMA_VERSION);
 
+    // Always update in-memory cache for fast access
     this.cache.set(key, entry);
 
-    // Also save to localStorage for persistence
+    // [PHASE 2.1] For feed data, use StorageManager as primary path, with legacy localStorage as fallback
     if (key.startsWith("feed:")) {
-      this.saveToLocalStorage(key, entry);
+      if (this.useStorageManager && this.storageManager) {
+        // [PHASE 2.1] Primary path: Use StorageManager (better performance, Capacitor support)
+        this.storageManager.set(key, entry, adjustedTtl).catch((error) => {
+          // Fallback to legacy localStorage if storage manager fails
+          console.warn('[DataCache] StorageManager failed, falling back to localStorage:', error);
+          this.saveToLocalStorage(key, entry);
+        });
+      } else {
+        // Legacy localStorage for feed data (fallback if StorageManager not available)
+        this.saveToLocalStorage(key, entry);
+      }
     }
   }
 
   get<T>(key: string): T | null {
-    // First check in-memory cache
+    // First check in-memory cache (fastest)
     const entry = this.cache.get(key);
     if (entry) {
       const isExpired = Date.now() - entry.timestamp > entry.ttl;
@@ -68,40 +176,69 @@ class DataCache {
       return entry.data as T;
     }
 
-    // If not in memory, try localStorage for feed data
+    // [PHASE 2.1] For feed data, try StorageManager first (primary path), then fallback to legacy localStorage
+    // Note: StorageManager is async, but we maintain synchronous API for backward compatibility
+    // We try StorageManager first (async load into memory), then fallback to legacy localStorage (synchronous)
     if (key.startsWith("feed:")) {
-      try {
-        const stored = this.getFromLocalStorage(key);
-        if (stored) {
-          const isExpired = Date.now() - stored.timestamp > stored.ttl;
-          if (isExpired) {
-            this.removeFromLocalStorage(key);
-            return null;
+      // [PHASE 2.1] Try StorageManager first (primary path)
+      if (this.useStorageManager && this.storageManager) {
+        // Load asynchronously from StorageManager and populate memory cache
+        // This ensures next access is fast (from memory)
+        // Note: StorageManager already handles expiration checking internally
+        this.storageManager.get<CacheEntry<T>>(key).then((entry) => {
+          if (entry) {
+            // StorageManager already checked expiration, so entry is valid
+            // Load back into memory cache for fast access
+            this.cache.set(key, entry);
           }
-          // Load back into memory cache
-          this.cache.set(key, stored);
-          return stored.data as T;
-        }
-      } catch (error) {
-        // PWA FIX: localStorage access might fail in PWA - retry once
-        console.warn("[DataCache] localStorage access failed, retrying:", error);
-        try {
-          // Small delay and retry (PWA might need time to initialize localStorage)
-          const retryStored = this.getFromLocalStorage(key);
-          if (retryStored) {
-            const isExpired = Date.now() - retryStored.timestamp > retryStored.ttl;
-            if (!isExpired) {
-              this.cache.set(key, retryStored);
-              return retryStored.data as T;
-            }
-          }
-        } catch (retryError) {
-          console.warn("[DataCache] Retry also failed:", retryError);
-          // Return null on failure - will fetch from API
-        }
+        }).catch((error) => {
+          // Silently fail - will try legacy localStorage as fallback
+          console.debug('[DataCache] StorageManager load failed, trying legacy localStorage:', error);
+        });
+      }
+
+      // Fallback to legacy localStorage (synchronous, for immediate return)
+      const legacyData = this.getFromLocalStorageLegacy<T>(key);
+      if (legacyData) {
+        return legacyData;
       }
     }
 
+    return null;
+  }
+
+  // Legacy localStorage getter (for backward compatibility)
+  private getFromLocalStorageLegacy<T>(key: string): T | null {
+    try {
+      const stored = this.getFromLocalStorage(key);
+      if (stored) {
+        const isExpired = Date.now() - stored.timestamp > stored.ttl;
+        if (isExpired) {
+          this.removeFromLocalStorage(key);
+          return null;
+        }
+        // Load back into memory cache
+        this.cache.set(key, stored);
+        return stored.data as T;
+      }
+    } catch (error) {
+      // PWA FIX: localStorage access might fail in PWA - retry once
+      console.warn("[DataCache] localStorage access failed, retrying:", error);
+      try {
+        // Small delay and retry (PWA might need time to initialize localStorage)
+        const retryStored = this.getFromLocalStorage(key);
+        if (retryStored) {
+          const isExpired = Date.now() - retryStored.timestamp > retryStored.ttl;
+          if (!isExpired) {
+            this.cache.set(key, retryStored);
+            return retryStored.data as T;
+          }
+        }
+      } catch (retryError) {
+        console.warn("[DataCache] Retry also failed:", retryError);
+        // Return null on failure - will fetch from API
+      }
+    }
     return null;
   }
 
@@ -199,7 +336,8 @@ class DataCache {
 
   // [CACHE FIX] Clear all feed-related cache entries (both in-memory and localStorage)
   // Why: Called on auth change to prevent cross-user data leakage
-  clearFeedCache(): void {
+  // [OPTIMIZATION: Phase 1 - Storage Abstraction] Now also clears unified storage
+  async clearFeedCache(): Promise<void> {
     // Clear in-memory cache entries that start with "feed:"
     const keysToDelete: string[] = [];
     this.cache.forEach((_, key) => {
@@ -209,7 +347,20 @@ class DataCache {
     });
     keysToDelete.forEach((key) => this.cache.delete(key));
 
-    // Clear localStorage feed cache
+    // [OPTIMIZATION: Phase 1 - Storage Abstraction] Clear from unified storage
+    if (this.useStorageManager && this.storageManager) {
+      try {
+        const feedKeys = await this.storageManager.keys("feed:");
+        await Promise.all(feedKeys.map((key) => this.storageManager!.delete(key)));
+        console.log(
+          `[DataCache] Cleared ${feedKeys.length} feed cache entries from unified storage`
+        );
+      } catch (error) {
+        console.warn("[DataCache] Failed to clear feed cache from unified storage:", error);
+      }
+    }
+
+    // Clear localStorage feed cache (legacy)
     try {
       const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
       if (stored) {
@@ -253,10 +404,12 @@ class DataCache {
     }:${offset || 0}:${userId}`;
   }
 
-  // Enhanced cache update that includes related data (follow status, RSVP, profiles)
+  // [PHASE 2.2] Enhanced cache update with SmartCacheValidator
+  // Uses unified cache validation logic for consistent behavior
   async updateFeedCache(newPosts: any[], currentOpts: any): Promise<any[]> {
     const currentKey = this.generateFeedKey(currentOpts);
-    const cachedData = this.get<any[]>(currentKey);
+    const cachedEntry = this.cache.get(currentKey);
+    const cachedData = cachedEntry ? cachedEntry.data : null;
 
     // [BATCH LOADER FIX] Disabled prefetchRelatedData - PostgreSQL function already provides all data
     // Why: Batch loader is no longer needed, PostgreSQL function includes follow_status, is_liked, is_saved, rsvp_data
@@ -266,31 +419,28 @@ class DataCache {
     //   await this.prefetchRelatedData(newPosts);
     // }
 
+    // [PHASE 2.2] Use SmartCacheValidator for validation
     if (!cachedData || !Array.isArray(cachedData) || cachedData.length === 0) {
       // No cached data or invalid format, just cache the new data
-      this.set(currentKey, newPosts, 10 * 60 * 1000); // 10 minutes TTL
+      const ttl = cacheValidator.getTTL('feed');
+      this.set(currentKey, newPosts, ttl);
       return newPosts;
     }
 
-    // Check if there are new posts at the beginning
-    const cachedPostIds = new Set(cachedData.map((post) => post.id));
-    const newPostIds = new Set(newPosts.map((post) => post.id));
+    // [PHASE 2.2] Use SmartCacheValidator to detect new posts (Twitter-style)
+    const newPostsDetected = cacheValidator.detectNewPosts(cachedData, newPosts);
 
-    // Find truly new posts (not in cache)
-    const trulyNewPosts = newPosts.filter(
-      (post) => !cachedPostIds.has(post.id)
-    );
-
-    if (trulyNewPosts.length > 0) {
+    if (newPostsDetected.length > 0) {
       console.log(
-        `[DataCache] Found ${trulyNewPosts.length} new posts, updating cache`
+        `[DataCache] Found ${newPostsDetected.length} new posts (Twitter-style detection), updating cache`
       );
 
       // Remove oldest posts to make room for new ones, keeping total around limit
       const limit = currentOpts.limit || 15;
-      const updatedCache = [...trulyNewPosts, ...cachedData].slice(0, limit);
+      const updatedCache = [...newPostsDetected, ...cachedData].slice(0, limit);
 
-      this.set(currentKey, updatedCache, 10 * 60 * 1000);
+      const ttl = cacheValidator.getTTL('feed');
+      this.set(currentKey, updatedCache, ttl);
       return updatedCache;
     }
 

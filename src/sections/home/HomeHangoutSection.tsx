@@ -166,18 +166,34 @@ export default function HomeHangoutSection({
         loadingComponent={
           <div className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0">
             <div className="relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3">
+              {/* Save button skeleton: bottom-left */}
               <div className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg">
                 <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
               </div>
+              {/* Header (avatar + name + date) */}
               <div className="flex items-center gap-2">
                 <div className="w-6 h-6 rounded-full bg-[var(--text)]/10 animate-pulse" />
                 <div className="flex-1 min-w-0">
                   <div className="h-3 w-24 rounded bg-[var(--text)]/10 animate-pulse mb-1" />
                 </div>
+                <div className="h-3 w-12 rounded bg-[var(--text)]/10 animate-pulse" />
               </div>
+              {/* Caption (3 lines to match clamp) */}
               <div className="mt-1 space-y-2">
                 <div className="h-4 w-[92%] rounded bg-[var(--text)]/10 animate-pulse" />
                 <div className="h-4 w-[78%] rounded bg-[var(--text)]/10 animate-pulse" />
+                <div className="h-4 w-[60%] rounded bg-[var(--text)]/10 animate-pulse" />
+              </div>
+              {/* Footer row: Action button skeleton (Follow button) */}
+              <div className="pt-1 flex items-center justify-between h-7">
+                <div className="flex items-center h-full">
+                  {/* Empty space for menu (non-owner) */}
+                  <div></div>
+                </div>
+                <div className="flex items-center h-full">
+                  {/* Follow button skeleton */}
+                  <div className="h-5 w-[60px] rounded-full bg-[var(--text)]/10 border border-[var(--border)] animate-pulse" />
+                </div>
               </div>
             </div>
           </div>

@@ -28,6 +28,7 @@ import { useStaleWhileRevalidate } from "../hooks/useStaleWhileRevalidate";
 import { useScrollStopDetection } from "../hooks/useScrollStopDetection";
 import { useVirtualScrolling } from "../hooks/useVirtualScrolling";
 import { useAdaptiveBuffer } from "../hooks/useAdaptiveBuffer";
+import { useConnectionAware } from "../hooks/useConnectionAware";
 import {
   type OffsetAwareLoadResult,
   extractItems,
@@ -188,7 +189,18 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   // Component mount tracking (removed excessive logs)
 
-  // Adaptive buffer
+  // [PHASE 2.3] Connection-aware configuration
+  const {
+    pageSize: connectionAwarePageSize,
+    bufferSize: connectionAwareBufferSize,
+    shouldPause,
+  } = useConnectionAware({
+    basePageSize: pageSize,
+    baseBufferSize: typeof bufferSize === "number" ? bufferSize : 3,
+    enablePauseOnSlow: true,
+  });
+
+  // Adaptive buffer (existing hook for scroll speed awareness)
   const { bufferSize: adaptiveBufferSize } = useAdaptiveBuffer({
     minBuffer: 1,
     maxBuffer: 3,
@@ -196,13 +208,24 @@ export default function ProgressiveFeed<T extends { id: string }>({
     enableScrollSpeedAware: true,
   });
 
+  // [PHASE 2.3] Determine actual pageSize (use connection-aware if provided pageSize is base)
+  const actualPageSize = useMemo(() => {
+    // If pageSize was explicitly provided, use connection-aware adjustment
+    // Otherwise, use the provided pageSize as-is (for backward compatibility)
+    return connectionAwarePageSize;
+  }, [connectionAwarePageSize]);
+
   // Determine actual buffer size
   const actualBufferSize = useMemo(() => {
     if (bufferSize === "adaptive") {
-      return adaptiveBufferSize;
+      // [PHASE 2.3] Use connection-aware buffer size if available
+      // Otherwise fall back to adaptive buffer from useAdaptiveBuffer
+      return connectionAwareBufferSize > 0
+        ? connectionAwareBufferSize
+        : adaptiveBufferSize;
     }
     return bufferSize;
-  }, [bufferSize, adaptiveBufferSize]);
+  }, [bufferSize, adaptiveBufferSize, connectionAwareBufferSize]);
 
   // Load more items (defined before hooks that use it)
   const loadMoreRef = useRef<(() => Promise<void>) | undefined>(undefined);
@@ -211,6 +234,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
     // Double-check: Ensure initial load is complete before allowing subsequent loads
     if (!initialLoadCompleteRef.current) {
       return; // Wait for initial load to complete
+    }
+
+    // [PHASE 2.3] Pause loading on very slow connections
+    if (shouldPause) {
+      return; // Don't load more on very slow connections
     }
 
     // CRITICAL FIX: Prevent loadMore from firing with offset 0 if we already have items
@@ -273,7 +301,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
         attempt = 1
       ): Promise<T[] | OffsetAwareLoadResult<T>> => {
         try {
-          return await loadItems(offsetRef.current, pageSize);
+          // [PHASE 2.3] Use connection-aware pageSize
+          return await loadItems(offsetRef.current, actualPageSize);
         } catch (error) {
           // Retry up to 3 times with exponential backoff
           if (attempt < 3) {
@@ -320,20 +349,21 @@ export default function ProgressiveFeed<T extends { id: string }>({
         // OPTIMIZATION: Use count from PostgreSQL function for reliable hasMore detection
         // If count is available and count < limit, we've reached the end
         // Otherwise, fallback to length check (for backward compatibility)
+        // [PHASE 2.3] Use connection-aware pageSize
         if (count !== undefined) {
-          if (count < pageSize) {
+          if (count < actualPageSize) {
             setHasMore(false);
           }
-        } else if (newItems.length < pageSize) {
+        } else if (newItems.length < actualPageSize) {
           // Fallback: Use length check if count is not available
           setHasMore(false);
         }
 
-        // PROGRESSIVE RENDERING: Add items one-by-one for smooth appearance
+        // [PHASE 2.4] PROGRESSIVE RENDERING: Add items one-by-one for smooth appearance
         // This gives the user immediate feedback as items appear, not all at once
         if (newItems.length > 0) {
-          // Add items one-by-one with shorter delays (25ms between each)
-          // Shorter delays for faster perceived performance while still preventing React batching
+          // Add items one-by-one with 100ms delays between each
+          // 100ms provides smoother UX while still preventing React batching
           newItems.forEach((item, index) => {
             const addItem = () => {
               if (index === 0) {
@@ -362,8 +392,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
                 loadingRef.current = false;
                 setIsLoadingMore(false);
               } else {
-                // Subsequent items: startTransition (non-urgent, can be batched by React)
-                // But 25ms delay ensures they're in separate event loop ticks
+                // [PHASE 2.4] Subsequent items: startTransition (non-urgent, can be batched by React)
+                // 100ms delay ensures they're in separate event loop ticks for smooth appearance
                 startTransition(() => {
                   setItems((prev) => {
                     // Avoid duplicates - use Map to ensure uniqueness
@@ -388,12 +418,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
             };
 
             if (index === 0) {
-              // First item: show immediately
+              // [PHASE 2.4] First item: show immediately (< 500ms target)
               requestAnimationFrame(addItem);
             } else {
-              // Subsequent items: show with shorter delay (25ms between each)
-              // Shorter delay for faster perceived performance
-              setTimeout(addItem, index * 25);
+              // [PHASE 2.4] Subsequent items: show with 100ms delay between each
+              // 100ms provides smoother, more natural appearance
+              setTimeout(addItem, index * 100);
             }
           });
 
@@ -485,9 +515,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
     maxItems,
     setCachedItems,
     isLoadingMore,
-    pageSize,
+    actualPageSize, // [PHASE 2.3] Use connection-aware pageSize
+    shouldPause, // [PHASE 2.3] Pause on slow connections
     loadMoreThreshold,
-  ]); // Added pageSize and loadMoreThreshold used in loadMore logic
+  ]); // Added actualPageSize, shouldPause, and loadMoreThreshold used in loadMore logic
 
   // Store loadMore in ref for use in other hooks
   loadMoreRef.current = loadMore;
@@ -608,8 +639,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
                     // Mark initial load as complete (allows IntersectionObserver to fire)
                     initialLoadCompleteRef.current = true;
                   } else {
-                    // Subsequent items: startTransition (non-urgent, can be batched by React)
-                    // But 25ms delay ensures they're in separate event loop ticks
+                    // [PHASE 2.4] Subsequent items: startTransition (non-urgent, can be batched by React)
+                    // 100ms delay ensures they're in separate event loop ticks for smooth appearance
                     startTransition(() => {
                       setItems((prev) => {
                         // For initial load, we can add items directly (no duplicates yet)
@@ -631,12 +662,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
                 };
 
                 if (index === 0) {
-                  // First item: show immediately
+                  // [PHASE 2.4] First item: show immediately (< 500ms target)
                   requestAnimationFrame(addItem);
                 } else {
-                  // Subsequent items: show with shorter delay (25ms between each)
-                  // Shorter delay for faster perceived performance
-                  setTimeout(addItem, index * 25);
+                  // [PHASE 2.4] Subsequent items: show with 100ms delay between each
+                  // 100ms provides smoother, more natural appearance
+                  setTimeout(addItem, index * 100);
                 }
               });
 
