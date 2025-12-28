@@ -1,5 +1,5 @@
 // src/router/AppRouter.tsx
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Paths } from "./Paths";
 import { PersistentTabContainer } from "./PersistentTabContainer";
 
@@ -19,32 +19,44 @@ import AuthCallback from "../pages/AuthCallback";
  * App Router - Tab Architecture
  *
  * Architecture:
- * 1. PersistentTabContainer: Always rendered, manages core tabs (Home, Profile, Notifications, Other Profile)
- * 2. Routes: Handles non-tab pages (detail pages, create flow, utilities)
+ * 1. PersistentTabContainer: Conditionally rendered on tab routes only
+ * 2. Routes: Handles ALL pages, returns null for tab routes when PersistentTabContainer is active
  *
  * Core tab pages (/, /u/me, /notifications, /u/:username) are handled by
- * PersistentTabContainer and return null in Routes to avoid double rendering.
+ * PersistentTabContainer when on a tab route. Non-tab routes render normally.
  *
  * Benefits:
  * - 31x faster tab navigation (16ms vs 500ms)
  * - 70% fewer API calls (no re-fetching on return)
  * - Preserved scroll position and component state
  * - Native app-like experience
+ * - No double rendering on non-tab routes
  */
 export default function AppRouter() {
+  const location = useLocation();
+  
+  // Check if current route is a tab route
+  const isTabRoute = 
+    location.pathname === '/' ||
+    location.pathname === '/notifications' ||
+    location.pathname === '/profile' ||
+    location.pathname === '/u/me' ||
+    location.pathname === '/me' ||
+    (location.pathname.startsWith('/u/') && !location.pathname.includes('/create'));
+
   return (
     <>
-      {/* Persistent Tabs - Always Mounted */}
-      <PersistentTabContainer />
+      {/* [FIX] Conditionally render PersistentTabContainer only on tab routes */}
+      {isTabRoute && <PersistentTabContainer />}
 
-      {/* Routes for Non-Tab Pages */}
+      {/* Routes for ALL pages */}
       <Routes>
-        {/* Tab routes - return null (handled by PersistentTabContainer) */}
-        <Route path={Paths.home} element={null} />
-        <Route path={Paths.notification} element={null} />
-        <Route path={Paths.profile} element={null} />
-        <Route path={Paths.profileMe} element={null} />
-        <Route path={Paths.user} element={null} />
+        {/* Tab routes - return null when PersistentTabContainer is active */}
+        <Route path={Paths.home} element={isTabRoute ? null : <Navigate to="/" replace />} />
+        <Route path={Paths.notification} element={isTabRoute ? null : <Navigate to="/notifications" replace />} />
+        <Route path={Paths.profile} element={isTabRoute ? null : <Navigate to="/u/me" replace />} />
+        <Route path={Paths.profileMe} element={isTabRoute ? null : <Navigate to="/u/me" replace />} />
+        <Route path={Paths.user} element={isTabRoute ? null : <Navigate to={location.pathname} replace />} />
         <Route path={Paths.me} element={<Navigate to="/u/me" replace />} />
 
         {/* Detail pages (will be converted to overlays in Phase 3) */}
