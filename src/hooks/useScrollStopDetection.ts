@@ -97,14 +97,16 @@ export function useScrollStopDetection(
 
   // Handle scroll stop
   const handleScrollStop = useCallback(() => {
+    console.log('[ScrollStopDetection] 🔴 Scroll STOPPED (after', delay, 'ms)');
     setIsScrolling(false);
     setIsStopped(true);
     onScrollStop?.();
-  }, [onScrollStop]);
+  }, [onScrollStop, delay]);
 
   // Handle scroll resume
   const handleScrollResume = useCallback(() => {
     if (wasScrollingRef.current && isStopped) {
+      console.log('[ScrollStopDetection] 🟢 Scroll RESUMED');
       setIsStopped(false);
       onScrollResume?.();
     }

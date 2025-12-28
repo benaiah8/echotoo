@@ -10,14 +10,14 @@ import { useLocation } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { useProfile } from "../../contexts/ProfileContext";
 import { selectUserId } from "../../selectors/authSelectors";
-import { getUserPostsCreated } from "../../api/queries/getUserPostsCreated";
+import { getUserPostsCreatedOptimized } from "../../api/queries/getUserPostsCreated";
 import {
-  getSavedPosts,
+  getSavedPostsOptimized,
   getCachedSavedPosts,
   SavedPostWithDetails,
 } from "../../api/services/savedPosts";
 import {
-  getLikedPostsWithDetails,
+  getLikedPostsWithDetailsForUserOptimized,
   LikedPostWithDetails,
 } from "../../api/services/likes";
 import Post from "../../components/Post";
@@ -37,7 +37,7 @@ import {
   requestManager,
   cancelContextRequests,
 } from "../../lib/requestManager";
-import { loadBatchData, type BatchLoadResult } from "../../lib/batchDataLoader";
+// [OPTIMIZATION: Phase 3.3] Removed batch loader - PostgreSQL functions provide all data
 
 /**
  * OwnProfilePostsSection - Posts section for OWN profile
@@ -81,80 +81,14 @@ export default function OwnProfilePostsSection() {
   const [createdPage, setCreatedPage] = useState(0);
   const [hasMoreCreated, setHasMoreCreated] = useState(true);
 
-  // [OPTIMIZATION: Phase 1 - Batch] Store batched data for components
-  const [batchedData, setBatchedData] = useState<BatchLoadResult | null>(null);
+  // [OPTIMIZATION: Phase 3.3] Removed batchedData - PostgreSQL functions provide all data
 
   // Refs to track abort controllers for cancellation
   const createdRequestRef = useRef<AbortController | null>(null);
   const likedRequestRef = useRef<AbortController | null>(null);
   const savedRequestRef = useRef<AbortController | null>(null);
 
-  // [OPTIMIZATION: Phase 1 - Batch] Helper to load batch data for posts
-  const loadBatchDataForPosts = useCallback(
-    async (posts: any[]) => {
-      if (!currentUserId || posts.length === 0) return;
-
-      try {
-        // Get current user profile ID
-        const { data: currentUserProfile } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("user_id", currentUserId)
-          .maybeSingle();
-
-        if (!currentUserProfile) return;
-
-        // Extract data from posts for batch loading
-        // Handle different post structures: created posts have direct fields, saved/liked have nested posts
-        const postIds = posts
-          .map((post) => {
-            return post.id || post.posts?.id;
-          })
-          .filter(Boolean);
-
-        // Extract author IDs
-        const authorIds = [
-          ...new Set(
-            posts
-              .map((post) => {
-                // Created posts: all by userId (own profile)
-                if (post.author_id) return post.author_id;
-                // Saved/liked posts: get from nested posts object
-                if (post.posts?.author_id) return post.posts.author_id;
-                // Fallback to userId for own profile
-                return userId;
-              })
-              .filter(Boolean)
-          ),
-        ];
-
-        const hangoutPostIds = posts
-          .filter((post) => {
-            const postType = post.type || post.posts?.type;
-            return postType === "hangout";
-          })
-          .map((post) => post.id || post.posts?.id)
-          .filter(Boolean);
-
-        // Load batch data
-        const batchResult = await loadBatchData({
-          postIds,
-          authorIds,
-          hangoutPostIds,
-          currentUserId,
-          currentProfileId: currentUserProfile.id,
-        });
-
-        setBatchedData(batchResult);
-      } catch (error) {
-        console.warn(
-          "[OwnProfilePostsSection] Failed to load batch data:",
-          error
-        );
-      }
-    },
-    [currentUserId, userId]
-  );
+  // [OPTIMIZATION: Phase 3.3] Removed loadBatchDataForPosts - PostgreSQL functions provide all data
 
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
@@ -327,16 +261,21 @@ export default function OwnProfilePostsSection() {
         const POSTS_PER_PAGE = 10;
         const from = createdPage * POSTS_PER_PAGE;
 
-        // Fetch fresh posts in background (stale-while-revalidate)
+        // [OPTIMIZATION: Phase 3.3] Get viewer user ID for PostgreSQL function
+        const { data: { user } } = await supabase.auth.getUser();
+        const viewerUserId = user?.id || null;
+
+        // Fetch fresh posts in background (stale-while-revalidate) using optimized PostgreSQL function
         const result = await requestManager.execute(
           `profile-${userId}-created-${createdPage}`,
           async (signal: AbortSignal) => {
-            const res = await getUserPostsCreated(
+            const res = await getUserPostsCreatedOptimized(
               userId,
               from,
               POSTS_PER_PAGE,
               true, // includeDrafts
-              true // isOwner
+              true, // isOwner
+              viewerUserId
             );
             if (signal.aborted) throw new Error("Aborted");
             return res;
@@ -355,10 +294,12 @@ export default function OwnProfilePostsSection() {
           return;
         }
 
-        // Data from getUserPostsCreated already includes database drafts (only on first page)
+        // [OPTIMIZATION: Phase 3.3] Data from getUserPostsCreatedOptimized is in FeedItem format
+        // Map to the format expected by the component (same structure, but author is nested)
+        const postsData = result.data?.data || [];
         const localStorageDrafts =
           createdPage === 0 ? getDraftsFromStorage() : [];
-        const postsData = result.data?.data || [];
+        // Combine drafts with posts (drafts are already in the right format)
         const newPosts = [...localStorageDrafts, ...postsData];
 
         if (!abortController.signal.aborted) {
@@ -382,21 +323,11 @@ export default function OwnProfilePostsSection() {
           }
 
           // Update state
+          // [OPTIMIZATION: Phase 3.3] No batch loader needed - PostgreSQL function provides all data
           if (createdPage === 0) {
             setCreated(newPosts as any);
-            // [OPTIMIZATION: Phase 1 - Batch] Load batch data for created posts
-            loadBatchDataForPosts(newPosts).catch(() => {
-              // Silent fail - batch loading is optional
-            });
           } else {
-            setCreated((prev) => {
-              const updated = [...prev, ...newPosts] as any;
-              // [OPTIMIZATION: Phase 1 - Batch] Reload batch data for all posts
-              loadBatchDataForPosts(updated).catch(() => {
-                // Silent fail - batch loading is optional
-              });
-              return updated;
-            });
+            setCreated((prev) => [...prev, ...newPosts] as any);
           }
 
           setHasMoreCreated(postsData.length === POSTS_PER_PAGE);
@@ -449,10 +380,19 @@ export default function OwnProfilePostsSection() {
         const abortController = new AbortController();
         savedRequestRef.current = abortController;
 
+        // [OPTIMIZATION: Phase 3.3] Get viewer user ID for PostgreSQL function
+        const { data: { user } } = await supabase.auth.getUser();
+        const viewerUserId = user?.id || null;
+
         const result = await requestManager.execute(
           `profile-${userId}-saved`,
           async (signal: AbortSignal) => {
-            const res = await getSavedPosts();
+            const res = await getSavedPostsOptimized(
+              currentUserId,
+              viewerUserId,
+              20, // limit
+              0 // offset
+            );
             if (signal.aborted) throw new Error("Aborted");
             return res;
           },
@@ -469,8 +409,7 @@ export default function OwnProfilePostsSection() {
         } else {
           const freshSaved = result.data?.data || [];
           setSaved(freshSaved);
-          // [OPTIMIZATION: Phase 1 - Batch] Load batch data for saved posts
-          loadBatchDataForPosts(freshSaved);
+          // [OPTIMIZATION: Phase 3.3] No batch loader needed - PostgreSQL function provides all data
         }
       } catch (error: any) {
         if (error.name !== "AbortError") {
@@ -506,10 +445,19 @@ export default function OwnProfilePostsSection() {
         // Force reload by fetching fresh data
         (async () => {
           try {
+            // [OPTIMIZATION: Phase 3.3] Get viewer user ID for PostgreSQL function
+            const { data: { user } } = await supabase.auth.getUser();
+            const viewerUserId = user?.id || null;
+
             const result = await requestManager.execute(
               `profile-${userId}-liked-refresh`,
               async (signal: AbortSignal) => {
-                const res = await getLikedPostsWithDetails();
+                const res = await getLikedPostsWithDetailsForUserOptimized(
+                  userId,
+                  viewerUserId,
+                  20, // limit
+                  0 // offset
+                );
                 if (signal.aborted) throw new Error("Aborted");
                 return res;
               },
@@ -527,8 +475,7 @@ export default function OwnProfilePostsSection() {
                 "interacted",
                 freshLiked.slice(0, 5)
               );
-              // [OPTIMIZATION: Phase 1 - Batch] Load batch data for liked posts
-              loadBatchDataForPosts(freshLiked);
+              // [OPTIMIZATION: Phase 3.3] No batch loader needed - PostgreSQL function provides all data
             }
           } catch (error: any) {
             if (error.name !== "AbortError") {
@@ -575,10 +522,19 @@ export default function OwnProfilePostsSection() {
         const abortController = new AbortController();
         likedRequestRef.current = abortController;
 
+        // [OPTIMIZATION: Phase 3.3] Get viewer user ID for PostgreSQL function
+        const { data: { user } } = await supabase.auth.getUser();
+        const viewerUserId = user?.id || null;
+
         const result = await requestManager.execute(
           `profile-${userId}-liked`,
           async (signal: AbortSignal) => {
-            const res = await getLikedPostsWithDetails();
+            const res = await getLikedPostsWithDetailsForUserOptimized(
+              userId,
+              viewerUserId,
+              20, // limit
+              0 // offset
+            );
             if (signal.aborted) throw new Error("Aborted");
             return res;
           },
@@ -698,10 +654,11 @@ export default function OwnProfilePostsSection() {
                       createdAt={p.created_at}
                       authorId={userId}
                       author={{
-                        id: userId,
-                        username: profile?.username || null,
-                        display_name: profile?.display_name || null,
-                        avatar_url: profile?.avatar_url || null,
+                        // [OPTIMIZATION: Phase 3.3] Use author from FeedItem if available, otherwise fallback to profile
+                        id: p.author?.id || userId,
+                        username: p.author?.username || profile?.username || null,
+                        display_name: p.author?.display_name || profile?.display_name || null,
+                        avatar_url: p.author?.avatar_url || profile?.avatar_url || null,
                       }}
                       type={p.type}
                       isOwner={true}
@@ -712,7 +669,6 @@ export default function OwnProfilePostsSection() {
                       anonymousName={p.anonymous_name || null}
                       anonymousAvatar={p.anonymous_avatar || null}
                       selectedDates={p.selected_dates || null}
-                      batchedData={batchedData}
                     />
                   </div>
                 )}
@@ -764,7 +720,6 @@ export default function OwnProfilePostsSection() {
                     isOwner={false}
                     status="published"
                     isAnonymous={l.posts.is_anonymous || false}
-                    batchedData={batchedData}
                     anonymousName={(l.posts as any).anonymous_name}
                     anonymousAvatar={(l.posts as any).anonymous_avatar}
                   />
@@ -817,7 +772,6 @@ export default function OwnProfilePostsSection() {
                     type={s.posts.type}
                     isOwner={false}
                     status="published"
-                    batchedData={batchedData}
                     isAnonymous={s.posts.is_anonymous || false}
                     anonymousName={(s.posts as any).anonymous_name}
                     anonymousAvatar={(s.posts as any).anonymous_avatar}

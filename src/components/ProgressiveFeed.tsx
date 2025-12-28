@@ -155,15 +155,23 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const getInitialItems = (): T[] => {
     let initial: T[] = [];
     if (initialItems && initialItems.length > 0) {
+      console.log('[ProgressiveFeed] 💾 Using initialItems prop:', initialItems.length, 'items');
       initial = initialItems;
     } else if (getCachedItems) {
       const cached = getCachedItems();
       if (cached && cached.length > 0) {
+        console.log('[ProgressiveFeed] 💾 Using cached items:', cached.length, 'items');
         initial = cached;
+      } else {
+        console.log('[ProgressiveFeed] ❌ No cached items found');
       }
+    } else {
+      console.log('[ProgressiveFeed] ❌ No cache function provided');
     }
     // Deduplicate by ID to prevent duplicate keys
-    return Array.from(new Map(initial.map((item) => [item.id, item])).values());
+    const deduplicated = Array.from(new Map(initial.map((item) => [item.id, item])).values());
+    console.log('[ProgressiveFeed] 📦 Initial state:', deduplicated.length, 'items (offset:', deduplicated.length, ')');
+    return deduplicated;
   };
 
   const initialItemsArray = getInitialItems();
@@ -542,9 +550,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
     delay: adjustedScrollStopDelay,
     enabled: enableScrollStopDetection,
     onScrollStop: () => {
+      console.log('[ProgressiveFeed] 🛑 STOP LOADING - shouldLoadRef = false');
       shouldLoadRef.current = false;
     },
     onScrollResume: () => {
+      console.log('[ProgressiveFeed] ▶️ RESUME LOADING - shouldLoadRef = true');
       shouldLoadRef.current = true;
       // CRITICAL FIX: Don't auto-load on scroll resume
       // Let IntersectionObserver handle loading when sentinel becomes visible
@@ -754,6 +764,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     // User requested: "can you make sure that it doesn't load all of the posts right it stops if i dont scroll"
     // This prevents loading all posts when user is not scrolling
     if (isStopped && enableScrollStopDetection) {
+      console.log('[ProgressiveFeed] ⏸️ IntersectionObserver blocked: scroll is stopped');
       return; // Don't load if scroll stopped - wait for user to resume scrolling
     }
 
@@ -781,7 +792,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
           !isLoadingMore && // Secondary check - state
           loadMoreRef.current;
 
+        if (entries[0].isIntersecting) {
+          console.log('[ProgressiveFeed] 👁️ Sentinel visible. canLoad:', canLoad, 'shouldLoadRef:', shouldLoadRef.current, 'initialComplete:', initialLoadCompleteRef.current);
+        }
+
         if (canLoad && loadMoreRef.current) {
+          console.log('[ProgressiveFeed] 📥 Loading more items...');
           loadMoreRef.current();
         }
       },

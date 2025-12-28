@@ -16,28 +16,18 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { getPostForEdit, deletePost } from "../../api/services/posts";
 import toast from "react-hot-toast";
-import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type FeedItem } from "../../api/queries/getPublicFeed";
+// [OPTIMIZATION: Phase 3.4] Removed BatchLoadResult - PostgreSQL function provides all data
 
 // ---- Types the component will accept (all extras are optional) ----
-export type Post = {
-  id: string;
-  type: "experience" | "hangout";
-  caption: string | null;
-  created_at: string;
-  author_id: string;
+// [OPTIMIZATION: Phase 3.4] Post type now extends FeedItem for consistency
+export type Post = FeedItem & {
   status?: "draft" | "published";
-  is_anonymous?: boolean; // NEW: anonymous flag
-  anonymous_name?: string | null; // NEW: anonymous name
-  anonymous_avatar?: string | null; // NEW: anonymous avatar
-
-  // author info
-  author?: {
-    display_name?: string | null;
-    username?: string | null;
-    avatar_url?: string | null;
-  };
-
-  // activities (server format)
+  visibility?: "public" | "friends" | "private";
+  rsvp_capacity?: number | null;
+  is_recurring?: boolean | null;
+  recurrence_days?: string[] | null;
+  // activities (server format) - included in FeedItem but explicitly typed here
   activities: {
     title: string | null;
     images: string[] | null;
@@ -52,18 +42,6 @@ export type Post = {
     // activity tags (multiple activities within this activity section)
     tags?: string[] | null;
   }[];
-
-  // tags
-  tags?: string[];
-
-  // optional visibility/anon (rendered if present)
-  visibility?: "public" | "friends" | "private";
-
-  // optional schedule & RSVP (rendered if present)
-  selected_dates?: string[] | null; // ISO strings
-  is_recurring?: boolean | null;
-  recurrence_days?: string[] | null; // e.g., ["Mon","Tue"] or ["MO","TU"]
-  rsvp_capacity?: number | null;
 };
 
 // Map possible day codes to short labels
@@ -105,12 +83,10 @@ function Chip({ children }: { children: React.ReactNode }) {
 export default function PostDetailBody({
   post,
   isPreview = false,
-  batchedData,
 }: {
   post: Post;
   isPreview?: boolean;
-  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
-  batchedData?: BatchLoadResult | null;
+  // [OPTIMIZATION: Phase 3.4] Removed batchedData - PostgreSQL function provides all data in post object
 }) {
   const navigate = useNavigate();
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -204,7 +180,7 @@ export default function PostDetailBody({
       <StickyPostActions
         postId={post.id}
         authorId={!anon ? post.author_id : undefined}
-        batchedData={batchedData}
+        post={post}
       />
 
       {/* HERO CAROUSEL (contain, lightbox) */}
@@ -235,6 +211,7 @@ export default function PostDetailBody({
             variant={anon ? "anon" : vis === "friends" ? "friends" : "default"}
             postType={post.type}
             anonymousAvatar={anon ? post.anonymous_avatar : undefined}
+            userId={anon ? null : post.author_id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
           />
 
           <div className="min-w-0">
@@ -299,14 +276,14 @@ export default function PostDetailBody({
               postId={post.id}
               capacity={post.rsvp_capacity}
               className=""
-              rsvpData={batchedData?.rsvpData.get(post.id)}
+              rsvpData={post.rsvp_data || undefined}
               align="left"
               postAuthor={{
                 id: post.author_id,
-                username: post.author?.username,
-                display_name: post.author?.display_name,
-                avatar_url: post.author?.avatar_url,
-                is_anonymous: post.is_anonymous,
+                username: post.author?.username || null,
+                display_name: post.author?.display_name || null,
+                avatar_url: post.author?.avatar_url || null,
+                is_anonymous: post.is_anonymous || false,
               }}
             />
           </div>

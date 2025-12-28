@@ -414,6 +414,7 @@ export default function PreviewPage() {
 
   // Get current user profile using same efficient strategy as BottomTab
   const [currentUserProfile, setCurrentUserProfile] = useState<{
+    id?: string;
     display_name?: string;
     username?: string;
     avatar_url?: string;
@@ -432,7 +433,7 @@ export default function PreviewPage() {
         // Get user profile from profiles table (same as BottomTab)
         const { data: profile, error } = await supabase
           .from("profiles")
-          .select("display_name, username, avatar_url")
+          .select("id, display_name, username, avatar_url")
           .eq("user_id", session.user.id)
           .single();
 
@@ -467,6 +468,7 @@ export default function PreviewPage() {
     created_at: new Date().toISOString(),
     author_id: "me",
     author: {
+      id: currentUserProfile.id || "me",
       display_name: currentUserProfile.display_name ?? "You",
       username: currentUserProfile.username ?? "you",
       avatar_url: currentUserProfile.avatar_url ?? null,

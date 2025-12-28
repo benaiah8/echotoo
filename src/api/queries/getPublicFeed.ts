@@ -33,6 +33,7 @@ export type FeedItem = {
   is_liked?: boolean;
   is_saved?: boolean;
   comment_count?: number;
+  has_images?: boolean; // [OPTIMIZATION: Phase 3.1] Indicates if post has images (for immediate skeleton display)
   rsvp_data?: {
     users: Array<{
       id: string;
@@ -44,6 +45,24 @@ export type FeedItem = {
     }>;
     currentUserStatus: string | null;
   } | null;
+  // [OPTIMIZATION: Phase 3.4] Additional fields for detail pages
+  status?: "draft" | "published";
+  visibility?: "public" | "friends" | "private";
+  rsvp_capacity?: number | null;
+  is_recurring?: boolean | null;
+  recurrence_days?: string[] | null;
+  activities?: Array<{
+    id?: string;
+    title: string | null;
+    images: string[] | null;
+    order_idx: number | null;
+    location_name?: string | null;
+    location_desc?: string | null;
+    location_url?: string | null;
+    location_notes?: string | null;
+    additional_info?: { title: string; value: string }[] | null;
+    tags?: string[] | null;
+  }>;
 };
 
 export type FeedOptions = {
@@ -388,6 +407,7 @@ export async function getPublicFeedOptimizedWithCount(
         is_liked?: boolean;
         is_saved?: boolean;
         comment_count?: number;
+        has_images?: boolean; // [OPTIMIZATION: Phase 3.1] Image presence flag
         rsvp_data?: any;
       }>;
       count: number;
@@ -423,6 +443,7 @@ export async function getPublicFeedOptimizedWithCount(
       is_liked: post.is_liked,
       is_saved: post.is_saved,
       comment_count: post.comment_count,
+      has_images: post.has_images, // [OPTIMIZATION: Phase 3.1] Image presence flag
       rsvp_data: post.rsvp_data || null,
     }));
 
@@ -438,6 +459,28 @@ export async function getPublicFeedOptimizedWithCount(
     }
 
     const finalData = sortedData as FeedItem[];
+
+    // [OPTIMIZATION: Phase 3.2] Cache avatars from feed data for instant reuse
+    // Why: Profile pictures load instantly everywhere (home page, profile page, etc.)
+    if (finalData.length > 0) {
+      const { setCachedAvatar, preloadAvatar } = await import("../../lib/avatarCache");
+      finalData.forEach((item) => {
+        // Cache author avatars (skip anonymous posts)
+        if (item.author && item.author.id && item.author.avatar_url && !item.is_anonymous) {
+          setCachedAvatar(item.author.id, item.author.avatar_url);
+          preloadAvatar(item.author.avatar_url);
+        }
+        // Cache RSVP user avatars
+        if (item.rsvp_data?.users) {
+          item.rsvp_data.users.forEach((user) => {
+            if (user.id && user.avatar_url) {
+              setCachedAvatar(user.id, user.avatar_url);
+              preloadAvatar(user.avatar_url);
+            }
+          });
+        }
+      });
+    }
 
     // Cache the result for first page queries only
     if (offset === 0) {

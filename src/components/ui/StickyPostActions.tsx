@@ -6,21 +6,22 @@ import FollowButton from "./FollowButton";
 import { useState, useEffect } from "react";
 import { getCommentCount } from "../../api/services/comments";
 import { supabase } from "../../lib/supabaseClient";
-import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type FeedItem } from "../../api/queries/getPublicFeed";
+// [OPTIMIZATION: Phase 3.4] Removed BatchLoadResult - PostgreSQL function provides all data
 
 interface StickyPostActionsProps {
   postId: string;
   authorId?: string; // This is auth user ID, we need to convert to profile ID
   className?: string;
-  // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
-  batchedData?: BatchLoadResult | null;
+  // [OPTIMIZATION: Phase 3.4] Post data with all related fields from PostgreSQL function
+  post?: FeedItem;
 }
 
 export default function StickyPostActions({
   postId,
   authorId,
   className = "",
-  batchedData,
+  post,
 }: StickyPostActionsProps) {
   const [commentCount, setCommentCount] = useState(0);
   const [authorProfileId, setAuthorProfileId] = useState<string | null>(null);
@@ -68,18 +69,22 @@ export default function StickyPostActions({
     getAuthorProfileId();
   }, [authorId]);
 
-  // Load comment count
+  // Load comment count (use from post if available, otherwise fetch)
   useEffect(() => {
-    const loadCommentCount = async () => {
-      try {
-        const count = await getCommentCount(postId);
-        setCommentCount(count);
-      } catch (error) {
-        console.error("Error loading comment count:", error);
-      }
-    };
-    loadCommentCount();
-  }, [postId]);
+    if (post?.comment_count !== undefined) {
+      setCommentCount(post.comment_count);
+    } else {
+      const loadCommentCount = async () => {
+        try {
+          const count = await getCommentCount(postId);
+          setCommentCount(count);
+        } catch (error) {
+          console.error("Error loading comment count:", error);
+        }
+      };
+      loadCommentCount();
+    }
+  }, [postId, post?.comment_count]);
 
   const scrollToComments = () => {
     const commentsSection = document.querySelector("[data-comments-section]");
@@ -114,12 +119,12 @@ export default function StickyPostActions({
             <LikeButton
               postId={postId}
               size={22}
-              isLiked={batchedData?.likeStatuses.get(postId)}
+              isLiked={post?.is_liked}
             />
             <SaveButton
               postId={postId}
               size={22}
-              isSaved={batchedData?.saveStatuses.get(postId)}
+              isSaved={post?.is_saved}
             />
           </div>
 
@@ -128,7 +133,7 @@ export default function StickyPostActions({
             <div className="h-7 min-w-[92px] flex items-center justify-center">
               <FollowButton
                 targetId={authorProfileId}
-                followStatus={batchedData?.followStatuses.get(authorProfileId)}
+                followStatus={post?.follow_status}
               />
             </div>
           )}

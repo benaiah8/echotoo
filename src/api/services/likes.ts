@@ -295,7 +295,80 @@ export interface LikedPostWithDetails {
 }
 
 /**
+ * [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
+ * Returns LikedPostWithDetails format with all related data included
+ */
+export async function getLikedPostsWithDetailsForUserOptimized(
+  userId: string,
+  viewerUserId: string | null = null,
+  limit = 20,
+  offset = 0
+): Promise<{
+  data: LikedPostWithDetails[] | null;
+  error: any;
+}> {
+  try {
+    console.log("[getLikedPostsWithDetailsForUserOptimized] Starting query for user:", userId);
+
+    const { data, error } = await supabase.rpc(
+      "get_user_posts_liked_with_related_data",
+      {
+        p_user_id: userId,
+        p_viewer_user_id: viewerUserId || null,
+        p_limit: limit,
+        p_offset: offset,
+      }
+    );
+
+    if (error) {
+      console.error("[getLikedPostsWithDetailsForUserOptimized] RPC error:", error);
+      return { data: null, error };
+    }
+
+    if (!data || !data.posts) {
+      console.warn("[getLikedPostsWithDetailsForUserOptimized] Invalid response structure");
+      return { data: [], error: null };
+    }
+
+    // Transform PostgreSQL result to LikedPostWithDetails format
+    const result: LikedPostWithDetails[] = data.posts.map((post: any) => ({
+      id: post.like_id,
+      post_id: post.id,
+      created_at: post.liked_at,
+      posts: {
+        id: post.id,
+        caption: post.caption,
+        type: post.type,
+        visibility: "public" as const, // Default, privacy already filtered in SQL
+        is_anonymous: post.is_anonymous || false,
+        anonymous_name: post.anonymous_name,
+        anonymous_avatar: post.anonymous_avatar,
+        created_at: post.created_at,
+        author_id: post.author_id,
+        profiles: {
+          username: post.author?.username || null,
+          display_name: post.author?.display_name || null,
+          avatar_url: post.author?.avatar_url || null,
+        },
+        activities: [], // Activities not included in PostgreSQL function (can be lazy loaded)
+      },
+    }));
+
+    console.log("[getLikedPostsWithDetailsForUserOptimized] Query result:", {
+      dataLength: result.length,
+      error: null,
+    });
+
+    return { data: result, error: null };
+  } catch (error: any) {
+    console.error("[getLikedPostsWithDetailsForUserOptimized] Error:", error);
+    return { data: null, error };
+  }
+}
+
+/**
  * Get all liked posts with full details for the current user (with caching)
+ * [DEPRECATED] Use getLikedPostsWithDetailsForUserOptimized for better performance
  */
 export async function getLikedPostsWithDetailsForUser(userId: string): Promise<{
   data: LikedPostWithDetails[] | null;

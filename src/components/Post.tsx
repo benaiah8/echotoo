@@ -268,6 +268,11 @@ function Post({
   const [images, setImages] = useState<string[] | null>(null); // null: unknown; []: none
   const [imagesLoading, setImagesLoading] = useState(false);
   const [tried, setTried] = useState(false);
+  
+  // [OPTIMIZATION: Phase 3.1] Show skeleton immediately if we know post has images
+  // Why: Better UX - skeleton appears instantly, not after IntersectionObserver triggers
+  const hasImages = post?.has_images ?? false;
+  const [showImageSkeleton, setShowImageSkeleton] = useState(hasImages);
 
   // [FIX] Move useState declarations before useCallback hooks that use them
   // Why: Prevents "Cannot access before initialization" errors
@@ -339,6 +344,15 @@ function Post({
     }
   }, [postId, navigate]);
 
+  // [OPTIMIZATION: Phase 3.1] Initialize image skeleton state based on has_images
+  // Why: Show skeleton immediately if we know post has images (from PostgreSQL function)
+  useEffect(() => {
+    if (hasImages) {
+      setShowImageSkeleton(true);
+      setImagesLoading(true);
+    }
+  }, [hasImages]);
+
   // Fetch only when near viewport
   const rootRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -361,7 +375,11 @@ function Post({
 
               // Only set loading state if there are actually images to load
               if (arr.length > 0) {
-                setImagesLoading(true);
+                // [OPTIMIZATION: Phase 3.1] Keep loading state if skeleton already showing
+                // (from has_images flag), otherwise set it now
+                if (!showImageSkeleton) {
+                  setImagesLoading(true);
+                }
 
                 // Use optimized URLs for better performance
                 const safeArr = arr.map((url) => {
@@ -369,14 +387,17 @@ function Post({
                   return getBestImageUrl(publicUrl, 400); // 400px viewport width for feed
                 });
                 setImages(safeArr);
+                // [OPTIMIZATION: Phase 3.1] Hide skeleton once we have image URLs
+                setShowImageSkeleton(false);
 
                 // Preload images for better UX
                 preloadImages(safeArr).catch(() => {
                   // Silent fail for preloading
                 });
               } else {
-                // No images, set empty array and no loading state
+                // No images, set empty array and hide skeleton
                 setImages([]);
+                setShowImageSkeleton(false);
               }
             } finally {
               setImagesLoading(false);
@@ -391,7 +412,7 @@ function Post({
     );
     obs.observe(node);
     return () => obs.disconnect();
-  }, [postId, tried]);
+  }, [postId, tried, showImageSkeleton]);
 
   const isDraftPost = status === "draft" || isDraft;
 
@@ -436,6 +457,7 @@ function Post({
               postType={type}
               variant={isAnonymous ? "anon" : "default"}
               anonymousAvatar={isAnonymous ? anonymousAvatar : undefined}
+              userId={isAnonymous ? null : author?.id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
             />
           </div>
         </div>
@@ -522,13 +544,14 @@ function Post({
             </button>
           )}
 
-          {/* media row — show placeholder only while loading, nothing if no images */}
-          {imagesLoading && (
+          {/* media row — show placeholder while loading, nothing if no images */}
+          {/* [OPTIMIZATION: Phase 3.1] Show skeleton immediately if has_images is true */}
+          {(imagesLoading || showImageSkeleton) && (
             <div className="mt-3 rounded-2xl border border-[var(--border)] overflow-hidden">
               <div className="w-full aspect-video bg-[var(--text)]/5 animate-pulse" />
             </div>
           )}
-          {!imagesLoading && images && images.length > 0 && (
+          {!imagesLoading && !showImageSkeleton && images && images.length > 0 && (
             <div className="mt-3" role="button" onClick={goToDetails}>
               <MediaCarousel images={images} maxHeight="44vh" />
             </div>

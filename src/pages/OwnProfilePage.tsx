@@ -104,6 +104,7 @@ export default function OwnProfilePage() {
 
   // Load profile for /u/me - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
+    console.log('[OwnProfilePage] 🔄 Component MOUNTED - loading profile data');
     let cancelled = false;
     (async () => {
       // Try to get cached profile immediately using stored profile ID
@@ -256,6 +257,7 @@ export default function OwnProfilePage() {
       }
     })();
     return () => {
+      console.log('[OwnProfilePage] 🔄 Component UNMOUNTING - cleanup');
       cancelled = true;
     };
     // Only run once on mount - cache handles subsequent loads
@@ -351,8 +353,8 @@ export default function OwnProfilePage() {
     }
   };
 
-  // [OPTIMIZATION: Phase 4 - Prefetch] Hero section: Follow counts - STALE-WHILE-REVALIDATE pattern + prefetch on profile load
-  // Why: Instant display of cached counts, prefetch when profile loads for faster drawer opening
+  // [OPTIMIZATION: Phase 3.2] Hero section: Follow counts - STALE-WHILE-REVALIDATE with silent background refresh
+  // Why: Instant display of cached counts, silent update when counts change (no skeleton, just update number)
   useEffect(() => {
     if (profile?.id) {
       // Show cached counts immediately if available
@@ -363,22 +365,43 @@ export default function OwnProfilePage() {
           cachedCounts
         );
         setCounts(cachedCounts);
-        setCountsLoading(false);
+        setCountsLoading(false); // No loading state if we have cached data
       } else {
-        setCountsLoading(true);
+        setCountsLoading(true); // Only show loading if no cache
       }
 
-      // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch counts when profile loads
-      // Why: Faster drawer opening, better perceived performance
+      // [OPTIMIZATION: Phase 3.2] Background refresh: fetch fresh counts and update silently if changed
+      // Why: Silent updates - no skeleton, just update the number when it changes
       getFollowCounts(profile.id)
-        .then((counts) => {
-          // Cache the fresh counts
-          setCachedFollowCounts(profile.id, counts);
-          setCounts(counts);
+        .then((freshCounts) => {
+          // [OPTIMIZATION: Phase 3.2] Only update if counts actually changed (silent update)
+          // Use cachedCounts for comparison (from closure), or current state if cache was empty
+          setCounts((currentCounts) => {
+            const countsChanged = 
+              !cachedCounts || 
+              cachedCounts.followers !== freshCounts.followers || 
+              cachedCounts.following !== freshCounts.following;
+
+            if (countsChanged) {
+              console.log(
+                "[OwnProfilePage] Counts changed, updating silently:",
+                { old: cachedCounts || currentCounts, new: freshCounts }
+              );
+            }
+
+            // Always return fresh counts (update silently)
+            return freshCounts;
+          });
+
+          // Always cache the fresh counts (even if not changed, refresh TTL)
+          setCachedFollowCounts(profile.id, freshCounts);
           setCountsLoading(false);
         })
         .catch(() => {
-          setCountsLoading(false);
+          // On error, keep cached counts if available
+          if (!cachedCounts) {
+            setCountsLoading(false);
+          }
         });
     } else {
       setCountsLoading(false);

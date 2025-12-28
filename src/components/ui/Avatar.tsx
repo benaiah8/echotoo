@@ -1,7 +1,8 @@
 // src/components/ui/Avatar.tsx
 import { optimizeImageUrl } from "../../lib/imageOptimization";
 import { imgUrlPublic } from "../../lib/img";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { getCachedAvatar, setCachedAvatar, preloadAvatar } from "../../lib/avatarCache";
 
 export default function Avatar({
   url,
@@ -11,6 +12,7 @@ export default function Avatar({
   variant = "default",
   postType,
   anonymousAvatar,
+  userId, // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
 }: {
   url?: string | null;
   name?: string | null;
@@ -19,6 +21,7 @@ export default function Avatar({
   variant?: "default" | "friends" | "anon";
   postType?: "hangout" | "experience";
   anonymousAvatar?: string | null; // NEW: custom anonymous avatar
+  userId?: string | null; // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
 }) {
   const letter =
     variant === "anon" && anonymousAvatar
@@ -26,6 +29,31 @@ export default function Avatar({
       : (name || "").trim().charAt(0).toUpperCase() || " ";
   const s = `${size}px`;
   const [showAnonymousMessage, setShowAnonymousMessage] = useState(false);
+  
+  // [OPTIMIZATION: Phase 3.2] Check cache for avatar URL if userId is provided
+  const [cachedUrl, setCachedUrl] = useState<string | null>(null);
+  
+  useEffect(() => {
+    // Only check cache if userId is provided and not anonymous
+    if (userId && variant !== "anon") {
+      const cached = getCachedAvatar(userId);
+      if (cached) {
+        setCachedUrl(cached);
+        // Preload cached avatar for instant display
+        preloadAvatar(cached);
+      } else if (url) {
+        // Cache the URL for future use
+        setCachedAvatar(userId, url);
+        preloadAvatar(url);
+        setCachedUrl(null); // Use provided URL
+      }
+    } else {
+      setCachedUrl(null);
+    }
+  }, [userId, url, variant]);
+  
+  // [OPTIMIZATION: Phase 3.2] Use cached URL if available, otherwise use provided URL
+  const displayUrl = cachedUrl || url;
 
   const handleClick = () => {
     if (variant === "anon") {
@@ -105,12 +133,24 @@ export default function Avatar({
               : undefined
           }
         >
-          {url ? (
+          {displayUrl ? (
             <img
-              src={imgUrlPublic(url)}
+              src={imgUrlPublic(displayUrl)}
               alt=""
               className="w-full h-full object-cover rounded-full"
               loading="lazy"
+              onLoad={() => {
+                // [OPTIMIZATION: Phase 3.2] Cache the URL when it loads successfully (if userId provided)
+                if (userId && variant !== "anon" && displayUrl) {
+                  setCachedAvatar(userId, displayUrl);
+                }
+              }}
+              onError={() => {
+                // [OPTIMIZATION: Phase 3.2] If cached URL fails, try provided URL
+                if (cachedUrl && url && cachedUrl !== url) {
+                  setCachedUrl(null); // Fallback to provided URL
+                }
+              }}
             />
           ) : (
             <div

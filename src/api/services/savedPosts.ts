@@ -204,7 +204,80 @@ export async function isPostSaved(
 }
 
 /**
+ * [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
+ * Returns SavedPostWithDetails format with all related data included
+ */
+export async function getSavedPostsOptimized(
+  userId: string,
+  viewerUserId: string | null = null,
+  limit = 20,
+  offset = 0
+): Promise<{
+  data: SavedPostWithDetails[] | null;
+  error: any;
+}> {
+  try {
+    console.log("[getSavedPostsOptimized] Starting query for user:", userId);
+
+    const { data, error } = await supabase.rpc(
+      "get_user_posts_saved_with_related_data",
+      {
+        p_user_id: userId,
+        p_viewer_user_id: viewerUserId || null,
+        p_limit: limit,
+        p_offset: offset,
+      }
+    );
+
+    if (error) {
+      console.error("[getSavedPostsOptimized] RPC error:", error);
+      return { data: null, error };
+    }
+
+    if (!data || !data.posts) {
+      console.warn("[getSavedPostsOptimized] Invalid response structure");
+      return { data: [], error: null };
+    }
+
+    // Transform PostgreSQL result to SavedPostWithDetails format
+    const result: SavedPostWithDetails[] = data.posts.map((post: any) => ({
+      id: post.saved_post_id,
+      post_id: post.id,
+      created_at: post.saved_at,
+      posts: {
+        id: post.id,
+        caption: post.caption,
+        type: post.type,
+        visibility: "public" as const, // Default, privacy already filtered in SQL
+        is_anonymous: post.is_anonymous || false,
+        anonymous_name: post.anonymous_name,
+        anonymous_avatar: post.anonymous_avatar,
+        created_at: post.created_at,
+        author_id: post.author_id,
+        profiles: {
+          username: post.author?.username || null,
+          display_name: post.author?.display_name || null,
+          avatar_url: post.author?.avatar_url || null,
+        },
+        activities: [], // Activities not included in PostgreSQL function (can be lazy loaded)
+      },
+    }));
+
+    console.log("[getSavedPostsOptimized] Query result:", {
+      dataLength: result.length,
+      error: null,
+    });
+
+    return { data: result, error: null };
+  } catch (error: any) {
+    console.error("[getSavedPostsOptimized] Error:", error);
+    return { data: null, error };
+  }
+}
+
+/**
  * Get all saved posts for the current user
+ * [DEPRECATED] Use getSavedPostsOptimized for better performance
  */
 export async function getSavedPosts(): Promise<{
   data: SavedPostWithDetails[] | null;

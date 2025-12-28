@@ -1,9 +1,11 @@
 // src/components/ui/RSVPListDrawer.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import FollowButton from "./FollowButton";
-import Avatar from "./Avatar";
 import { useNavigate } from "react-router-dom";
+import { getRSVPListOptimized } from "../../api/services/rsvp";
+import BottomDrawer from "./BottomDrawer";
+import DrawerProfileCard from "./DrawerProfileCard";
+// [OPTIMIZATION: Phase 3.5] Use optimized PostgreSQL function instead of 3 separate queries
 
 interface RSVPUser {
   id: string;
@@ -123,64 +125,45 @@ export default function RSVPListDrawer({
   const loadRSVPs = async () => {
     setLoading(true);
     try {
-      const { data: rsvpData, error } = await supabase
-        .from("rsvp_responses")
-        .select("id, user_id, status")
-        .eq("post_id", postId)
-        .order("created_at", { ascending: false });
+      // [OPTIMIZATION: Phase 3.5] Get viewer user ID for PostgreSQL function
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+      const viewerUserId = authUser?.id || null;
 
-      if (error) {
+      // [OPTIMIZATION: Phase 3.5] Use optimized PostgreSQL function (includes all related data)
+      const result = await getRSVPListOptimized(postId, viewerUserId);
+
+      if (result.error) {
         console.error(
           `[RSVPListDrawer] Error loading RSVPs for post ${postId}:`,
-          error
+          result.error
         );
         setRsvpUsers([]);
+        setCurrentUserRsvp(null);
         return;
       }
 
-      // Get user profiles for RSVP users
-      // Note: rsvp_responses.user_id is auth user ID, not profile ID
-      const authUserIds = (rsvpData || []).map((item: any) => item.user_id);
-      let userProfiles: any[] = [];
-
-      if (authUserIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase
-          .from("profiles")
-          .select("id, user_id, username, display_name, avatar_url")
-          .in("user_id", authUserIds); // Query by user_id (auth user ID)
-
-        if (profilesError) {
-          console.error("Error loading profiles:", profilesError);
-        } else {
-          userProfiles = profilesData || [];
-        }
+      if (!result.data) {
+        setRsvpUsers([]);
+        setCurrentUserRsvp(null);
+        return;
       }
 
-      // Transform the data
-      const users: RSVPUser[] = (rsvpData || []).map((item: any) => {
-        const profile = userProfiles.find(
-          (p: any) => p.user_id === item.user_id
-        );
-        return {
-          id: profile?.id || item.user_id, // Use profile ID if available, fallback to auth user ID
-          username: profile?.username || null,
-          display_name: profile?.display_name || null,
-          avatar_url: profile?.avatar_url || null,
-          status: item.status,
-          created_at: new Date().toISOString(), // Use current time as fallback
-        };
-      });
+      // PostgreSQL function returns users with profile data already included
+      const users: RSVPUser[] = result.data.users || [];
+
+      // [FIX] Filter to only "going" status users to match the count display
+      const goingUsers = users.filter((u) => u.status === "going");
 
       // Always include the creator as "going" if they exist
-      const allUsers = [...users];
+      const allUsers = [...goingUsers];
 
       // Always add creator if they exist and aren't already in the list
       if (postAuthor) {
-        const creatorExists = users.find((u) => u.id === postAuthor.id);
-        console.log("- creatorExists:", creatorExists);
+        const creatorExists = goingUsers.find((u) => u.id === postAuthor.id);
 
         if (!creatorExists) {
-          console.log("- Adding creator to list");
           allUsers.unshift({
             id: postAuthor.id,
             username: postAuthor.username || null,
@@ -189,51 +172,30 @@ export default function RSVPListDrawer({
             status: "going",
             created_at: "", // Creator doesn't have a created_at for RSVP
           });
-        } else {
-          console.log("- Creator already exists in list");
         }
-      } else {
-        console.log("- No postAuthor provided!");
       }
 
-      console.log("- Final allUsers:", allUsers);
-      console.log("- allUsers.length:", allUsers.length);
       setRsvpUsers(allUsers);
 
-      // Check current user's RSVP status - need to check ALL statuses, not just what's in users array
-      if (currentUser) {
-        // Get current user's auth user ID for RSVP query
-        const {
-          data: { user: authUser },
-        } = await supabase.auth.getUser();
-        if (!authUser) return;
-
-        // Get current user's RSVP status (any status)
-        const { data: currentUserRsvpData, error: currentUserError } =
-          await supabase
-            .from("rsvp_responses")
-            .select("status")
-            .eq("post_id", postId)
-            .eq("user_id", authUser.id) // Use auth user ID
-            .maybeSingle(); // Use maybeSingle to handle 0 rows gracefully (prevents 406 errors)
-
-        if (currentUserError && currentUserError.code !== "PGRST116") {
-          console.error("Error loading current user RSVP:", currentUserError);
-        }
-
+      // Set current user's RSVP status from PostgreSQL function result
+      if (currentUser && authUser) {
         // If no RSVP found, check if current user is the creator
         if (
-          !currentUserRsvpData &&
+          !result.data.currentUserStatus &&
           postAuthor &&
-          currentUser.id === postAuthor.id
+          currentUserProfile?.id === postAuthor.id
         ) {
           setCurrentUserRsvp("going"); // Creator is automatically "going"
         } else {
-          setCurrentUserRsvp(currentUserRsvpData?.status || null);
+          setCurrentUserRsvp(result.data.currentUserStatus || null);
         }
+      } else {
+        setCurrentUserRsvp(null);
       }
     } catch (error) {
       console.error("Error loading RSVPs:", error);
+      setRsvpUsers([]);
+      setCurrentUserRsvp(null);
     } finally {
       setLoading(false);
     }
@@ -291,137 +253,109 @@ export default function RSVPListDrawer({
     }
   };
 
-  if (!open) return null;
-
   // If post is anonymous, don't show RSVP list
   if (postAuthor?.is_anonymous) {
     return null;
   }
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* backdrop */}
-      <div
-        className="absolute inset-0 bg-[var(--surface)]/60"
-        onClick={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          onClose();
-        }}
-      />
+    <BottomDrawer
+      open={open}
+      onClose={onClose}
+      title="RSVP List"
+      maxHeight="80vh"
+    >
+      {loading && (
+        <div className="text-sm text-[var(--text)]/60 py-6 text-center">
+          Loading RSVPs...
+        </div>
+      )}
 
-      {/* sheet */}
-      <div className="absolute left-0 right-0 bottom-0 rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)] p-3 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between pb-3">
-          <div className="text-lg font-semibold">RSVP List</div>
+      {!loading && rsvpUsers.length === 0 && !postAuthor && (
+        <div className="text-sm text-[var(--text)]/60 py-6 text-center">
+          No RSVPs yet.
+        </div>
+      )}
+
+      {/* RSVP Toggle Button for current user */}
+      {!loading && currentUser && (
+        <div className="mb-4">
+          <div className="text-sm font-medium mb-3 text-[var(--text)]">RSVP</div>
           <button
-            className="text-sm text-[var(--text)]/70"
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              onClose();
+              handleRSVPResponse(
+                currentUserRsvp === "going" ? "not_going" : "going"
+              );
+            }}
+            className={`w-full py-2 px-3 rounded-full text-sm font-medium transition ${
+              currentUserRsvp === "going"
+                ? "bg-white text-black"
+                : "bg-[var(--glass-active-bg)] border border-[var(--glass-active-border)] text-[var(--text)] hover:bg-white/10"
+            }`}
+            style={{
+              backdropFilter: "blur(var(--glass-blur))",
+              WebkitBackdropFilter: "blur(var(--glass-blur))",
+              boxShadow: currentUserRsvp === "going" 
+                ? "none" 
+                : "var(--glass-active-shadow)",
             }}
           >
-            Close
+            {currentUserRsvp === "going" ? "You've RSVP'd ✓" : "RSVP"}
           </button>
         </div>
+      )}
 
-        {loading && (
-          <div className="text-sm text-[var(--text)]/60 py-6 text-center">
-            Loading RSVPs...
-          </div>
-        )}
+      {!loading && (rsvpUsers.length > 0 || postAuthor) && (
+        <div className="space-y-2">
+          {/* All RSVP'd users in simple list format */}
+          {rsvpUsers.map((user) => {
+            // [OPTIMIZATION: Phase 3.5] Compare profile IDs (user.id is profile id from PostgreSQL function)
+            const isCurrentUser = currentUserProfile && user.id === currentUserProfile.id;
+            const displayUser =
+              isCurrentUser && currentUserProfile ? currentUserProfile : user;
+            const hasRsvpd = currentUserRsvp === "going";
 
-        {!loading && rsvpUsers.length === 0 && !postAuthor && (
-          <div className="text-sm text-[var(--text)]/60 py-6 text-center">
-            No RSVPs yet.
-          </div>
-        )}
+            // Hide current user if they haven't RSVP'd (unless they're the creator)
+            if (
+              isCurrentUser &&
+              !hasRsvpd &&
+              (!postAuthor || currentUserProfile?.id !== postAuthor.id)
+            ) {
+              return null;
+            }
 
-        {/* RSVP Toggle Button for current user */}
-        {!loading && currentUser && (
-          <div className="mb-4">
-            <div className="text-sm font-medium mb-3">RSVP</div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                handleRSVPResponse(
-                  currentUserRsvp === "going" ? "not_going" : "going"
-                );
-              }}
-              className={`w-full py-2 px-3 rounded-full text-sm font-medium transition ${
-                currentUserRsvp === "going"
-                  ? "bg-white text-black"
-                  : "bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] hover:bg-white/10"
-              }`}
-            >
-              {currentUserRsvp === "going" ? "You've RSVP'd ✓" : "RSVP"}
-            </button>
-          </div>
-        )}
-
-        {!loading && (rsvpUsers.length > 0 || postAuthor) && (
-          <div className="space-y-2">
-            {/* All RSVP'd users in simple list format */}
-            {rsvpUsers.map((user) => {
-              const isCurrentUser = currentUser && user.id === currentUser.id;
-              const displayUser =
-                isCurrentUser && currentUserProfile ? currentUserProfile : user;
-              const hasRsvpd = currentUserRsvp === "going";
-
-              // Hide current user if they haven't RSVP'd (unless they're the creator)
-              if (
-                isCurrentUser &&
-                !hasRsvpd &&
-                (!postAuthor || currentUser.id !== postAuthor.id)
-              ) {
-                return null;
-              }
-
-              return (
-                <div
-                  key={user.id}
-                  className={`flex items-center gap-3 p-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer hover:bg-[var(--surface)]/50 transition-colors ${
-                    isCurrentUser && !hasRsvpd ? "opacity-50" : ""
-                  }`}
-                  onClick={() =>
-                    !isCurrentUser &&
-                    navigate(`/u/${displayUser.username || displayUser.id}`)
-                  }
-                >
-                  <Avatar
-                    url={displayUser.avatar_url || undefined}
-                    name={displayUser.display_name || "User"}
-                    size={36}
-                    variant={
-                      displayUser.id === postAuthor?.id &&
-                      postAuthor?.is_anonymous
-                        ? "anon"
-                        : "default"
-                    }
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm leading-tight truncate">
-                      {displayUser.display_name || "Unnamed"}
-                    </div>
-                    <div className="text-xs text-[var(--text)]/60 truncate">
-                      @{displayUser.username || "user"}
-                    </div>
-                  </div>
-                  {isCurrentUser ? (
+            return (
+              <DrawerProfileCard
+                key={user.id}
+                id={user.id}
+                username={displayUser.username || null}
+                display_name={displayUser.display_name || null}
+                avatar_url={displayUser.avatar_url || null}
+                onClick={() =>
+                  !isCurrentUser &&
+                  navigate(`/u/${displayUser.username || displayUser.id}`)
+                }
+                showFollowButton={!isCurrentUser}
+                showCustomBadge={
+                  isCurrentUser ? (
                     <div className="px-2 py-1 text-xs rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
                       It's you, silly! 😄
                     </div>
-                  ) : (
-                    <FollowButton targetId={user.id} className="ml-2" />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+                  ) : undefined
+                }
+                avatarVariant={
+                  displayUser.id === postAuthor?.id && postAuthor?.is_anonymous
+                    ? "anon"
+                    : "default"
+                }
+                className={isCurrentUser && !hasRsvpd ? "opacity-50" : ""}
+              />
+            );
+          })}
+        </div>
+      )}
+    </BottomDrawer>
   );
 }

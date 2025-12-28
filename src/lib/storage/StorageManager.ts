@@ -1,21 +1,21 @@
 /**
  * [OPTIMIZATION: Phase 1 - Storage Abstraction]
- * 
+ *
  * Storage Manager
- * 
+ *
  * Coordinates multiple storage adapters (Memory → LocalStorage → IndexedDB)
  * Provides automatic tier selection, migration, and error handling.
- * 
+ *
  * Usage:
  * ```typescript
  * const storage = new StorageManager({
  *   defaultTtl: 10 * 60 * 1000, // 10 minutes
  *   connectionAware: true,
  * });
- * 
+ *
  * // Store data (automatically chooses best tier)
  * await storage.set('feed:home', posts, 10 * 60 * 1000);
- * 
+ *
  * // Retrieve data (tries tiers in order)
  * const posts = await storage.get<Post[]>('feed:home');
  * ```
@@ -31,14 +31,14 @@ import {
   isExpired,
   createStorageEntry,
   adjustTtlForConnection,
-} from './StorageAdapter';
+} from "./StorageAdapter";
 
 // Re-export StorageOptions for convenience
 export type { StorageOptions };
 
 /**
  * Storage Manager
- * 
+ *
  * Manages multiple storage tiers and automatically selects the best tier
  * for each operation based on size, frequency, and availability.
  */
@@ -83,9 +83,9 @@ export class StorageManager {
    * Tries adapters in order until a value is found
    */
   async get<T>(key: string): Promise<T | null> {
-    if (!key || typeof key !== 'string') {
+    if (!key || typeof key !== "string") {
       throw new StorageError(
-        'Invalid key: key must be a non-empty string',
+        "Invalid key: key must be a non-empty string",
         StorageErrorCode.INVALID_KEY
       );
     }
@@ -94,7 +94,7 @@ export class StorageManager {
     for (const adapter of this.adapters) {
       try {
         const entry = await adapter.get<StorageEntry<T>>(key);
-        
+
         if (entry) {
           // Check if expired
           if (isExpired(entry)) {
@@ -126,14 +126,10 @@ export class StorageManager {
    * Set a value in storage
    * Automatically selects the best tier based on size and availability
    */
-  async set<T>(
-    key: string,
-    value: T,
-    ttlMs?: number
-  ): Promise<void> {
-    if (!key || typeof key !== 'string') {
+  async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
+    if (!key || typeof key !== "string") {
       throw new StorageError(
-        'Invalid key: key must be a non-empty string',
+        "Invalid key: key must be a non-empty string",
         StorageErrorCode.INVALID_KEY
       );
     }
@@ -157,7 +153,7 @@ export class StorageManager {
 
     if (!adapter) {
       throw new StorageError(
-        'No available storage adapter',
+        "No available storage adapter",
         StorageErrorCode.NOT_SUPPORTED
       );
     }
@@ -170,10 +166,10 @@ export class StorageManager {
       if (
         this.options.autoMigrate &&
         estimatedSize > 100 * 1024 && // > 100KB
-        adapter.getType() !== 'IndexedDB'
+        adapter.getType() !== "IndexedDB"
       ) {
         const indexedDBAdapter = this.adapters.find(
-          (a) => a.getType() === 'IndexedDB'
+          (a) => a.getType() === "IndexedDB"
         );
         if (indexedDBAdapter) {
           // Store in IndexedDB as backup (don't await, fire and forget)
@@ -205,9 +201,9 @@ export class StorageManager {
    * Deletes from all adapters
    */
   async delete(key: string): Promise<void> {
-    if (!key || typeof key !== 'string') {
+    if (!key || typeof key !== "string") {
       throw new StorageError(
-        'Invalid key: key must be a non-empty string',
+        "Invalid key: key must be a non-empty string",
         StorageErrorCode.INVALID_KEY
       );
     }
@@ -229,7 +225,7 @@ export class StorageManager {
    * Check if a key exists in storage
    */
   async has(key: string): Promise<boolean> {
-    if (!key || typeof key !== 'string') {
+    if (!key || typeof key !== "string") {
       return false;
     }
 
@@ -346,17 +342,20 @@ export class StorageManager {
       }
 
       // Prefer Memory for small, frequently accessed data
-      if (adapterType === 'Memory' && size < 100 * 1024) {
+      if (adapterType === "Memory" && size < 100 * 1024) {
         return adapter;
       }
 
       // Prefer LocalStorage for medium data
-      if (adapterType === 'LocalStorage' && size < this.options.maxLocalStorageSize) {
+      if (
+        adapterType === "LocalStorage" &&
+        size < this.options.maxLocalStorageSize
+      ) {
         return adapter;
       }
 
       // Use IndexedDB for large data
-      if (adapterType === 'IndexedDB') {
+      if (adapterType === "IndexedDB") {
         return adapter;
       }
     }
@@ -368,7 +367,9 @@ export class StorageManager {
   /**
    * Get the next adapter in the tier hierarchy
    */
-  private getNextAdapter(currentAdapter: StorageAdapter): StorageAdapter | null {
+  private getNextAdapter(
+    currentAdapter: StorageAdapter
+  ): StorageAdapter | null {
     const currentIndex = this.adapters.indexOf(currentAdapter);
     if (currentIndex === -1 || currentIndex >= this.adapters.length - 1) {
       return null;
@@ -400,7 +401,9 @@ export let defaultStorageManager: StorageManager | null = null;
  * Initialize the default storage manager
  * Should be called once during app initialization
  */
-export function initializeStorageManager(options?: StorageOptions): StorageManager {
+export function initializeStorageManager(
+  options?: StorageOptions
+): StorageManager {
   defaultStorageManager = new StorageManager(options);
   return defaultStorageManager;
 }
@@ -412,10 +415,9 @@ export function initializeStorageManager(options?: StorageOptions): StorageManag
 export function getStorageManager(): StorageManager {
   if (!defaultStorageManager) {
     throw new StorageError(
-      'Storage manager not initialized. Call initializeStorageManager() first.',
+      "Storage manager not initialized. Call initializeStorageManager() first.",
       StorageErrorCode.ADAPTER_ERROR
     );
   }
   return defaultStorageManager;
 }
-

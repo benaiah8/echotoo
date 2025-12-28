@@ -68,27 +68,9 @@ export default function HomePage() {
     if (isHidden && !forceRevealHeader) setFiltersOpen(false);
   }, [isHidden, forceRevealHeader]);
 
-  // main list (respecting viewMode & search)
-  const [items, setItems] = useState<FeedItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  // [REFACTOR] Removed items/loading state - ProgressiveFeed is now the single source of truth
+  // This eliminates race conditions between HomePage's SWR and ProgressiveFeed's loading
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-
-  // Track if we've already passed initial items to prevent unnecessary re-renders
-  // Set it synchronously so ProgressiveFeed gets it on mount
-  const initialItemsRef = useRef<FeedItem[] | undefined>(undefined);
-
-  // Update ref synchronously when items change (not in useEffect)
-  if (items.length > 0 && !initialItemsRef.current) {
-    initialItemsRef.current = items;
-  }
-
-  // FIX: Clear initialItemsRef when viewMode changes to prevent wrong type items
-  useEffect(() => {
-    initialItemsRef.current = undefined;
-  }, [viewMode]);
 
   // [PHASE 1-4] Removed batchedData state - PostgreSQL function provides all data in FeedItem
 
@@ -114,6 +96,31 @@ export default function HomePage() {
   const currentUserId = authState?.user?.id;
   const [showInfoModal, setShowInfoModal] = useState(false);
 
+  // Viewer profile id (profile.id) for cache scoping; different from auth user id
+  // Keep stable during session; fetched once
+  const [viewerProfileId, setViewerProfileId] = useState<string | null>(null);
+  const viewerProfileIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const pid = await getViewerId();
+        if (!cancelled) {
+          viewerProfileIdRef.current = pid || null;
+          setViewerProfileId(pid || null);
+        }
+      } catch {
+        if (!cancelled) {
+          viewerProfileIdRef.current = null;
+          setViewerProfileId(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Disable body scroll when modal is open
   useEffect(() => {
     if (showInfoModal) {
@@ -132,341 +139,90 @@ export default function HomePage() {
   const HEADER_HEIGHT = 120;
   const FOOTER_HEIGHT = 80;
 
-  // compute type filter from viewMode
-  const type = useMemo(
-    () =>
-      viewMode === "hangouts"
-        ? "hangout"
-        : viewMode === "experiences"
-        ? "experience"
-        : undefined,
-    [viewMode]
+  // Track and persist scroll position per feed key to restore when navigating back
+  const latestScrollRef = useRef(0);
+  
+  // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
+  // This ensures cache hits after profile ID resolves
+  const feedCacheKey = useMemo(() => {
+    return dataCache.generateFeedKey({
+      type:
+        viewMode === "hangouts"
+          ? "hangout"
+          : viewMode === "experiences"
+          ? "experience"
+          : undefined,
+      q: search || undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      limit: PAGE_SIZE,
+      offset: 0,
+      viewerProfileId: viewerProfileId ?? null, // Use state, not ref
+    });
+  }, [viewMode, search, selectedTags, viewerProfileId]); // Added viewerProfileId to deps
+
+  const saveScrollPosition = useCallback(
+    (key: string, value: number) => {
+      try {
+        localStorage.setItem(
+          `home_scroll:${key}`,
+          JSON.stringify({ v: 1, y: Math.max(0, value) })
+        );
+      } catch (e) {
+        // ignore storage errors
+      }
+    },
+    []
   );
 
-  // when filters change, go back to the first page (do NOT clear items here)
+  const getSavedScrollPosition = useCallback((key: string): number => {
+    try {
+      const raw = localStorage.getItem(`home_scroll:${key}`);
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.y === "number") {
+        return parsed.y;
+      }
+    } catch (e) {
+      // ignore parse/storage errors
+    }
+    return 0;
+  }, []);
+
+  // Restore scroll on mount if we have a saved position for this feed key
   useEffect(() => {
-    setPage(0);
+    const savedY = getSavedScrollPosition(feedCacheKey);
+    console.log('[HomePage] 📜 Restoring scroll position:', savedY, 'for key:', feedCacheKey);
+    if (savedY > 0) {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: savedY, behavior: "auto" });
+      });
+    }
+  }, [feedCacheKey, getSavedScrollPosition]);
+
+  // Track scroll and persist on unmount
+  useEffect(() => {
+    const onScroll = () => {
+      latestScrollRef.current = window.scrollY;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      console.log('[HomePage] 💾 Saving scroll position:', latestScrollRef.current, 'for key:', feedCacheKey);
+      window.removeEventListener("scroll", onScroll);
+      saveScrollPosition(feedCacheKey, latestScrollRef.current);
+    };
+  }, [feedCacheKey, saveScrollPosition]);
+
+  // [REFACTOR] Removed hydrate/SWR/trim functions - ProgressiveFeed handles all loading
+  // This eliminates race conditions and duplicate API calls
+
+  // when filters change, clear fallback
+  useEffect(() => {
     setShowTagFallback(false);
     setTagFallbackItems([]);
-  }, [type, search, selectedTags]);
+  }, [viewMode, search, selectedTags]);
 
-  // load a page for main list
-  useEffect(() => {
-    // [PHASE 1] Skip legacy loading when ProgressiveFeed is active
-    // Why: ProgressiveFeed handles all loading, legacy code causes competing API calls
-    const useProgressiveFeed = true; // Matches the prop passed to HomePostsSection
-    if (useProgressiveFeed) {
-      return; // Skip entire legacy loading logic
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        // console.log(
-        //   "[HomePage] Starting data fetch - page:",
-        //   page,
-        //   "type:",
-        //   type,
-        //   "search:",
-        //   search,
-        //   "selectedTags:",
-        //   selectedTags
-        // );
-        // Set loading state based on whether it's initial load or pagination
-        if (page === 0) {
-          setLoading(true);
-        } else {
-          setLoadingMore(true);
-        }
-
-        // Get viewer profile ID for privacy filtering
-        const viewerProfileId = await getViewerId();
-
-        const feedOptions = {
-          // UNIFIED: Now fetching both hangouts and experiences together
-          type: undefined, // Remove type filter to get both
-          q: search || undefined,
-          tags: selectedTags.length > 0 ? selectedTags : undefined,
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
-          viewerProfileId: viewerProfileId || undefined, // Pass viewer ID for privacy filtering
-        };
-
-        let data: FeedItem[] = [];
-
-        // For first page (page === 0), try to use cached data first for faster loading
-        if (page === 0) {
-          const cacheKey = dataCache.generateFeedKey(feedOptions);
-          const cachedData = dataCache.get<FeedItem[]>(cacheKey);
-
-          if (cachedData && cachedData.length > 0) {
-            // console.log(
-            //   "[HomePage] Using cached data for faster loading:",
-            //   cachedData.length,
-            //   "posts"
-            // );
-
-            // Show cached data immediately
-            setItems(cachedData);
-            setLoading(false);
-
-            // REMOVED: prefetchRelatedData - batch loader no longer needed
-            // PostgreSQL function already provides all data in FeedItem
-            // Components handle their own lazy loading when data is not provided
-
-            // Now fetch fresh data in the background
-            try {
-              const freshData = USE_OPTIMIZED_FEED
-                ? await getPublicFeedOptimized(feedOptions)
-                : await getPublicFeed(feedOptions);
-              if (!cancelled) {
-                // Update cache with fresh data (handles new posts intelligently)
-                const updatedData = await dataCache.updateFeedCache(
-                  freshData,
-                  feedOptions
-                );
-                setItems(updatedData);
-                setHasMore(updatedData.length >= PAGE_SIZE);
-              }
-            } catch (error) {
-              console.warn(
-                "[HomePage] Failed to fetch fresh data in background:",
-                error
-              );
-              // Keep using cached data if fresh fetch fails
-            }
-            return;
-          }
-        }
-
-        // console.log(
-        //   "[HomePage] Calling getPublicFeed with options:",
-        //   feedOptions
-        // );
-
-        data = USE_OPTIMIZED_FEED
-          ? await getPublicFeedOptimized(feedOptions)
-          : await getPublicFeed(feedOptions);
-
-        // Cache the data for future use
-        if (page === 0) {
-          const cacheKey = dataCache.generateFeedKey(feedOptions);
-          dataCache.set(cacheKey, data, 10 * 60 * 1000); // 10 minutes TTL
-
-          // REMOVED: prefetchRelatedData - batch loader no longer needed
-          // PostgreSQL function already provides all data in FeedItem
-          // Components handle their own lazy loading when data is not provided
-        }
-
-        // console.log(
-        //   "[Home] page",
-        //   page,
-        //   "type",
-        //   type ?? "all=>experience",
-        //   "search",
-        //   search,
-        //   "rows",
-        //   data.length,
-        //   "types",
-        //   data.map((r) => r.type),
-        //   "data",
-        //   data
-        // );
-
-        if (cancelled) return;
-
-        if (page === 0) {
-          // first page replaces the list
-          // console.log("[HomePage] Setting items:", data);
-          setItems(data);
-          setHasMore(data.length >= PAGE_SIZE);
-          setError(null);
-
-          // If we got no data on first page, let's try to debug
-          if (data.length === 0) {
-            console.warn(
-              "[HomePage] No data returned from getPublicFeed on first page"
-            );
-          }
-
-          // If we have tag filters, always load fallback posts to show other content
-          if (selectedTags.length > 0) {
-            setShowTagFallback(true);
-            setTagFallbackLoading(true);
-
-            try {
-              // Load more posts without tag filter to show as "other posts"
-              const fallbackData = USE_OPTIMIZED_FEED
-                ? await getPublicFeedOptimized({
-                    type: undefined, // UNIFIED: Get both types for fallback
-                    q: search || undefined,
-                    // No tag filter for fallback - show all posts
-                    limit: PAGE_SIZE * 2, // Load more to account for filtering out duplicates
-                    offset: 0,
-                  })
-                : await getPublicFeed({
-                    type: undefined, // UNIFIED: Get both types for fallback
-                    q: search || undefined,
-                    // No tag filter for fallback - show all posts
-                    limit: PAGE_SIZE * 2, // Load more to account for filtering out duplicates
-                    offset: 0,
-                  });
-              if (!cancelled) {
-                // Filter out posts that are already in the main results to avoid duplicates
-                const mainPostIds = new Set(data.map((item) => item.id));
-                const filteredFallbackData = fallbackData.filter(
-                  (item) => !mainPostIds.has(item.id)
-                );
-                setTagFallbackItems(filteredFallbackData.slice(0, PAGE_SIZE)); // Limit to reasonable amount
-              }
-            } catch (fallbackError) {
-              // [OPTIMIZATION: Phase 7.1.3] Silent error for fallback - already handling gracefully
-              // Why: This is a fallback attempt, don't show error if it fails
-              console.debug("Error loading fallback posts:", fallbackError);
-              if (!cancelled) setTagFallbackItems([]);
-            } finally {
-              if (!cancelled) setTagFallbackLoading(false);
-            }
-          } else {
-            setShowTagFallback(false);
-            setTagFallbackItems([]);
-          }
-        } else {
-          // subsequent pages append
-          setItems((prev) => [...prev, ...data]);
-          if (data.length < PAGE_SIZE) setHasMore(false);
-        }
-      } catch (e: any) {
-        // [OPTIMIZATION: Phase 7.1.3] Use user-friendly error handling
-        // Why: Shows clear error messages to users instead of just console logs
-        handleError(e, "HomePage");
-        if (!cancelled) {
-          const errorMessage = getErrorMessage(e);
-          setError(errorMessage);
-
-          // [OPTIMIZATION: Phase 7.1.5] Graceful degradation - try to show cached data on error
-          // Why: User still sees content even if network request fails
-          if (page === 0) {
-            try {
-              // [CACHE FIX] Include currentUserId in cache key for user-specific caching
-              const cacheKey = dataCache.generateFeedKey({
-                type: undefined,
-                q: search || undefined,
-                tags: selectedTags.length > 0 ? selectedTags : undefined,
-                limit: PAGE_SIZE,
-                offset: 0,
-                viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
-              });
-              const cachedData = dataCache.get<FeedItem[]>(cacheKey);
-              if (cachedData && cachedData.length > 0) {
-                console.log("[HomePage] Showing cached data after error");
-                setItems(cachedData);
-                setError(null); // Clear error if we have cached data
-              } else {
-                // No cached data, keep error message
-                setItems([]);
-              }
-            } catch (cacheError) {
-              // If cache check fails, just show empty with error
-              setItems([]);
-            }
-          } else {
-            // For pagination errors, don't clear existing items - they remain visible
-            // Just don't append new items
-          }
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-          setLoadingMore(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [type, search, selectedTags, page]);
-
-  // 🔎 log every render of items (SAFE — not inside JSX)
-  useEffect(() => {
-    // console.log(
-    //   "[HomePage] render items:",
-    //   items.length,
-    //   items.map((i) => i.type)
-    // );
-  }, [items]);
-
-  // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch next page when user is 80% through current page
-  // Why: Seamless pagination, no loading delay when user reaches bottom
-  const handlePrefetchNextPage = useCallback(async () => {
-    if (loading || loadingMore || !hasMore) return;
-
-    // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
-    // Why: Skip prefetching on slow connections to save bandwidth
-    const { shouldSkipPrefetching } = await import("../lib/connectionAware");
-    if (shouldSkipPrefetching()) {
-      return; // Skip prefetching on very slow connections
-    }
-
-    // Get viewer profile ID for privacy filtering
-    (async () => {
-      const viewerProfileId = await getViewerId();
-      const feedOptions = {
-        type: undefined, // UNIFIED: Prefetch both types
-        q: search || undefined,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        limit: PAGE_SIZE,
-        offset: items.length, // Next page offset
-        viewerProfileId: viewerProfileId ?? undefined, // Pass viewer ID for privacy filtering
-      };
-
-      dataCache.prefetchFeedData(feedOptions);
-    })();
-  }, [loading, loadingMore, hasMore, search, selectedTags, items.length]);
-
-  // Performance: Prefetch images when items are loaded
-  useEffect(() => {
-    if (items.length > 0 && !loading) {
-      // [OPTIMIZATION: Phase 6 - Connection] Check connection speed before prefetching
-      // Why: Skip prefetching on slow connections to save bandwidth
-      (async () => {
-        const { shouldSkipPrefetching, isSlowConnection } = await import(
-          "../lib/connectionAware"
-        );
-        if (shouldSkipPrefetching()) {
-          return; // Skip prefetching on very slow connections
-        }
-
-        // [OPTIMIZATION: Phase 6 - Connection] Prioritize critical content on slow connections
-        // Why: Load first post images immediately, defer non-critical avatars
-        const isSlow = isSlowConnection();
-
-        // On slow connections, only prefetch critical images (first post)
-        // On fast connections, prefetch first 3 posts
-        const postsToPrefetch = isSlow ? items.slice(0, 1) : items.slice(0, 3);
-
-        // Prefetch images from the selected posts
-        onIdle(() => {
-          const imageUrls: string[] = [];
-          postsToPrefetch.forEach((post) => {
-            // Only add author avatar on fast connections (non-critical on slow)
-            if (!isSlow && post.author?.avatar_url) {
-              imageUrls.push(post.author.avatar_url);
-            }
-          });
-
-          if (imageUrls.length > 0) {
-            preloadImages(imageUrls).catch(() => {
-              // Silent fail for image prefetching
-            });
-          }
-          // [OPTIMIZATION: Phase 5 - Rendering] Reduced delay from 1500ms to immediate with requestIdleCallback
-          // Why: Faster image prefetching, better perceived performance
-        }, 0);
-      })();
-    }
-  }, [items.length, loading, type, search, selectedTags]);
+  // [REFACTOR] Removed entire legacy loading effect - ProgressiveFeed handles all loading
+  // This eliminates ~300 lines of competing logic that caused race conditions
 
   // horizontal rail: fetch mixed recent and relevant content with filter support
   useEffect(() => {
@@ -503,21 +259,13 @@ export default function HomePage() {
 
           if (!cancelled) {
             // Filter-based prioritization algorithm:
-            // 1. Combine recent posts with main feed posts for better coverage
-            // 2. If filter is selected, prioritize matching posts first
-            // 3. Then show remaining posts
-            // 4. Mix hangouts and experiences
-            // 5. Limit to 8 items for the rail
+            // 1. If filter is selected, prioritize matching posts first
+            // 2. Then show remaining posts
+            // 3. Mix hangouts and experiences
+            // 4. Limit to 8 items for the rail
 
-            // Combine recent posts with main feed posts to ensure we have all available posts
+            // Use recent posts for horizontal rail
             const allAvailablePosts = [...recent];
-
-            // Add posts from main feed that aren't already in recent
-            const recentIds = new Set(recent.map((p) => p.id));
-            const additionalPosts = items.filter(
-              (post) => !recentIds.has(post.id)
-            );
-            allAvailablePosts.push(...additionalPosts);
 
             let prioritizedPosts = allAvailablePosts;
 
@@ -679,81 +427,9 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [search, selectedTags, selectedFilters, items, currentUserId]);
+  }, [search, selectedTags, selectedFilters, currentUserId]);
 
-  // fallback bucket: when searching, fetch a few non-search posts (exclude IDs from main results)
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!search) {
-        setFallbackItems([]);
-        return;
-      }
-      try {
-        setFallbackLoading(true);
-        const primary = new Set(items.map((p) => p.id));
-        const others = USE_OPTIMIZED_FEED
-          ? await getPublicFeedOptimized({
-              type: undefined, // UNIFIED: Get both types for fallback
-              limit: 12,
-              offset: 0,
-            })
-          : await getPublicFeed({
-              type: undefined, // UNIFIED: Get both types for fallback
-              limit: 12,
-              offset: 0,
-            });
-
-        const filtered = others.filter((p) => !primary.has(p.id));
-        if (!cancelled) setFallbackItems(filtered);
-      } finally {
-        if (!cancelled) setFallbackLoading(false);
-      }
-    })();
-    // re-run when search, type, or the first page of results changes
-  }, [
-    search,
-    type,
-    items
-      .slice(0, PAGE_SIZE)
-      .map((p) => p.id)
-      .join(","),
-  ]);
-
-  // infinite scroll observer — do NOT start until first page is on screen
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    // wait until we have at least one item rendered
-    if (items.length === 0) return;
-
-    // don't observe while loading more or if there's nothing more to load
-    if (!hasMore || loadingMore) return;
-
-    const node = sentinelRef.current;
-    if (!node) return;
-
-    const obs = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting) {
-          // ask for next page
-          setPage((p) => p + 1);
-        }
-      },
-      {
-        root: null,
-        // [OPTIMIZATION: Phase 5 - Image] Optimized rootMargin for better prefetching
-        // Why: 150px is optimal - prefetches early enough without wasting bandwidth
-        rootMargin: "150px 0px 150px 0px",
-        threshold: 0.1,
-      }
-    );
-
-    obs.observe(node);
-    return () => obs.disconnect();
-    // IMPORTANT: depend on items.length (first page on screen), not sentinelRef.current
-  }, [items.length, hasMore, loadingMore]);
+  // [REFACTOR] Removed fallback and infinite scroll logic - ProgressiveFeed handles this
 
   useEffect(() => {
     if (!filtersOpen) setForceRevealHeader(false);
@@ -856,54 +532,48 @@ export default function HomePage() {
                 useProgressiveLoading={true}
                 loadItems={useCallback(
                   async (offset: number, limit: number) => {
-                    const viewerProfileId = await getViewerId();
                     const feedOptions: FeedOptions = {
-                      type: "hangout" as const, // FIX: Filter at PostgreSQL level
+                      type: "hangout" as const,
                       q: search || undefined,
                       tags: selectedTags.length > 0 ? selectedTags : undefined,
                       limit,
                       offset,
-                      viewerProfileId: viewerProfileId || undefined,
+                      viewerProfileId: viewerProfileId || undefined, // Use state
                     };
-                    // FIX: No need to filter, PostgreSQL already returns hangouts only
                     return USE_OPTIMIZED_FEED
                       ? await getPublicFeedOptimized(feedOptions)
                       : await getPublicFeed(feedOptions);
                   },
-                  [search, selectedTags]
+                  [search, selectedTags, viewerProfileId] // Added viewerProfileId
                 )}
                 initialItems={hangouts.length > 0 ? hangouts : undefined}
                 getCachedItems={useCallback(() => {
-                  // Cache key for horizontal rail
-                  // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                   const feedOptions = {
-                    type: "hangout", // Already filtered at PostgreSQL level
+                    type: "hangout",
                     q: search || undefined,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit: 20,
                     offset: 0,
-                    viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
+                    viewerProfileId: viewerProfileId ?? null, // Use state
                   };
                   const cacheKey = dataCache.generateFeedKey(feedOptions);
                   const cached = dataCache.get<FeedItem[]>(cacheKey);
-                  // FIX: No need to filter, cache already contains only hangouts
                   return Array.isArray(cached) ? cached : null;
-                }, [search, selectedTags, currentUserId])} // [CACHE FIX] Add currentUserId to dependencies
+                }, [search, selectedTags, viewerProfileId])} // Added viewerProfileId
                 setCachedItems={useCallback(
                   (items: FeedItem[]) => {
-                    // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                     const feedOptions = {
                       type: "hangout",
                       q: search || undefined,
                       tags: selectedTags.length > 0 ? selectedTags : undefined,
                       limit: 20,
                       offset: 0,
-                      viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
+                      viewerProfileId: viewerProfileId ?? null, // Use state
                     };
                     const cacheKey = dataCache.generateFeedKey(feedOptions);
-                    dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
+                    dataCache.set(cacheKey, items, 10 * 60 * 1000);
                   },
-                  [search, selectedTags, currentUserId] // [CACHE FIX] Add currentUserId to dependencies
+                  [search, selectedTags, viewerProfileId] // Added viewerProfileId
                 )}
               />
             </div>
@@ -911,29 +581,8 @@ export default function HomePage() {
 
           {/* POSTS & INJECTIONS */}
           <div className="w-full max-w-[640px] mx-auto px-0 pt-1">
-            {/* [OPTIMIZATION: Phase 7.1.4] Error display with retry button */}
-            {error && (
-              <div className="px-3 py-3 mb-2 rounded-lg border border-red-500/30 bg-red-500/10 flex items-center justify-between gap-3">
-                <div className="flex-1">
-                  <p className="text-red-400 text-sm">{error}</p>
-                </div>
-                <button
-                  onClick={() => {
-                    setError(null);
-                    setPage(0); // Reset to first page and trigger refetch
-                  }}
-                  className="px-3 py-1.5 text-xs rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-
             <HomePostsSection
               viewMode={viewMode}
-              items={items} // Legacy mode - will be phased out
-              loading={loading}
-              loadingMore={loadingMore}
               hasActiveFilters={hasActiveFilters}
               tagFallbackItems={tagFallbackItems}
               tagFallbackLoading={tagFallbackLoading}
@@ -941,35 +590,32 @@ export default function HomePage() {
               selectedTags={selectedTags}
               hangouts={hangouts}
               hangoutsLoading={hangoutsLoading}
-              onPrefetchNextPage={handlePrefetchNextPage}
               batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
-              // [OPTIMIZATION: Phase 2 - Progressive] Progressive feed props
-              useProgressiveFeed={true} // Enable progressive rendering
+              // [REFACTOR] ProgressiveFeed now owns all loading - HomePage is thin
+              useProgressiveFeed={true}
               loadItems={useCallback(
                 async (offset: number, limit: number) => {
-                  const viewerProfileId = await getViewerId();
+                  // [FIX] Use resolved viewerProfileId state, not getViewerId() per load
                   const feedOptions: FeedOptions = {
-                    // FIX: Pass type filter to PostgreSQL for server-side filtering
                     type:
                       viewMode === "hangouts"
                         ? ("hangout" as const)
                         : viewMode === "experiences"
                         ? ("experience" as const)
-                        : undefined, // "all" = undefined (get both types)
+                        : undefined,
                     q: search || undefined,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit,
                     offset,
-                    viewerProfileId: viewerProfileId || undefined,
+                    viewerProfileId: viewerProfileId || undefined, // Use state
                   };
                   if (USE_OPTIMIZED_FEED) {
-                    // Use new function that returns count for reliable hasMore detection
                     const { items, count } =
                       await getPublicFeedOptimizedWithCount(feedOptions);
                     return {
                       items,
                       consumedOffset: items.length,
-                      count, // Include count for hasMore detection
+                      count,
                     };
                   } else {
                     const items = await getPublicFeed(feedOptions);
@@ -979,14 +625,10 @@ export default function HomePage() {
                     };
                   }
                 },
-                [search, selectedTags, viewMode] // FIX: Add viewMode to dependencies
+                [search, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
               )}
-              initialItems={initialItemsRef.current || []} // Ensure array, not undefined
               getCachedItems={useCallback(() => {
-                // Use dataCache directly (sync operation)
-                // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                 const feedOptions = {
-                  // FIX: Include type filter in cache key (matches loadItems)
                   type:
                     viewMode === "hangouts"
                       ? "hangout"
@@ -997,18 +639,15 @@ export default function HomePage() {
                   tags: selectedTags.length > 0 ? selectedTags : undefined,
                   limit: PAGE_SIZE,
                   offset: 0,
-                  viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
+                  viewerProfileId: viewerProfileId ?? null, // Use state
                 };
                 const cacheKey = dataCache.generateFeedKey(feedOptions);
                 const cached = dataCache.get<FeedItem[]>(cacheKey);
-                // Ensure we return an array or null (not undefined or other types)
                 return Array.isArray(cached) ? cached : null;
-              }, [search, selectedTags, viewMode, currentUserId])} // [CACHE FIX] Add currentUserId to dependencies
+              }, [search, selectedTags, viewMode, viewerProfileId])} // Added viewerProfileId
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
-                  // [CACHE FIX] Include currentUserId in cache key for user-specific caching
                   const feedOptions = {
-                    // FIX: Include type filter in cache key (matches loadItems)
                     type:
                       viewMode === "hangouts"
                         ? "hangout"
@@ -1019,12 +658,12 @@ export default function HomePage() {
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit: PAGE_SIZE,
                     offset: 0,
-                    viewerProfileId: currentUserId || null, // Use currentUserId as proxy for viewerProfileId
+                    viewerProfileId: viewerProfileId ?? null, // Use state
                   };
                   const cacheKey = dataCache.generateFeedKey(feedOptions);
-                  dataCache.set(cacheKey, items, 10 * 60 * 1000); // 10 minutes TTL
+                  dataCache.set(cacheKey, items, 10 * 60 * 1000);
                 },
-                [search, selectedTags, viewMode, currentUserId] // [CACHE FIX] Add currentUserId to dependencies
+                [search, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
               )}
               feedOptions={{
                 type:
@@ -1035,31 +674,9 @@ export default function HomePage() {
                     : undefined,
                 q: search || undefined,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
-                currentUserId: currentUserId || null, // FIX: Include for feedKey to reset on auth change
+                currentUserId: viewerProfileId ?? null, // Use state for feedKey
               }}
             />
-
-            {/* "Other things you might like" appears only during search */}
-            {search && (
-              <div className="mt-6">
-                <div className="text-[var(--text)]/80 text-sm mb-2">
-                  Other things you might like
-                </div>
-                <HomePostsSection
-                  viewMode={viewMode}
-                  items={fallbackItems}
-                  loading={fallbackLoading}
-                />
-              </div>
-            )}
-
-            {/* Infinite scroll sentinel */}
-            <div ref={sentinelRef} className="h-10" />
-            {!hasMore && !loading && (
-              <div className="text-[var(--text)]/50 text-xs py-6 text-center">
-                You’re all caught up.
-              </div>
-            )}
           </div>
         </div>
       </PrimaryPageContainer>

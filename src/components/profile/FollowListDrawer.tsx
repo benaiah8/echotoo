@@ -1,14 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import FollowButton from "../ui/FollowButton";
 import { useNavigate } from "react-router-dom";
-import CachedAvatar from "../ui/CachedAvatar";
 import { getViewerId, getBatchFollowStatuses, removeFollower } from "../../api/services/follows";
 import { setCachedFollowStatus, clearCachedFollowStatus } from "../../lib/followStatusCache";
 import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
 import { MdMoreVert } from "react-icons/md";
 import { toast } from "react-hot-toast";
 import { createPortal } from "react-dom";
+import DrawerProfileCard from "../ui/DrawerProfileCard";
 
 type Props = {
   open: boolean;
@@ -368,102 +367,69 @@ export default function FollowListDrawer({
             const isRemoving = removingId === u.id;
 
             return (
-              <li
-                key={u.id}
-                className="flex items-center gap-3 p-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]"
-              >
-                {/* avatar */}
-                <div
-                  className="cursor-pointer"
+              <li key={u.id}>
+                <DrawerProfileCard
+                  id={u.id}
+                  username={u.username}
+                  display_name={u.display_name}
+                  avatar_url={u.avatar_url}
                   onClick={() => {
                     navigate(`/u/${u.username || u.id}`);
                     onClose(); // Close the drawer when navigating
                   }}
-                >
-                  <CachedAvatar
-                    profileId={u.id}
-                    avatarUrl={u.avatar_url}
-                    className="w-9 h-9 rounded-full object-cover"
-                    alt={`${u.display_name || "User"} profile picture`}
-                  />
-                </div>
-
-                {/* names */}
-                <div
-                  className="min-w-0 flex-1 cursor-pointer"
-                  onClick={() => {
-                    navigate(`/u/${u.username || u.id}`);
-                    onClose(); // Close the drawer when navigating
+                  showFollowButton={true}
+                  onFollowChange={(nowFollowing) => {
+                    // If we're showing the "following" list and the viewer unfollows,
+                    // remove that row from the list so it reflects reality immediately.
+                    if (mode === "following" && !nowFollowing) {
+                      setItems((prev) => prev.filter((x) => x.id !== u.id));
+                      setLoadedItems((prev) => prev.filter((x) => x.id !== u.id));
+                    }
+                    // If this is the "followers" list, we don't remove on follow/unfollow,
+                    // because it's about who follows *me*, not who I follow.
                   }}
-                >
-                  <div className="text-sm leading-tight truncate">
-                    {u.display_name || "Unnamed"}
-                  </div>
-                  <div className="text-xs text-[var(--text)]/60 truncate">
-                    @{u.username || "user"}
-                  </div>
-                </div>
-
-                {/* Actions: Follow button and three-dot menu */}
-                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                  {/* inline follow/unfollow */}
-                  <FollowButton
-                    targetId={u.id}
-                    className="ml-2"
-                    onChange={(nowFollowing) => {
-                      // If we're showing the "following" list and the viewer unfollows,
-                      // remove that row from the list so it reflects reality immediately.
-                      if (mode === "following" && !nowFollowing) {
-                        setItems((prev) => prev.filter((x) => x.id !== u.id));
-                        setLoadedItems((prev) => prev.filter((x) => x.id !== u.id));
-                      }
-                      // If this is the "followers" list, we don't remove on follow/unfollow,
-                      // because it's about who follows *me*, not who I follow.
-                    }}
-                  />
-
-                  {/* [OPTIMIZATION: Phase 4 - Performance] Three-dot menu - loads immediately (no lazy loading) */}
-                  {/* Why: Instant menu display, better UX, no delay when clicking */}
-                  {showMenu && (
-                    <div
-                      ref={(el) => {
-                        menuRefs.current[u.id] = el;
-                      }}
-                      className="relative"
-                    >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId(isMenuOpen ? null : u.id);
+                  customActions={
+                    showMenu ? (
+                      <div
+                        ref={(el) => {
+                          menuRefs.current[u.id] = el;
                         }}
-                        className="p-1 rounded-full hover:bg-[var(--surface)]/50 transition-colors"
-                        aria-label="More options"
+                        className="relative"
                       >
-                        <MdMoreVert
-                          size={18}
-                          className="text-[var(--text)]/70"
-                        />
-                      </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId(isMenuOpen ? null : u.id);
+                          }}
+                          className="p-1 rounded-full hover:bg-[var(--surface)]/50 transition-colors"
+                          aria-label="More options"
+                        >
+                          <MdMoreVert
+                            size={18}
+                            className="text-[var(--text)]/70"
+                          />
+                        </button>
 
-                      {/* Dropdown menu */}
-                      {isMenuOpen && (
-                        <div className="absolute right-0 top-8 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg py-1 min-w-[140px] z-50">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenMenuId(null);
-                              setShowRemoveConfirm(u.id);
-                            }}
-                            disabled={isRemoving}
-                            className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2 disabled:opacity-50"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                        {/* Dropdown menu */}
+                        {isMenuOpen && (
+                          <div className="absolute right-0 top-8 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg py-1 min-w-[140px] z-50">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuId(null);
+                                setShowRemoveConfirm(u.id);
+                              }}
+                              disabled={isRemoving}
+                              className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2 disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : undefined
+                  }
+                />
               </li>
             );
           })}

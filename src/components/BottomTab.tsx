@@ -442,6 +442,7 @@ function BottomTab() {
           url={avatarUrl || undefined}
           name={displayName || " "}
           size={28}
+          userId={authedId || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
         />
       ) : (
         <BsPersonFill />
