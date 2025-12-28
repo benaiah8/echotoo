@@ -449,116 +449,12 @@ class DataCache {
     return cachedData;
   }
 
-  // [OPTIMIZATION: Phase 1 - Batch] Prefetch related data for posts using batch loader
-  // Why: Replaces individual queries per post with batched queries, reducing ~50 queries to ~5-8
-  async prefetchRelatedData(posts: any[]): Promise<void> {
-    try {
-      if (!posts || !Array.isArray(posts) || posts.length === 0) return;
-
-      // Import cache functions and batch loader dynamically to avoid circular dependencies
-      const { getCachedFollowStatus, setCachedFollowStatus } = await import(
-        "./followStatusCache"
-      );
-      const { getCachedRSVPData, setCachedRSVPData } = await import(
-        "./rsvpCache"
-      );
-      const { getCachedProfile, setCachedProfile } = await import(
-        "./profileCache"
-      );
-      const { supabase } = await import("../lib/supabaseClient");
-      const { loadBatchData } = await import("./batchDataLoader");
-
-      // Get current user for follow status checks
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const currentUserId = session?.user?.id;
-
-      if (!currentUserId) return;
-
-      // Get profile ID for current user
-      const { data: currentUserProfile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", currentUserId)
-        .maybeSingle();
-
-      if (!currentUserProfile) return;
-
-      // Extract data from posts for batch loading
-      const postIds = posts.map((post) => post.id).filter(Boolean);
-      const authorIds = [
-        ...new Set(
-          posts.map((post) => post.author_id || post.author?.id).filter(Boolean)
-        ),
-      ];
-      const hangoutPostIds = posts
-        .filter((post) => post.type === "hangout")
-        .map((post) => post.id)
-        .filter(Boolean);
-
-      // Check what's already cached to optimize batch loading
-      // We'll still pass all IDs to batch loader, but skip caching if already cached
-      const uncachedHangoutPostIds: string[] = [];
-
-      // Check RSVP cache (only check RSVP since it's the most expensive)
-      for (const postId of hangoutPostIds) {
-        const cached = getCachedRSVPData(postId);
-        if (!cached) {
-          uncachedHangoutPostIds.push(postId);
-        }
-      }
-
-      // Use batch loader to fetch all data
-      // Note: Batch loader is efficient even if some data is cached - it batches queries
-      // We pass all IDs and let batch loader handle it, then we update caches
-      const batchResult = await loadBatchData({
-        postIds: postIds, // All post IDs (for like/save status - no cache yet)
-        authorIds: authorIds, // All author IDs (for follow status and profiles)
-        hangoutPostIds: hangoutPostIds, // All hangout post IDs (batch loader handles efficiently)
-        currentUserId: currentUserId,
-        currentProfileId: currentUserProfile.id,
-      });
-
-      // Update follow status cache (only if not already cached)
-      batchResult.followStatuses.forEach((status, authorId) => {
-        if (authorId !== currentUserProfile.id) {
-          const cached = getCachedFollowStatus(currentUserProfile.id, authorId);
-          if (!cached) {
-            setCachedFollowStatus(currentUserProfile.id, authorId, status);
-          }
-        }
-      });
-
-      // Update RSVP cache (only if not already cached)
-      batchResult.rsvpData.forEach((rsvpData, postId) => {
-        const cached = getCachedRSVPData(postId);
-        if (!cached) {
-          setCachedRSVPData(postId, rsvpData.users, rsvpData.currentUserStatus);
-        }
-      });
-
-      // Update profile cache (only if not already cached)
-      batchResult.profiles.forEach((profile, profileId) => {
-        const cached = getCachedProfile(profileId);
-        if (!cached) {
-          setCachedProfile(profile);
-        }
-      });
-
-      // Note: Like and save statuses are returned in batchResult but not cached yet
-      // Components will use them directly from the batch result when we integrate in Step 4
-
-      console.log(
-        "[DataCache] Successfully prefetched related data for",
-        posts.length,
-        "posts using batch loader"
-      );
-    } catch (error) {
-      console.warn("[DataCache] Failed to prefetch related data:", error);
-      // Don't throw - allow app to continue even if prefetching fails
-    }
-  }
+  // [REMOVED] prefetchRelatedData() - obsolete batch loader replaced by PostgreSQL RPC functions
+  // All related data now comes from optimized database functions:
+  // - get_feed_with_related_data (home feed)
+  // - get_user_posts_created_with_related_data (profile posts)
+  // - get_post_detail_with_related_data (detail pages)
+  // - get_rsvp_list_with_profiles (RSVP lists)
 
   // Prefetch related data
   async prefetchFeedData(currentOpts: any): Promise<void> {

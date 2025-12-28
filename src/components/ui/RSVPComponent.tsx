@@ -8,7 +8,7 @@ import { useDispatch } from "react-redux";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { imgUrlPublic } from "../../lib/img";
 import { getCachedRSVPData, setCachedRSVPData } from "../../lib/rsvpCache";
-import { type RSVPData } from "../../lib/batchDataLoader";
+import { type RSVPData } from "../../types/legacy";
 
 interface RSVPUser {
   id: string;

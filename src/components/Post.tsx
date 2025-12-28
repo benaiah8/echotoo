@@ -27,7 +27,7 @@ import {
   getCachedFollowStatus,
   setCachedFollowStatus,
 } from "../lib/followStatusCache";
-import { type BatchLoadResult } from "../lib/batchDataLoader";
+import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 
 type PostProps = {

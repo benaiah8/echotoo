@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Hangout from "../../components/Hangout";
-import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type BatchLoadResult } from "../../types/legacy";
 import ProgressiveHorizontalRail from "../../components/ProgressiveHorizontalRail";
 
 /** Some feeds include extra fields; make them optional here */

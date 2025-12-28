@@ -5,7 +5,7 @@ import {
   setCachedAvatar,
   preloadAvatar,
 } from "../lib/avatarCache";
-import { type BatchLoadResult } from "../lib/batchDataLoader";
+import { type BatchLoadResult } from "../types/legacy";
 
 interface ProgressivePostProps {
   postId: string;

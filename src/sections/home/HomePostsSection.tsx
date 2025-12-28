@@ -7,7 +7,7 @@ import ProgressiveFeed from "../../components/ProgressiveFeed";
 import { getPublicFeed } from "../../api/queries/getPublicFeed";
 import { getViewerId } from "../../api/services/follows";
 import { dataCache } from "../../lib/dataCache";
-import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type BatchLoadResult } from "../../types/legacy";
 import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 

@@ -12,7 +12,7 @@ import { getCommentCount } from "../../api/services/comments";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { RootState } from "../../app/store";
-import { type BatchLoadResult } from "../../lib/batchDataLoader";
+import { type BatchLoadResult } from "../../types/legacy";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 
 interface PostActionsProps {
