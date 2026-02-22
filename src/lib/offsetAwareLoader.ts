@@ -152,6 +152,48 @@ export function createOffsetAwareLoader<T>(
 }
 
 /**
+ * Normalized shape for load results. ProgressiveFeed always uses this.
+ * - consumedOffset = backend rows consumed (never from client-side dedupe)
+ * - count = total from backend when available
+ */
+export interface NormalizedLoadResult<T> {
+  items: T[];
+  consumedOffset: number; // Backend rows consumed (raw response length)
+  count?: number; // Total from backend (for hasMore)
+}
+
+/**
+ * Normalize loadItems return shape. Handles:
+ * - T[] -> { items, consumedOffset: items.length, count: undefined }
+ * - { items, count } -> { items, consumedOffset: items.length, count }
+ * - { items, consumedOffset, count } -> pass through (consumedOffset must be backend rows)
+ * - { posts, count } (RPC shape) -> { items: posts, consumedOffset: posts.length, count }
+ */
+export function normalizeLoadResult<T>(
+  result: T[] | { items?: T[]; posts?: T[]; consumedOffset?: number; count?: number }
+): NormalizedLoadResult<T> {
+  if (Array.isArray(result)) {
+    return {
+      items: result,
+      consumedOffset: result.length,
+      count: undefined,
+    };
+  }
+  if (result && typeof result === "object") {
+    const items = result.items ?? result.posts ?? [];
+    const arr = Array.isArray(items) ? items : [];
+    const consumedOffset =
+      typeof result.consumedOffset === "number" ? result.consumedOffset : arr.length;
+    return {
+      items: arr,
+      consumedOffset,
+      count: typeof result.count === "number" ? result.count : undefined,
+    };
+  }
+  return { items: [], consumedOffset: 0, count: undefined };
+}
+
+/**
  * Helper to check if a load result is in the new format (with consumedOffset)
  */
 export function isOffsetAwareResult<T>(
@@ -174,7 +216,14 @@ export function extractItems<T>(
   if (isOffsetAwareResult(result)) {
     return result.items;
   }
-  return result;
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && "items" in result) {
+    return Array.isArray((result as any).items) ? (result as any).items : [];
+  }
+  if (result && typeof result === "object" && "posts" in result) {
+    return Array.isArray((result as any).posts) ? (result as any).posts : [];
+  }
+  return [];
 }
 
 /**
@@ -186,7 +235,16 @@ export function extractConsumedOffset<T>(
   if (isOffsetAwareResult(result)) {
     return result.consumedOffset;
   }
-  return result.length;
+  if (Array.isArray(result)) return result.length;
+  if (result && typeof result === "object") {
+    const items = (result as any).items ?? (result as any).posts;
+    const len = Array.isArray(items) ? items.length : 0;
+    if (typeof (result as any).consumedOffset === "number") {
+      return (result as any).consumedOffset;
+    }
+    return len;
+  }
+  return 0;
 }
 
 /**
@@ -197,6 +255,10 @@ export function extractCount<T>(
 ): number | undefined {
   if (isOffsetAwareResult(result)) {
     return result.count;
+  }
+  if (result && typeof result === "object" && "count" in result) {
+    const c = (result as any).count;
+    return typeof c === "number" ? c : undefined;
   }
   return undefined;
 }

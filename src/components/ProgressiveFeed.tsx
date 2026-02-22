@@ -21,20 +21,19 @@ import React, {
   useRef,
   useCallback,
   useMemo,
-  useTransition,
 } from "react";
-import { flushSync } from "react-dom";
 import { useStaleWhileRevalidate } from "../hooks/useStaleWhileRevalidate";
-import { useScrollStopDetection } from "../hooks/useScrollStopDetection";
 import { useVirtualScrolling } from "../hooks/useVirtualScrolling";
 import { useAdaptiveBuffer } from "../hooks/useAdaptiveBuffer";
+import { isPWA } from "../lib/pwaDetection";
 import { useConnectionAware } from "../hooks/useConnectionAware";
 import {
   type OffsetAwareLoadResult,
-  extractItems,
-  extractConsumedOffset,
-  extractCount,
+  normalizeLoadResult,
 } from "../lib/offsetAwareLoader";
+import { onPostChanged } from "../lib/postEvents";
+import { applyPostPatch } from "../lib/applyPostPatch";
+import { logFetchStart } from "../lib/tabVisibilityDebug";
 
 export interface ProgressiveFeedProps<T> {
   // Data loading
@@ -62,9 +61,11 @@ export interface ProgressiveFeedProps<T> {
   enableLazyLoading?: boolean;
   loadMoreThreshold?: number; // Pixels from bottom to trigger load (default: 200px)
 
-  // Scroll stop detection
+  // [STEP 2] Scroll stop detection removed - caused IO disconnect and "skeleton until scroll" behavior
+  /** @deprecated Ignored - scroll stop detection removed */
   enableScrollStopDetection?: boolean;
-  scrollStopDelay?: number; // Milliseconds to wait before stopping (default: 2000ms)
+  /** @deprecated Ignored - scroll stop detection removed */
+  scrollStopDelay?: number;
 
   // Loading states
   loading?: boolean;
@@ -83,6 +84,9 @@ export interface ProgressiveFeedProps<T> {
   // Options
   pageSize?: number; // Items to load per page (default: 6)
   maxItems?: number; // Maximum items to load (0 = unlimited)
+  isVisible?: boolean; // Default: true (backward compatible) - gates auto-load when hidden
+  /** [DEBUG] Tab id for visibility logging (e.g. "home", "profile") */
+  tabId?: string;
 }
 
 /**
@@ -116,8 +120,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
   bufferSize = "adaptive",
   enableLazyLoading = true,
   loadMoreThreshold = 200,
-  enableScrollStopDetection = true,
-  scrollStopDelay = 1000, // Faster response to scroll stop (reduced from 3000ms)
+  enableScrollStopDetection: _enableScrollStopDetection = undefined, // [STEP 2] Ignored - removed
+  scrollStopDelay: _scrollStopDelay = undefined, // [STEP 2] Ignored - removed
   loading: externalLoading = false,
   error: externalError = null,
   emptyMessage = "No items to display",
@@ -126,12 +130,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
   containerRef: externalContainerRef,
   pageSize = 1, // Default: load one item at a time for true progressive loading
   maxItems = 0,
+  isVisible = true, // [STEP 1] Default: true for backward compatibility
+  tabId = "unknown",
 }: ProgressiveFeedProps<T>) {
   // PWA detection: Use centralized utility
-  const isPWA = (() => {
+  const isPWAValue = (() => {
     try {
-      const { isPWA: detectPWA } = require("../lib/pwaDetection");
-      return detectPWA();
+      return isPWA();
     } catch {
       // Fallback if module not available
       return (
@@ -143,38 +148,26 @@ export default function ProgressiveFeed<T extends { id: string }>({
     }
   })();
   /**
-   * Calculate initial load size - fixed at 5 items
-   * User requested: "when first load it should load more and also loading just 3 is little lets load 5 posts"
+   * Calculate initial load size - fixed at 15 items (egress reduction)
    */
   const calculateInitialLoadSize = useCallback((): number => {
-    return 5; // Fixed: always load 5 items initially, show one-by-one
+    return 15; // Fixed: load 15 items initially for fewer RPCs
   }, []);
 
-  // Calculate initial items and offset together to keep them in sync
-  // This ensures offsetRef matches items.length from the start
-  const getInitialItems = (): T[] => {
-    let initial: T[] = [];
+  // Calculate initial items - ONLY use initialItems prop during render
+  // Do NOT call getCachedItems() during render - it causes re-render loops
+  // getCachedItems() is created with useCallback and gets new reference on every render
+  // Calling it during render causes component to re-render when cache populates
+  const initialItemsArray = useMemo(() => {
     if (initialItems && initialItems.length > 0) {
-      console.log('[ProgressiveFeed] 💾 Using initialItems prop:', initialItems.length, 'items');
-      initial = initialItems;
-    } else if (getCachedItems) {
-      const cached = getCachedItems();
-      if (cached && cached.length > 0) {
-        console.log('[ProgressiveFeed] 💾 Using cached items:', cached.length, 'items');
-        initial = cached;
-      } else {
-        console.log('[ProgressiveFeed] ❌ No cached items found');
-      }
-    } else {
-      console.log('[ProgressiveFeed] ❌ No cache function provided');
+      // Deduplicate by ID to prevent duplicate keys
+      return Array.from(
+        new Map(initialItems.map((item) => [item.id, item])).values()
+      );
     }
-    // Deduplicate by ID to prevent duplicate keys
-    const deduplicated = Array.from(new Map(initial.map((item) => [item.id, item])).values());
-    console.log('[ProgressiveFeed] 📦 Initial state:', deduplicated.length, 'items (offset:', deduplicated.length, ')');
-    return deduplicated;
-  };
+    return [];
+  }, []); // Empty deps - only run on mount, ignore initialItems changes
 
-  const initialItemsArray = getInitialItems();
   const initialOffset = initialItemsArray.length;
 
   // Internal state
@@ -183,19 +176,139 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(externalError);
 
-  // useTransition for progressive rendering (prevents React from batching updates)
-  const [isPending, startTransition] = useTransition();
-
   // Refs
   const internalContainerRef = useRef<HTMLDivElement>(null);
   const containerRef = externalContainerRef || internalContainerRef;
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
   const offsetRef = useRef(initialOffset); // Initialize with calculated offset
-  const shouldLoadRef = useRef(true);
   const initialLoadCompleteRef = useRef(false); // Track if initial load has completed
 
+  // [FIX] Track current items via ref for cache updates
+  // This avoids calling setCachedItems inside setItems callback (causes infinite loops)
+  const itemsRef = useRef<T[]>(initialItemsArray);
+
+  // [STEP 1] New refs for visibility gating and deduplication
+  // [FIX C] Track in-flight offsets with pageSize to prevent duplicate requests
+  const inFlightOffsetsRef = useRef<Set<string>>(new Set());
+  // [FIX B] Use refs for stable dependencies in loadMore
+  const hasMoreRef = useRef(true);
+  const isVisibleRef = useRef(true);
+  // [FIX A] Store observer in ref for proper cleanup
+  const observerRef = useRef<IntersectionObserver | null>(null);
+
+  // [CHAIN] Cap chained loads per completion to avoid infinite loops
+  const PREFETCH_PX = 600;
+  const MAX_CHAINED_LOADS = 1; // One chain max - prevents rapid multiple RPCs
+  const chainCountRef = useRef(0);
+
+  // [PASS 2] Mount + visibility guards: track scheduled work and clear on hide/unmount
+  const mountedRef = useRef(true);
+  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const rafsRef = useRef<number[]>([]);
+
+  const scheduleTimeout = useCallback(
+    (fn: () => void, ms: number): ReturnType<typeof setTimeout> => {
+      const id = setTimeout(fn, ms);
+      timeoutsRef.current.push(id);
+      return id;
+    },
+    []
+  );
+  const scheduleRaf = useCallback((fn: () => void): number => {
+    const id = requestAnimationFrame(fn);
+    rafsRef.current.push(id);
+    return id;
+  }, []);
+
+  // [CHAIN] Check if sentinel is within prefetch distance of viewport bottom
+  const isSentinelNearBottom = useCallback((): boolean => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return false;
+    const rect = sentinel.getBoundingClientRect();
+    const viewportBottom = window.innerHeight;
+    return rect.top < viewportBottom + PREFETCH_PX && rect.bottom > 0;
+  }, []);
+
+  const clearScheduled = useCallback(() => {
+    timeoutsRef.current.forEach((id) => clearTimeout(id));
+    timeoutsRef.current = [];
+    rafsRef.current.forEach((id) => cancelAnimationFrame(id));
+    rafsRef.current = [];
+  }, []);
+
+  // [DEBUG] Stable identifier per instance (used only when DEBUG_PF is true)
+  const logIdRef = useRef<string>(
+    `PF-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
+  const logId = logIdRef.current;
+
+  // [DEBUG] Toggle for console noise - [STEP 1] TEMP: Enable for repro
+  const DEBUG_PF = true;
+
+  // [FIX] Keep itemsRef in sync with items state
+  // This allows us to read current items without using setItems callback
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  // [POST EVENTS] Subscribe to post:changed and patch feed items (like/save/comment/follow)
+  useEffect(() => {
+    const cleanup = onPostChanged((e) => {
+      const { postId, patch } = e.detail;
+      setItems((prev) => {
+        const next = prev.map((item) => {
+          if (item.id !== postId) return item;
+          return applyPostPatch(item as Record<string, unknown>, patch) as T;
+        });
+        if (setCachedItems && next.some((n, i) => n !== prev[i])) {
+          scheduleTimeout(() => {
+            if (!mountedRef.current) return;
+            setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    });
+    return cleanup;
+  }, [setCachedItems, scheduleTimeout]);
+
+  // [STEP 1] Keep refs in sync with state for stable dependencies
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+  useEffect(() => {
+    isVisibleRef.current = isVisible ?? true;
+  }, [isVisible]);
+
+  // [PASS 2] Mount effect: set mountedRef, clear scheduled work on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearScheduled();
+    };
+  }, [clearScheduled]);
+
+  // [PASS 2] When isVisible becomes false, clear scheduled timers/RAF immediately
+  useEffect(() => {
+    if (!isVisible) {
+      clearScheduled();
+    }
+  }, [isVisible, clearScheduled]);
+
   // Component mount tracking (removed excessive logs)
+  useEffect(() => {
+    if (!DEBUG_PF) return;
+    console.log("[PF] mount", {
+      logId,
+      initialOffset,
+      initialItemsLen: initialItemsArray.length,
+    });
+    return () => {
+      console.log("[PF] unmount", { logId });
+    };
+  }, [logId, initialOffset, initialItemsArray.length, DEBUG_PF]);
 
   // [PHASE 2.3] Connection-aware configuration
   const {
@@ -216,11 +329,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
     enableScrollSpeedAware: true,
   });
 
-  // [PHASE 2.3] Determine actual pageSize (use connection-aware if provided pageSize is base)
+  // [PHASE 2.3] Determine actual pageSize (connection-aware + clamp)
+  const MIN_PAGE_SIZE = 5; // Prevent collapse to 1 post on slow connections
   const actualPageSize = useMemo(() => {
-    // If pageSize was explicitly provided, use connection-aware adjustment
-    // Otherwise, use the provided pageSize as-is (for backward compatibility)
-    return connectionAwarePageSize;
+    return Math.max(MIN_PAGE_SIZE, connectionAwarePageSize);
   }, [connectionAwarePageSize]);
 
   // Determine actual buffer size
@@ -239,22 +351,72 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const loadMoreRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const loadMore = useCallback(async () => {
+    // [FIX 3] Declare dedupeKey at top for finally block access
+    const currentOffset = offsetRef.current;
+    const dedupeKey = `${currentOffset}:${actualPageSize}`;
+    let didMarkInFlight = false;
+
+    // [STEP 1] Guard: Check visibility first
+    if (!isVisibleRef.current) {
+      if (DEBUG_PF) {
+        console.log("[PF] loadMore blocked: not visible", { logId });
+      }
+      return;
+    }
+
+    if (DEBUG_PF) {
+      console.log("[PF] loadMore enter", {
+        logId,
+        offset: offsetRef.current,
+        itemsLen: itemsRef.current.length, // [FIX B] Use ref
+        hasMore: hasMoreRef.current, // [FIX B] Use ref
+        loadingRef: loadingRef.current,
+        isLoadingMore,
+      });
+    }
     // Double-check: Ensure initial load is complete before allowing subsequent loads
     if (!initialLoadCompleteRef.current) {
+      if (DEBUG_PF) {
+        console.log("[PF] loadMore blocked: initial load not complete", {
+          logId,
+        });
+      }
       return; // Wait for initial load to complete
     }
 
     // [PHASE 2.3] Pause loading on very slow connections
     if (shouldPause) {
+      if (DEBUG_PF) {
+        console.log("[PF] loadMore blocked: shouldPause", { logId });
+      }
       return; // Don't load more on very slow connections
     }
 
     // CRITICAL FIX: Prevent loadMore from firing with offset 0 if we already have items
     // This prevents race condition where initial load and loadMore both fire with offset 0
-    if (offsetRef.current === 0 && items.length > 0) {
+    if (offsetRef.current === 0 && itemsRef.current.length > 0) {
+      // [FIX B] Use ref
       console.warn(
         "[ProgressiveFeed] loadMore called with offset 0 but items exist - skipping to prevent duplicate loads"
       );
+      if (DEBUG_PF) {
+        console.log("[PF] loadMore blocked: offset=0 items>0", {
+          logId,
+          offset: offsetRef.current,
+          itemsLen: itemsRef.current.length, // [FIX B] Use ref
+        });
+      }
+      return;
+    }
+
+    // [FIX C] Check in-flight dedupe before proceeding
+    if (inFlightOffsetsRef.current.has(dedupeKey)) {
+      if (DEBUG_PF) {
+        console.log("[PF] loadMore blocked: duplicate in-flight", {
+          logId,
+          dedupeKey,
+        });
+      }
       return;
     }
 
@@ -262,11 +424,25 @@ export default function ProgressiveFeed<T extends { id: string }>({
     if (
       loadingRef.current ||
       isLoadingMore ||
-      !hasMore ||
-      !shouldLoadRef.current
+      !hasMoreRef.current // [FIX B] Use ref
     ) {
+      if (DEBUG_PF) {
+        console.log("[PF BLOCKED FLAGS] loadMore flags", {
+          sentinelPresent: !!sentinelRef.current,
+          initialLoadComplete: initialLoadCompleteRef.current,
+          loadingRef: loadingRef.current,
+          isLoadingMoreState: isLoadingMore,
+          hasMoreRef: hasMoreRef.current,
+          offset: offsetRef.current,
+          itemsLen: itemsRef.current.length,
+        });
+      }
       return;
     }
+
+    // [FIX C] Mark this offset as in-flight (only after all guards pass)
+    inFlightOffsetsRef.current.add(dedupeKey);
+    didMarkInFlight = true;
 
     // Fix: Ensure isLoadingMore and loadingRef stay in sync - set both together
     loadingRef.current = true;
@@ -274,10 +450,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
     setError(null);
 
     // [PWA FIX] Detect PWA context for longer timeout
-    const isPWA = (() => {
+    const isPWAValue = (() => {
       try {
-        const { isPWA: detectPWA } = require("../lib/pwaDetection");
-        return detectPWA();
+        return isPWA();
       } catch {
         // Fallback if module not available
         return (
@@ -288,20 +463,25 @@ export default function ProgressiveFeed<T extends { id: string }>({
     })();
 
     // Safety timeout: Force reset loading state after timeout to prevent stuck state
-    // Longer timeout for PWA (20s) to account for slower network connections in PWA context
-    const timeout = isPWA ? 20000 : 15000;
-    let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
-      if (loadingRef.current) {
-        console.warn(
-          `[ProgressiveFeed] loadMore: TIMEOUT${
-            isPWA ? " (PWA)" : ""
-          } - Force resetting loading state after ${timeout}ms. This usually indicates a slow network or database query.`
-        );
-        loadingRef.current = false;
-        setIsLoadingMore(false);
-        timeoutId = null;
-      }
-    }, timeout);
+    // [FIX] Increased timeout for RPC calls which can be slow (30s for PWA, 25s for web)
+    // Longer timeout for PWA (30s) to account for slower network connections in PWA context
+    const timeout = isPWAValue ? 30000 : 25000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = scheduleTimeout(
+      () => {
+        if (loadingRef.current) {
+          console.warn(
+            `[ProgressiveFeed] loadMore: TIMEOUT${
+              isPWAValue ? " (PWA)" : ""
+            } - Request taking longer than ${timeout}ms. This usually indicates a slow network or database query.`
+          );
+          console.warn(
+            `[ProgressiveFeed] Request still in progress after timeout. Waiting for completion...`
+          );
+          timeoutId = null;
+        }
+      },
+      timeout
+    );
 
     try {
       // [PWA FIX] Add retry logic for PWA network issues
@@ -309,6 +489,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
         attempt = 1
       ): Promise<T[] | OffsetAwareLoadResult<T>> => {
         try {
+          logFetchStart(
+            "ProgressiveFeed",
+            tabId,
+            isVisibleRef.current,
+            undefined
+          );
           // [PHASE 2.3] Use connection-aware pageSize
           return await loadItems(offsetRef.current, actualPageSize);
         } catch (error) {
@@ -328,146 +514,121 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
       const loadResult = await loadWithRetry();
 
-      // Extract items, consumed offset, and count (supports both old and new formats)
-      const newItems = extractItems(loadResult);
-      const consumedOffset = extractConsumedOffset(loadResult);
-      const count = extractCount(loadResult);
+      // [PAGINATION FIX] Normalize result - offset/hasMore use backend rows only, never client dedupe
+      const { items: fetchedItems, consumedOffset, count } =
+        normalizeLoadResult(loadResult);
 
-      if (newItems.length === 0) {
-        // Simplified: Only set hasMore=false when we definitely reached the end
-        // consumedOffset === 0 means no items were consumed, so we're at the end
-        if (consumedOffset === 0) {
-          setHasMore(false);
-        } else {
-          // We consumed offsets but got 0 items (likely filtering)
-          // Update offset and try again
-          offsetRef.current += consumedOffset;
+      const oldOffset = offsetRef.current;
+      const requestedLimit = actualPageSize;
+      const fetchedLen = fetchedItems.length;
+
+      // Rule 1 — Backend offset: advance by backend rows consumed (raw response length)
+      const backendConsumed = consumedOffset;
+      const nextOffset = oldOffset + backendConsumed;
+      offsetRef.current = nextOffset;
+
+      // Rule 3 — hasMore from backend count/limit, NOT from dedupe results
+      let nextHasMore: boolean;
+      if (fetchedLen === 0) {
+        nextHasMore = false; // End reached
+      } else if (count != null) {
+        nextHasMore = nextOffset < count;
+      } else {
+        nextHasMore = fetchedLen >= requestedLimit; // No count: assume more if full page
+      }
+      setHasMore(nextHasMore);
+
+      // [DEBUG] One log per successful fetch
+      if (DEBUG_PF) {
+        const existingIds = new Set(itemsRef.current.map((p) => p.id));
+        const addedUnique = fetchedItems.filter((i) => !existingIds.has(i.id))
+          .length;
+        console.log("[PF] loadMore result", {
+          logId,
+          requestedLimit,
+          oldOffset,
+          fetchedLen,
+          addedUnique,
+          nextOffset,
+          count: count ?? "n/a",
+          hasMore: nextHasMore,
+        });
+      }
+
+      if (fetchedLen === 0) {
+        loadingRef.current = false;
+        setIsLoadingMore(false);
+        if (DEBUG_PF) {
+          console.log("[PF] loadMore exit: end reached", {
+            logId,
+            nextOffset,
+          });
         }
       } else {
-        // CRITICAL FIX: Update offset using newItems.length, not consumedOffset
-        // consumedOffset might be 0 or incorrect if API returns fewer items than requested
-        // We definitely consumed newItems.length offsets, so use that
-        if (newItems.length > 0) {
-          offsetRef.current += newItems.length;
-        } else if (consumedOffset === 0) {
-          // No items consumed and no items returned = at end
-          setHasMore(false);
+        // [STEP 1 FIX] Add entire batch in ONE synchronous setItems update
+        // UI dedupe is separate — does NOT affect offset progression
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
         }
 
-        // OPTIMIZATION: Use count from PostgreSQL function for reliable hasMore detection
-        // If count is available and count < limit, we've reached the end
-        // Otherwise, fallback to length check (for backward compatibility)
-        // [PHASE 2.3] Use connection-aware pageSize
-        if (count !== undefined) {
-          if (count < actualPageSize) {
+        // [ORDERING] Keep prev in stable order, append only truly-new items (dedupe by id)
+        setItems((prev) => {
+          const existingIds = new Set(prev.map((p) => p.id));
+          const toAppend = fetchedItems.filter(
+            (item) => !existingIds.has(item.id)
+          );
+          const merged = [...prev, ...toAppend];
+          if (maxItems > 0 && merged.length >= maxItems) {
             setHasMore(false);
           }
-        } else if (newItems.length < actualPageSize) {
-          // Fallback: Use length check if count is not available
-          setHasMore(false);
-        }
+          return merged;
+        });
+        loadingRef.current = false;
+        setIsLoadingMore(false);
 
-        // [PHASE 2.4] PROGRESSIVE RENDERING: Add items one-by-one for smooth appearance
-        // This gives the user immediate feedback as items appear, not all at once
-        if (newItems.length > 0) {
-          // Add items one-by-one with 100ms delays between each
-          // 100ms provides smoother UX while still preventing React batching
-          newItems.forEach((item, index) => {
-            const addItem = () => {
-              if (index === 0) {
-                // First item: flushSync (immediate, non-batched, forces render)
-                flushSync(() => {
-                  setItems((prev) => {
-                    // Avoid duplicates - use Map to ensure uniqueness
-                    const itemsMap = new Map<string, T>();
-                    // Add existing items
-                    prev.forEach((existingItem) => {
-                      itemsMap.set(existingItem.id, existingItem);
-                    });
-                    // Add this specific item
-                    itemsMap.set(item.id, item);
-                    const newItemsArray = Array.from(itemsMap.values());
-
-                    // Check maxItems using the NEW length
-                    if (maxItems > 0 && newItemsArray.length >= maxItems) {
-                      setHasMore(false);
-                    }
-
-                    return newItemsArray;
-                  });
-                });
-                // Reset loading state immediately after first item appears
-                loadingRef.current = false;
-                setIsLoadingMore(false);
-              } else {
-                // [PHASE 2.4] Subsequent items: startTransition (non-urgent, can be batched by React)
-                // 100ms delay ensures they're in separate event loop ticks for smooth appearance
-                startTransition(() => {
-                  setItems((prev) => {
-                    // Avoid duplicates - use Map to ensure uniqueness
-                    const itemsMap = new Map<string, T>();
-                    // Add existing items
-                    prev.forEach((existingItem) => {
-                      itemsMap.set(existingItem.id, existingItem);
-                    });
-                    // Add this specific item
-                    itemsMap.set(item.id, item);
-                    const newItemsArray = Array.from(itemsMap.values());
-
-                    // Check maxItems using the NEW length
-                    if (maxItems > 0 && newItemsArray.length >= maxItems) {
-                      setHasMore(false);
-                    }
-
-                    return newItemsArray;
-                  });
-                });
-              }
-            };
-
-            if (index === 0) {
-              // [PHASE 2.4] First item: show immediately (< 500ms target)
-              requestAnimationFrame(addItem);
-            } else {
-              // [PHASE 2.4] Subsequent items: show with 100ms delay between each
-              // 100ms provides smoother, more natural appearance
-              setTimeout(addItem, index * 100);
-            }
-          });
-
-          // Update cache asynchronously (non-blocking)
-          // Defer to next tick so it doesn't block progressive rendering
-          if (setCachedItems) {
-            // Store newItems in closure for async cache update
-            const itemsToCache = [...newItems];
-            setTimeout(() => {
-              // Read current items state and merge with new items
-              setItems((currentItems) => {
-                const itemsMap = new Map<string, T>();
-                // Add existing items from current state
-                currentItems.forEach((item) => itemsMap.set(item.id, item));
-                // Add new items (will overwrite duplicates)
-                itemsToCache.forEach((item) => itemsMap.set(item.id, item));
-                const mergedItems = Array.from(itemsMap.values());
-                // Update cache (outside of setItems callback)
-                setCachedItems(mergedItems);
-                return currentItems; // Return unchanged (we're just reading for cache)
-              });
-            }, 0); // Next tick, non-blocking
+        // [CHAIN] If sentinel still near bottom, chain loadMore (cap 1) without requiring scroll
+        const tryChain = () => {
+          if (
+            chainCountRef.current < MAX_CHAINED_LOADS &&
+            hasMoreRef.current &&
+            isSentinelNearBottom() &&
+            !loadingRef.current &&
+            initialLoadCompleteRef.current
+          ) {
+            chainCountRef.current++;
+            loadMoreRef.current?.();
+          } else {
+            chainCountRef.current = 0;
           }
-        } else {
-          // No items: reset loading state immediately
-          loadingRef.current = false;
-          setIsLoadingMore(false);
-        }
+        };
+        scheduleRaf(() => scheduleRaf(tryChain));
 
-        // REMOVED: Aggressive hasMore check that was stopping loading prematurely
-        // The existing logic at line 282 (if consumedOffset === 0) already handles
-        // the end case correctly. Removing this prevents false positives where
-        // API returns fewer items than requested but there are still more items.
-        // If there are truly no more items, API will return 0 items and consumedOffset
-        // will be 0, triggering hasMore=false correctly.
+        // Update cache asynchronously (non-blocking)
+        if (setCachedItems) {
+          const itemsToCache = [...fetchedItems];
+          scheduleTimeout(() => {
+            if (!mountedRef.current || !isVisibleRef.current) return;
+            const currentItems = itemsRef.current;
+            const existingIds = new Set(currentItems.map((i) => i.id));
+            const toAppend = itemsToCache.filter(
+              (item) => !existingIds.has(item.id)
+            );
+            const mergedItems = [...currentItems, ...toAppend];
+            if (DEBUG_PF) {
+              console.log("[PF] cache update", {
+                logId,
+                currentLen: currentItems.length,
+                addLen: itemsToCache.length,
+                mergedLen: mergedItems.length,
+              });
+            }
+            setCachedItems(mergedItems);
+          }, 0);
+        }
       }
+
+      // Rule 4 — No probe requests: end inferred from count/limit above
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
@@ -476,57 +637,30 @@ export default function ProgressiveFeed<T extends { id: string }>({
       loadingRef.current = false;
       setIsLoadingMore(false);
     } finally {
+      // [FIX 3] Remove from in-flight set only if we actually added it
+      if (didMarkInFlight) {
+        inFlightOffsetsRef.current.delete(dedupeKey);
+      }
+
       // Clear timeout if it exists
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
-      // Note: Loading state is reset immediately after fetch (before progressive rendering)
-      // This allows next load to start while items are still being added progressively
-
-      // Re-check if sentinel is visible after load completes
-      // This ensures loading continues if sentinel is still in viewport
-      requestAnimationFrame(() => {
-        if (
-          sentinelRef.current &&
-          hasMore &&
-          !loadingRef.current &&
-          loadMoreRef.current
-        ) {
-          const rect = sentinelRef.current.getBoundingClientRect();
-          const container = containerRef.current || document.documentElement;
-          const containerRect =
-            container === document.documentElement
-              ? {
-                  top: 0,
-                  bottom: window.innerHeight,
-                  left: 0,
-                  right: window.innerWidth,
-                }
-              : (container as HTMLElement).getBoundingClientRect();
-
-          const isVisible =
-            rect.top < containerRect.bottom + loadMoreThreshold &&
-            rect.bottom > containerRect.top - loadMoreThreshold;
-
-          if (isVisible) {
-            // Reset shouldLoadRef if sentinel is visible (allows loading to resume)
-            shouldLoadRef.current = true;
-            loadMoreRef.current();
-          }
-        }
-      });
+      // [PASS 2 C] Post-load scheduling removed. Rely on IO + user scroll for more loads.
     }
   }, [
-    hasMore,
     loadItems,
     maxItems,
     setCachedItems,
     isLoadingMore,
-    actualPageSize, // [PHASE 2.3] Use connection-aware pageSize
-    shouldPause, // [PHASE 2.3] Pause on slow connections
-    loadMoreThreshold,
-  ]); // Added actualPageSize, shouldPause, and loadMoreThreshold used in loadMore logic
+    actualPageSize,
+    shouldPause,
+    scheduleTimeout,
+    scheduleRaf,
+    isSentinelNearBottom,
+    tabId,
+  ]);
 
   // Store loadMore in ref for use in other hooks
   loadMoreRef.current = loadMore;
@@ -540,28 +674,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     enabled: enableVirtualScrolling && items.length > 50,
   });
 
-  // Scroll stop detection
-  // PWA FIX: Use longer delay for PWA to account for slower scroll detection
-  const adjustedScrollStopDelay = isPWA
-    ? scrollStopDelay * 1.5
-    : scrollStopDelay;
-  const { isStopped } = useScrollStopDetection({
-    container: containerRef.current || window,
-    delay: adjustedScrollStopDelay,
-    enabled: enableScrollStopDetection,
-    onScrollStop: () => {
-      console.log('[ProgressiveFeed] 🛑 STOP LOADING - shouldLoadRef = false');
-      shouldLoadRef.current = false;
-    },
-    onScrollResume: () => {
-      console.log('[ProgressiveFeed] ▶️ RESUME LOADING - shouldLoadRef = true');
-      shouldLoadRef.current = true;
-      // CRITICAL FIX: Don't auto-load on scroll resume
-      // Let IntersectionObserver handle loading when sentinel becomes visible
-      // This prevents continuous loading when user is scrolling
-      // The IntersectionObserver will trigger loadMore when sentinel is visible
-    },
-  });
+  // [STEP 2] useScrollStopDetection removed - it disconnected IO and caused "skeleton until scroll" behavior
 
   // [FIX] Disable SWR when using ProgressiveFeed - it conflicts with progressive loading
   // SWR was loading 1 item with offset 0, interfering with the main loading mechanism
@@ -579,8 +692,52 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   // [REMOVED] SWR data update effect - SWR is disabled to prevent conflicts
 
+  // [DIAGNOSTIC] Track initial load effect runs
+  const initialLoadRunCountRef = useRef(0);
+  const initialLoadGuardRef = useRef(false);
+
   // Initial load: fill viewport if no initial items
+  // [FIX] Check cache in useEffect, not during render
+  // This prevents re-render loops when getCachedItems reference changes
   useEffect(() => {
+    if (items.length > 0) return; // Already have items from initialItems prop
+
+    // Check cache ONCE on mount (not during render)
+    // This prevents re-render loops when getCachedItems reference changes
+    if (getCachedItems) {
+      const cached = getCachedItems();
+      if (cached && cached.length > 0) {
+        // Deduplicate by ID
+        const deduplicated = Array.from(
+          new Map(cached.map((item) => [item.id, item])).values()
+        );
+        setItems(deduplicated);
+        offsetRef.current = deduplicated.length;
+        if (setCachedItems) {
+          setCachedItems(deduplicated);
+        }
+        initialLoadCompleteRef.current = true;
+        return; // Cache loaded, don't proceed to API load
+      }
+    }
+    // [FIX] Empty deps - only run on mount
+    // This prevents re-running when getCachedItems reference changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally empty - only run once on mount
+
+  useEffect(() => {
+    if (!isVisible) return;
+
+    initialLoadRunCountRef.current += 1;
+
+    // Guard: Prevent multiple simultaneous initial loads
+    if (initialLoadGuardRef.current) {
+      if (DEBUG_PF) {
+        console.log("[PF] initialLoad blocked: guard set", { logId });
+      }
+      return;
+    }
+
     // Only do initial load if we have no items and haven't started loading
     if (
       items.length === 0 &&
@@ -590,6 +747,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
       !externalLoading &&
       !initialLoadCompleteRef.current // Prevent running if already completed
     ) {
+      if (DEBUG_PF) {
+        console.log("[PF] initialLoad start", { logId });
+      }
+      initialLoadGuardRef.current = true; // Set guard
       // PWA FIX: Add small delay for PWA to ensure DOM is ready
       const performInitialLoad = () => {
         const initialLoadSize = calculateInitialLoadSize();
@@ -597,110 +758,89 @@ export default function ProgressiveFeed<T extends { id: string }>({
         loadingRef.current = true;
         setIsLoadingMore(true);
 
+        logFetchStart("ProgressiveFeed", tabId, isVisible, undefined);
         loadItems(0, initialLoadSize)
           .then((loadResult) => {
-            const newItems = extractItems(loadResult);
-            const consumedOffset = extractConsumedOffset(loadResult);
-            const count = extractCount(loadResult);
+            const { items: fetchedItems, consumedOffset, count } =
+              normalizeLoadResult(loadResult);
 
-            if (newItems.length > 0) {
-              // CRITICAL FIX: Set offset to newItems.length, not consumedOffset
-              // consumedOffset might be 0 or incorrect, but we definitely consumed newItems.length offsets
-              offsetRef.current = newItems.length;
+            const fetchedLen = fetchedItems.length;
+            const requestedLimit = initialLoadSize;
 
-              // OPTIMIZATION: Use count from PostgreSQL function for reliable hasMore detection
-              // If count is available and count < initialLoadSize, we've reached the end
-              // Otherwise, fallback to length check (for backward compatibility)
-              if (count !== undefined) {
-                if (count < initialLoadSize) {
-                  setHasMore(false);
-                }
-              } else if (newItems.length < initialLoadSize) {
-                // Fallback: Use length check if count is not available
-                setHasMore(false);
-              }
+            // Rule 1 — Backend offset: advance by backend rows consumed
+            offsetRef.current = consumedOffset;
 
-              // PROGRESSIVE RENDERING: Add initial items one-by-one for smooth appearance
-              // This gives the user immediate feedback as items appear
-              newItems.forEach((item, index) => {
-                const addItem = () => {
-                  if (index === 0) {
-                    // First item: flushSync (immediate, non-batched, forces render)
-                    flushSync(() => {
-                      setItems((prev) => {
-                        // For initial load, we can add items directly (no duplicates yet)
-                        if (prev.length === 0) {
-                          // First item - add just this one
-                          return [item];
-                        } else {
-                          // Subsequent items - merge with existing
-                          const itemsMap = new Map<string, T>();
-                          prev.forEach((existingItem) => {
-                            itemsMap.set(existingItem.id, existingItem);
-                          });
-                          itemsMap.set(item.id, item);
-                          return Array.from(itemsMap.values());
-                        }
-                      });
-                    });
-                    // Reset loading state immediately after first item appears
-                    loadingRef.current = false;
-                    setIsLoadingMore(false);
-                    // Mark initial load as complete (allows IntersectionObserver to fire)
-                    initialLoadCompleteRef.current = true;
-                  } else {
-                    // [PHASE 2.4] Subsequent items: startTransition (non-urgent, can be batched by React)
-                    // 100ms delay ensures they're in separate event loop ticks for smooth appearance
-                    startTransition(() => {
-                      setItems((prev) => {
-                        // For initial load, we can add items directly (no duplicates yet)
-                        if (prev.length === 0) {
-                          // First item(s) - add all items up to this index
-                          return newItems.slice(0, index + 1);
-                        } else {
-                          // Subsequent items - merge with existing
-                          const itemsMap = new Map<string, T>();
-                          prev.forEach((existingItem) => {
-                            itemsMap.set(existingItem.id, existingItem);
-                          });
-                          itemsMap.set(item.id, item);
-                          return Array.from(itemsMap.values());
-                        }
-                      });
-                    });
-                  }
-                };
+            // Rule 3 — hasMore from backend count/limit
+            let nextHasMore: boolean;
+            if (fetchedLen === 0) {
+              nextHasMore = false;
+            } else if (count != null) {
+              nextHasMore = consumedOffset < count;
+            } else {
+              nextHasMore = fetchedLen >= requestedLimit;
+            }
+            setHasMore(nextHasMore);
 
-                if (index === 0) {
-                  // [PHASE 2.4] First item: show immediately (< 500ms target)
-                  requestAnimationFrame(addItem);
-                } else {
-                  // [PHASE 2.4] Subsequent items: show with 100ms delay between each
-                  // 100ms provides smoother, more natural appearance
-                  setTimeout(addItem, index * 100);
-                }
+            if (DEBUG_PF) {
+              const existingIds = new Set(itemsRef.current.map((p) => p.id));
+              const addedUnique = fetchedItems.filter(
+                (i) => !existingIds.has(i.id)
+              ).length;
+              console.log("[PF] initialLoad result", {
+                logId,
+                requestedLimit,
+                oldOffset: 0,
+                fetchedLen,
+                addedUnique,
+                nextOffset: consumedOffset,
+                count: count ?? "n/a",
+                hasMore: nextHasMore,
               });
+            }
 
-              // Update cache asynchronously (non-blocking)
-              // Defer to next tick so it doesn't block progressive rendering
+            if (fetchedLen > 0) {
+              initialLoadCompleteRef.current = true;
+
+              const tryChainInitial = () => {
+                if (
+                  chainCountRef.current < MAX_CHAINED_LOADS &&
+                  hasMoreRef.current &&
+                  isSentinelNearBottom() &&
+                  !loadingRef.current &&
+                  initialLoadCompleteRef.current
+                ) {
+                  chainCountRef.current++;
+                  loadMoreRef.current?.();
+                } else {
+                  chainCountRef.current = 0;
+                }
+              };
+              scheduleRaf(() => scheduleRaf(tryChainInitial));
+
+              setItems((prev) => {
+                const existingIds = new Set(prev.map((p) => p.id));
+                const toAppend = fetchedItems.filter(
+                  (item) => !existingIds.has(item.id)
+                );
+                return [...prev, ...toAppend];
+              });
+              loadingRef.current = false;
+              setIsLoadingMore(false);
+
               if (setCachedItems) {
-                setTimeout(() => {
-                  setCachedItems(newItems);
-                }, 0); // Next tick, non-blocking
+                scheduleTimeout(() => {
+                  if (!mountedRef.current || !isVisibleRef.current) return;
+                  setCachedItems(fetchedItems);
+                }, 0);
               }
-
-              // REMOVED: Aggressive hasMore check that was stopping loading prematurely
-              // The existing logic at line 282 (if consumedOffset === 0) already handles
-              // the end case correctly. Removing this prevents false positives where
-              // API returns fewer items than requested but there are still more items.
-              // If there are truly no more items, API will return 0 items and consumedOffset
-              // will be 0, triggering hasMore=false correctly.
             } else {
               setHasMore(false);
-              // No items: reset loading state immediately and mark as complete
               loadingRef.current = false;
               setIsLoadingMore(false);
               initialLoadCompleteRef.current = true;
+              if (DEBUG_PF) {
+                console.log("[PF] initialLoad no items", { logId });
+              }
             }
           })
           .catch((err) => {
@@ -712,6 +852,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
             loadingRef.current = false;
             setIsLoadingMore(false);
             initialLoadCompleteRef.current = true;
+            initialLoadGuardRef.current = false; // [DIAGNOSTIC] Reset guard on error
+            if (DEBUG_PF) {
+              console.log("[PF] initialLoad error", {
+                logId,
+                error: errorMessage,
+              });
+            }
           })
           .finally(() => {
             // CRITICAL FIX: Don't reset loading state here - it's handled in addItem callback
@@ -726,10 +873,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
           });
       };
 
-      // PWA FIX: Add small delay for PWA to ensure DOM is ready
-      if (isPWA) {
-        const timer = setTimeout(performInitialLoad, 100); // 100ms delay for PWA
-        return () => clearTimeout(timer);
+      if (isPWAValue) {
+        const timer = scheduleTimeout(performInitialLoad, 100);
+        return () => {
+          clearTimeout(timer);
+          if (initialLoadGuardRef.current) initialLoadGuardRef.current = false;
+        };
       } else {
         performInitialLoad();
       }
@@ -737,7 +886,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
       // If we have items (from cache or initialItems), mark initial load as complete
       initialLoadCompleteRef.current = true;
     }
-  }, []); // Only on mount
+
+    // [FIX] Do NOT reset guard in cleanup - prevents StrictMode mount/unmount/mount from
+    // clearing the guard and triggering a second initial-load RPC. Guard is still reset on error
+    // so real failures can retry. On real unmount the ref is discarded.
+    return () => {};
+  }, [isVisible]);
 
   // Safety check: Update offsetRef if initialItems prop changes after mount
   // This handles edge cases where initialItems changes without component remounting
@@ -757,29 +911,42 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   // Intersection Observer for lazy loading
   useEffect(() => {
-    if (!enableLazyLoading || !sentinelRef.current || !hasMore) {
+    // [STEP 1] [FIX A] Guard: Don't set up observer if not visible
+    if (!isVisible) {
+      // [FIX A] Disconnect existing observer if it exists
+      if (observerRef.current) {
+        if (DEBUG_PF) {
+          console.log("[PF] IO disconnect: not visible", { logId });
+        }
+        observerRef.current.disconnect();
+        observerRef.current = null;
+      }
+      if (DEBUG_PF) {
+        console.log("[PF] IO skip: not visible", { logId });
+      }
       return;
     }
-    // CRITICAL FIX: Stop loading immediately when scroll stops (regardless of item count)
-    // User requested: "can you make sure that it doesn't load all of the posts right it stops if i dont scroll"
-    // This prevents loading all posts when user is not scrolling
-    if (isStopped && enableScrollStopDetection) {
-      console.log('[ProgressiveFeed] ⏸️ IntersectionObserver blocked: scroll is stopped');
-      return; // Don't load if scroll stopped - wait for user to resume scrolling
-    }
 
-    // CRITICAL: Don't set up IntersectionObserver until initial load completes
-    // This prevents race condition where observer fires before initial load finishes
-    if (!initialLoadCompleteRef.current) {
-      return; // Wait for initial load to complete
+    if (!enableLazyLoading || !sentinelRef.current || !hasMore) {
+      if (DEBUG_PF) {
+        console.log("[PF] IO skip: base guards", {
+          logId,
+          enableLazyLoading,
+          hasMore,
+          hasSentinel: !!sentinelRef.current,
+        });
+      }
+      return;
     }
+    // [STEP 2] Scroll-stop early return removed - it disconnected IO and caused "skeleton until scroll"
 
-    // PWA FIX: Adjust IntersectionObserver parameters for PWA
-    // Larger rootMargin and lower threshold for more reliable triggering in PWA
-    const adjustedRootMargin = isPWA
-      ? `${loadMoreThreshold * 1.5}px` // 50% larger margin for PWA
-      : `${loadMoreThreshold}px`;
-    const adjustedThreshold = isPWA ? 0.05 : 0.1; // Lower threshold for PWA (more sensitive)
+    // [FIX] Removed early return guard - refs don't trigger effect re-runs
+    // The initialLoadCompleteRef check is now only inside the IO callback (canLoad)
+    // This ensures IO attaches even if initialLoadCompleteRef is false initially
+
+    // [CHAIN] Bottom-prefetch only: trigger when sentinel within 600px of viewport bottom
+    const rootMargin = "0px 0px 600px 0px";
+    const threshold = 0;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -787,90 +954,60 @@ export default function ProgressiveFeed<T extends { id: string }>({
         const canLoad =
           entries[0].isIntersecting &&
           initialLoadCompleteRef.current && // Initial load must be complete
-          shouldLoadRef.current &&
           !loadingRef.current && // Primary check - ref is more reliable
           !isLoadingMore && // Secondary check - state
-          loadMoreRef.current;
-
-        if (entries[0].isIntersecting) {
-          console.log('[ProgressiveFeed] 👁️ Sentinel visible. canLoad:', canLoad, 'shouldLoadRef:', shouldLoadRef.current, 'initialComplete:', initialLoadCompleteRef.current);
-        }
+          loadMoreRef.current &&
+          isVisibleRef.current; // [STEP 1] Check visibility
 
         if (canLoad && loadMoreRef.current) {
-          console.log('[ProgressiveFeed] 📥 Loading more items...');
+          if (DEBUG_PF) {
+            console.log("[PF] IO trigger: loading more", { logId });
+            console.log("[ProgressiveFeed] 📥 Loading more items...");
+          }
+          chainCountRef.current = 0; // Reset on user-triggered load
           loadMoreRef.current();
+        } else {
+          if (DEBUG_PF) {
+            console.log("[PF BLOCKED FLAGS] IO visible but blocked", {
+              isIntersecting: entries[0].isIntersecting,
+              sentinelPresent: !!sentinelRef.current,
+              initialLoadComplete: initialLoadCompleteRef.current,
+              loadingRef: loadingRef.current,
+              isLoadingMoreState: isLoadingMore,
+              hasMoreRef: hasMoreRef.current,
+              offset: offsetRef.current,
+              itemsLen: itemsRef.current.length,
+            });
+          }
         }
       },
       {
-        root: containerRef.current || null,
-        rootMargin: adjustedRootMargin,
-        threshold: adjustedThreshold,
+        // Use viewport root (null) when no external container provided (profile pages scroll window).
+        root: externalContainerRef?.current ?? null,
+        rootMargin,
+        threshold,
       }
     );
 
+    // [FIX A] Store observer in ref
+    observerRef.current = observer;
     observer.observe(sentinelRef.current);
 
-    // Check if sentinel is already visible (might be if there are only 2 items)
-    const checkInitialVisibility = () => {
-      if (sentinelRef.current && initialLoadCompleteRef.current) {
-        const rect = sentinelRef.current.getBoundingClientRect();
-        const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
-
-        // CRITICAL FIX: Respect scroll stop detection
-        // Don't auto-load if scroll is stopped (user is not scrolling)
-        if (isStopped && enableScrollStopDetection) {
-          return; // Wait for user to resume scrolling
-        }
-
-        // Double-check: Ensure initial load is complete AND not currently loading
-        const canLoad =
-          isVisible &&
-          initialLoadCompleteRef.current && // Initial load must be complete
-          shouldLoadRef.current &&
-          hasMore &&
-          !loadingRef.current && // Primary check - ref is more reliable
-          !isLoadingMore && // Secondary check - state
-          loadMoreRef.current;
-
-        if (canLoad) {
-          // Use requestAnimationFrame to ensure observer is set up
-          requestAnimationFrame(() => {
-            // Re-check all conditions before calling (including scroll stop)
-            if (
-              initialLoadCompleteRef.current &&
-              shouldLoadRef.current &&
-              hasMore &&
-              !loadingRef.current &&
-              !isLoadingMore &&
-              loadMoreRef.current &&
-              // CRITICAL: Don't load if scroll is stopped
-              !(isStopped && enableScrollStopDetection)
-            ) {
-              loadMoreRef.current();
-            }
-          });
-        }
-      }
-    };
-
-    // Check after DOM is ready
-    requestAnimationFrame(() => {
-      requestAnimationFrame(checkInitialVisibility); // Double RAF ensures layout
-    });
+    if (DEBUG_PF) {
+      console.log("[PF] IO attach", { logId });
+    }
 
     return () => {
-      observer.disconnect();
+      // [FIX A] Proper cleanup: disconnect and null ref
+      if (observerRef.current) {
+        if (DEBUG_PF) {
+          console.log("[PF] IO disconnect: cleanup", { logId });
+        }
+        observerRef.current.disconnect();
+        observerRef.current = null;
+      }
     };
-  }, [
-    enableLazyLoading,
-    hasMore,
-    isStopped,
-    enableScrollStopDetection,
-    loadMoreThreshold,
-    containerRef,
-    items.length, // Re-check when items change (sentinel position might change)
-    initialLoadCompleteRef, // Add to dependencies to ensure proper re-check
-  ]);
+  }, [enableLazyLoading, hasMore, isVisible, externalContainerRef]);
 
   // Get items to render (virtual scrolling or all)
   const itemsToRender = useMemo(() => {
@@ -900,7 +1037,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
         <button
           onClick={() => {
             setError(null);
-            shouldLoadRef.current = true;
             loadMore();
           }}
           className="px-4 py-2 text-sm rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
@@ -964,7 +1100,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
       {/* Loading skeleton for next item */}
       {/* FIX: Only show skeleton if hasMore is true AND we're loading */}
-      {hasMore && (isLoadingMore || !isStopped) && loadingComponent && (
+      {hasMore && isLoadingMore && loadingComponent && (
         <div className="w-full">
           {/* Single skeleton for next item (progressive) */}
           {loadingComponent}
@@ -990,12 +1126,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
         />
       )}
 
-      {/* Scroll stopped indicator (debug, can remove later) */}
-      {enableScrollStopDetection && isStopped && hasMore && (
-        <div className="text-xs text-center text-[var(--text)]/50 py-2">
-          Scroll to load more
-        </div>
-      )}
     </div>
   );
 }
