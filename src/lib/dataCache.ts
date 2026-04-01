@@ -6,6 +6,7 @@
 import type { StorageManager } from './storage/StorageManager';
 import { getStorageManager } from './storage/StorageManager';
 import { cacheValidator, CACHE_SCHEMA_VERSION, type CacheEntry } from './cacheValidation';
+import { getCacheDurationMultiplier } from './connectionAware';
 
 // [PHASE 2.2] Use CacheEntry from cacheValidation for consistency
 // CacheEntry interface is now defined in cacheValidation.ts
@@ -14,23 +15,35 @@ class DataCache {
   private cache = new Map<string, CacheEntry<any>>();
   private readonly LOCAL_STORAGE_KEY = "echotoo_cache";
   private readonly MAX_CACHE_SIZE = 15; // Maximum number of cached post sets
-  // [PWA FIX] Cache version for invalidation on updates
-  // [CACHE FIX] Bumped to v3 to invalidate old cache without user ID
-  private readonly CACHE_VERSION = "v3";
-  private readonly CACHE_VERSION_KEY = "echotoo_cache_version";
   
   // [OPTIMIZATION: Phase 1 - Storage Abstraction] Optional storage manager
   // If available, uses unified storage layer for better performance and Capacitor support
   private storageManager: StorageManager | null = null;
   private useStorageManager: boolean = false;
   private migrationInProgress: boolean = false; // Track migration to prevent duplicate migrations
+  
+  // [PHASE 2.3 - FIX] Promise that resolves when preload is complete
+  // Why: Ensures cache is ready before use, preventing cache misses on second load
+  private _readyPromise: Promise<void>;
+  public get ready(): Promise<void> {
+    return this._readyPromise;
+  }
 
   constructor() {
-    this.checkCacheVersion();
-    this.loadFromLocalStorage();
+    // [PHASE 1.2] Version checking is now handled by unified cacheVersionManager
+    // Called during app startup in initializeDefaultStorage.ts
     this.initializeStorageManager();
     // [PHASE 2.1] Migrate existing cache data to StorageManager
-    this.migrateLegacyCacheToStorageManager();
+    // [PHASE 2.3 - FIX] Preload must complete before cache is used
+    this._readyPromise = Promise.all([
+      this.migrateLegacyCacheToStorageManager(),
+      this.loadFromStorageManager(),
+    ]).then(() => {
+      console.log('[DataCache] ✅ DataCache is now ready after preload');
+    }).catch((error) => {
+      console.warn('[DataCache] Preload completed with errors (cache will still work):', error);
+      // Don't throw - cache will work, just might miss on first access
+    });
   }
 
   // [OPTIMIZATION: Phase 1 - Storage Abstraction] Initialize storage manager if available
@@ -113,21 +126,54 @@ class DataCache {
     }
   }
 
-  // [PWA FIX] Check cache version and clear if version changed
-  private checkCacheVersion(): void {
+  // [PHASE 1.1] Load feed data from StorageManager into memory cache on startup
+  // Why: Ensures cached data is available synchronously on first get() call
+  // Prevents cache misses and unnecessary API calls
+  private async loadFromStorageManager(): Promise<void> {
+    if (!this.useStorageManager || !this.storageManager) {
+      return;
+    }
+
     try {
-      const storedVersion = localStorage.getItem(this.CACHE_VERSION_KEY);
-      if (storedVersion !== this.CACHE_VERSION) {
-        // Clear all cache on version change
-        this.cache.clear();
-        localStorage.removeItem(this.LOCAL_STORAGE_KEY);
-        localStorage.setItem(this.CACHE_VERSION_KEY, this.CACHE_VERSION);
-        console.log("[DataCache] Cache version changed, cleared cache");
+      // Get all feed cache keys from StorageManager
+      const feedKeys = await this.storageManager.keys("feed:");
+      
+      if (feedKeys.length === 0) {
+        return; // No feed data to load
+      }
+
+      console.log(`[DataCache] Preloading ${feedKeys.length} feed cache entries from StorageManager`);
+
+      // Load each feed entry into memory cache
+      let loadedCount = 0;
+      for (const key of feedKeys) {
+        try {
+          const entry = await this.storageManager.get<CacheEntry<any>>(key);
+          if (entry) {
+            // StorageManager already checked expiration, so entry is valid
+            // Load into memory cache for fast synchronous access
+            this.cache.set(key, entry);
+            loadedCount++;
+          }
+        } catch (error) {
+          // Continue with other keys - don't fail entire preload for one key
+          console.debug(`[DataCache] Failed to load key ${key} from StorageManager:`, error);
+        }
+      }
+
+      if (loadedCount > 0) {
+        console.log(`[DataCache] Successfully preloaded ${loadedCount} feed cache entries into memory`);
       }
     } catch (error) {
-      console.warn("[DataCache] Failed to check cache version:", error);
+      // Don't throw - preload failure shouldn't break the app
+      // Cache will be populated on-demand via get() method
+      console.warn('[DataCache] Failed to preload feed cache from StorageManager:', error);
     }
   }
+
+  // [PHASE 1.2] Version checking removed - now handled by unified cacheVersionManager
+  // The unified version manager clears all caches (including dataCache) on startup
+  // if the version changes. This prevents duplicate version checking logic.
 
   set<T>(key: string, data: T, ttlMs: number = 5 * 60 * 1000): void {
     // [PHASE 2.2] Use SmartCacheValidator for TTL management
@@ -148,18 +194,19 @@ class DataCache {
     // Always update in-memory cache for fast access
     this.cache.set(key, entry);
 
-    // [PHASE 2.1] For feed data, use StorageManager as primary path, with legacy localStorage as fallback
+    // [PHASE 1.1] For feed data, use StorageManager only (legacy localStorage removed)
     if (key.startsWith("feed:")) {
       if (this.useStorageManager && this.storageManager) {
-        // [PHASE 2.1] Primary path: Use StorageManager (better performance, Capacitor support)
+        // [PHASE 1.1] Primary path: Use StorageManager (better performance, Capacitor support)
         this.storageManager.set(key, entry, adjustedTtl).catch((error) => {
-          // Fallback to legacy localStorage if storage manager fails
-          console.warn('[DataCache] StorageManager failed, falling back to localStorage:', error);
-          this.saveToLocalStorage(key, entry);
+          // Log error but don't fallback - will fetch from API on next get()
+          console.warn('[DataCache] StorageManager failed, will fetch from API on next access:', error);
         });
       } else {
-        // Legacy localStorage for feed data (fallback if StorageManager not available)
-        this.saveToLocalStorage(key, entry);
+        // StorageManager not available - this is expected if not initialized
+        // Use debug log instead of warning to reduce console noise
+        // Data will be fetched from API on next get() call
+        console.debug('[DataCache] StorageManager not available, will fetch from API on next access');
       }
     }
   }
@@ -176,11 +223,11 @@ class DataCache {
       return entry.data as T;
     }
 
-    // [PHASE 2.1] For feed data, try StorageManager first (primary path), then fallback to legacy localStorage
+    // [PHASE 1.1] For feed data, try StorageManager (legacy localStorage removed)
     // Note: StorageManager is async, but we maintain synchronous API for backward compatibility
-    // We try StorageManager first (async load into memory), then fallback to legacy localStorage (synchronous)
+    // We try StorageManager (async load into memory), returns null if not found (triggers API call)
     if (key.startsWith("feed:")) {
-      // [PHASE 2.1] Try StorageManager first (primary path)
+      // [PHASE 1.1] Try StorageManager (primary path)
       if (this.useStorageManager && this.storageManager) {
         // Load asynchronously from StorageManager and populate memory cache
         // This ensures next access is fast (from memory)
@@ -192,61 +239,21 @@ class DataCache {
             this.cache.set(key, entry);
           }
         }).catch((error) => {
-          // Silently fail - will try legacy localStorage as fallback
-          console.debug('[DataCache] StorageManager load failed, trying legacy localStorage:', error);
+          // Silently fail - will fetch from API on next access
+          console.debug('[DataCache] StorageManager load failed, will fetch from API:', error);
         });
       }
-
-      // Fallback to legacy localStorage (synchronous, for immediate return)
-      const legacyData = this.getFromLocalStorageLegacy<T>(key);
-      if (legacyData) {
-        return legacyData;
-      }
+      // No localStorage fallback - returns null to trigger API call
     }
 
     return null;
   }
 
-  // Legacy localStorage getter (for backward compatibility)
-  private getFromLocalStorageLegacy<T>(key: string): T | null {
-    try {
-      const stored = this.getFromLocalStorage(key);
-      if (stored) {
-        const isExpired = Date.now() - stored.timestamp > stored.ttl;
-        if (isExpired) {
-          this.removeFromLocalStorage(key);
-          return null;
-        }
-        // Load back into memory cache
-        this.cache.set(key, stored);
-        return stored.data as T;
-      }
-    } catch (error) {
-      // PWA FIX: localStorage access might fail in PWA - retry once
-      console.warn("[DataCache] localStorage access failed, retrying:", error);
-      try {
-        // Small delay and retry (PWA might need time to initialize localStorage)
-        const retryStored = this.getFromLocalStorage(key);
-        if (retryStored) {
-          const isExpired = Date.now() - retryStored.timestamp > retryStored.ttl;
-          if (!isExpired) {
-            this.cache.set(key, retryStored);
-            return retryStored.data as T;
-          }
-        }
-      } catch (retryError) {
-        console.warn("[DataCache] Retry also failed:", retryError);
-        // Return null on failure - will fetch from API
-      }
-    }
-    return null;
-  }
 
   // [OPTIMIZATION: Phase 6 - Connection] Get adjusted TTL based on connection speed
   // Why: Longer cache duration on slow connections
   private getAdjustedTtl(baseTtl: number): number {
     try {
-      const { getCacheDurationMultiplier } = require("./connectionAware");
       const multiplier = getCacheDurationMultiplier();
       return baseTtl * multiplier;
     } catch {
@@ -255,76 +262,6 @@ class DataCache {
     }
   }
 
-  private loadFromLocalStorage(): void {
-    try {
-      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
-      if (stored) {
-        const cacheData = JSON.parse(stored);
-        Object.entries(cacheData).forEach(([key, value]: [string, any]) => {
-          if (key.startsWith("feed:")) {
-            // Only load feed data, and only if it's not expired
-            const isExpired = Date.now() - value.timestamp > value.ttl;
-            if (!isExpired) {
-              this.cache.set(key, value);
-            }
-          }
-        });
-      }
-    } catch (error) {
-      console.warn("Failed to load cache from localStorage:", error);
-    }
-  }
-
-  private saveToLocalStorage(key: string, entry: CacheEntry<any>): void {
-    try {
-      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
-      const cacheData = stored ? JSON.parse(stored) : {};
-
-      // Remove oldest entries if we exceed max size
-      const feedKeys = Object.keys(cacheData).filter((k) =>
-        k.startsWith("feed:")
-      );
-      if (feedKeys.length >= this.MAX_CACHE_SIZE) {
-        // Sort by timestamp and remove oldest
-        feedKeys.sort(
-          (a, b) => cacheData[a].timestamp - cacheData[b].timestamp
-        );
-        const oldestKey = feedKeys[0];
-        delete cacheData[oldestKey];
-      }
-
-      cacheData[key] = entry;
-      localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(cacheData));
-    } catch (error) {
-      console.warn("Failed to save cache to localStorage:", error);
-    }
-  }
-
-  private getFromLocalStorage(key: string): CacheEntry<any> | null {
-    try {
-      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
-      if (stored) {
-        const cacheData = JSON.parse(stored);
-        return cacheData[key] || null;
-      }
-    } catch (error) {
-      console.warn("Failed to get cache from localStorage:", error);
-    }
-    return null;
-  }
-
-  private removeFromLocalStorage(key: string): void {
-    try {
-      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
-      if (stored) {
-        const cacheData = JSON.parse(stored);
-        delete cacheData[key];
-        localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(cacheData));
-      }
-    } catch (error) {
-      console.warn("Failed to remove cache from localStorage:", error);
-    }
-  }
 
   delete(key: string): void {
     this.cache.delete(key);
@@ -347,7 +284,7 @@ class DataCache {
     });
     keysToDelete.forEach((key) => this.cache.delete(key));
 
-    // [OPTIMIZATION: Phase 1 - Storage Abstraction] Clear from unified storage
+    // [PHASE 1.1] Clear from unified storage (legacy localStorage removed)
     if (this.useStorageManager && this.storageManager) {
       try {
         const feedKeys = await this.storageManager.keys("feed:");
@@ -360,26 +297,6 @@ class DataCache {
       }
     }
 
-    // Clear localStorage feed cache (legacy)
-    try {
-      const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
-      if (stored) {
-        const cacheData = JSON.parse(stored);
-        const feedKeys = Object.keys(cacheData).filter((k) =>
-          k.startsWith("feed:")
-        );
-        feedKeys.forEach((key) => {
-          delete cacheData[key];
-        });
-        localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(cacheData));
-        console.log(
-          `[DataCache] Cleared ${feedKeys.length} feed cache entries from localStorage`
-        );
-      }
-    } catch (error) {
-      console.warn("[DataCache] Failed to clear feed cache from localStorage:", error);
-    }
-
     console.log(
       `[DataCache] Cleared ${keysToDelete.length} feed cache entries from memory`
     );
@@ -387,19 +304,25 @@ class DataCache {
 
   // Generate cache key from feed options
   // [CACHE FIX] Now includes viewerProfileId for user-specific caching (security fix)
+  // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Added filters parameter for horizontal rail filtering
   generateFeedKey(opts: {
     type?: string;
     q?: string;
     tags?: string[];
+    filters?: string[]; // Filter types: "friends", "today", "anonymous"
     limit?: number;
     offset?: number;
     viewerProfileId?: string | null; // User-specific cache key (prevents cross-user data leakage)
   }): string {
-    const { type, q, tags, limit, offset, viewerProfileId } = opts;
+    const { type, q, tags, filters, limit, offset, viewerProfileId } = opts;
     // Include viewerProfileId in key to prevent cross-user cache pollution
     // Defaults to "guest" for backward compatibility
     const userId = viewerProfileId || "guest";
-    return `feed:${type || "all"}:${q || ""}:${tags?.join(",") || ""}:${
+    // Sort filters for consistent key generation (order doesn't matter for filtering)
+    const filtersKey = filters && filters.length > 0 
+      ? filters.slice().sort().join(",") 
+      : "";
+    return `feed:${type || "all"}:${q || ""}:${tags?.join(",") || ""}:${filtersKey}:${
       limit || 12
     }:${offset || 0}:${userId}`;
   }

@@ -1,5 +1,5 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { type NotificationWithActor } from "../../types/notification";
 import { markNotificationAsRead } from "../../api/services/notifications";
 import { formatDistanceToNow } from "date-fns";
@@ -108,6 +108,9 @@ export default function NotificationItem({
   onInviteAccepted,
   batchedFollowStatus,
 }: Props) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   // Use specialized component for invite notifications
   if (notification.type === "invite") {
     return (
@@ -244,6 +247,7 @@ export default function NotificationItem({
           {showGoToPostButton && (
             <Link
               to={linkTo}
+              state={{ backgroundLocation: location }}
               onClick={handleClick}
               className={`px-2 py-1 text-xs rounded-full transition-colors border ${getSubtleButtonColor()}`}
             >
@@ -258,6 +262,7 @@ export default function NotificationItem({
   return (
     <Link
       to={linkTo}
+      state={{ backgroundLocation: location }}
       onClick={handleClick}
       className={`w-full rounded-lg p-2 gap-2 flex transition-colors bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 border-l-3 ${getBorderColor()}`}
     >
@@ -298,7 +303,8 @@ export default function NotificationItem({
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                window.location.href = linkTo;
+                handleClick();
+                navigate(linkTo, { state: { backgroundLocation: location } });
               }}
               className={`px-2 py-1 text-xs rounded-full transition-colors border ${getSubtleButtonColor()}`}
             >

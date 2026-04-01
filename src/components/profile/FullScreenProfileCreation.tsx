@@ -1,10 +1,25 @@
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { uploadToCloudinary } from "../../api/services/cloudinaryUpload";
+import ConfirmDialog from "../ui/ConfirmDialog";
+import { softDeleteAccount } from "../../api/services/account";
+import { clearAuthCache } from "../../api/services/follows";
+import { clearCachedProfile } from "../../lib/profileCache";
+import { clearCachedFollowCounts } from "../../lib/followCountsCache";
+import { imgUrlPublic } from "../../lib/img";
+import { getSupportMailto } from "../../lib/supportConfig";
+import { uploadImage } from "../../api/services/mediaUpload";
 import { useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
+
+const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
+
+function mapProfileAvatarUploadError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("not authenticated")) return msg;
+  if (msg.includes("Supabase Storage")) return msg;
+  return "Could not prepare image. Try a different photo.";
+}
 
 type Props = {
   open: boolean;
@@ -25,14 +40,6 @@ type Props = {
     social_media_public?: boolean | null;
   };
 };
-
-const rotatingWords = [
-  "fun",
-  "wellness",
-  "learning",
-  "community",
-  "connection",
-];
 
 export default function FullScreenProfileCreation({
   open,
@@ -60,90 +67,234 @@ export default function FullScreenProfileCreation({
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(
     null
   );
-  const [userNumber, setUserNumber] = useState<number>(0);
-  const [currentWordIndex, setCurrentWordIndex] = useState(0);
-  const [isWordVisible, setIsWordVisible] = useState(true);
   const [isPrivate, setIsPrivate] = useState(false);
   const [socialMediaPublic, setSocialMediaPublic] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  /** Snapshot for dirty detection — only updated on hydrate / after successful save */
+  type Baseline = {
+    displayName: string;
+    username: string;
+    bio: string;
+    avatarUrl: string;
+    instagramUrl: string;
+    tiktokUrl: string;
+    telegramUrl: string;
+    isPrivate: boolean;
+    socialMediaPublic: boolean;
+  };
+  const baselineRef = useRef<Baseline | null>(null);
+
+  const setBaselineFromValues = useCallback((b: Baseline) => {
+    baselineRef.current = { ...b };
+  }, []);
+
+  /** Latest props snapshot — read inside hydrate effect only (do not put initialProfileData in effect deps). */
+  const initialProfileDataRef = useRef(initialProfileData);
+  initialProfileDataRef.current = initialProfileData;
+
+  const applyProfileRow = useCallback(
+    (data: {
+      display_name: string | null;
+      username: string | null;
+      bio: string | null;
+      avatar_url: string | null;
+      instagram_url: string | null;
+      tiktok_url: string | null;
+      telegram_url: string | null;
+      is_private?: boolean | null;
+      social_media_public?: boolean | null;
+    }) => {
+      const displayNameV = data.display_name ?? "";
+      const usernameV = data.username ?? "";
+      const bioV = data.bio ?? "";
+      const avatarV = data.avatar_url ?? "";
+      const ig = data.instagram_url ?? "";
+      const tt = data.tiktok_url ?? "";
+      const tg = data.telegram_url ?? "";
+      const priv = data.is_private ?? false;
+      const soc = data.social_media_public ?? false;
+
+      setDisplayName(displayNameV);
+      setUsername(usernameV);
+      setOrigUsername(data.username ?? null);
+      setBio(bioV);
+      setAvatarUrl(avatarV);
+      setInstagramUrl(ig);
+      setTiktokUrl(tt);
+      setTelegramUrl(tg);
+      setIsPrivate(priv);
+      setSocialMediaPublic(soc);
+
+      setBaselineFromValues({
+        displayName: displayNameV,
+        username: usernameV,
+        bio: bioV,
+        avatarUrl: avatarV,
+        instagramUrl: ig,
+        tiktokUrl: tt,
+        telegramUrl: tg,
+        isPrivate: priv,
+        socialMediaPublic: soc,
+      });
+    },
+    [setBaselineFromValues]
+  );
 
   useEffect(() => {
-    if (!open) return;
-    
-    // Pre-populate immediately with initialProfileData if available (instant)
-    if (initialProfileData) {
-      console.log("[FullScreenProfileCreation] Using initial profile data for instant pre-population");
-      setDisplayName(initialProfileData.display_name ?? "");
-      setUsername(initialProfileData.username ?? "");
-      setOrigUsername(initialProfileData.username ?? null);
-      setBio(initialProfileData.bio ?? "");
-      setAvatarUrl(initialProfileData.avatar_url ?? "");
-      setInstagramUrl(initialProfileData.instagram_url ?? "");
-      setTiktokUrl(initialProfileData.tiktok_url ?? "");
-      setTelegramUrl(initialProfileData.telegram_url ?? "");
-      setUserNumber(initialProfileData.member_no ?? 0);
-      setIsPrivate(initialProfileData.is_private ?? false);
-      setSocialMediaPublic(initialProfileData.social_media_public ?? false);
+    if (!open) {
+      baselineRef.current = null;
+      return;
     }
-    
-    // Fetch fresh data in background to ensure we have the latest
-    (async () => {
+
+    let cancelled = false;
+
+    const run = async () => {
       setError(null);
+      const snap = initialProfileDataRef.current;
+
+      if (snap) {
+        applyProfileRow({
+          display_name: snap.display_name,
+          username: snap.username,
+          bio: snap.bio,
+          avatar_url: snap.avatar_url,
+          instagram_url: snap.instagram_url,
+          tiktok_url: snap.tiktok_url,
+          telegram_url: snap.telegram_url,
+          is_private: snap.is_private,
+          social_media_public: snap.social_media_public,
+        });
+      }
+
       try {
         const { data, error: fetchError } = await supabase
           .from("profiles")
           .select(
-            "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_number, is_private, social_media_public"
+            "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_no, is_private, social_media_public"
           )
           .eq("id", profileId)
           .maybeSingle();
-        
+
+        if (cancelled) return;
+
         if (fetchError) {
-          console.error("[FullScreenProfileCreation] Error fetching profile data:", fetchError);
-          // Don't show error to user if we have initialProfileData (they can still edit)
-          if (!initialProfileData) {
+          console.error(
+            "[FullScreenProfileCreation] Error fetching profile data:",
+            fetchError
+          );
+          if (!snap) {
             setError("Failed to load profile data. Please try again.");
           }
           return;
         }
-        
-        // Update with fresh data (only if different from initial data or if no initial data)
+
         if (data) {
-          setDisplayName(data.display_name ?? "");
-          setUsername(data.username ?? "");
-          setOrigUsername(data.username ?? null);
-          setBio(data.bio ?? "");
-          setAvatarUrl(data.avatar_url ?? "");
-          setInstagramUrl(data.instagram_url ?? "");
-          setTiktokUrl(data.tiktok_url ?? "");
-          setTelegramUrl(data.telegram_url ?? "");
-          setUserNumber(data.member_number ?? 0);
-          setIsPrivate(data.is_private ?? false);
-          setSocialMediaPublic(data.social_media_public ?? false);
+          applyProfileRow(data);
         }
       } catch (e) {
-        console.error("[FullScreenProfileCreation] Unexpected error fetching profile:", e);
-        if (!initialProfileData) {
+        console.error(
+          "[FullScreenProfileCreation] Unexpected error fetching profile:",
+          e
+        );
+        if (!cancelled && !snap) {
           setError("Failed to load profile data. Please try again.");
         }
       }
-    })();
-  }, [open, profileId, initialProfileData]);
+    };
 
-  // Word rotation effect
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, profileId, applyProfileRow]);
+
+  const isDirty = useCallback(() => {
+    const b = baselineRef.current;
+    if (!b) return false;
+    return (
+      displayName.trim() !== b.displayName.trim() ||
+      username.trim() !== b.username.trim() ||
+      bio.trim() !== b.bio.trim() ||
+      (avatarUrl || "") !== (b.avatarUrl || "") ||
+      instagramUrl.trim() !== b.instagramUrl.trim() ||
+      tiktokUrl.trim() !== b.tiktokUrl.trim() ||
+      telegramUrl.trim() !== b.telegramUrl.trim() ||
+      isPrivate !== b.isPrivate ||
+      socialMediaPublic !== b.socialMediaPublic
+    );
+  }, [
+    displayName,
+    username,
+    bio,
+    avatarUrl,
+    instagramUrl,
+    tiktokUrl,
+    telegramUrl,
+    isPrivate,
+    socialMediaPublic,
+  ]);
+
+  const skipPopstateRef = useRef(false);
+  const isDirtyFnRef = useRef(isDirty);
+  isDirtyFnRef.current = isDirty;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const prevOpenRef = useRef(false);
+
+  /** Push a history entry while open so browser/capacitor “back” can be intercepted. */
   useEffect(() => {
-    if (!isFirstTime) return;
+    if (!open) return;
+    window.history.pushState(
+      { editProfileModal: true } as const,
+      "",
+      window.location.href
+    );
 
-    const interval = setInterval(() => {
-      setIsWordVisible(false);
-      setTimeout(() => {
-        setCurrentWordIndex((prev) => (prev + 1) % rotatingWords.length);
-        setIsWordVisible(true);
-      }, 300);
-    }, 2000);
+    const onPopState = () => {
+      if (skipPopstateRef.current) {
+        skipPopstateRef.current = false;
+        return;
+      }
+      if (!isDirtyFnRef.current()) {
+        onCloseRef.current();
+        return;
+      }
+      setShowExitConfirm(true);
+      window.history.pushState(
+        { editProfileModal: true } as const,
+        "",
+        window.location.href
+      );
+    };
 
-    return () => clearInterval(interval);
-  }, [isFirstTime]);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [open]);
+
+  /** Remove the synthetic history entry when the modal closes intentionally (not via popstate). */
+  useEffect(() => {
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+    if (wasOpen && !open) {
+      const st = window.history.state as { editProfileModal?: boolean } | null;
+      if (st?.editProfileModal) {
+        skipPopstateRef.current = true;
+        window.history.back();
+      }
+    }
+  }, [open]);
+
+  const requestClose = useCallback(() => {
+    if (!isDirty()) {
+      onClose();
+      return;
+    }
+    setShowExitConfirm(true);
+  }, [isDirty, onClose]);
 
   // Auto-generate username from display name on first time
   useEffect(() => {
@@ -155,8 +306,13 @@ export default function FullScreenProfileCreation({
   const generateUsernameFromDisplayName = async (name: string) => {
     if (!name) return;
 
-    // Create base username from display name (lowercase, no spaces, only alphanumeric)
-    const baseUsername = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Prefer first word of display name (e.g. "John Smith" → "john"), then slugify
+    const firstWord = name.trim().split(/\s+/)[0] ?? "";
+    let baseUsername = firstWord.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!baseUsername) {
+      // Fallback: full display name if first token has no usable latin chars
+      baseUsername = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    }
     if (!baseUsername) return;
 
     let finalUsername = baseUsername;
@@ -216,7 +372,7 @@ export default function FullScreenProfileCreation({
       checkUsername(username);
     }, 500);
     return () => clearTimeout(timer);
-  }, [username]);
+  }, [username, origUsername]);
 
   const save = async () => {
     setSaving(true);
@@ -266,9 +422,15 @@ export default function FullScreenProfileCreation({
       if (upErr) throw upErr;
 
       // Update privacy settings using the dedicated function (handles auto-approve logic)
-      const { updateProfilePrivacy } = await import("../../api/services/follows");
+      const { updateProfilePrivacy } = await import(
+        "../../api/services/follows"
+      );
       try {
-        const privacyError = await updateProfilePrivacy(profileId, isPrivate, socialMediaPublic);
+        const privacyError = await updateProfilePrivacy(
+          profileId,
+          isPrivate,
+          socialMediaPublic
+        );
         if (privacyError.error) {
           console.error("Error updating privacy settings:", privacyError.error);
           // Don't fail the save if privacy update fails, but log it
@@ -290,42 +452,84 @@ export default function FullScreenProfileCreation({
         if (username) localStorage.setItem("my_username", username.trim());
       } catch {}
 
-      // [OPTIMIZATION: Phase 1 - Cache] Update cache immediately with new data (prevents "Sign in" message)
-      // Why: Shows updated profile data instantly, including privacy settings, without flicker
-      const { setCachedProfile } = await import("../../lib/profileCache");
-      const { getViewerId } = await import("../../api/services/follows");
-      const viewerId = await getViewerId();
-      
-      if (viewerId) {
-        // Fetch the updated profile to get all fields (including xp, member_no, privacy settings, etc.)
-        const { data: updatedProfile } = await supabase
-          .from("profiles")
-          .select("id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public")
-          .eq("id", profileId)
-          .single();
-        
-        if (updatedProfile) {
-          // [OPTIMIZATION: Phase 1 - Cache] Update cache immediately with fresh data including privacy settings
-          // Why: Instant display of updated privacy status, prevents flicker
-          setCachedProfile({
-            ...updatedProfile,
-            member_no: updatedProfile.member_no ?? null,
-            is_private: updatedProfile.is_private ?? null,
-            social_media_public: updatedProfile.social_media_public ?? null,
-          } as any);
-          
-          // Update avatar cache
-          const { setCachedAvatar, preloadAvatar } = await import("../../lib/avatarCache");
-          if (updatedProfile.avatar_url) {
-            setCachedAvatar(updatedProfile.user_id, updatedProfile.avatar_url);
-            preloadAvatar(updatedProfile.avatar_url);
-          }
+      const { getCachedProfile, setCachedProfile } = await import(
+        "../../lib/profileCache"
+      );
+
+      const { data: updatedProfile } = await supabase
+        .from("profiles")
+        .select(
+          "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
+        )
+        .eq("id", profileId)
+        .maybeSingle();
+
+      const existing = getCachedProfile(profileId);
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const authUserId = session?.user?.id ?? existing?.user_id ?? null;
+
+      let profilePayload: {
+        id: string;
+        user_id: string;
+        username: string | null;
+        display_name: string | null;
+        avatar_url: string | null;
+        bio: string | null;
+        xp: number | null;
+        member_no: number | null;
+        instagram_url: string | null;
+        tiktok_url: string | null;
+        telegram_url: string | null;
+        is_private: boolean | null;
+        social_media_public: boolean | null;
+      } | null = null;
+
+      if (updatedProfile) {
+        profilePayload = {
+          ...updatedProfile,
+          member_no: updatedProfile.member_no ?? null,
+          is_private: updatedProfile.is_private ?? null,
+          social_media_public: updatedProfile.social_media_public ?? null,
+        };
+      } else if (authUserId) {
+        profilePayload = {
+          id: profileId,
+          user_id: authUserId,
+          username: username.trim(),
+          display_name: displayName.trim(),
+          bio: bio.trim() || "I'm too lazy to write a bio 😅",
+          avatar_url: avatarUrl,
+          xp: existing?.xp ?? 0,
+          member_no: existing?.member_no ?? null,
+          instagram_url: instagramUrl.trim() || null,
+          tiktok_url: tiktokUrl.trim() || null,
+          telegram_url: telegramUrl.trim() || null,
+          is_private: isPrivate,
+          social_media_public: socialMediaPublic,
+        };
+      }
+
+      if (profilePayload) {
+        setCachedProfile(profilePayload as any);
+
+        const { setCachedAvatar, preloadAvatar } = await import(
+          "../../lib/avatarCache"
+        );
+        if (profilePayload.avatar_url) {
+          setCachedAvatar(profilePayload.user_id, profilePayload.avatar_url);
+          preloadAvatar(profilePayload.avatar_url);
         }
       }
 
-      // Tell the rest of the app to refresh this profile
+      // Invalidate follow counts so OwnProfilePage won't show stale counts on first render
+      clearCachedFollowCounts(profileId);
+
       window.dispatchEvent(
-        new CustomEvent("profile:updated", { detail: { id: profileId } })
+        new CustomEvent("profile:updated", {
+          detail: { id: profileId, profile: profilePayload },
+        })
       );
 
       // Close the modal
@@ -351,92 +555,146 @@ export default function FullScreenProfileCreation({
   return (
     <div className="fixed inset-0 z-50 bg-[var(--surface)]">
       <div className="flex flex-col h-full">
-        {/* Header */}
-        <div className="flex items-center justify-center p-4 border-b border-[var(--border)] relative">
-          <div className="text-lg font-semibold">
-            {isFirstTime ? "Create Your Profile" : "Edit Profile"}
+        {/* Header - fixed at top, gradient (solid at top → transparent) theme-aware, content scrolls behind */}
+        <div
+          className="fixed left-0 right-0 top-0 z-30 flex flex-col items-center pt-[calc(8px+env(safe-area-inset-top,0px))] pb-3 pointer-events-none"
+          style={{
+            minHeight: "calc(52px + 8px + env(safe-area-inset-top, 0px))",
+            background: "var(--gradient-from-top)",
+          }}
+        >
+          {/* Floating pill */}
+          <div className="relative z-10 flex items-center justify-between w-[80%] max-w-[640px] rounded-full bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] border border-[var(--bottom-tab-border)] py-[10px] px-4 pointer-events-auto">
+            <span className="text-base font-semibold text-[var(--text)]">
+              {isFirstTime ? "Create Your Profile" : "Edit Profile"}
+            </span>
+            {!isFirstTime && (
+              <button
+                type="button"
+                className="text-sm text-[var(--text)]/70 hover:text-[var(--text)] transition-colors"
+                onClick={requestClose}
+              >
+                Cancel
+              </button>
+            )}
           </div>
-          {!isFirstTime && (
-            <button
-              className="absolute right-4 text-sm text-[var(--text)]/70 hover:text-[var(--text)]"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-          )}
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {/* Welcome Message for First Time Users */}
-          {isFirstTime && (
-            <div className="mb-6 text-center">
-              <h1 className="text-xl font-bold mb-2">Welcome!</h1>
-              <div className="text-sm text-[var(--text)]/80">
-                The only place you need when you go out
-              </div>
-            </div>
-          )}
-
+        {/* Content - z-0 keeps scroll/composited children below fixed header/footer (z-30) */}
+        <div className="relative z-0 flex-1 min-h-0 overflow-y-auto p-4 pt-[calc(5rem+env(safe-area-inset-top,0px))] pb-[calc(7rem+var(--safe-area-bottom-layout))]">
           {error && (
             <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-sm">
               {error}
             </div>
           )}
 
-          {/* Avatar Section */}
-          <div className="mb-6">
-            <div className="flex items-center justify-center mb-4">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  className="w-20 h-20 rounded-full object-cover border-2 border-[var(--text)]"
-                  alt=""
+          {/* Avatar Section — entire card triggers the same file picker as before */}
+          <div className="mb-6 flex justify-center">
+            <input
+              id="avatar-input"
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!file.type.startsWith("image/")) {
+                  setError("Please choose an image file.");
+                  return;
+                }
+                console.log(PROFILE_AVATAR_UPLOAD_LOG, "selection_ok", {
+                  name: file.name,
+                  bytes: file.size,
+                  type: file.type,
+                });
+                setError(null);
+                setUploading(true);
+                try {
+                  // Get userId from session for uploadImage
+                  const {
+                    data: { session },
+                  } = await supabase.auth.getSession();
+                  if (!session?.user?.id) {
+                    throw new Error("User not authenticated");
+                  }
+                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "upload_start", {
+                    userId: session.user.id,
+                    bytes: file.size,
+                  });
+                  const result = await uploadImage(file, {
+                    userId: session.user.id,
+                    kind: "avatar",
+                  });
+                  setAvatarUrl(result);
+                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "success");
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  const phase = msg.includes("Supabase Storage")
+                    ? "upload"
+                    : msg.includes("not authenticated")
+                    ? "auth"
+                    : "preparation_or_unknown";
+                  console.warn(PROFILE_AVATAR_UPLOAD_LOG, "failed", {
+                    phase,
+                    message: msg,
+                  });
+                  setError(mapProfileAvatarUploadError(err));
+                } finally {
+                  setUploading(false);
+                  (e.target as HTMLInputElement).value = "";
+                }
+              }}
+            />
+            <label
+              htmlFor="avatar-input"
+              aria-busy={uploading}
+              className="relative flex w-full max-w-[min(320px,92vw)] cursor-pointer flex-col items-center gap-3 overflow-hidden rounded-full border border-[var(--glass-active-border)] px-8 py-5 shadow-[var(--glass-active-shadow)] transition-[filter,transform] hover:brightness-[1.03] active:scale-[0.99] focus-within:ring-2 focus-within:ring-[var(--brand)] focus-within:ring-offset-2 focus-within:ring-offset-[var(--surface)]"
+            >
+              {/* Same “mirror” treatment as BottomTab active profile pill */}
+              {imgUrlPublic(avatarUrl) ? (
+                <div
+                  className="pointer-events-none absolute inset-0 rounded-full"
+                  style={{
+                    backgroundImage: `url(${imgUrlPublic(avatarUrl)})`,
+                    backgroundSize: "250%",
+                    backgroundPosition: "center",
+                    filter: "blur(4px)",
+                    opacity: 0.88,
+                  }}
+                  aria-hidden
                 />
               ) : (
-                <div className="w-20 h-20 rounded-full bg-white/12 flex items-center justify-center text-2xl border-2 border-[var(--text)]">
-                  ?
-                </div>
+                <div
+                  className="pointer-events-none absolute inset-0 rounded-full bg-[var(--bottom-tab-active-bg)]"
+                  aria-hidden
+                />
               )}
-            </div>
-
-            <div className="flex justify-center">
-              <input
-                id="avatar-input"
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  if (!file.type.startsWith("image/")) {
-                    setError("Please choose an image file.");
-                    return;
-                  }
-                  if (file.size > 5 * 1024 * 1024) {
-                    setError("Max image size is 5MB.");
-                    return;
-                  }
-                  setError(null);
-                  setUploading(true);
-                  try {
-                    const url = await uploadToCloudinary(file);
-                    setAvatarUrl(url);
-                  } catch (err: any) {
-                    setError(err?.message || "Upload failed.");
-                  } finally {
-                    setUploading(false);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }}
-              />
-              <label
-                htmlFor="avatar-input"
-                className="px-4 py-2 rounded-lg text-sm border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer hover:bg-[var(--surface-2)]/90 transition"
-              >
-                {uploading ? "Uploading..." : "Change Photo"}
-              </label>
-            </div>
+              {imgUrlPublic(avatarUrl) && (
+                <div
+                  className="pointer-events-none absolute inset-0 z-[1] rounded-full"
+                  style={{
+                    backgroundColor: "var(--profile-avatar-pill-scrim)",
+                  }}
+                  aria-hidden
+                />
+              )}
+              <div className="relative z-10 flex flex-col items-center gap-3">
+                {imgUrlPublic(avatarUrl) ? (
+                  <img
+                    src={imgUrlPublic(avatarUrl)!}
+                    className="pointer-events-none h-20 w-20 rounded-full border-2 border-[var(--text)] object-cover shadow-md"
+                    alt=""
+                  />
+                ) : (
+                  <div className="pointer-events-none flex h-20 w-20 items-center justify-center rounded-full border-2 border-[var(--text)] bg-white/12 text-2xl shadow-md">
+                    ?
+                  </div>
+                )}
+                <span className="text-sm font-medium text-[var(--text)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.75)]">
+                  {uploading ? "Uploading..." : "Change photo"}
+                </span>
+              </div>
+            </label>
           </div>
 
           {/* Form Fields */}
@@ -447,7 +705,7 @@ export default function FullScreenProfileCreation({
                 Display Name *
               </label>
               <input
-                className="w-full px-4 py-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 maxLength={40}
@@ -462,7 +720,7 @@ export default function FullScreenProfileCreation({
               </label>
               <div className="relative">
                 <input
-                  className="w-full px-4 py-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                  className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   maxLength={24}
@@ -497,7 +755,7 @@ export default function FullScreenProfileCreation({
                 Bio
               </label>
               <textarea
-                className="w-full px-4 py-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] resize-none"
+                className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] resize-none"
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
                 rows={3}
@@ -518,7 +776,7 @@ export default function FullScreenProfileCreation({
                     Instagram URL
                   </label>
                   <input
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                     value={instagramUrl}
                     onChange={(e) => setInstagramUrl(e.target.value)}
                     placeholder="https://instagram.com/yourusername"
@@ -531,7 +789,7 @@ export default function FullScreenProfileCreation({
                     TikTok URL
                   </label>
                   <input
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                     value={tiktokUrl}
                     onChange={(e) => setTiktokUrl(e.target.value)}
                     placeholder="https://tiktok.com/@yourusername"
@@ -544,7 +802,7 @@ export default function FullScreenProfileCreation({
                     Telegram
                   </label>
                   <input
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                     value={telegramUrl}
                     onChange={(e) => setTelegramUrl(e.target.value)}
                     placeholder="@yourusername or https://t.me/yourusername"
@@ -582,9 +840,7 @@ export default function FullScreenProfileCreation({
                       }
                     }}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      isPrivate
-                        ? "bg-[var(--brand)]"
-                        : "bg-[var(--text)]/20"
+                      isPrivate ? "bg-[var(--brand)]" : "bg-[var(--text)]/20"
                     }`}
                   >
                     <span
@@ -599,7 +855,9 @@ export default function FullScreenProfileCreation({
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
                     <div className="text-sm font-medium text-[var(--text)] mb-1">
-                      {isPrivate ? "Show Social Media Links" : "Show Social Media Links"}
+                      {isPrivate
+                        ? "Show Social Media Links"
+                        : "Show Social Media Links"}
                     </div>
                     <div className="text-xs text-[var(--text)]/70">
                       {isPrivate
@@ -628,67 +886,147 @@ export default function FullScreenProfileCreation({
                 </div>
               </div>
             </div>
+
+            {/* Help & Support - Play Store compliance */}
+            {!isFirstTime && (
+              <div className="pt-4 mt-4 border-t border-[var(--border)]">
+                <a
+                  href={getSupportMailto()}
+                  className="text-sm text-[var(--brand)] hover:underline"
+                >
+                  Help & Support
+                </a>
+              </div>
+            )}
+
+            {/* Danger zone - only when editing (not first-time) */}
+            {!isFirstTime && (
+              <div className="pt-4 mt-4 border-t border-[var(--border)]">
+                <label className="block text-sm font-medium text-[var(--text)] mb-3">
+                  Danger zone
+                </label>
+                <p className="text-xs text-[var(--text)]/70 mb-3">
+                  This will remove your profile from the app and sign you out.
+                </p>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="w-full px-4 py-2 rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                >
+                  Delete Account
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-[var(--border)]">
-          <button
-            className="w-full py-3 rounded-lg bg-[var(--brand)] text-[var(--brand-ink)] font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
-            disabled={!canSave || saving}
-            onClick={() => {
-              if (!isFirstTime) {
-                setShowSaveConfirm(true);
-              } else {
-                save(); // No confirmation for first-time users
-              }
-            }}
-          >
-            {saving
-              ? "Saving..."
-              : isFirstTime
-              ? "Create Profile"
-              : "Save Changes"}
-          </button>
+        {/* Footer - fixed at bottom, gradient (solid at bottom → transparent) theme-aware */}
+        <div
+          className="fixed left-0 right-0 bottom-0 z-30 flex flex-col items-center pb-[calc(8px+var(--safe-area-bottom-layout))] pt-4 pointer-events-none"
+          style={{ background: "var(--gradient-from-bottom)" }}
+        >
+          <div className="w-[80%] max-w-[640px] pointer-events-auto">
+            <button
+              className="w-full py-2.5 px-6 rounded-full bg-[var(--brand)] text-[var(--brand-ink)] font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+              disabled={!canSave || saving}
+              onClick={() => {
+                if (!isFirstTime) {
+                  setShowSaveConfirm(true);
+                } else {
+                  save();
+                }
+              }}
+            >
+              {saving
+                ? "Saving..."
+                : isFirstTime
+                ? "Create Profile"
+                : "Save Changes"}
+            </button>
+          </div>
         </div>
       </div>
-      
-      {/* Save Confirmation Modal */}
-      {showSaveConfirm && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-[var(--surface)]/80"
-            onClick={() => setShowSaveConfirm(false)}
-          />
-          <div className="relative bg-[var(--surface-2)] border border-[var(--border)] rounded-lg p-4 max-w-sm w-full mx-4 z-[61]">
-            <h3 className="text-lg font-semibold text-[var(--text)] mb-2">
-              Save Changes?
-            </h3>
-            <p className="text-sm text-[var(--text)]/70 mb-4">
-              Are you sure you want to save these changes to your profile?
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowSaveConfirm(false)}
-                className="px-4 py-2 text-sm rounded-lg border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setShowSaveConfirm(false);
-                  save();
-                }}
-                disabled={saving}
-                className="px-4 py-2 text-sm rounded-lg bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+
+      {/* Save Changes Confirmation */}
+      <ConfirmDialog
+        open={showSaveConfirm}
+        onClose={() => !saving && setShowSaveConfirm(false)}
+        onConfirm={async () => {
+          setShowSaveConfirm(false);
+          await save();
+        }}
+        title="Save Changes?"
+        message="Are you sure you want to save these changes to your profile?"
+        cancelLabel="Cancel"
+        confirmLabel="Save Changes"
+        confirmVariant="primary"
+        isLoading={saving}
+        higherZIndex
+      />
+
+      <ConfirmDialog
+        open={showExitConfirm}
+        onClose={() => !saving && setShowExitConfirm(false)}
+        onConfirm={async () => {
+          setShowExitConfirm(false);
+          await save();
+        }}
+        title="Leave without saving?"
+        message="You have unsaved changes. Save now, keep editing, or discard and lose your changes."
+        cancelLabel="Cancel"
+        secondaryLabel="Discard"
+        secondaryVariant="dangerSoft"
+        onSecondary={() => {
+          setShowExitConfirm(false);
+          onClose();
+        }}
+        confirmLabel="Save"
+        confirmVariant="primary"
+        isLoading={saving}
+        higherZIndex
+      />
+
+      {/* Delete Account Confirmation */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onClose={() => !isDeleting && setShowDeleteConfirm(false)}
+        onConfirm={async () => {
+          if (isDeleting) return;
+          setIsDeleting(true);
+          setError(null);
+          try {
+            const result = await softDeleteAccount();
+            if (!result.success) {
+              setError(result.error);
+              setShowDeleteConfirm(false);
+              setIsDeleting(false);
+              return;
+            }
+            setShowDeleteConfirm(false);
+            clearAuthCache();
+            clearCachedProfile(profileId);
+            clearCachedFollowCounts(profileId);
+            try {
+              localStorage.removeItem("my_profile_id");
+            } catch {}
+            onClose();
+            navigate("/");
+            await supabase.auth.signOut();
+          } catch (e: any) {
+            setError(e?.message || "Failed to delete account");
+            setShowDeleteConfirm(false);
+            setIsDeleting(false);
+          }
+        }}
+        title="Delete account"
+        message="Are you sure you want to delete your account? This action will remove your profile from the app and sign you out."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        isLoading={isDeleting}
+        higherZIndex
+      />
     </div>
   );
 }

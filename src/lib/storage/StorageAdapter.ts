@@ -18,6 +18,8 @@
  * - Capacitor-ready
  */
 
+import { getCacheDurationMultiplier } from '../connectionAware';
+
 /**
  * Storage adapter interface
  * 
@@ -204,7 +206,6 @@ export function createStorageEntry<T>(
  */
 export function getConnectionAwareTtlMultiplier(): number {
   try {
-    const { getCacheDurationMultiplier } = require('../connectionAware');
     return getCacheDurationMultiplier();
   } catch {
     // Fallback if connectionAware not available

@@ -14,14 +14,16 @@ import {
 import toast from "react-hot-toast";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
-import { FiLock } from "react-icons/fi";
+import { PiLock } from "react-icons/pi";
+import { recordSignal } from "../../lib/feedPersonalization";
+import { incrementMyXp } from "../../api/services/xp";
 
 type Props = {
   targetId: string; // profile id to follow/unfollow
   className?: string;
   onChange?: (nowFollowing: boolean) => void;
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status from batch loader
-  followStatus?: "none" | "pending" | "following" | "friends" | null;
+  followStatus?: "none" | "pending" | "following" | "friends" | "self" | null;
 };
 
 export default function FollowButton({
@@ -119,17 +121,18 @@ export default function FollowButton({
         if (cachedProfileId) {
           targetProfileId = cachedProfileId;
         } else {
+          // [PHASE 2.3 - OPTIMIZATION] Use getProfileIdByUserId() for conversion
+          // Why: Reuses cache, RequestManager deduplicates, and caches full profile for future use
           try {
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("id")
-              .eq("user_id", targetId)
-              .single();
+            const { getProfileIdByUserId } = await import(
+              "../../api/services/follows"
+            );
+            const profileId = await getProfileIdByUserId(targetId);
 
-            if (profile?.id) {
-              targetProfileId = profile.id;
+            if (profileId) {
+              targetProfileId = profileId;
               // Cache the conversion for future use
-              localStorage.setItem(cachedProfileIdKey, profile.id);
+              localStorage.setItem(cachedProfileIdKey, profileId);
             } else {
               // If not found, assume targetId is already a profile ID
               // Cache that assumption to avoid repeated queries
@@ -211,9 +214,24 @@ export default function FollowButton({
   // Listen for follow changes from other components
   useEffect(() => {
     const handleFollowChange = (event: CustomEvent) => {
-      const { targetId: changedTargetId, nowFollowing } = event.detail || {};
-      if (changedTargetId === targetId && viewerId) {
-        // Refresh follow status when this user's follow status changes elsewhere
+      const { targetId: changedTargetId, status: detailStatus } =
+        event.detail || {};
+      if (changedTargetId !== targetId) return;
+      // Use status from event for immediate update, otherwise refetch
+      if (
+        detailStatus !== undefined &&
+        detailStatus !== null &&
+        detailStatus !== "self"
+      ) {
+        setFollowStatus(detailStatus);
+        if (detailStatus !== "pending" && viewerId) {
+          setCachedFollowStatus(
+            viewerId,
+            targetId,
+            detailStatus as "none" | "following" | "friends" | "self"
+          );
+        }
+      } else if (viewerId) {
         getFollowStatus(viewerId, targetId).then((status) => {
           setFollowStatus(status);
           if (status !== "pending") {
@@ -244,22 +262,30 @@ export default function FollowButton({
     if (!targetId) return null;
 
     try {
-      // First try to see if targetId is an auth user ID
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("user_id", targetId)
-        .single();
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileIdByUserId() for conversion
+      // Why: Reuses cache, RequestManager deduplicates, and caches full profile for future use
+      const { getProfileIdByUserId } = await import(
+        "../../api/services/follows"
+      );
+      const profileId = await getProfileIdByUserId(targetId);
 
-      if (profile?.id) {
-        return profile.id;
+      if (profileId) {
+        return profileId;
       }
     } catch (error) {
       // targetId is likely already a profile ID
     }
 
     // Verify it's a real profile ID
+    // [PHASE 2.3 - OPTIMIZATION] Check cache first before querying
     try {
+      const { getCachedProfile } = await import("../../lib/profileCache");
+      const cached = getCachedProfile(targetId);
+      if (cached) {
+        return targetId; // Profile exists in cache
+      }
+
+      // If not in cache, verify with query
       const { data: profile, error } = await supabase
         .from("profiles")
         .select("id")
@@ -371,6 +397,21 @@ export default function FollowButton({
         setIsProcessing(false);
         clearTimeout(safetyTimeout);
 
+        // [PHASE 1] Update XP (follow = +2, unfollow = -2)
+        try {
+          await incrementMyXp(wasFollowing ? -2 : 2);
+        } catch (err) {
+          // Fail silently - don't break follow action if XP fails
+        }
+        // [PHASE 3] Record signal for personalization (only on follow, not unfollow)
+        if (!wasFollowing) {
+          try {
+            recordSignal(targetProfileId, "follow");
+          } catch (err) {
+            // Fail silently - don't break follow action if personalization fails
+          }
+        }
+
         // [FIX: Use actual status from API] Use returned status to prevent flickering
         // Why: API returns the actual status (pending/approved), so we use that instead of guessing
         if (currentViewerId) {
@@ -457,12 +498,13 @@ export default function FollowButton({
                 // Keep the status from API on error
               });
 
-            // Dispatch event for other components
+            // Dispatch event for other components (include status for immediate sync without refetch)
             window.dispatchEvent(
               new CustomEvent("follow:changed", {
                 detail: {
                   targetId: targetProfileId,
                   nowFollowing: !wasFollowing,
+                  status: actualStatus,
                 },
               })
             );
@@ -559,7 +601,7 @@ export default function FollowButton({
       return (
         <>
           <span>{text}</span>
-          <FiLock size={12} className="ml-1" />
+          <PiLock size={12} className="ml-1" />
         </>
       );
     }

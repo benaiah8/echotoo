@@ -54,7 +54,9 @@ export default function AnimatedLogo({
               width: `${star.size}px`,
               height: `${star.size}px`,
               opacity: 0.6,
-              animation: `twinkle ${2 + Math.random() * 2}s ease-in-out infinite`,
+              animation: `twinkle ${
+                2 + Math.random() * 2
+              }s ease-in-out infinite`,
               animationDelay: `${star.delay}s`,
             }}
           />
@@ -71,7 +73,7 @@ export default function AnimatedLogo({
         {/* Owl logo */}
         <img
           src={getOwlLogoPath()}
-          alt="Echotoo"
+          alt="EchoToo"
           className="block"
           style={{
             width: "90px",
@@ -104,4 +106,3 @@ export default function AnimatedLogo({
     </div>
   );
 }
-

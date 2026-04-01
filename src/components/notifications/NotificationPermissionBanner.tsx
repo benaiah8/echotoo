@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { IoNotifications, IoClose } from "react-icons/io5";
+import { PiBell, PiX } from "react-icons/pi";
 
 export default function NotificationPermissionBanner() {
   const [showBanner, setShowBanner] = useState(false);
@@ -65,7 +65,7 @@ export default function NotificationPermissionBanner() {
     <div className="mx-3 mb-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
       <div className="flex items-start gap-3">
         <div className="flex-shrink-0">
-          <IoNotifications size={20} className="text-blue-500" />
+          <PiBell size={20} className="text-blue-500" />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -97,7 +97,7 @@ export default function NotificationPermissionBanner() {
           onClick={dismissBanner}
           className="flex-shrink-0 text-[var(--text)]/30 hover:text-[var(--text)]/60 transition-colors"
         >
-          <IoClose size={16} />
+          <PiX size={16} />
         </button>
       </div>
     </div>

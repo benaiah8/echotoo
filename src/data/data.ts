@@ -68,7 +68,7 @@ export const additionalActiviesData = [
   "Accessibility",
   "Age-Suitability",
   "Host Contact Info",
-  "Other",
+  "Custom",
 ];
 
 export const categoriesData = [

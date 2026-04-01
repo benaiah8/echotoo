@@ -8,6 +8,8 @@ interface ModalProps {
   modalType?: "side" | "center";
   sideModalOverrideClassname?: string;
   centerModalOverrideClassname?: string;
+  /** When "glass", center modal uses frosted glass background and theme-aware border */
+  centerVariant?: "default" | "glass";
 }
 
 const Modal = ({
@@ -17,6 +19,7 @@ const Modal = ({
   modalType = "side",
   sideModalOverrideClassname = "",
   centerModalOverrideClassname = "",
+  centerVariant = "default",
 }: ModalProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
@@ -45,25 +48,51 @@ const Modal = ({
 
   if (!isMounted) return null;
 
+  const isGlass = modalType === "center" && centerVariant === "glass";
+
   return createPortal(
     <div
       onClick={onClose}
       className={`fixed inset-0 z-[9999] flex transition-opacity duration-300 ${
         modalType === "center"
-          ? "items-center justify-center"
+          ? "items-center justify-center p-4"
           : "justify-end items-stretch"
       } ${
         isVisible
-          ? "bg-[var(--surface)]/50 opacity-100"
-          : "bg-[var(--surface)]/0 opacity-0"
+          ? isGlass
+            ? "opacity-100"
+            : "bg-[var(--surface)]/50 opacity-100"
+          : "opacity-0"
       }`}
+      style={
+        isGlass && isVisible
+          ? {
+              backgroundColor: "var(--drawer-backdrop, rgba(0, 0, 0, 0.5))",
+              backdropFilter: "blur(var(--glass-blur))",
+              WebkitBackdropFilter: "blur(var(--glass-blur))",
+            }
+          : undefined
+      }
     >
       {modalType === "center" ? (
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`bg-white p-6 rounded-md shadow-lg max-w-md w-full transition-all duration-300 transform text-black ${
+          className={`p-6 rounded-2xl shadow-2xl max-w-md w-full transition-all duration-300 transform ${
+            !isGlass ? "bg-white text-black" : ""
+          } ${
             isVisible ? "scale-100 opacity-100" : "scale-95 opacity-0"
           } ${centerModalOverrideClassname}`}
+          style={
+            isGlass
+              ? {
+                  backgroundColor: "var(--glass-bg)",
+                  border: "1px solid var(--glass-active-border)",
+                  backdropFilter: "blur(var(--glass-blur))",
+                  WebkitBackdropFilter: "blur(var(--glass-blur))",
+                  color: "var(--text)",
+                }
+              : undefined
+          }
         >
           {children}
         </div>

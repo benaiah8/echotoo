@@ -1,4 +1,4 @@
-// PERF: compress originals and generate thumbnails client-side before upload
+// PERF: compress originals client-side before upload
 export async function fileToBitmap(file: File) {
   // Safari fallback: createImageBitmap may fail; fallback via <img>
   try {
@@ -37,9 +37,4 @@ function bitmapToBlob(bitmap: ImageBitmap, maxW: number, quality = 0.8) {
 export async function compressImage(file: File, maxW = 2000, quality = 0.85) {
   const bmp = await fileToBitmap(file);
   return await bitmapToBlob(bmp, maxW, quality); // WebP
-}
-
-export async function makeThumbnail(file: File, thumbW = 800, quality = 0.78) {
-  const bmp = await fileToBitmap(file);
-  return await bitmapToBlob(bmp, thumbW, quality); // WebP
 }

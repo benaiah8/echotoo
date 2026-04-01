@@ -4,6 +4,8 @@ import { supabase } from "../lib/supabaseClient";
 import { useDispatch } from "react-redux";
 import { setAuthUser, setAuthLoading } from "../reducers/authReducer";
 import { setAuthModal } from "../reducers/modalReducer";
+import { getAuthRedirectUrl } from "../lib/authRedirect";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 
 /** Minimal shape of the user we put in Redux */
 export type SimpleUser = {
@@ -64,13 +66,26 @@ export default function useSupabaseAuth() {
   );
 
   const signInWithGoogle = useCallback(async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
+    const redirectTo = getAuthRedirectUrl();
+
+    console.log("[AuthRedirectDebug] useSupabaseAuth.signInWithGoogle", {
+      origin: window.location.origin,
+      redirectTo,
+      isNativeApp: isNativeApp(),
+    });
+
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`, // <— unify
-      },
+      options: { redirectTo },
     });
     if (error) throw error;
+
+    if (isNativeApp() && data?.url) {
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.open({ url: data.url });
+    } else if (data?.url) {
+      window.location.href = data.url;
+    }
   }, []);
 
   const signOut = useCallback(async () => {

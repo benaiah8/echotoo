@@ -1,4 +1,4 @@
-import { MdCheck } from "react-icons/md";
+import { PiCheck } from "react-icons/pi";
 
 interface PrimarySelectableProps {
   selected?: boolean;
@@ -25,7 +25,7 @@ function PrimarySelectable({
       {selected ? (
         <div className="flex items-center gap-1">
           <span className="text-[var(--text)]">
-            <MdCheck />
+            <PiCheck />
           </span>
           <span className="font-medium text-[var(--text)]">{label}</span>
         </div>

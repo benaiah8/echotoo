@@ -28,7 +28,7 @@ function ActivityRow({ a, i }: { a: Activity; i: number }) {
         {/* header row */}
         <div className="flex items-baseline">
           <h3 className="text-sm font-semibold">
-            {a.title || `Activity ${i + 1}`}
+            {a.title || `Stop ${i + 1}`}
           </h3>
         </div>
 

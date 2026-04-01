@@ -1,25 +1,31 @@
 /**
  * [OPTIMIZATION FILE: Phase 3]
- * 
+ *
  * This file contains the unified cache invalidation system.
- * 
+ *
  * Optimizations included:
  * - Cache: Unified invalidation for all related caches
  * - Event: Event-based cache invalidation
  * - Smart: Only clears what's needed, updates when possible
- * 
+ *
  * Related optimizations:
  * - See: src/lib/requestManager.ts for request deduplication
  */
 
-import { clearCachedProfile } from "./profileCache";
+import { clearCachedProfile, setCachedProfile } from "./profileCache";
 import { clearCachedFollowStatus } from "./followStatusCache";
-import { clearCachedFollowRequestStatus } from "./followRequestStatusCache";
+import {
+  clearCachedFollowRequestStatus,
+  clearAllFollowRequestStatusCache,
+} from "./followRequestStatusCache";
 import { clearCachedFollowCounts } from "./followCountsCache";
 import { clearCachedNotificationSettings } from "./notificationSettingsCache";
 import { clearPrivacyCache } from "./postPrivacyFilter";
-import { clearCachedProfilePosts } from "./profilePostsCache";
+import { dataCache } from "./dataCache";
 import { clearCachedAvatar } from "./avatarCache";
+import { clearMutualFriendsCache } from "./mutualFriendsCache";
+import { invalidatePostDetailCache } from "../api/queries/getPostById";
+import { clearCachedRSVPData } from "./rsvpCache";
 
 /**
  * [OPTIMIZATION: Phase 3 - Cache] Cache relationship mapping
@@ -39,7 +45,7 @@ interface CacheRelationships {
 /**
  * [OPTIMIZATION: Phase 3 - Cache] Unified cache invalidation function
  * Why: Single function to invalidate all related caches, prevents cache inconsistencies
- * 
+ *
  * @param profileId - The profile ID that changed
  * @param relationships - Which related caches to invalidate
  * @param updateData - Optional: Update cache instead of invalidating (prevents flicker)
@@ -54,14 +60,19 @@ export function invalidateRelatedCaches(
     avatar?: { userId: string; avatarUrl: string };
   }
 ): void {
-  console.log("[CacheInvalidation] Invalidating caches for profile:", profileId, relationships);
+  console.log(
+    "[CacheInvalidation] Invalidating caches for profile:",
+    profileId,
+    relationships
+  );
 
   // [OPTIMIZATION: Phase 3 - Smart] Update cache instead of invalidating when possible
   // Why: Prevents flicker, shows updated data immediately
   if (updateData?.profile) {
-    const { setCachedProfile } = require("./profileCache");
     setCachedProfile(updateData.profile);
-    console.log("[CacheInvalidation] Updated profile cache instead of invalidating");
+    console.log(
+      "[CacheInvalidation] Updated profile cache instead of invalidating"
+    );
   } else if (relationships.profile?.includes(profileId)) {
     clearCachedProfile(profileId);
   }
@@ -74,11 +85,13 @@ export function invalidateRelatedCaches(
   }
 
   // Invalidate follow request status caches
-  if (relationships.followRequestStatus && relationships.followRequestStatus.length > 0) {
+  if (
+    relationships.followRequestStatus &&
+    relationships.followRequestStatus.length > 0
+  ) {
     // Note: followRequestStatus cache requires both follower and following IDs
     // For now, we clear all if any profile in the relationship changes
     // In production, you'd want to track both IDs for more precise clearing
-    const { clearAllFollowRequestStatusCache } = require("./followRequestStatusCache");
     // Clear all follow request status cache when any relationship changes
     // This is safe because follow request status is checked frequently
     clearAllFollowRequestStatusCache();
@@ -106,11 +119,12 @@ export function invalidateRelatedCaches(
   }
 
   // Invalidate profile posts caches
+  // [PHASE D.1] Use dataCache instead of profilePostsCache
   if (relationships.posts) {
     relationships.posts.forEach((userId) => {
-      clearCachedProfilePosts(userId, "created");
-      clearCachedProfilePosts(userId, "interacted");
-      clearCachedProfilePosts(userId, "saved");
+      dataCache.delete(`profile_created_${userId}`);
+      dataCache.delete(`profile_interacted_${userId}`);
+      dataCache.delete(`profile_saved_${userId}`);
     });
   }
 
@@ -134,11 +148,12 @@ export function setupCacheInvalidationListeners(): void {
 
     console.log("[CacheInvalidation] Profile updated event:", profileId);
 
-    // Invalidate related caches
+    // Do not clear profile row here — FullScreenProfileCreation / editors write fresh
+    // data first; clearing caused stale UI and races with OwnProfilePage. Still
+    // refresh counts and post list caches.
     invalidateRelatedCaches(profileId, {
-      profile: [profileId],
       followCounts: [profileId],
-      posts: [profileId], // Assuming profileId is user_id for posts
+      posts: [profileId],
     });
   });
 
@@ -197,5 +212,53 @@ export function invalidateFollowCaches(
     followCounts: [followerId, followingId],
     followRequestStatus: [followerId, followingId],
   });
+
+  // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Clear mutual friends cache for both users
+  // Why: Mutual friends list changes when follow relationships change
+  try {
+    clearMutualFriendsCache(followerId);
+    clearMutualFriendsCache(followingId);
+  } catch (error) {
+    console.warn(
+      "[CacheInvalidation] Failed to clear mutual friends cache:",
+      error
+    );
+  }
 }
 
+/**
+ * [Step 5] Invalidate caches after like/unlike.
+ * Touches: post detail (is_liked), feed (cards), profile interacted tab.
+ */
+export function invalidateOnLike(postId: string, userId: string): void {
+  invalidatePostDetailCache(postId);
+  dataCache.delete(`profile_interacted_${userId}`);
+  dataCache.clearFeedCache().catch(() => {});
+}
+
+/**
+ * [Step 5] Invalidate caches after save/unsave.
+ * Touches: post detail (is_saved), feed (cards), profile saved tab.
+ */
+export function invalidateOnSave(postId: string, userId: string): void {
+  invalidatePostDetailCache(postId);
+  dataCache.delete(`profile_saved_${userId}`);
+  dataCache.clearFeedCache().catch(() => {});
+}
+
+/**
+ * [Step 5] Invalidate caches after RSVP change.
+ * Touches: post detail (rsvp_data), RSVP cache.
+ */
+export function invalidateOnRSVP(postId: string): void {
+  invalidatePostDetailCache(postId);
+  clearCachedRSVPData(postId);
+}
+
+/**
+ * [Step 5] Invalidate caches after add/delete comment.
+ * Touches: post detail (comment_count). Comments cache is handled by comments service.
+ */
+export function invalidateOnComment(postId: string): void {
+  invalidatePostDetailCache(postId);
+}

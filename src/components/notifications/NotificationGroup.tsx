@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { IoChevronDown, IoChevronUp } from "react-icons/io5";
+import { PiCaretDown, PiCaretUp } from "react-icons/pi";
 import { type NotificationWithActor } from "../../types/notification";
 import NotificationItem from "./NotificationItem";
 import Avatar from "../ui/Avatar";
@@ -34,7 +34,10 @@ export default function NotificationGroup({
   const unreadCount = notifications.filter((n) => {
     if (!n.is_read) {
       // Don't count declined follow requests as unread
-      if (n.type === "follow" && n.additional_data?.follow_request_status === "declined") {
+      if (
+        n.type === "follow" &&
+        n.additional_data?.follow_request_status === "declined"
+      ) {
         return false;
       }
       return true;
@@ -120,11 +123,7 @@ export default function NotificationGroup({
 
           {notifications.length > 0 && (
             <div className="text-[var(--text)]/50">
-              {isExpanded ? (
-                <IoChevronUp size={20} />
-              ) : (
-                <IoChevronDown size={20} />
-              )}
+              {isExpanded ? <PiCaretUp size={20} /> : <PiCaretDown size={20} />}
             </div>
           )}
         </button>
@@ -181,7 +180,8 @@ export default function NotificationGroup({
                               "Someone"}
                             {notification.type === "like" && " liked your post"}
                             {notification.type === "follow" &&
-                              (notification.additional_data?.follow_request_status
+                              (notification.additional_data
+                                ?.follow_request_status
                                 ? " requested to follow you"
                                 : " started following you")}
                             {notification.type === "comment" &&

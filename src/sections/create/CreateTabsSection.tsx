@@ -1,6 +1,20 @@
 // src/sections/create/CreateTabsSection.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { PiArrowRight } from "react-icons/pi";
+import {
+  APP_SAFE_BOTTOM_SYNC_EVENT,
+  resolveSafeAreaBottomLayoutPx,
+} from "../../lib/appSafeAreaBottom";
+
+/**
+ * Height (px) of the create-step strip (outer frosted bar + inner pills).
+ * Roughly ~50% of a typical bottom-tab pill (~54px). Change only this number to tune.
+ */
+export const CREATE_STEP_STRIP_HEIGHT_PX = 28;
+
+/** Taller strip when forward-only step uses solid white primary CTA (e.g. Activities). */
+export const CREATE_STEP_STRIP_HEIGHT_PX_FORWARD_EMPHASIS = 40;
 
 type Props = {
   /** 1..4 where 1=create, 2=activities, 3=categories/caption, 4=preview */
@@ -13,6 +27,19 @@ type Props = {
   isEditMode?: boolean;
   /** Whether to hide the Previous button */
   hidePrev?: boolean;
+  /**
+   * Activities step: one forward action only (no Prev, no step dots).
+   * Other create steps keep the three-part strip unless they opt in.
+   */
+  forwardOnly?: boolean;
+  /** Label for the forward button (default "Next →") */
+  nextLabel?: string;
+  /** When true, this strip does not hide on scroll (stable primary CTA) */
+  stableOnScroll?: boolean;
+  /** Quiet note fixed just above the forward strip (e.g. Activities optionality) */
+  footerNote?: ReactNode;
+  /** Stronger primary CTA styling for forward-only steps (e.g. Activities → caption) */
+  emphasizeNext?: boolean;
 };
 
 export default function CreateTabsSection({
@@ -22,22 +49,46 @@ export default function CreateTabsSection({
   onPrev,
   isEditMode = false,
   hidePrev = false,
+  forwardOnly = false,
+  nextLabel = "Next →",
+  stableOnScroll = false,
+  footerNote,
+  emphasizeNext = false,
 }: Props) {
   const navigate = useNavigate();
 
-  // visual tuning
-  const SAFE = envSafeArea();
-  const BAR_H = 52; // visible control bar height
-  const OVERLAP = 0; // no overlap - directly attach to bottom tab
+  /** Space between this strip and the bottom tab pill (px) — increase/decrease here */
+  const GAP_ABOVE_TAB = 16;
 
-  // measure BottomTab so the bar hugs it perfectly (but with lower z-index)
+  const [safeBottom, setSafeBottom] = useState(0);
+  useEffect(() => {
+    const sync = () => setSafeBottom(resolveSafeAreaBottomLayoutPx());
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.removeEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, sync);
+    };
+  }, []);
+
+  // measure BottomTab so the bar sits just above it (lower z-index than tab)
   const [btHeight, setBtHeight] = useState(0);
+  const [btWidth, setBtWidth] = useState(0);
   const [hidden, setHidden] = useState(false); // track scroll state to follow bottom tab
 
   useEffect(() => {
     const el = document.getElementById("bottom-tab");
-    const measure = () =>
-      setBtHeight(el ? Math.round(el.getBoundingClientRect().height) : 0);
+    const measure = () => {
+      if (!el) {
+        setBtHeight(0);
+        setBtWidth(0);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      setBtHeight(Math.round(r.height));
+      setBtWidth(Math.round(r.width));
+    };
     measure();
     // re-measure on resize & when BottomTab animates
     window.addEventListener("resize", measure);
@@ -53,8 +104,12 @@ export default function CreateTabsSection({
     };
   }, []);
 
-  // Follow the bottom tab's scroll behavior
+  // Follow the bottom tab's scroll behavior (optional: keep strip visible)
   useEffect(() => {
+    if (stableOnScroll) {
+      setHidden(false);
+      return;
+    }
     const onScroll = () => {
       const current = window.scrollY;
       const shouldHide = current > 60; // same threshold as BottomTab
@@ -63,16 +118,28 @@ export default function CreateTabsSection({
 
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [stableOnScroll]);
+
+  const footerNoteReservePx = footerNote ? 26 : 0;
+
+  const forwardEmphasis = emphasizeNext && forwardOnly;
+  const stripHeightPx = forwardEmphasis
+    ? CREATE_STEP_STRIP_HEIGHT_PX_FORWARD_EMPHASIS
+    : CREATE_STEP_STRIP_HEIGHT_PX;
 
   // let pages reserve enough space so content never hides behind bars
   useEffect(() => {
-    const total = btHeight + BAR_H + SAFE;
+    const total =
+      btHeight +
+      GAP_ABOVE_TAB +
+      stripHeightPx +
+      safeBottom +
+      footerNoteReservePx;
     document.documentElement.style.setProperty(
       "--create-actions-total-bottom",
       `${total}px`
     );
-  }, [btHeight, SAFE]);
+  }, [btHeight, safeBottom, footerNoteReservePx, stripHeightPx]);
 
   const prevPath = useMemo(
     () => paths[Math.max(0, step - 2)] || null,
@@ -83,92 +150,138 @@ export default function CreateTabsSection({
     [paths, step]
   );
 
-  // Gradient from black at bottom to gray at top (theme-aware)
-  const gradientBg = `linear-gradient(to top,
-      var(--bg) 0%,
-      var(--bg) 30%,
-      var(--surface) 100%)`;
+  const bottomOffset = btHeight > 0 ? btHeight + GAP_ABOVE_TAB : GAP_ABOVE_TAB;
+
+  const stepCount = isEditMode ? 2 : 4;
+  const rowH = stripHeightPx;
+
+  const innerPill =
+    "flex h-full min-h-0 shrink-0 items-center justify-center rounded-full border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]";
+
+  const outerStyle: React.CSSProperties =
+    btWidth > 0
+      ? {
+          width: btWidth,
+          maxWidth: "calc(100vw - 24px)",
+          height: rowH,
+        }
+      : { height: rowH };
+
+  const showPrev = !forwardOnly && !hidePrev;
+  const showStepDots = !forwardOnly;
 
   return (
     <>
-      {/* Navigation bar that follows bottom tab behavior */}
       <div
         className={[
-          "fixed left-0 right-0 z-30 transition-transform duration-300",
+          "fixed inset-x-0 z-30 flex flex-col items-center gap-1.5 pointer-events-none",
+          "transition-transform duration-300",
           hidden ? "translate-y-[110%]" : "translate-y-0",
         ].join(" ")}
-        style={{ bottom: Math.max(0, btHeight - OVERLAP) }}
+        style={{ bottom: bottomOffset }}
       >
-        {/* Full gradient background */}
+        {footerNote ? (
+          <div className="pointer-events-none max-w-[min(640px,calc(100vw-24px))] px-3 text-center">
+            {footerNote}
+          </div>
+        ) : null}
+        {/* Borderless frosted track (flush); height = CREATE_STEP_STRIP_HEIGHT_PX */}
         <div
-          className="w-full rounded-t-2xl"
-          style={{
-            height: BAR_H + SAFE,
-            paddingBottom: SAFE,
-            backgroundImage: gradientBg,
-            borderTop: `1px solid var(--border)`, // top border
-          }}
+          className={[
+            "pointer-events-auto flex items-stretch rounded-full",
+            forwardOnly ? "justify-center w-full min-w-0" : "justify-between",
+            forwardEmphasis
+              ? "bg-transparent backdrop-blur-none"
+              : "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+            btWidth > 0
+              ? "max-w-none"
+              : forwardOnly
+              ? "w-full max-w-[min(640px,calc(100vw-24px))]"
+              : "w-fit max-w-[min(640px,calc(100vw-24px))]",
+          ].join(" ")}
+          style={outerStyle}
         >
-          {/* the actual control bar */}
-          <div
-            className={[
-              "mx-auto max-w-[640px] px-4",
-              "h-[52px] rounded-t-2xl",
-              "flex items-center justify-between",
-            ].join(" ")}
-          >
-            {!hidePrev && (
-              <button
-                className="text-[13px] font-medium text-[var(--text)]/85"
-                onClick={() =>
-                  onPrev ? onPrev() : prevPath ? navigate(prevPath) : null
-                }
-              >
-                ← Prev
-              </button>
-            )}
-            {hidePrev && <div />}
-
-            <div className="flex items-center gap-2">
-              {(isEditMode ? [1, 2] : [1, 2, 3, 4]).map((n) => (
-                <span
-                  key={n}
-                  className={[
-                    "inline-block h-[6px] rounded-full",
-                    n === step
-                      ? "w-6 bg-[var(--text)]/85"
-                      : "w-3 bg-[var(--text)]/30",
-                  ].join(" ")}
-                />
-              ))}
-            </div>
-
+          {showPrev ? (
             <button
-              className="text-[13px] font-medium text-[var(--text)]/85"
+              type="button"
+              className={`${innerPill} px-3`}
               onClick={() =>
-                onNext ? onNext() : nextPath ? navigate(nextPath) : null
+                onPrev ? onPrev() : prevPath ? navigate(prevPath) : null
               }
             >
-              Next →
+              <span className="text-[11px] sm:text-[12px] font-medium text-[var(--text)]/85 leading-none">
+                ← Prev
+              </span>
             </button>
-          </div>
+          ) : null}
+
+          {showStepDots ? (
+            <div
+              className={`${innerPill} min-w-0 px-2.5`}
+              role="status"
+              aria-label={`Step ${step} of ${stepCount}`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                {(isEditMode ? [1, 2] : [1, 2, 3, 4]).map((n) => (
+                  <span
+                    key={n}
+                    className={[
+                      "inline-block h-[4px] rounded-full shrink-0",
+                      n === step
+                        ? "w-5 bg-[var(--text)]/85"
+                        : "w-2.5 bg-[var(--text)]/30",
+                    ].join(" ")}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className={
+              forwardEmphasis
+                ? [
+                    "flex h-full min-h-0 shrink-0 items-center justify-center rounded-full",
+                    "min-w-0 flex-1 px-4",
+                    "border border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-ink)]",
+                    "shadow-sm hover:brightness-110 active:scale-[0.99]",
+                  ].join(" ")
+                : [
+                    innerPill,
+                    forwardOnly ? "min-w-0 flex-1 px-4" : "px-3",
+                  ].join(" ")
+            }
+            onClick={() =>
+              onNext ? onNext() : nextPath ? navigate(nextPath) : null
+            }
+            aria-label={nextLabel}
+          >
+            {forwardEmphasis ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="text-center text-[13px] font-semibold leading-tight tracking-tight text-[var(--brand-ink)] sm:text-[14px]">
+                  {nextLabel}
+                </span>
+                <PiArrowRight
+                  className="h-[1.1rem] w-[1.1rem] shrink-0 text-[var(--brand-ink)] sm:h-[1.15rem] sm:w-[1.15rem]"
+                  aria-hidden
+                />
+              </span>
+            ) : (
+              <span
+                className={[
+                  "leading-tight text-center",
+                  emphasizeNext && forwardOnly
+                    ? "text-[10px] font-bold tracking-tight text-[var(--text)] sm:text-[11px]"
+                    : "text-[11px] font-medium text-[var(--text)]/85 sm:text-[12px]",
+                ].join(" ")}
+              >
+                {nextLabel}
+              </span>
+            )}
+          </button>
         </div>
       </div>
     </>
   );
-}
-
-/** reads iOS safe area inset (0 for desktop) */
-function envSafeArea() {
-  try {
-    const probe = document.createElement("div");
-    probe.style.cssText =
-      "position:fixed;bottom:0;left:0;right:0;height:constant(safe-area-inset-bottom);height:env(safe-area-inset-bottom);";
-    document.body.appendChild(probe);
-    const px = parseFloat(getComputedStyle(probe).height || "0");
-    document.body.removeChild(probe);
-    return isFinite(px) ? px : 0;
-  } catch {
-    return 0;
-  }
 }

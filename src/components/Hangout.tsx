@@ -1,15 +1,59 @@
-import React, { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  useCallback,
+} from "react";
+import { createPortal } from "react-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
-import { MdMoreHoriz, MdEdit, MdDelete, MdPersonAdd } from "react-icons/md";
+import { PiPencilSimple, PiTrash, PiUserPlus } from "react-icons/pi";
 import Avatar from "./ui/Avatar";
 import FollowButton from "./ui/FollowButton";
 import InviteDrawer from "./ui/InviteDrawer";
 import SaveButton from "./ui/SaveButton";
+import ConfirmDialog from "./ui/ConfirmDialog";
 import { getPostForEdit, deletePost } from "../api/services/posts";
 import { Paths } from "../router/Paths";
 import toast from "react-hot-toast";
 import { getDatePriorityLabel } from "../lib/feedSorting";
+import { type FeedItem } from "../api/queries/getPublicFeed";
+import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
+import RailCardImageBackdrop from "./RailCardImageBackdrop";
+
+function getPriorityColorClass(label: string) {
+  switch (label) {
+    case "Today":
+      return "bg-green-500/20 text-green-600 border-green-500/30";
+    case "Tomorrow":
+      return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
+    case "This Weekend":
+      return "bg-purple-500/20 text-purple-600 border-purple-500/30";
+    default:
+      return "bg-gray-500/20 text-gray-600 border-gray-500/30";
+  }
+}
+
+/** Frosted glass + accent border when rail card has a cover image */
+function getRailPriorityPillClass(label: string) {
+  const accent = (() => {
+    switch (label) {
+      case "Today":
+        return "border-green-500/55 ring-1 ring-inset ring-green-500/35";
+      case "Tomorrow":
+        return "border-amber-400/65 ring-1 ring-inset ring-amber-400/45";
+      case "This Weekend":
+        return "border-purple-500/55 ring-1 ring-inset ring-purple-500/40";
+      default:
+        return "border-[var(--border)]";
+    }
+  })();
+  return `backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] text-[var(--text)] shadow-[var(--rail-card-pill-shadow)] border ${accent}`;
+}
+
+const RAIL_DATE_PILL_CLASS =
+  "backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] border border-[var(--border)] text-[var(--text)] shadow-[var(--rail-card-pill-shadow)]";
 
 type Props = {
   id: string; // NEW
@@ -30,6 +74,10 @@ type Props = {
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded statuses from batch loader
   isSaved?: boolean;
   followStatus?: "none" | "pending" | "following" | "friends" | null;
+  // [ENHANCEMENT: Visual Distinction] Visual styling for filtered items
+  isFiltered?: boolean; // Whether this item matches active filters
+  /** Full FeedItem for initialPost when opening PostDetailModal (rail→modal sync) */
+  post?: FeedItem;
 };
 
 export default function Hangout({
@@ -49,20 +97,48 @@ export default function Hangout({
   type = "hangout", // Default to hangout for backward compatibility
   isSaved, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded save status
   followStatus, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status
+  isFiltered = false, // [ENHANCEMENT: Visual Distinction] Visual styling for filtered items
+  post, // Full FeedItem for initialPost when opening modal
 }: Props) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
+  const [railImageFailed, setRailImageFailed] = useState(false);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isDraft = status === "draft";
+  // Prefer post object when provided (patched by post:changed); fallback to primitive props
+  const effectiveIsSaved = post?.is_saved ?? isSaved;
+  const effectiveFollowStatus = post?.follow_status ?? followStatus;
 
-  // Close menu when clicking outside
+  const priorityLabel = getDatePriorityLabel({
+    selected_dates: selectedDates,
+  } as any);
+
+  const railCoverUrl = useMemo(() => getRailCardCoverUrl(post), [post]);
+  const showRailCover = Boolean(railCoverUrl && !railImageFailed);
+
+  useEffect(() => {
+    setRailImageFailed(false);
+  }, [id, railCoverUrl]);
+
+  const handleRailImageError = useCallback(() => {
+    setRailImageFailed(true);
+  }, []);
+
+  // Close menu when clicking outside (trigger or portaled dropdown)
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const inTrigger = triggerRef.current?.contains(target);
+      const inDropdown = dropdownRef.current?.contains(target);
+      if (!inTrigger && !inDropdown) {
         setIsMenuOpen(false);
       }
     };
@@ -76,7 +152,23 @@ export default function Hangout({
     };
   }, [isMenuOpen]);
 
+  // Close on scroll/resize (dropdown position would drift)
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const close = () => setIsMenuOpen(false);
+    window.addEventListener("scroll", close, { capture: true });
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, { capture: true });
+      window.removeEventListener("resize", close);
+    };
+  }, [isMenuOpen]);
+
   const handleEdit = async () => {
+    if (isDraft || id.startsWith("draft-")) {
+      navigate("/create/activities?type=hangout");
+      return;
+    }
     try {
       const { post, activities } = await getPostForEdit(id);
 
@@ -119,6 +211,15 @@ export default function Hangout({
   };
 
   const handleDelete = async () => {
+    if (isDraft || id.startsWith("draft-")) {
+      // Skip DB delete; drafts live in localStorage. TODO: Parent should clear cache/refresh to remove card.
+      localStorage.removeItem("draftMeta");
+      localStorage.removeItem("draftActivities");
+      toast.success("Draft discarded");
+      setShowDeleteModal(false);
+      return;
+    }
+    setIsDeleting(true);
     try {
       await deletePost(id);
       toast.success("Hangout deleted successfully");
@@ -127,6 +228,8 @@ export default function Hangout({
     } catch (error) {
       console.error("Error deleting hangout:", error);
       toast.error("Failed to delete hangout");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -149,8 +252,17 @@ export default function Hangout({
           e.preventDefault();
           return;
         }
+        if (isDraft || id.startsWith("draft-")) {
+          navigate("/create/activities?type=hangout");
+          return;
+        }
         console.log("Hangout navigating to:", id);
-        navigate(`/hangout/${id}`);
+        navigate(`/hangout/${id}`, {
+          state: {
+            backgroundLocation: location,
+            initialPost: post ?? undefined,
+          },
+        });
       }}
       role="button"
       tabIndex={0}
@@ -162,20 +274,36 @@ export default function Hangout({
         )
           return;
         if (e.key === "Enter" || e.key === " ") {
-          navigate(`/hangout/${id}`);
+          if (isDraft || id.startsWith("draft-")) {
+            navigate("/create/activities?type=hangout");
+          } else {
+            navigate(`/hangout/${id}`, {
+              state: {
+                backgroundLocation: location,
+                initialPost: post ?? undefined,
+              },
+            });
+          }
         }
       }}
       className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0 cursor-pointer"
     >
-      {/* allow corner badge to hang outside */}
+      {/* allow corner badge to hang outside; overflow-visible so save pill is not clipped */}
       <div
-        className={`relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3 ${
-          isDraft ? "opacity-60" : ""
-        }`}
+        className={`relative overflow-visible mb-3 rounded-[14px] border border-[var(--border)] pt-2 px-3 pb-3 ${
+          showRailCover ? "bg-transparent" : "ui-card"
+        } ${isDraft ? "opacity-60" : ""}`}
       >
+        {showRailCover && railCoverUrl && (
+          <RailCardImageBackdrop
+            coverUrl={railCoverUrl}
+            onImageError={handleRailImageError}
+          />
+        )}
+
         {/* save button: bottom-left, slightly outside, no content overlap */}
         <div
-          className="absolute -bottom-3 -left-3 z-10"
+          className="absolute -bottom-3 -left-3 z-20"
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -185,209 +313,201 @@ export default function Hangout({
             postId={id}
             className="grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
             size={18}
-            isSaved={isSaved} // [OPTIMIZATION: Phase 1 - Batch] Pass batched save status
+            isSaved={effectiveIsSaved}
+            post={post}
           />
         </div>
 
-        {/* author row */}
-        <div className="flex items-center gap-2">
-          <Avatar
-            url={isAnonymous ? null : avatarUrl}
-            name={authorHandle ?? ""}
-            size={24}
-            postType={type}
-            variant={isAnonymous ? "anon" : "default"}
-            anonymousAvatar={isAnonymous ? authorHandle?.charAt(0) : undefined}
-          />
-          <span className="text-xs text-[var(--text)]/80 truncate">
-            {authorHandle}
-          </span>
-          {isDraft && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-yellow-500/20 text-yellow-600 rounded-full border border-yellow-500/30">
-              Draft
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-1">
-            {/* Date priority label */}
-            {(() => {
-              const priorityLabel = getDatePriorityLabel({
-                selected_dates: selectedDates,
-              } as any);
-              if (priorityLabel) {
-                const getPriorityColor = (label: string) => {
-                  switch (label) {
-                    case "Today":
-                      return "bg-green-500/20 text-green-600 border-green-500/30";
-                    case "Tomorrow":
-                      return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
-                    case "This Weekend":
-                      return "bg-purple-500/20 text-purple-600 border-purple-500/30";
-                    default:
-                      return "bg-gray-500/20 text-gray-600 border-gray-500/30";
-                  }
-                };
-                return (
-                  <span
-                    className={`px-1.5 py-0.5 text-[10px] rounded-full border ${getPriorityColor(
-                      priorityLabel
-                    )}`}
-                  >
-                    {priorityLabel}
-                  </span>
-                );
+        <div className="relative z-10 flex flex-col gap-2">
+          {/* Date / priority strip — compact pill above avatar row */}
+          <div className="w-full min-w-0 mb-2">
+            {priorityLabel ? (
+              <span
+                className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${
+                  showRailCover
+                    ? getRailPriorityPillClass(priorityLabel)
+                    : getPriorityColorClass(priorityLabel)
+                }`}
+              >
+                {priorityLabel}
+              </span>
+            ) : (
+              <span
+                className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full border whitespace-nowrap overflow-hidden text-ellipsis ${
+                  showRailCover
+                    ? RAIL_DATE_PILL_CLASS
+                    : "text-[var(--text)]/60 border-[var(--border)]/60 bg-[var(--text)]/[0.04]"
+                }`}
+              >
+                {new Date(createdAt).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+
+          {/* author row */}
+          <div className="flex items-center gap-2 min-w-0">
+            <Avatar
+              url={isAnonymous ? null : avatarUrl}
+              name={authorHandle ?? ""}
+              size={24}
+              postType={type}
+              variant={isAnonymous ? "anon" : "default"}
+              anonymousAvatar={
+                isAnonymous ? authorHandle?.charAt(0) : undefined
               }
-              return (
-                <span className="text-xs text-[var(--text)]/50">
-                  {new Date(createdAt).toLocaleDateString()}
-                </span>
-              );
-            })()}
+            />
+            <span className="text-xs text-[var(--text)]/80 truncate min-w-0 flex-1">
+              {authorHandle}
+            </span>
+            {isDraft && (
+              <span className="shrink-0 px-1.5 py-0.5 text-[10px] bg-yellow-500/20 text-yellow-600 rounded-full border border-yellow-500/30">
+                Draft
+              </span>
+            )}
           </div>
-        </div>
 
-        {/* caption: clamp to 3 lines for equal height */}
-        <div
-          className="mt-1 text-[13px] leading-5 text-[var(--text)]/95"
-          style={{
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-            minHeight: "60px",
-          }}
-        >
-          {caption}
-        </div>
+          {/* caption: clamp to 3 lines for equal height */}
+          <div
+            className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--text)]/95"
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              minHeight: "60px",
+            }}
+          >
+            {caption}
+          </div>
 
-        {/* Action Button - Follow for experiences and hangouts in horizontal rail */}
-        <div className="pt-1 flex items-center justify-between h-7">
-          {/* Three dots menu for owner's hangouts */}
-          <div className="flex items-center h-full">
-            {isOwner ? (
-              <div ref={menuRef} className="relative flex items-center h-full">
+          {/* Action Button - Follow for experiences and hangouts in horizontal rail */}
+          <div className="pt-1 flex items-center justify-between h-7">
+            {/* Three dots menu for owner's hangouts */}
+            <div className="flex items-center h-full">
+              {isOwner ? (
                 <div
-                  className="bg-[var(--surface)] border border-[var(--border)] rounded-full w-8 h-5 shadow-sm flex items-center justify-center gap-0.5 cursor-pointer hover:bg-[var(--surface)]/80 transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    setIsMenuOpen(!isMenuOpen);
-                  }}
+                  ref={triggerRef}
+                  className="relative flex items-center h-full"
                 >
-                  <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
-                  <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
-                  <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
-                </div>
-
-                {/* Dropdown menu */}
-                {isMenuOpen && (
-                  <div className="absolute right-0 top-6 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg py-1 min-w-[120px] z-50">
-                    {!isDraft && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          setIsMenuOpen(false);
-                          handleInvite();
-                        }}
-                        className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface)]/50 flex items-center gap-2"
-                      >
-                        <MdPersonAdd size={16} />
-                        Invite
-                      </button>
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        setIsMenuOpen(false);
-                        handleEdit();
-                      }}
-                      className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface)]/50 flex items-center gap-2"
-                    >
-                      <MdEdit size={16} />
-                      Edit
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        setIsMenuOpen(false);
-                        setShowDeleteModal(true);
-                      }}
-                      className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2"
-                    >
-                      <MdDelete size={16} />
-                      Delete
-                    </button>
+                  <div
+                    className="bg-[var(--surface)] border border-[var(--border)] rounded-full w-8 h-5 shadow-sm flex items-center justify-center gap-0.5 cursor-pointer hover:bg-[var(--surface)]/80 transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const rect = (
+                        e.currentTarget as HTMLElement
+                      ).getBoundingClientRect();
+                      setMenuRect(rect);
+                      setIsMenuOpen((prev) => !prev);
+                    }}
+                  >
+                    <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
+                    <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
+                    <div className="w-1 h-1 bg-[var(--text)]/70 rounded-full"></div>
                   </div>
-                )}
-              </div>
-            ) : (
-              <div></div>
-            )}
-          </div>
 
-          {/* Action Button */}
-          <div className="flex items-center h-full">
-            {authorId ? (
-              type === "experience" ? (
-                // Show Follow button for experiences (horizontal rail)
-                <FollowButton
-                  targetId={authorId}
-                  className="text-xs h-5 min-w-[60px] px-2"
-                  followStatus={followStatus} // [OPTIMIZATION: Phase 1 - Batch] Pass batched follow status
-                />
+                  {/* Dropdown menu - portaled to escape stacking context, frosted glass */}
+                  {isMenuOpen &&
+                    menuRect &&
+                    createPortal(
+                      <div
+                        ref={dropdownRef}
+                        className="fixed z-[100] rounded-lg shadow-xl py-1 min-w-[120px]"
+                        style={{
+                          top: menuRect.bottom + 4,
+                          right: window.innerWidth - menuRect.right,
+                          backgroundColor: "var(--glass-bg)",
+                          backdropFilter: "blur(var(--glass-blur))",
+                          WebkitBackdropFilter: "blur(var(--glass-blur))",
+                          border: "1px solid var(--border)",
+                        }}
+                      >
+                        {!isDraft && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setIsMenuOpen(false);
+                              handleInvite();
+                            }}
+                            className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
+                          >
+                            <PiUserPlus size={16} />
+                            Invite
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setIsMenuOpen(false);
+                            handleEdit();
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
+                        >
+                          <PiPencilSimple size={16} />
+                          Edit
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setIsMenuOpen(false);
+                            setShowDeleteModal(true);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2"
+                        >
+                          <PiTrash size={16} />
+                          Delete
+                        </button>
+                      </div>,
+                      document.body
+                    )}
+                </div>
               ) : (
-                // Show Follow button for hangouts too in horizontal rail
-                <FollowButton
-                  targetId={authorId}
-                  className="text-xs h-5 min-w-[60px] px-2"
-                  followStatus={followStatus} // [OPTIMIZATION: Phase 1 - Batch] Pass batched follow status
-                />
-              )
-            ) : (
-              <div className="text-xs text-[var(--text)]/50">
-                Follow unavailable
-              </div>
-            )}
+                <div></div>
+              )}
+            </div>
+
+            {/* Action Button */}
+            <div className="flex items-center h-full">
+              {authorId ? (
+                type === "experience" ? (
+                  // Show Follow button for experiences (horizontal rail)
+                  <FollowButton
+                    targetId={authorId}
+                    className="text-xs h-5 min-w-[60px] px-2"
+                    followStatus={effectiveFollowStatus}
+                  />
+                ) : (
+                  // Show Follow button for hangouts too in horizontal rail
+                  <FollowButton
+                    targetId={authorId}
+                    className="text-xs h-5 min-w-[60px] px-2"
+                    followStatus={effectiveFollowStatus}
+                  />
+                )
+              ) : (
+                <div className="text-xs text-[var(--text)]/50">
+                  Follow unavailable
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Delete confirmation modal */}
-      {showDeleteModal && (
-        <div className="fixed inset-0 z-[1000]">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setShowDeleteModal(false)}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 mx-auto max-w-[640px]
-                    rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)]
-                    p-4"
-          >
-            <div className="text-sm font-semibold mb-1">Delete hangout?</div>
-            <p className="text-xs text-[var(--text)]/70 mb-3">
-              Are you sure you want to delete this hangout? This action cannot
-              be undone.
-            </p>
-            <div className="flex gap-2">
-              <button
-                className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs"
-                onClick={() => setShowDeleteModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-semibold"
-                onClick={handleDelete}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={handleDelete}
+        title="Delete hangout?"
+        message="Are you sure you want to delete this hangout? This action cannot be undone."
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        isLoading={isDeleting}
+      />
 
       {/* Invite Drawer */}
       <InviteDrawer

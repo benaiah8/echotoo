@@ -1,5 +1,5 @@
 import { useEffect, useState, CSSProperties } from "react";
-import { FiMoon, FiSun } from "react-icons/fi";
+import { PiMoon, PiSun } from "react-icons/pi";
 import {
   applyTheme,
   getInitialTheme,
@@ -98,8 +98,8 @@ export default function ThemeSwitch({
           height: "var(--h)",
         }}
       >
-        <FiMoon size={14} className="text-white" />
-        <FiSun
+        <PiMoon size={14} className="text-white" />
+        <PiSun
           size={14}
           className="text-yellow-300 drop-shadow-[0_0_2px_rgba(0,0,0,0.25)]"
         />

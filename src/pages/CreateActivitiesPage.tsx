@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
+import CreateFlowKeyboardShell, {
+  createFlowMainColumnStyle,
+} from "../components/create/CreateFlowKeyboardShell";
+import CreateFlowTopBar from "../components/create/CreateFlowTopBar";
 import CreateActivityHeaderSection from "../sections/create/CreateActivityHeaderSection";
 import CreateActivityDetailSection from "../sections/create/CreateActivityDetailSection";
 import CreateTabsSection from "../sections/create/CreateTabsSection";
 import { Paths } from "../router/Paths";
 import { ActivityType } from "../types/post";
-import { markDraftDirty } from "../lib/drafts"; // ← NEW
+import { markDraftDirty } from "../lib/drafts";
+import { CREATE_FLOW_POST_IMAGE_MERGED_EVENT } from "../lib/createFlowDraftStorage";
+import type { CreateFlowPostImageMergedDetail } from "../lib/createFlowDraftStorage";
+import { CREATE_FLOW_LIMITS } from "../lib/createFlowLimits";
+import { dispatchCreateFlowLeaveRequest } from "../lib/createFlowLeaveRequest";
 
 const SEED: ActivityType = {
-  title: "Activity 1",
+  title: "Stop 1",
   activityType: "",
   customActivity: "",
   locationDesc: "",
@@ -22,7 +30,11 @@ const SEED: ActivityType = {
 
 const cleanImages = (arr: unknown): string[] =>
   Array.isArray(arr)
-    ? arr.map(String).filter((u) => /^https?:\/\//.test(u))
+    ? arr
+        .map(String)
+        .filter(
+          (u) => /^https?:\/\//.test(u) || (u.includes("/") && u.includes("."))
+        )
     : [];
 
 const normalizeActivity = (a: any) => {
@@ -33,7 +45,7 @@ const normalizeActivity = (a: any) => {
   const finalTags = tags.length > 0 ? tags : activityType ? [activityType] : [];
 
   return {
-    title: a?.title ?? "Activity",
+    title: a?.title ?? "",
     activityType: activityType,
     customActivity: a?.customActivity ?? "",
     locationDesc: a?.locationDesc ?? "",
@@ -51,13 +63,13 @@ export default function CreateActivitiesPage() {
   const [searchParams] = useSearchParams();
   const postType = searchParams.get("type") || "experience";
 
-  // Flow: Create → Activities → (Caption+Tags) → Preview
+  // Flow: Create → Activities → Finalize (Phase 5A shell) → … → Preview
   const base = `?type=${postType}`;
   const paths = [
     `${Paths.create}${base}`, // step 1 (Create landing)
     `${Paths.createActivities}${base}`, // step 2 (this page)
-    `${Paths.createCategories}${base}`, // step 3 (merged Caption+Tags page)
-    `${Paths.preview}${base}`, // step 4
+    `${Paths.createFinalize}${base}`, // step 3 (merged final-step shell)
+    `${Paths.preview}${base}`, // step 4 (legacy preview / publish)
   ];
 
   // load once
@@ -92,6 +104,32 @@ export default function CreateActivitiesPage() {
     markDraftDirty();
   }, []);
 
+  // Sync React state when CreatePostMediaProvider merges images into localStorage (same mount)
+  useEffect(() => {
+    const onMerged = (e: Event) => {
+      const ce = e as CustomEvent<CreateFlowPostImageMergedDetail>;
+      const detail = ce.detail;
+      if (!detail || typeof detail.activityIndex !== "number") return;
+      const { activityIndex: idx, images } = detail;
+      if (!Array.isArray(images)) return;
+      setActivities((prev) => {
+        if (idx < 0 || idx >= prev.length) return prev;
+        return prev.map((a, i) =>
+          i === idx ? { ...a, images: [...images] } : a
+        );
+      });
+    };
+    window.addEventListener(
+      CREATE_FLOW_POST_IMAGE_MERGED_EVENT,
+      onMerged as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        CREATE_FLOW_POST_IMAGE_MERGED_EVENT,
+        onMerged as EventListener
+      );
+  }, []);
+
   // persist on every change
   useEffect(() => {
     if (isEditMode) {
@@ -108,54 +146,92 @@ export default function CreateActivitiesPage() {
     }
   }, [activities, isEditMode]);
 
-  const handleNext = () => {
+  const handleNext = useCallback(() => {
     setError("");
-    navigate(paths[2]);
-  };
+    navigate(`${Paths.createFinalize}?type=${postType}`);
+  }, [navigate, postType]);
 
-  const handlePrev = () => {
-    // In Create Activities mode, we don't allow going back
-    // This prevents navigation to the Create landing page
-    return;
-  };
+  const handleLeaveCreateFlow = useCallback(() => {
+    dispatchCreateFlowLeaveRequest(() => navigate(Paths.home));
+  }, [navigate]);
+
+  const addActivity = useCallback(() => {
+    setActivities((prev) => {
+      if (prev.length >= CREATE_FLOW_LIMITS.activities.maxStopsPerPost) {
+        return prev;
+      }
+      const next = [
+        ...prev,
+        {
+          title: `Stop ${prev.length + 1}`,
+          activityType: "",
+          customActivity: "",
+          locationDesc: "",
+          tags: [],
+          location: "",
+          locationNotes: "",
+          locationUrl: "",
+          images: [],
+        } as ActivityType,
+      ];
+      setActivityIndex(next.length - 1);
+      return next;
+    });
+  }, []);
 
   return (
-    <PrimaryPageContainer>
-      <div
-        className="flex-1 w-full px-4 flex flex-col"
-        style={{
-          // ensures nothing hides under the fixed action bar + BottomTab
-          paddingBottom:
-            "calc(var(--create-actions-total-bottom, 120px) + 24px)",
+    <PrimaryPageContainer capacitorNotchScrim>
+      <CreateFlowTopBar
+        emphasizeWhiteBorder
+        leftAction={{
+          icon: "close",
+          label: "Leave create flow",
+          onClick: handleLeaveCreateFlow,
         }}
-      >
-        <CreateActivityHeaderSection
-          activities={activities}
-          activity={activityIndex}
-          setActivities={setActivities}
-          setActivity={setActivityIndex}
-        />
+        rightAction={{
+          icon: "arrow-right",
+          label: "Continue to caption",
+          onClick: handleNext,
+        }}
+      />
+      <CreateFlowKeyboardShell>
+        <div
+          className="flex-1 w-full px-2.5 flex flex-col"
+          style={createFlowMainColumnStyle}
+        >
+          <CreateActivityHeaderSection
+            activities={activities}
+            activity={activityIndex}
+            setActivities={setActivities}
+            setActivity={setActivityIndex}
+            onAddStop={addActivity}
+            canAddStop={
+              activities.length < CREATE_FLOW_LIMITS.activities.maxStopsPerPost
+            }
+          />
 
-        <div className="mt-2">
           <CreateActivityDetailSection
             activities={activities}
             activity={activityIndex}
             activityIndex={activityIndex}
             setActivities={setActivities}
           />
+
+          {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
+
+          <div className="min-h-0 flex-1" />
+          <CreateTabsSection
+            step={isEditMode ? 1 : 2}
+            paths={paths}
+            onNext={handleNext}
+            isEditMode={isEditMode}
+            forwardOnly
+            nextLabel="Continue to caption"
+            stableOnScroll
+            emphasizeNext
+          />
         </div>
-
-        {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
-
-        <div className="flex-1" />
-        <CreateTabsSection
-          step={isEditMode ? 1 : 2}
-          paths={paths}
-          onNext={handleNext}
-          isEditMode={isEditMode}
-          hidePrev={isEditMode}
-        />
-      </div>
+      </CreateFlowKeyboardShell>
     </PrimaryPageContainer>
   );
 }

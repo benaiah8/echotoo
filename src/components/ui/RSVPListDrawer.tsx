@@ -3,6 +3,10 @@ import React, { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { getRSVPListOptimized } from "../../api/services/rsvp";
+import {
+  getViewerId,
+  getBatchFollowStatuses,
+} from "../../api/services/follows";
 import BottomDrawer from "./BottomDrawer";
 import DrawerProfileCard from "./DrawerProfileCard";
 // [OPTIMIZATION: Phase 3.5] Use optimized PostgreSQL function instead of 3 separate queries
@@ -27,7 +31,7 @@ interface RSVPListDrawerProps {
     avatar_url?: string | null;
     is_anonymous?: boolean;
   };
-  onRSVPChange?: () => void; // Callback to notify parent of RSVP changes
+  onRSVPChange?: (newStatus: string, deltaGoingCount: number) => void; // Optimistic update: no refetch
 }
 
 export default function RSVPListDrawer({
@@ -43,6 +47,12 @@ export default function RSVPListDrawer({
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserRsvp, setCurrentUserRsvp] = useState<string | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  /** Viewer profile ID resolved once per load; used for batch follow status and self check */
+  const [viewerProfileId, setViewerProfileId] = useState<string | null>(null);
+  /** Batched follow statuses keyed by profile id; avoids per-row getFollowStatus */
+  const [batchedFollowStatuses, setBatchedFollowStatuses] = useState<
+    Record<string, "none" | "pending" | "following" | "friends">
+  >({});
 
   // Get current user and their profile (using cached data like BottomTab)
   useEffect(() => {
@@ -69,19 +79,16 @@ export default function RSVPListDrawer({
             avatar_url: cachedAvatarUrl,
           });
         } else {
-          // Fetch from database if not cached
-          const { data: profileData, error: profileError } = await supabase
-            .from("profiles")
-            .select("id, username, display_name, avatar_url")
-            .eq("user_id", session.user.id)
-            .single();
+          // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+          const { getProfileByUserId } = await import(
+            "../../api/services/follows"
+          );
+          const profileData = await getProfileByUserId(session.user.id);
 
-          if (profileError) {
-            console.error("Error loading current user profile:", profileError);
-
-            // If profile doesn't exist, try to create one
-            if (profileError.code === "PGRST116") {
-              console.log("Profile not found, attempting to create one");
+          if (!profileData) {
+            // Profile doesn't exist - try to create one
+            console.log("Profile not found, attempting to create one");
+            try {
               const { data: newProfile, error: createError } = await supabase
                 .from("profiles")
                 .insert({
@@ -97,15 +104,27 @@ export default function RSVPListDrawer({
                 console.error("Error creating profile:", createError);
               } else {
                 console.log("Profile created successfully:", newProfile);
-                setCurrentUserProfile(newProfile);
+                setCurrentUserProfile({
+                  id: newProfile.id,
+                  username: newProfile.username,
+                  display_name: newProfile.display_name,
+                  avatar_url: newProfile.avatar_url,
+                });
               }
+            } catch (createErr) {
+              console.error("Error creating profile:", createErr);
             }
           } else {
             console.log(
               "🔍 RSVPListDrawer - Current user profile:",
               profileData
             );
-            setCurrentUserProfile(profileData);
+            setCurrentUserProfile({
+              id: profileData.id,
+              username: profileData.username,
+              display_name: profileData.display_name,
+              avatar_url: profileData.avatar_url,
+            });
           }
         }
       } else {
@@ -126,10 +145,10 @@ export default function RSVPListDrawer({
     setLoading(true);
     try {
       // [OPTIMIZATION: Phase 3.5] Get viewer user ID for PostgreSQL function
-      const {
-        data: { user: authUser },
-      } = await supabase.auth.getUser();
-      const viewerUserId = authUser?.id || null;
+      const { getViewerAuthUserId } = await import(
+        "../../api/services/follows"
+      );
+      const viewerUserId = await getViewerAuthUserId();
 
       // [OPTIMIZATION: Phase 3.5] Use optimized PostgreSQL function (includes all related data)
       const result = await getRSVPListOptimized(postId, viewerUserId);
@@ -177,8 +196,34 @@ export default function RSVPListDrawer({
 
       setRsvpUsers(allUsers);
 
+      // Batch load follow statuses once for all rows (avoid per-row getFollowStatus)
+      if (allUsers.length > 0) {
+        const vid =
+          typeof localStorage !== "undefined"
+            ? localStorage.getItem("my_profile_id")
+            : null;
+        const resolvedViewerId = vid || (await getViewerId());
+        if (resolvedViewerId) {
+          setViewerProfileId(resolvedViewerId);
+          const targetProfileIds = allUsers.map((u) => u.id);
+          const statuses = await getBatchFollowStatuses(
+            resolvedViewerId,
+            targetProfileIds
+          );
+          setBatchedFollowStatuses(statuses);
+        } else {
+          setViewerProfileId(null);
+          setBatchedFollowStatuses({});
+        }
+      } else {
+        setViewerProfileId(null);
+        setBatchedFollowStatuses({});
+      }
+
       // Set current user's RSVP status from PostgreSQL function result
-      if (currentUser && authUser) {
+      // Use viewerUserId instead of undefined authUser
+      // Handle null case gracefully (user not authenticated)
+      if (currentUser && viewerUserId) {
         // If no RSVP found, check if current user is the creator
         if (
           !result.data.currentUserStatus &&
@@ -190,6 +235,7 @@ export default function RSVPListDrawer({
           setCurrentUserRsvp(result.data.currentUserStatus || null);
         }
       } else {
+        // User not authenticated or viewerUserId is null
         setCurrentUserRsvp(null);
       }
     } catch (error) {
@@ -218,16 +264,17 @@ export default function RSVPListDrawer({
       // console.log("- Attempting to upsert RSVP response");
 
       // Get current user's auth user ID for RSVP
-      const {
-        data: { user: authUser },
-      } = await supabase.auth.getUser();
-      if (!authUser) return;
+      const { getViewerAuthUserId } = await import(
+        "../../api/services/follows"
+      );
+      const authUserId = await getViewerAuthUserId();
+      if (!authUserId) return;
 
       // Use proper upsert with onConflict to handle the unique constraint
       const { error } = await supabase.from("rsvp_responses").upsert(
         {
           post_id: postId,
-          user_id: authUser.id, // Use auth user ID
+          user_id: authUserId, // Use auth user ID
           status,
           updated_at: new Date().toISOString(),
         },
@@ -242,12 +289,19 @@ export default function RSVPListDrawer({
         return;
       }
 
-      // console.log("- RSVP response successful, reloading RSVPs");
-      // Reload RSVPs
+      // [Step 5] Invalidate post detail cache so modal shows fresh rsvp_data
+      const { invalidateOnRSVP } = await import("../../lib/cacheInvalidation");
+      invalidateOnRSVP(postId);
+
+      // Reload drawer's own list
       loadRSVPs();
 
-      // Notify parent component of RSVP change
-      onRSVPChange?.();
+      // Optimistic update: notify parent (no refetch)
+      const prevGoing = currentUserRsvp === "going";
+      const nextGoing = status === "going";
+      const deltaGoingCount =
+        !prevGoing && nextGoing ? 1 : prevGoing && !nextGoing ? -1 : 0;
+      onRSVPChange?.(status, deltaGoingCount);
     } catch (error) {
       console.error("Error updating RSVP:", error);
     }
@@ -280,7 +334,9 @@ export default function RSVPListDrawer({
       {/* RSVP Toggle Button for current user */}
       {!loading && currentUser && (
         <div className="mb-4">
-          <div className="text-sm font-medium mb-3 text-[var(--text)]">RSVP</div>
+          <div className="text-sm font-medium mb-3 text-[var(--text)]">
+            RSVP
+          </div>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -297,9 +353,10 @@ export default function RSVPListDrawer({
             style={{
               backdropFilter: "blur(var(--glass-blur))",
               WebkitBackdropFilter: "blur(var(--glass-blur))",
-              boxShadow: currentUserRsvp === "going" 
-                ? "none" 
-                : "var(--glass-active-shadow)",
+              boxShadow:
+                currentUserRsvp === "going"
+                  ? "none"
+                  : "var(--glass-active-shadow)",
             }}
           >
             {currentUserRsvp === "going" ? "You've RSVP'd ✓" : "RSVP"}
@@ -312,7 +369,8 @@ export default function RSVPListDrawer({
           {/* All RSVP'd users in simple list format */}
           {rsvpUsers.map((user) => {
             // [OPTIMIZATION: Phase 3.5] Compare profile IDs (user.id is profile id from PostgreSQL function)
-            const isCurrentUser = currentUserProfile && user.id === currentUserProfile.id;
+            const isCurrentUser =
+              currentUserProfile && user.id === currentUserProfile.id;
             const displayUser =
               isCurrentUser && currentUserProfile ? currentUserProfile : user;
             const hasRsvpd = currentUserRsvp === "going";
@@ -333,6 +391,10 @@ export default function RSVPListDrawer({
                 username={displayUser.username || null}
                 display_name={displayUser.display_name || null}
                 avatar_url={displayUser.avatar_url || null}
+                followStatus={
+                  batchedFollowStatuses[user.id] ??
+                  (user.id === viewerProfileId ? "self" : "none")
+                }
                 onClick={() =>
                   !isCurrentUser &&
                   navigate(`/u/${displayUser.username || displayUser.id}`)

@@ -1,13 +1,13 @@
 /**
  * [OPTIMIZATION FILE: Phase 1]
- * 
+ *
  * This file contains the centralized privacy filtering utility for posts.
- * 
+ *
  * Optimizations included:
  * - Privacy Filter: Centralized filtering logic for all post types
  * - Cache: Privacy status caching with 5-minute TTL
  * - Batch: Batch operations for privacy and follow status checks
- * 
+ *
  * Related optimizations:
  * - See: src/lib/profileCache.ts for profile caching
  * - See: src/api/services/follows.ts for batch follow status checks
@@ -78,19 +78,20 @@ async function getPrivateAuthorIds(authorIds: string[]): Promise<Set<string>> {
   if (uncachedIds.length > 0) {
     const { requestManager } = await import("./requestManager");
     const dedupeKey = `privacy_status_${uncachedIds.sort().join("_")}`;
-    
+
     const result = await requestManager.execute(
       dedupeKey,
       async (signal) => {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("id, is_private")
-          .in("id", uncachedIds);
+          .in("id", uncachedIds)
+          .is("deleted_at", null);
         return profiles;
       },
       "medium" // Medium priority for privacy checks
     );
-    
+
     const profiles = result.data;
 
     if (profiles) {
@@ -113,10 +114,10 @@ async function getPrivateAuthorIds(authorIds: string[]): Promise<Set<string>> {
 /**
  * [OPTIMIZATION: Phase 1 - Privacy Filter] Filter posts to only show those from public accounts
  * or private accounts where the viewer is an approved follower
- * 
+ *
  * Why: Centralized filtering logic eliminates code duplication and ensures consistent
  * privacy behavior across feed, profile sections, and saved posts
- * 
+ *
  * @param posts - Array of posts (any structure with author info)
  * @param viewerProfileId - Viewer's profile ID (null/undefined = not logged in, show only public)
  * @returns Filtered array of posts
@@ -130,11 +131,7 @@ export async function filterPostsByPrivacy<T extends PostWithAuthor>(
   // [OPTIMIZATION: Phase 1 - Batch] Extract all author IDs at once
   // Why: Single pass through posts to collect all unique author IDs
   const authorIds = Array.from(
-    new Set(
-      posts
-        .map(getAuthorId)
-        .filter((id): id is string => !!id)
-    )
+    new Set(posts.map(getAuthorId).filter((id): id is string => !!id))
   );
 
   if (authorIds.length === 0) return posts;
@@ -189,4 +186,3 @@ export function clearPrivacyCache(profileId?: string): void {
     privacyStatusCache.clear();
   }
 }
-

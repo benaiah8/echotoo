@@ -1,18 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
-import { Paths } from "../router/Paths";
+import CreateFlowKeyboardShell, {
+  createFlowPreviewColumnStyle,
+} from "../components/create/CreateFlowKeyboardShell";
+import { Paths, postDetailPath } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
 import { useDispatch } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
+import { getViewerAuthUserId } from "../api/services/follows";
 import toast from "react-hot-toast";
 import { discardAllDrafts } from "../lib/drafts";
-import { insertPost, saveDraft } from "../api/services/posts";
+import { saveDraft } from "../api/services/posts";
 import PostDetailBody, {
   Post as DetailPost,
 } from "../components/detail/PostDetailBody";
+import { useCreatePostMedia } from "../components/create/CreatePostMediaProvider";
 import ActionSheet from "../components/ui/ActionSheet";
+import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill";
 import InviteDrawer from "../components/ui/InviteDrawer";
+import PostedSuccessModal from "../components/ui/PostedSuccessModal";
+import { executeCreateFlowPublish } from "../lib/createFlowPublish";
 
 const BOTTOM_NAV_H = 56;
 const GAP_BELOW_ACTIONS = 4;
@@ -52,10 +60,29 @@ function read<T>(key: string, def: T): T {
 }
 
 const isHttpUrl = (v: unknown): v is string =>
-  typeof v === "string" && /^https?:\/\//.test(v);
+  typeof v === "string" &&
+  (/^https?:\/\//.test(v) || (v.includes("/") && v.includes(".")));
 
-const cleanImages = (arr: unknown): string[] =>
-  Array.isArray(arr) ? arr.map(String).filter(isHttpUrl) : [];
+const isCloudinaryUrl = (u: string) => u.includes("res.cloudinary.com");
+
+/**
+ * Prepare images for storage in activities.images.
+ * Drops Cloudinary URLs (causing 401s); keeps Supabase and other non-Cloudinary.
+ * If dropping Cloudinary would leave empty, log warning and return [].
+ */
+const cleanImages = (arr: unknown): string[] => {
+  const valid = Array.isArray(arr) ? arr.map(String).filter(isHttpUrl) : [];
+  const nonCloudinary = valid.filter((u) => !isCloudinaryUrl(u));
+  const hadCloudinary = valid.some(isCloudinaryUrl);
+  if (hadCloudinary && nonCloudinary.length === 0) {
+    console.warn(
+      "[PreviewPage] Dropping Cloudinary-only images (would store empty); backfill later",
+      { droppedCount: valid.length, first: valid[0]?.substring(0, 80) }
+    );
+    return [];
+  }
+  return hadCloudinary ? nonCloudinary : valid;
+};
 
 export default function PreviewPage() {
   const nav = useNavigate();
@@ -107,16 +134,18 @@ export default function PreviewPage() {
     [finalActivities]
   );
 
-  // derive visibility/is_anonymous for DB
+  // derive visibility for DB (public | friends | private)
   const dbVisibility =
-    finalMeta.visibility === "friends"
-      ? "friends"
-      : finalMeta.visibility === "anonymous"
-      ? "public"
-      : "public"; // default public; anon is handled via is_anonymous
-  const isAnonymous = finalMeta.visibility === "anonymous";
+    finalMeta.visibility === "friends" ? "friends" : "public";
 
   const tags = finalMeta.tags || [];
+
+  // [LAUNCH] Defensive: always submit as non-anonymous; anonymous posting disabled
+  const ANONYMOUS_GUARD = {
+    is_anonymous: false,
+    anonymous_name: null as string | null,
+    anonymous_avatar: null as string | null,
+  };
 
   const [publishing, setPublishing] = useState(false);
   const [showPostedModal, setShowPostedModal] = useState(false);
@@ -124,7 +153,19 @@ export default function PreviewPage() {
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
 
+  const { hasPendingUploads, jobs } = useCreatePostMedia();
+
+  const previewUploadingCount = useMemo(
+    () => jobs.filter((j) => j.status === "uploading").length,
+    [jobs]
+  );
+
   const handlePublish = async () => {
+    if (hasPendingUploads) {
+      console.log("[PreviewPage] publish blocked: post image uploads pending");
+      toast.error("Images are still uploading. Please wait before publishing.");
+      return;
+    }
     setPublishing(true);
     try {
       const {
@@ -139,137 +180,38 @@ export default function PreviewPage() {
         return;
       }
 
-      // 1) Insert or update post
-      let post;
-      if (isEditMode && editData.postId) {
-        // Update existing post
-        const { error: updateErr } = await supabase
-          .from("posts")
-          .update({
-            type: postType === "hangout" ? "hangout" : "experience",
-            caption: finalMeta.caption || "", // Use empty string for consistency
-            visibility: dbVisibility as "public" | "friends" | "private",
-            is_anonymous: isAnonymous,
-            anonymous_name: finalMeta.anonymousName || null, // NEW: anonymous name
-            anonymous_avatar: finalMeta.anonymousAvatar || null, // NEW: anonymous avatar
-            rsvp_capacity:
-              finalMeta.rsvpCapacity === ""
-                ? null
-                : finalMeta.rsvpCapacity ?? null,
-            selected_dates: (finalMeta.selectedDates || []).length
-              ? finalMeta.selectedDates!
-              : null,
-            is_recurring: finalMeta.isRecurring ?? null,
-            recurrence_days: (finalMeta.recurrenceDays || []).length
-              ? finalMeta.recurrenceDays!
-              : null,
-            tags: tags.length ? tags : null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editData.postId);
+      const rsvpCap =
+        finalMeta.rsvpCapacity === "" ? null : finalMeta.rsvpCapacity ?? null;
 
-        if (updateErr) throw updateErr;
-
-        // Get the updated post
-        const { data: updatedPost, error: fetchErr } = await supabase
-          .from("posts")
-          .select("*")
-          .eq("id", editData.postId)
-          .single();
-
-        if (fetchErr) throw fetchErr;
-        post = updatedPost;
-      } else {
-        // Create new post
-        post = await insertPost({
-          type: postType === "hangout" ? "hangout" : "experience",
-          caption: finalMeta.caption || "",
-          visibility: dbVisibility as "public" | "friends" | "private",
-          is_anonymous: isAnonymous,
-          anonymous_name: finalMeta.anonymousName || null, // NEW: anonymous name
-          anonymous_avatar: finalMeta.anonymousAvatar || null, // NEW: anonymous avatar
-          rsvp_capacity:
-            finalMeta.rsvpCapacity === ""
-              ? null
-              : finalMeta.rsvpCapacity ?? null,
-          selected_dates: (finalMeta.selectedDates || []).length
-            ? finalMeta.selectedDates!
-            : null,
-          is_recurring: finalMeta.isRecurring ?? null,
-          recurrence_days: (finalMeta.recurrenceDays || []).length
-            ? finalMeta.recurrenceDays!
-            : null,
-          tags: tags.length ? tags : null,
-        });
-      }
+      const { post } = await executeCreateFlowPublish({
+        postType: postType === "hangout" ? "hangout" : "experience",
+        caption: finalMeta.caption || "",
+        tags,
+        visibility: dbVisibility === "friends" ? "friends" : "public",
+        rsvpCapacity: typeof rsvpCap === "number" ? rsvpCap : null,
+        selectedDatesIso: (finalMeta.selectedDates || []).length
+          ? finalMeta.selectedDates!
+          : [],
+        isRecurring: !!finalMeta.isRecurring,
+        recurrenceDays: finalMeta.recurrenceDays || [],
+        activities: sanitizedActivities as DraftActivity[],
+        isEditMode,
+        editPostId: isEditMode ? editData.postId : undefined,
+      });
 
       setNewPostId(post.id);
 
-      // 2) Insert or update activities
-      if (sanitizedActivities.length) {
-        if (isEditMode && editData.postId) {
-          // Delete existing activities and insert new ones
-          const { error: deleteErr } = await supabase
-            .from("activities")
-            .delete()
-            .eq("post_id", editData.postId);
-
-          if (deleteErr) throw deleteErr;
-        }
-
-        const items = sanitizedActivities.map(
-          (a: DraftActivity, i: number) => ({
-            post_id: post.id,
-            order_idx: i,
-            title:
-              a.title ||
-              a.customActivity ||
-              a.activityType ||
-              `Activity ${i + 1}`,
-            activity_type: a.activityType ?? null,
-            custom_activity: a.customActivity ?? null,
-            location_name: a.location ?? null,
-            location_desc: a.locationDesc ?? null,
-            location_url: a.locationUrl ?? null,
-            location_notes: a.locationNotes ?? null,
-            additional_info: a.additionalInfo ?? null,
-            tags: a.tags ?? null,
-            images: cleanImages(a.images),
-          })
-        );
-        const { error: actErr } = await supabase
-          .from("activities")
-          .insert(items);
-        if (actErr) throw actErr;
-      }
-
-      // store preview payload (optional)
-      try {
-        localStorage.setItem(
-          "publishedPostLast",
-          JSON.stringify({
-            id: post.id,
-            type: post.type,
-            caption: post.caption,
-            tags,
-            activities: sanitizedActivities,
-          })
-        );
-      } catch {}
-
       if (isEditMode) {
-        // In edit mode, get the return path before clearing
-        const editData = read<any>("editPostData", null);
-        const returnPath = editData?.returnPath || "/u/me";
+        localStorage.removeItem("draftMeta");
+        localStorage.removeItem("draftActivities");
+        discardAllDrafts();
 
-        // Clear edit data
+        const editDataAfter = read<any>("editPostData", null);
+        const returnPath = editDataAfter?.returnPath || "/u/me";
         localStorage.removeItem("editPostData");
-
-        // Navigate back to where we came from
         nav(returnPath);
       } else {
-        // In create mode, clear draft data
-        discardAllDrafts();
+        console.log("[PreviewPage] posted success modal opened");
         setShowPostedModal(true);
       }
     } catch (err) {
@@ -281,6 +223,15 @@ export default function PreviewPage() {
   };
 
   const handleSaveDraft = async () => {
+    if (hasPendingUploads) {
+      console.log(
+        "[PreviewPage] save draft blocked: post image uploads pending"
+      );
+      toast.error(
+        "Images are still uploading. Please wait before saving your draft."
+      );
+      return;
+    }
     setPublishing(true);
     try {
       const {
@@ -300,7 +251,7 @@ export default function PreviewPage() {
         type: postType === "hangout" ? "hangout" : "experience",
         caption: finalMeta.caption || "",
         visibility: dbVisibility as "public" | "friends" | "private",
-        is_anonymous: isAnonymous,
+        ...ANONYMOUS_GUARD,
         rsvp_capacity:
           finalMeta.rsvpCapacity === "" ? null : finalMeta.rsvpCapacity ?? null,
         selected_dates: (finalMeta.selectedDates || []).length
@@ -321,10 +272,7 @@ export default function PreviewPage() {
             post_id: post.id,
             order_idx: i,
             title:
-              a.title ||
-              a.customActivity ||
-              a.activityType ||
-              `Activity ${i + 1}`,
+              a.title || a.customActivity || a.activityType || `Stop ${i + 1}`,
             activity_type: a.activityType ?? null,
             custom_activity: a.customActivity ?? null,
             location_name: a.location ?? null,
@@ -351,15 +299,12 @@ export default function PreviewPage() {
 
       toast?.success?.("Draft saved successfully!");
       // Navigate to profile to see the saved draft
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return nav(Paths.profile);
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("username")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const userId = await getViewerAuthUserId();
+      if (!userId) return nav(Paths.profile);
+
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+      const { getProfileByUserId } = await import("../api/services/follows");
+      const profile = await getProfileByUserId(userId);
       if (profile?.username) return nav(`/u/${profile.username}`);
       return nav("/u/me");
     } catch (err) {
@@ -372,26 +317,26 @@ export default function PreviewPage() {
 
   const goToProfile = async () => {
     setShowPostedModal(false);
+    try {
+      localStorage.removeItem("draftMeta");
+      localStorage.removeItem("draftActivities");
+      discardAllDrafts();
+      console.log(
+        "[PreviewPage] create-flow draft cleared after posted modal dismissal"
+      );
+    } catch {
+      /* ignore */
+    }
     // Try to route to /u/:username; fallback to /u/me
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return nav(Paths.profile);
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("username")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const userId = await getViewerAuthUserId();
+    if (!userId) return nav(Paths.profile);
+
+    // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+    const { getProfileByUserId } = await import("../api/services/follows");
+    const profile = await getProfileByUserId(userId);
     if (profile?.username) return nav(`/u/${profile.username}`);
     return nav("/u/me");
   };
-
-  useEffect(() => {
-    if (!meta.caption && sanitizedActivities.length === 0) {
-      nav(`${Paths.createTitle}?type=${postType}`);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // measure sheet width with the column
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -424,31 +369,41 @@ export default function PreviewPage() {
     avatar_url: localStorage.getItem("my_avatar_url") || undefined,
   });
 
+  /** Auth user id for preview post.author_id (never use sentinel "me" — breaks profiles.user_id queries) */
+  const [viewerAuthUserId, setViewerAuthUserId] = useState<string | null>(null);
+
   useEffect(() => {
     const getCurrentUserProfile = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (session?.user) {
-        // Get user profile from profiles table (same as BottomTab)
-        const { data: profile, error } = await supabase
-          .from("profiles")
-          .select("id, display_name, username, avatar_url")
-          .eq("user_id", session.user.id)
-          .single();
+      const authId = session?.user?.id ?? null;
+      setViewerAuthUserId(authId);
 
-        if (!error && profile) {
-          setCurrentUserProfile(profile);
-          // Cache for next mount to avoid flicker (same as BottomTab)
-          if (profile.display_name) {
-            localStorage.setItem("my_display_name", profile.display_name);
-          }
-          if (profile.username) {
-            localStorage.setItem("my_username", profile.username);
-          }
-          if (profile.avatar_url) {
-            localStorage.setItem("my_avatar_url", profile.avatar_url);
-          }
+      if (!session?.user) {
+        return;
+      }
+
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+      const { getProfileByUserId } = await import("../api/services/follows");
+      const profile = await getProfileByUserId(session.user.id);
+
+      if (profile) {
+        setCurrentUserProfile({
+          id: profile.id,
+          display_name: profile.display_name ?? undefined,
+          username: profile.username ?? undefined,
+          avatar_url: profile.avatar_url ?? undefined,
+        });
+        // Cache for next mount to avoid flicker (same as BottomTab)
+        if (profile.display_name) {
+          localStorage.setItem("my_display_name", profile.display_name);
+        }
+        if (profile.username) {
+          localStorage.setItem("my_username", profile.username);
+        }
+        if (profile.avatar_url) {
+          localStorage.setItem("my_avatar_url", profile.avatar_url);
         }
       }
     };
@@ -460,23 +415,46 @@ export default function PreviewPage() {
     return () => window.removeEventListener("profile:updated", onUpdated);
   }, []);
 
+  const captionTrimmed = (finalMeta.caption ?? "").trim();
+  const captionMissing = captionTrimmed.length === 0;
+
+  useEffect(() => {
+    if (captionMissing) {
+      nav(`${Paths.createCategories}?type=${postType}`, { replace: true });
+    }
+  }, [captionMissing, postType, nav]);
+
+  if (captionMissing) {
+    return (
+      <PrimaryPageContainer back capacitorNotchScrim>
+        <CreateFlowKeyboardShell>
+          <div
+            className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-[var(--text)]/65"
+            aria-live="polite"
+          >
+            Taking you back to add a caption…
+          </div>
+        </CreateFlowKeyboardShell>
+      </PrimaryPageContainer>
+    );
+  }
+
   // Build a PostDetailBody-compatible object from drafts
   const previewPost: DetailPost = {
     id: "draft",
     type: postType === "hangout" ? "hangout" : "experience",
-    caption: meta.caption ?? "",
+    caption: finalMeta.caption ?? "",
     created_at: new Date().toISOString(),
-    author_id: "me",
+    author_id: viewerAuthUserId ?? "",
     author: {
-      id: currentUserProfile.id || "me",
+      id: currentUserProfile.id ?? "",
       display_name: currentUserProfile.display_name ?? "You",
       username: currentUserProfile.username ?? "you",
       avatar_url: currentUserProfile.avatar_url ?? null,
     },
     tags: tags.length ? tags : undefined,
     activities: sanitizedActivities.map((a: DraftActivity, i: number) => ({
-      title:
-        a.title || a.customActivity || a.activityType || `Activity ${i + 1}`,
+      title: a.title || a.customActivity || a.activityType || `Stop ${i + 1}`,
       images: Array.isArray(a.images) ? (a.images as string[]) : [],
       order_idx: i,
       location_name: a.location ?? null,
@@ -489,12 +467,11 @@ export default function PreviewPage() {
       // NEW: activity tags (multiple activities within this activity section)
       tags: a.tags || null,
     })),
-    // NEW: Add metadata for preview
-    visibility:
-      finalMeta.visibility === "anonymous" ? "public" : finalMeta.visibility,
-    is_anonymous: isAnonymous,
-    anonymous_name: finalMeta.anonymousName || null, // NEW: anonymous name
-    anonymous_avatar: finalMeta.anonymousAvatar || null, // NEW: anonymous avatar
+    // [LAUNCH] Preview always non-anonymous; anonymous posting disabled
+    visibility: dbVisibility,
+    is_anonymous: false,
+    anonymous_name: null,
+    anonymous_avatar: null,
     rsvp_capacity:
       finalMeta.rsvpCapacity === "" ? null : finalMeta.rsvpCapacity ?? null,
     selected_dates: finalMeta.selectedDates || null,
@@ -503,138 +480,99 @@ export default function PreviewPage() {
   };
 
   return (
-    <PrimaryPageContainer back>
-      {/* Use same max width & padding as detail page */}
-      <div
-        ref={contentRef}
-        className="flex-1 w-full page-content-wide"
-        style={{ paddingTop: 12, paddingBottom: 20 }}
-      >
-        <PostDetailBody post={previewPost} isPreview={true} />
-      </div>
-
-      <ActionSheet
-        onBack={() => nav(`${Paths.createCategories}?type=${postType}`)}
-        onPublish={handlePublish}
-        onSaveDraft={undefined} // Disable until database is updated
-        publishing={publishing}
-        backText="Back"
-        publishText={isEditMode ? "Republish" : "Publish"}
-        isEditMode={isEditMode}
-        onExit={
-          isEditMode
-            ? () => {
-                // Get the return path before clearing edit data
-                const editData = read<any>("editPostData", null);
-                const returnPath = editData?.returnPath || "/u/me";
-
-                // Clear edit data
-                localStorage.removeItem("editPostData");
-
-                // Navigate back
-                nav(returnPath);
-              }
-            : undefined
-        }
-      />
-
-      {/* Posted modal */}
-      {showPostedModal && (
-        <div className="fixed inset-0 z-[80]" role="dialog" aria-modal="true">
-          <div
-            className="absolute inset-0 bg-[var(--surface)]/60 backdrop-blur-sm"
-            onClick={goToProfile}
+    <PrimaryPageContainer back capacitorNotchScrim>
+      <CreateFlowKeyboardShell>
+        {/* Use same max width & padding as detail page */}
+        <div
+          ref={contentRef}
+          className="flex-1 w-full page-content-wide"
+          style={createFlowPreviewColumnStyle}
+        >
+          <PostDetailBody
+            post={previewPost}
+            isPreview={true}
+            previewHeroOverlay={
+              previewUploadingCount > 0 ? (
+                <PreviewUploadOverlayPill
+                  uploadingCount={previewUploadingCount}
+                />
+              ) : undefined
+            }
           />
-          <div className="relative mx-auto px-4">
-            <div className="mt-24 w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl max-w-[680px]">
-              <div className="p-5">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-[var(--text)] font-semibold text-base">
-                    🎉 Posted!
-                  </h3>
-                  <button
-                    onClick={goToProfile}
-                    className="text-[var(--text)]/70 hover:text-[var(--text)] text-sm px-2"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <p className="text-[var(--text)]/80 text-sm mt-1">
-                  Nice! Your post is live.
-                </p>
-                {/* Subtle separator line */}
-                <div className="border-t border-[var(--border)]/30 my-4"></div>
-                <div className="space-y-3">
-                  {/* First row: Share and Invite */}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        try {
-                          // Get the current URL for the post
-                          const postUrl = window.location.href;
-                          const shareData = {
-                            title: `Check out this ${
-                              postType === "hangout" ? "hangout" : "experience"
-                            }`,
-                            url: postUrl,
-                          };
-
-                          // Try to use the Web Share API if available
-                          if (
-                            navigator.share &&
-                            navigator.canShare &&
-                            navigator.canShare(shareData)
-                          ) {
-                            await navigator.share(shareData);
-                          } else {
-                            // Fallback: copy to clipboard
-                            await navigator.clipboard.writeText(postUrl);
-                            console.log("Link copied to clipboard");
-                          }
-                        } catch (error) {
-                          console.error("Error sharing:", error);
-                        }
-                      }}
-                      className="flex-1 bg-white text-black py-2 rounded-full text-sm font-medium hover:bg-gray-100 transition border border-[var(--border)]/50"
-                    >
-                      Share
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowInviteDrawer(true);
-                      }}
-                      className="flex-1 bg-[var(--brand)] text-[var(--brand-ink)] py-2 rounded-full text-sm font-medium hover:brightness-110 transition border border-[var(--brand)]"
-                    >
-                      Invite
-                    </button>
-                  </div>
-                  {/* Subtle separator line */}
-                  <div className="border-t border-[var(--border)]/30 my-3"></div>
-                  {/* Second row: Done */}
-                  <button
-                    onClick={goToProfile}
-                    className="w-full border border-[var(--border)] text-[var(--text)] py-2 rounded-full text-sm hover:bg-white/5 transition bg-transparent"
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
-      )}
 
-      {/* Invite Drawer */}
-      {newPostId && (
-        <InviteDrawer
-          isOpen={showInviteDrawer}
-          onClose={() => setShowInviteDrawer(false)}
-          postId={newPostId}
-          postType={postType === "hangout" ? "hangout" : "experience"}
-          postCaption={finalMeta.caption || "Untitled"}
-          onClosingChange={setIsInviteDrawerClosing}
+        <ActionSheet
+          onBack={() => nav(`${Paths.createCategories}?type=${postType}`)}
+          onPublish={handlePublish}
+          onSaveDraft={undefined} // Disable until database is updated
+          publishing={publishing}
+          lockActionsWhilePendingUploads={hasPendingUploads}
+          backText="Back"
+          publishText={isEditMode ? "Republish" : "Publish"}
+          isEditMode={isEditMode}
+          onExit={
+            isEditMode
+              ? () => {
+                  // Get the return path before clearing edit data
+                  const editData = read<any>("editPostData", null);
+                  const returnPath = editData?.returnPath || "/u/me";
+
+                  // Clear edit data
+                  localStorage.removeItem("editPostData");
+
+                  // Navigate back
+                  nav(returnPath);
+                }
+              : undefined
+          }
         />
-      )}
+
+        <PostedSuccessModal
+          open={showPostedModal}
+          onDismiss={() => void goToProfile()}
+          onShareClick={async () => {
+            try {
+              if (!newPostId) return;
+              const postUrl = `${window.location.origin}${postDetailPath(
+                postType === "hangout" ? "hangout" : "experience",
+                newPostId
+              )}`;
+              const shareData = {
+                title: `Check out this ${
+                  postType === "hangout" ? "hangout" : "experience"
+                }`,
+                url: postUrl,
+              };
+
+              if (
+                navigator.share &&
+                navigator.canShare &&
+                navigator.canShare(shareData)
+              ) {
+                await navigator.share(shareData);
+              } else {
+                await navigator.clipboard.writeText(postUrl);
+                console.log("Link copied to clipboard");
+              }
+            } catch (error) {
+              console.error("Error sharing:", error);
+            }
+          }}
+          onInviteClick={() => setShowInviteDrawer(true)}
+        />
+
+        {/* Invite Drawer */}
+        {newPostId && (
+          <InviteDrawer
+            isOpen={showInviteDrawer}
+            onClose={() => setShowInviteDrawer(false)}
+            postId={newPostId}
+            postType={postType === "hangout" ? "hangout" : "experience"}
+            postCaption={finalMeta.caption || "Untitled"}
+            onClosingChange={setIsInviteDrawerClosing}
+          />
+        )}
+      </CreateFlowKeyboardShell>
     </PrimaryPageContainer>
   );
 }

@@ -1,9 +1,11 @@
 // src/api/queries/getUserPostsCreated.ts
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
+import { requestManager } from "../../lib/requestManager";
 
 // [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
 // Returns FeedItem format with all related data (follow_status, is_liked, is_saved, rsvp_data, etc.)
+// [PERF] Added RequestManager for request deduplication to prevent duplicate RPC calls
 export async function getUserPostsCreatedOptimized(
   authorId: string,
   from = 0,
@@ -12,26 +14,42 @@ export async function getUserPostsCreatedOptimized(
   isOwner = false,
   viewerUserId: string | null = null
 ): Promise<{ data: FeedItem[]; error: any }> {
-  try {
-    console.log("[getUserPostsCreatedOptimized] Starting query with params:", {
-      authorId,
-      from,
-      limit,
-      includeDrafts,
-      isOwner,
-    });
+  if (!authorId) {
+    return { data: [], error: null };
+  }
 
-    const { data, error } = await supabase.rpc(
-      "get_user_posts_created_with_related_data",
-      {
-        p_user_id: authorId,
-        p_viewer_user_id: viewerUserId || null,
-        p_limit: limit,
-        p_offset: from,
-        p_include_drafts: includeDrafts,
-        p_is_owner: isOwner,
-      }
+  // [PERF] Use RequestManager for deduplication - prevents multiple simultaneous calls with same params
+  // This is especially important for ProgressiveFeed which may make multiple calls (offset 0, 5, 10)
+  const dedupeKey = `user_posts_created_${authorId}_${from}_${limit}_${includeDrafts}_${isOwner}_${
+    viewerUserId || "null"
+  }`;
+
+  try {
+    const result = await requestManager.execute(
+      dedupeKey,
+      async (signal: AbortSignal) => {
+        const { data, error } = await supabase.rpc(
+          "get_user_posts_created_with_related_data",
+          {
+            p_user_id: authorId,
+            p_viewer_user_id: viewerUserId || null,
+            p_limit: limit,
+            p_offset: from,
+            p_include_drafts: includeDrafts,
+            p_is_owner: isOwner,
+          }
+        );
+
+        if (signal.aborted) {
+          throw new Error("Aborted");
+        }
+
+        return { data, error };
+      },
+      "high" // High priority for profile page posts
     );
+
+    const { data, error } = result.data || { data: null, error: result.error };
 
     if (error) {
       console.error("[getUserPostsCreatedOptimized] RPC error:", error);
@@ -64,16 +82,14 @@ export async function getUserPostsCreatedOptimized(
         | undefined,
       is_liked: post.is_liked,
       is_saved: post.is_saved,
+      like_count: post.like_count,
       comment_count: post.comment_count,
       has_images: post.has_images,
       rsvp_data: post.rsvp_data || null,
+      // [PHASE 4.1.1 FIX] Include activities from PostgreSQL to prevent extra queries
+      // This eliminates 1 activities query per post (5+ fewer network requests)
+      activities: post.activities || [],
     }));
-
-    console.log("[getUserPostsCreatedOptimized] Query result:", {
-      dataLength: feedItems.length,
-      error: null,
-      hasError: false,
-    });
 
     return { data: feedItems, error: null };
   } catch (error: any) {

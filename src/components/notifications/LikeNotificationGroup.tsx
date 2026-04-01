@@ -1,9 +1,9 @@
 import React, { useState, useMemo } from "react";
-import { IoChevronDown, IoChevronUp } from "react-icons/io5";
+import { PiCaretDown, PiCaretUp } from "react-icons/pi";
 import { type NotificationWithActor } from "../../types/notification";
 import NotificationItem from "./NotificationItem";
 import Avatar from "../ui/Avatar";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
 import { markNotificationAsRead } from "../../api/services/notifications";
 
@@ -30,12 +30,16 @@ export default function LikeNotificationGroup({
   onFilterChange,
   showGoToPostButton = true,
 }: Props) {
+  const location = useLocation();
   const [isExpanded, setIsExpanded] = useState(false);
   // Exclude declined follow requests from unread count
   const unreadCount = notifications.filter((n) => {
     if (!n.is_read) {
       // Don't count declined follow requests as unread
-      if (n.type === "follow" && n.additional_data?.follow_request_status === "declined") {
+      if (
+        n.type === "follow" &&
+        n.additional_data?.follow_request_status === "declined"
+      ) {
         return false;
       }
       return true;
@@ -135,11 +139,7 @@ export default function LikeNotificationGroup({
 
           {notifications.length > 0 && (
             <div className="text-[var(--text)]/50">
-              {isExpanded ? (
-                <IoChevronUp size={20} />
-              ) : (
-                <IoChevronDown size={20} />
-              )}
+              {isExpanded ? <PiCaretUp size={20} /> : <PiCaretDown size={20} />}
             </div>
           )}
         </button>
@@ -180,6 +180,7 @@ export default function LikeNotificationGroup({
                     >
                       <Link
                         to={getNotificationLink(notification)}
+                        state={{ backgroundLocation: location }}
                         onClick={async () => {
                           if (!notification.is_read) {
                             try {

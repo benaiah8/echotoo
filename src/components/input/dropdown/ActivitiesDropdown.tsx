@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { IoIosArrowDown } from "react-icons/io";
+import { PiCaretDown } from "react-icons/pi";
 import DropdownContainer from "./DropdownContainer";
 import { activitiesData } from "../../../data/data";
 
@@ -110,9 +110,7 @@ const ActivitiesDropdown: React.FC<Props> = ({
           </small>
         </div>
 
-        <IoIosArrowDown
-          className={`transition-all ${open ? "rotate-180" : ""}`}
-        />
+        <PiCaretDown className={`transition-all ${open ? "rotate-180" : ""}`} />
       </div>
     </DropdownContainer>
   );

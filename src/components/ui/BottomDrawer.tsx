@@ -13,7 +13,7 @@ interface BottomDrawerProps {
 
 /**
  * Reusable Bottom Drawer Component
- * 
+ *
  * Features:
  * - Renders via portal to document.body (escapes all stacking contexts)
  * - Accounts for bottom tab height dynamically
@@ -37,7 +37,8 @@ export default function BottomDrawer({
   useEffect(() => {
     if (open) {
       setIsMounted(true);
-      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      const scrollbarWidth =
+        window.innerWidth - document.documentElement.clientWidth;
       document.body.style.overflow = "hidden";
       document.body.style.paddingRight = `${scrollbarWidth}px`;
     } else {
@@ -55,16 +56,6 @@ export default function BottomDrawer({
   }, [open]);
 
   if (!isMounted) return null;
-
-  // Calculate safe area inset
-  const safeAreaBottom =
-    typeof window !== "undefined"
-      ? parseFloat(
-          getComputedStyle(document.documentElement).getPropertyValue(
-            "--safe-area-inset-bottom"
-          ) || "0"
-        )
-      : 0;
 
   return createPortal(
     <div className="fixed inset-0 z-[100]">
@@ -91,7 +82,8 @@ export default function BottomDrawer({
           bottom: 0, // Flush with bottom
           maxHeight: maxHeight,
           // Apply top/left/right border on the container so the curve isn't clipped
-          borderTop: "1px solid var(--glass-active-border-strong, rgba(255, 255, 255, 0.35))",
+          borderTop:
+            "1px solid var(--glass-active-border-strong, rgba(255, 255, 255, 0.35))",
           borderLeft: "1px solid var(--glass-active-border)",
           borderRight: "1px solid var(--glass-active-border)",
           // Gradient: small solid sections at top and bottom, transparent in middle (80-90%)
@@ -105,12 +97,15 @@ export default function BottomDrawer({
           )`,
           backdropFilter: "blur(var(--glass-blur))",
           WebkitBackdropFilter: "blur(var(--glass-blur))",
-          paddingBottom: `calc(1rem + ${safeAreaBottom}px)`,
+          paddingBottom: "calc(1rem + var(--safe-area-bottom-layout))",
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Content container with proper scrolling */}
-        <div className="overflow-y-auto h-full" style={{ maxHeight: maxHeight }}>
+        <div
+          className="overflow-y-auto h-full"
+          style={{ maxHeight: maxHeight }}
+        >
           {/* Header - gradient from solid at top to transparent, no border */}
           {(title || showCloseButton) && (
             <div
@@ -130,7 +125,9 @@ export default function BottomDrawer({
               }}
             >
               {title && (
-                <div className="text-lg font-semibold text-[var(--text)]">{title}</div>
+                <div className="text-lg font-semibold text-[var(--text)]">
+                  {title}
+                </div>
               )}
               {showCloseButton && (
                 <button
@@ -155,4 +152,3 @@ export default function BottomDrawer({
     document.body
   );
 }
-

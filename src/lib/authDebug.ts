@@ -13,7 +13,7 @@ export function dbg(tag: string, ...args: any[]) {
   (window as any).__AUTHDBG.push([ts(), tag, ...args]);
   if ((window as any).__AUTHDBG.length > 200) (window as any).__AUTHDBG.shift();
   // eslint-disable-next-line no-console
-  console.log(`[AUTHDBG] ${ts()} ${tag}`, ...args);
+  // console.log(`[AUTHDBG] ${ts()} ${tag}`, ...args); // SILENCED FOR NAV DEBUG
 }
 
 export function dumpAuthEnv(extra: Record<string, any> = {}) {

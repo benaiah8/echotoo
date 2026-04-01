@@ -2,7 +2,11 @@
 import { optimizeImageUrl } from "../../lib/imageOptimization";
 import { imgUrlPublic } from "../../lib/img";
 import React, { useState, useEffect } from "react";
-import { getCachedAvatar, setCachedAvatar, preloadAvatar } from "../../lib/avatarCache";
+import {
+  getCachedAvatar,
+  setCachedAvatar,
+  preloadAvatar,
+} from "../../lib/avatarCache";
 
 export default function Avatar({
   url,
@@ -13,6 +17,7 @@ export default function Avatar({
   postType,
   anonymousAvatar,
   userId, // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
+  className = "",
 }: {
   url?: string | null;
   name?: string | null;
@@ -22,6 +27,8 @@ export default function Avatar({
   postType?: "hangout" | "experience";
   anonymousAvatar?: string | null; // NEW: custom anonymous avatar
   userId?: string | null; // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
+  /** Merges onto the root wrapper (e.g. flex centering in toolbars). */
+  className?: string;
 }) {
   const letter =
     variant === "anon" && anonymousAvatar
@@ -29,10 +36,10 @@ export default function Avatar({
       : (name || "").trim().charAt(0).toUpperCase() || " ";
   const s = `${size}px`;
   const [showAnonymousMessage, setShowAnonymousMessage] = useState(false);
-  
+
   // [OPTIMIZATION: Phase 3.2] Check cache for avatar URL if userId is provided
   const [cachedUrl, setCachedUrl] = useState<string | null>(null);
-  
+
   useEffect(() => {
     // Only check cache if userId is provided and not anonymous
     if (userId && variant !== "anon") {
@@ -51,7 +58,7 @@ export default function Avatar({
       setCachedUrl(null);
     }
   }, [userId, url, variant]);
-  
+
   // [OPTIMIZATION: Phase 3.2] Use cached URL if available, otherwise use provided URL
   const displayUrl = cachedUrl || url;
 
@@ -111,8 +118,8 @@ export default function Avatar({
   };
 
   return (
-    <div className="relative">
-      <div className="relative inline-block">
+    <div className={className ? `relative ${className}` : "relative"}>
+      <div className="relative inline-block leading-none">
         <div
           className={`relative rounded-full overflow-hidden ${
             onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""
@@ -133,9 +140,9 @@ export default function Avatar({
               : undefined
           }
         >
-          {displayUrl ? (
+          {imgUrlPublic(displayUrl) ? (
             <img
-              src={imgUrlPublic(displayUrl)}
+              src={imgUrlPublic(displayUrl)!}
               alt=""
               className="w-full h-full object-cover rounded-full"
               loading="lazy"

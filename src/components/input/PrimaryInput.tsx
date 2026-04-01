@@ -1,15 +1,22 @@
 import React, { useRef, useEffect } from "react";
+import {
+  charCounterClassForTone,
+  charLimitTone,
+  formatCharCount,
+} from "../../lib/createFlowLimitUtils";
 
 type PrimaryInputProps = React.InputHTMLAttributes<HTMLInputElement> &
   React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
     label?: string;
     textarea?: boolean;
+    /** Renders n/max inside the field (bottom-right); uses value length vs max. */
+    counterMax?: number;
   };
 
 const PrimaryInput = React.forwardRef<
   HTMLInputElement | HTMLTextAreaElement,
   PrimaryInputProps
->(({ label, textarea = false, className = "", ...props }, ref) => {
+>(({ label, textarea = false, className = "", counterMax, ...props }, ref) => {
   const internalRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Set both internal + forwarded ref
@@ -38,7 +45,31 @@ const PrimaryInput = React.forwardRef<
   }, [textarea]);
 
   const sharedStyles =
-    "w-full text-xs bg-transparent text-[var(--text)] placeholder-gray-400 border-b border-gray-700 transition-all pb-1 font-normal";
+    "w-full text-xs bg-transparent text-[var(--text)] placeholder-gray-400 border-b border-gray-700 transition-all font-normal";
+
+  const valStr =
+    props.value !== undefined && props.value !== null
+      ? String(props.value)
+      : "";
+  const showCounter =
+    typeof counterMax === "number" && counterMax > 0 && !props.disabled;
+  const tone = charLimitTone(valStr.length, counterMax ?? 0);
+  const counterPad = showCounter
+    ? textarea
+      ? " !pb-7 !pr-12"
+      : " !pb-6 !pr-11"
+    : " pb-1";
+
+  const counterEl = showCounter ? (
+    <span
+      className={`pointer-events-none absolute bottom-1 right-1 text-[10px] tabular-nums leading-none ${charCounterClassForTone(
+        tone
+      )}`}
+      aria-hidden
+    >
+      {formatCharCount(valStr, counterMax!)}
+    </span>
+  ) : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -46,15 +77,35 @@ const PrimaryInput = React.forwardRef<
         <label className="text-[var(--text)]/60 text-sm">{label}</label>
       )}
       {textarea ? (
-        <textarea
-          ref={setRefs}
-          className={`${sharedStyles} resize-none overflow-hidden ${className}`}
-          {...props}
-        />
+        showCounter ? (
+          <div className="relative">
+            <textarea
+              ref={setRefs}
+              className={`${sharedStyles} resize-none overflow-hidden ${counterPad} ${className}`}
+              {...props}
+            />
+            {counterEl}
+          </div>
+        ) : (
+          <textarea
+            ref={setRefs}
+            className={`${sharedStyles} resize-none overflow-hidden ${counterPad} ${className}`}
+            {...props}
+          />
+        )
+      ) : showCounter ? (
+        <div className="relative">
+          <input
+            ref={ref as React.Ref<HTMLInputElement>}
+            className={`${sharedStyles} ${counterPad} ${className}`}
+            {...props}
+          />
+          {counterEl}
+        </div>
       ) : (
         <input
           ref={ref as React.Ref<HTMLInputElement>}
-          className={`${sharedStyles} ${className}`}
+          className={`${sharedStyles} ${counterPad} ${className}`}
           {...props}
         />
       )}

@@ -1,5 +1,4 @@
 // PERF: Optimized post component with image optimization
-import { FaCommentDots } from "react-icons/fa";
 import React, {
   useEffect,
   useRef,
@@ -7,7 +6,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
 import MediaCarousel from "./MediaCarousel";
@@ -20,15 +19,31 @@ import toast from "react-hot-toast";
 
 import { imgUrlPublic } from "../lib/img";
 import { prefetchProfile } from "../lib/prefetch";
-import { getBestImageUrl, preloadImages } from "../lib/imageOptimization";
+import { preloadImages } from "../lib/imageOptimization";
+import { buildCarouselImages } from "../lib/carouselImages";
 import { getViewerId } from "../api/services/follows";
 import { getFollowStatus } from "../api/services/follows";
 import {
   getCachedFollowStatus,
   setCachedFollowStatus,
 } from "../lib/followStatusCache";
+import {
+  getCachedActivities,
+  isActivitiesPending,
+  subscribeActivitiesCache,
+} from "../lib/activitiesCache";
 import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
+import { requestManager } from "../lib/requestManager";
+
+/** In-memory set of postIds we've attempted fallback for (avoids loops + repeat requests) */
+const fallbackAttemptedPostIds = new Set<string>();
+
+/** In-flight dedupe: postId -> Promise so multiple renders can't fire multiple per-post fetches */
+const perPostFetchInFlight = new Map<
+  string,
+  Promise<Array<{ images: string[] | null; order_idx: number | null }>>
+>();
 
 type PostProps = {
   postId: string;
@@ -47,6 +62,15 @@ type PostProps = {
   post?: FeedItem;
   // [OPTIMIZATION: Phase 1 - Batch] Batched data for components (fallback for backward compatibility)
   batchedData?: BatchLoadResult | null;
+  // Optional props passed from FeedItem (used when post is provided)
+  tags?: string[] | null;
+  followStatus?: "none" | "pending" | "following" | "friends";
+  isLiked?: boolean;
+  isSaved?: boolean;
+  commentCount?: number;
+  rsvpData?: FeedItem["rsvp_data"];
+  /** When false, multi-image feed carousel autoplay is paused (hidden tab / inactive profile sub-tab). */
+  slideshowHostVisible?: boolean;
 
   authorId: string; // profile id (for FollowButton)
   author: {
@@ -74,12 +98,16 @@ function Post({
   selectedDates = null, // Default to null for backward compatibility
   post, // [OPTIMIZATION: Phase 1 - PostgreSQL] Full FeedItem with PostgreSQL data
   batchedData, // [OPTIMIZATION: Phase 1 - Batch] Fallback for backward compatibility
+  slideshowHostVisible = true,
 }: PostProps) {
   const navigate = useNavigate();
 
   // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch profiles and follow status for visible post authors
   // Why: Instant profile page loads, better perceived performance
   const postRef = useRef<HTMLDivElement>(null);
+  // [OPTIMIZATION: Phase 2.2] Ref for IntersectionObserver (fallback query only)
+  const rootRef = useRef<HTMLElement | null>(null);
+  const lockedNonCloudinaryRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     if (isAnonymous || isOwner || !authorId || !postRef.current) return;
@@ -266,13 +294,50 @@ function Post({
 
   // lazy-load FIRST activity's images
   const [images, setImages] = useState<string[] | null>(null); // null: unknown; []: none
+  const imagesRef = useRef<string[] | null>(null);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+
+  const isCloudinaryUrl = (u?: string | null) =>
+    !!u && u.includes("res.cloudinary.com");
+
+  const hasNonCloudinary = (arr?: string[] | null) =>
+    !!arr && arr.some((u) => u && !isCloudinaryUrl(u));
+
+  const hasAnyCloudinary = (arr?: string[] | null) =>
+    !!arr && arr.some((u) => isCloudinaryUrl(u));
+
+  const setImagesWithReason = (next: string[], reason: string) => {
+    const nextHasNonCloudinary = hasNonCloudinary(next);
+    const nextHasCloudinary = hasAnyCloudinary(next);
+    const nextIsCloudinaryOnly = nextHasCloudinary && !nextHasNonCloudinary;
+
+    if (nextHasNonCloudinary) {
+      lockedNonCloudinaryRef.current[postId] = true;
+    }
+
+    setImages((prev) => {
+      if (
+        lockedNonCloudinaryRef.current[postId] === true &&
+        nextIsCloudinaryOnly
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  };
+
   const [imagesLoading, setImagesLoading] = useState(false);
   const [tried, setTried] = useState(false);
-  
+
   // [OPTIMIZATION: Phase 3.1] Show skeleton immediately if we know post has images
   // Why: Better UX - skeleton appears instantly, not after IntersectionObserver triggers
-  const hasImages = post?.has_images ?? false;
-  const [showImageSkeleton, setShowImageSkeleton] = useState(hasImages);
+  // [FIX] undefined = unknown (Home feed RPC omits has_images); only true/false are explicit.
+  const hasImages = post?.has_images;
+  const [showImageSkeleton, setShowImageSkeleton] = useState(
+    hasImages === true
+  );
 
   // [FIX] Move useState declarations before useCallback hooks that use them
   // Why: Prevents "Cannot access before initialization" errors
@@ -281,6 +346,7 @@ function Post({
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
+  const location = useLocation();
   const goToDetails = useCallback(() => {
     // Don't navigate if invite drawer is closing
     if (isInviteDrawerClosing) {
@@ -288,17 +354,54 @@ function Post({
       return;
     }
 
-    console.log("Navigating to post details:", postId);
+    // Draft: go to create flow instead of detail
+    const isDraftPost =
+      status === "draft" || isDraft || postId.startsWith("draft-");
+    if (isDraftPost) {
+      navigate(`/create/activities?type=${type}`);
+      return;
+    }
+
+    // Prefetch hero image so modal renders instantly (guarded for real URLs only)
+    if (post?.activities?.length) {
+      const { images } = buildCarouselImages(post.activities, 400);
+      const heroUrl = images[0];
+      if (
+        heroUrl &&
+        (heroUrl.startsWith("http://") || heroUrl.startsWith("https://"))
+      ) {
+        const img = new Image();
+        img.src = heroUrl;
+      }
+    }
+
     const detailPath =
       type === "hangout"
         ? Paths.hangoutDetail.replace(":id", postId)
         : Paths.experienceDetail.replace(":id", postId);
-    navigate(detailPath);
-  }, [isInviteDrawerClosing, postId, type, navigate]);
+    navigate(detailPath, {
+      state: { backgroundLocation: location, initialPost: post ?? undefined },
+    });
+  }, [
+    isInviteDrawerClosing,
+    postId,
+    type,
+    status,
+    isDraft,
+    navigate,
+    location,
+    post,
+  ]);
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize edit handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
   const handleEdit = useCallback(async () => {
+    const isDraftPost =
+      status === "draft" || isDraft || postId.startsWith("draft-");
+    if (isDraftPost) {
+      navigate(`/create/activities?type=${type}`);
+      return;
+    }
     try {
       const { post, activities } = await getPostForEdit(postId);
 
@@ -342,68 +445,225 @@ function Post({
       console.error("Error loading post for edit:", error);
       toast.error("Failed to load post for editing");
     }
-  }, [postId, navigate]);
+  }, [postId, navigate, status, isDraft, type]);
 
-  // [OPTIMIZATION: Phase 3.1] Initialize image skeleton state based on has_images
-  // Why: Show skeleton immediately if we know post has images (from PostgreSQL function)
+  // [OPTIMIZATION: Phase 2.2] Use activities from PostgreSQL if available
+  // Why: Eliminates separate activities queries, reduces egress by 50-60%, images available immediately
   useEffect(() => {
+    // Step 1: Check if activities are already in post prop (from PostgreSQL function)
+    if (post?.activities && post.activities.length > 0) {
+      const result = buildCarouselImages(post.activities, 400);
+      if (result.images.length > 0) {
+        setShowImageSkeleton(true);
+        setImagesLoading(true);
+        setImagesWithReason(result.images, "STEP1 post.activities");
+        setShowImageSkeleton(false);
+        preloadImages(result.images).catch(() => {});
+      } else {
+        setImagesWithReason([], "NO_IMAGES");
+        setShowImageSkeleton(false);
+      }
+      setImagesLoading(false);
+      if (result.images.length > 0) return;
+    }
+
+    // Step 2: Fallback - Use has_images flag to show skeleton immediately (if available)
     if (hasImages) {
       setShowImageSkeleton(true);
       setImagesLoading(true);
     }
-  }, [hasImages]);
+  }, [post?.activities, hasImages]); // Only run when activities or hasImages change
 
-  // Fetch only when near viewport
-  const rootRef = useRef<HTMLElement | null>(null);
+  // When ProgressiveFeed's batch completes after this card already read an empty/partial cache,
+  // upgrade carousel images without a second IntersectionObserver pass.
   useEffect(() => {
-    if (!rootRef.current || tried) return;
+    return subscribeActivitiesCache(postId, () => {
+      const cached = getCachedActivities(postId);
+      if (cached == null) return;
+      const result = buildCarouselImages(cached, 400);
+      if (result.images.length === 0) return;
+      const curLen = imagesRef.current?.length ?? 0;
+      if (result.images.length <= curLen) return;
+      setImagesWithReason(result.images, "CACHE activities batch (late)");
+      preloadImages(result.images).catch(() => {});
+    });
+  }, [postId]);
+
+  // Step 3: Fallback - Query activities only if not in post prop (backward compatibility)
+  // This handles: old cached data, legacy code paths, or posts loaded without PostgreSQL function
+  // Only runs if we don't have activities from PostgreSQL
+  useEffect(() => {
+    // [FIX] Guard: prevent repeat attempts (effect re-runs, in-flight races)
+    if (fallbackAttemptedPostIds.has(postId)) {
+      return;
+    }
+
+    // [SHRINK] Feed returns first_image_url only; we may have 1 image. Still run fallback to check
+    // batch cache (which has full carousel). Don't skip - cache may have more images.
+
+    // [FIX] Skip fallback when has_images=false ONLY if we have strong evidence there are no images.
+    // Home feed can return has_images=false + activities=[] incorrectly; allow fallback when activities
+    // is missing/empty so we can fetch from DB. Skip only when we have activities with all empty images.
+    if (post?.has_images === false) {
+      const hasActivitiesWithAllEmpty =
+        post.activities &&
+        post.activities.length > 0 &&
+        post.activities.every((a) => (a.images?.length ?? 0) === 0);
+      if (hasActivitiesWithAllEmpty) {
+        return;
+      }
+    }
+
+    // Skip if already tried or no root element
+    if (tried || !rootRef.current) {
+      return;
+    }
+
     const node = rootRef.current;
     const obs = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
           setTried(true);
+          // Mark attempted BEFORE fetch to prevent repeat attempts from effect re-runs while in flight
+          fallbackAttemptedPostIds.add(postId);
+
           (async () => {
             try {
-              const { data } = await supabase
-                .from("activities")
-                .select("images, order_idx")
-                .eq("post_id", postId)
-                .order("order_idx", { ascending: true })
-                .limit(1)
-                .maybeSingle();
-              const arr = (data?.images ?? []).filter(Boolean) as string[];
-
-              // Only set loading state if there are actually images to load
-              if (arr.length > 0) {
-                // [OPTIMIZATION: Phase 3.1] Keep loading state if skeleton already showing
-                // (from has_images flag), otherwise set it now
-                if (!showImageSkeleton) {
-                  setImagesLoading(true);
+              // Check batch-fetch cache first (ProgressiveFeed may have populated it)
+              let cached = getCachedActivities(postId);
+              if (cached !== null) {
+                if (cached.length > 0) {
+                  const result = buildCarouselImages(cached, 400);
+                  if (result.images.length > 0) {
+                    if (!showImageSkeleton) setImagesLoading(true);
+                    setImagesWithReason(
+                      result.images,
+                      "CACHE activities batch"
+                    );
+                    setShowImageSkeleton(false);
+                    preloadImages(result.images).catch(() => {});
+                  } else {
+                    setImagesWithReason([], "NO_IMAGES");
+                    setShowImageSkeleton(false);
+                  }
+                } else {
+                  setImagesWithReason([], "NO_IMAGES");
+                  setShowImageSkeleton(false);
                 }
+                setImagesLoading(false);
+                obs.disconnect();
+                return;
+              }
 
-                // Use optimized URLs for better performance
-                const safeArr = arr.map((url) => {
-                  const publicUrl = imgUrlPublic(url) || url;
-                  return getBestImageUrl(publicUrl, 400); // 400px viewport width for feed
-                });
-                setImages(safeArr);
-                // [OPTIMIZATION: Phase 3.1] Hide skeleton once we have image URLs
+              // Batch mode: when pending, NEVER do per-post fetch - retry cache only
+              if (isActivitiesPending(postId)) {
+                const MAX_RETRIES = 3;
+                const RETRY_MS = 300;
+                for (let r = 0; r < MAX_RETRIES; r++) {
+                  await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+                  cached = getCachedActivities(postId);
+                  if (cached !== null) {
+                    if (cached.length > 0) {
+                      const result = buildCarouselImages(cached, 400);
+                      if (result.images.length > 0) {
+                        if (!showImageSkeleton) setImagesLoading(true);
+                        setImagesWithReason(
+                          result.images,
+                          "CACHE activities batch"
+                        );
+                        setShowImageSkeleton(false);
+                        preloadImages(result.images).catch(() => {});
+                      } else {
+                        setImagesWithReason([], "NO_IMAGES");
+                        setShowImageSkeleton(false);
+                      }
+                    } else {
+                      setImagesWithReason([], "NO_IMAGES");
+                      setShowImageSkeleton(false);
+                    }
+                    setImagesLoading(false);
+                    obs.disconnect();
+                    return;
+                  }
+                }
+                // After retries: no cache yet - use feed's first_image_url if any, else "no activities"
+                const fromFeed =
+                  post?.activities?.flatMap((a) => a.images ?? []) ?? [];
+                if (fromFeed.length > 0) {
+                  const result = buildCarouselImages(
+                    fromFeed.map((img) => ({ images: [img], order_idx: 0 })),
+                    400
+                  );
+                  setImagesWithReason(result.images, "FEED first_image_url");
+                  preloadImages(result.images).catch(() => {});
+                } else {
+                  setImagesWithReason([], "NO_IMAGES");
+                }
                 setShowImageSkeleton(false);
+                setImagesLoading(false);
+                obs.disconnect();
+                return;
+              }
 
-                // Preload images for better UX
-                preloadImages(safeArr).catch(() => {
-                  // Silent fail for preloading
-                });
+              // Skip RPC when we already have multiple hero URLs from the post payload (e.g. profile).
+              // Feed shrink usually yields a single first_image_url — then we still RPC below.
+              const fromPostActivities =
+                post?.activities && post.activities.length > 0
+                  ? buildCarouselImages(post.activities, 400).images
+                  : [];
+              if (fromPostActivities.length > 1) {
+                obs.disconnect();
+                return;
+              }
+
+              // In-flight dedupe: reuse existing fetch (use RPC, no REST activities?select=)
+              let fetchPromise = perPostFetchInFlight.get(postId);
+              if (!fetchPromise) {
+                fetchPromise = (async () => {
+                  const { data: rows } = await requestManager.execute(
+                    `activities_rpc:${postId}`,
+                    async () => {
+                      const { data, error } = await supabase.rpc(
+                        "get_activities_for_posts_sanitized",
+                        { p_post_ids: [postId] }
+                      );
+                      if (error) throw error;
+                      return data ?? [];
+                    }
+                  );
+                  return (rows ?? []).map(
+                    (r: {
+                      post_id?: string;
+                      images?: string[] | null;
+                      order_idx?: number | null;
+                    }) => ({
+                      images: (r.images ?? []) as string[] | null,
+                      order_idx:
+                        typeof r.order_idx === "number" ? r.order_idx : 0,
+                    })
+                  );
+                })();
+                perPostFetchInFlight.set(postId, fetchPromise);
+              }
+
+              const activities = await fetchPromise;
+              perPostFetchInFlight.delete(postId);
+
+              const result = buildCarouselImages(activities, 400);
+              if (result.images.length > 0) {
+                if (!showImageSkeleton) setImagesLoading(true);
+                setImagesWithReason(result.images, "FALLBACK activities query");
+                setShowImageSkeleton(false);
+                preloadImages(result.images).catch(() => {});
               } else {
-                // No images, set empty array and hide skeleton
-                setImages([]);
+                setImagesWithReason([], "NO_IMAGES");
                 setShowImageSkeleton(false);
               }
             } finally {
               setImagesLoading(false);
+              obs.disconnect();
             }
           })();
-          obs.disconnect();
         }
       },
       // [OPTIMIZATION: Phase 5 - Image] Optimized rootMargin for better prefetching
@@ -412,7 +672,7 @@ function Post({
     );
     obs.observe(node);
     return () => obs.disconnect();
-  }, [postId, tried, showImageSkeleton]);
+  }, [post?.activities, postId, tried, showImageSkeleton, hasImages]); // Added hasImages to dependencies since we use it in the effect
 
   const isDraftPost = status === "draft" || isDraft;
 
@@ -506,24 +766,30 @@ function Post({
             )}
           </div>
 
-          {/* Three dots menu for owner's posts - positioned absolutely */}
-          {isOwner && (
-            <div className="absolute top-0 right-0">
-              <PostMenu
-                postId={postId}
-                onEdit={handleEdit}
-                onDelete={onDelete}
-                isDraft={isDraftPost}
-              />
-            </div>
-          )}
+          {/* Three dots menu - Edit/Delete for owner, Report for non-owner */}
+          <div className="absolute top-0 right-0">
+            <PostMenu
+              postId={postId}
+              isOwner={isOwner}
+              onEdit={handleEdit}
+              onDelete={onDelete}
+              isDraft={isDraftPost}
+            />
+          </div>
 
-          {/* caption */}
+          {/* caption — clamp on feed/profile lists; full text on post detail */}
           {caption && (
             <p
-              className="mt-2 text-[13px] leading-snug text-[var(--text)]/90"
+              className="mt-2 cursor-pointer whitespace-pre-wrap text-left text-[13px] leading-snug text-[var(--text)]/90 line-clamp-6 break-words"
               onClick={goToDetails}
               role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  goToDetails();
+                }
+              }}
             >
               {caption}
             </p>
@@ -551,28 +817,38 @@ function Post({
               <div className="w-full aspect-video bg-[var(--text)]/5 animate-pulse" />
             </div>
           )}
-          {!imagesLoading && !showImageSkeleton && images && images.length > 0 && (
-            <div className="mt-3" role="button" onClick={goToDetails}>
-              <MediaCarousel images={images} maxHeight="44vh" />
-            </div>
-          )}
+          {!imagesLoading &&
+            !showImageSkeleton &&
+            images &&
+            images.length > 0 && (
+              <div className="mt-3" role="button" onClick={goToDetails}>
+                <MediaCarousel
+                  images={images}
+                  maxHeight="44vh"
+                  autoplay={images.length > 1}
+                  hostVisible={slideshowHostVisible}
+                />
+              </div>
+            )}
 
           {/* actions row */}
           <div className="mt-4 text-[var(--text)]/85">
             <PostActions
               postId={postId}
-              authorId={authorId}
+              authorId={isAnonymous ? undefined : authorId}
               postType={type}
               caption={caption}
               postImageUrl={images && images.length > 0 ? images[0] : null}
               postAuthor={
-                author
+                isAnonymous
+                  ? undefined
+                  : author
                   ? {
                       id: authorId,
                       username: author.username,
                       display_name: author.display_name,
                       avatar_url: author.avatar_url,
-                      is_anonymous: isAnonymous,
+                      is_anonymous: false,
                     }
                   : undefined
               }
@@ -600,8 +876,12 @@ function Post({
 // [OPTIMIZATION: Phase 6.2 - React] Memoize Post component to prevent unnecessary re-renders
 // Why: Post components are rendered frequently in lists, memoization reduces render overhead
 export default React.memo(Post, (prevProps, nextProps) => {
-  // Custom comparison function for better performance
-  // Only re-render if these key props change
+  const prevSig = (prevProps.post?.activities ?? [])
+    .map((a) => a?.images?.length ?? 0)
+    .join(",");
+  const nextSig = (nextProps.post?.activities ?? [])
+    .map((a) => a?.images?.length ?? 0)
+    .join(",");
   return (
     prevProps.postId === nextProps.postId &&
     prevProps.caption === nextProps.caption &&
@@ -618,6 +898,15 @@ export default React.memo(Post, (prevProps, nextProps) => {
     prevProps.isAnonymous === nextProps.isAnonymous &&
     prevProps.anonymousName === nextProps.anonymousName &&
     prevProps.anonymousAvatar === nextProps.anonymousAvatar &&
+    prevProps.post?.has_images === nextProps.post?.has_images &&
+    (prevProps.post?.activities?.length ?? 0) ===
+      (nextProps.post?.activities?.length ?? 0) &&
+    prevSig === nextSig &&
+    prevProps.post?.like_count === nextProps.post?.like_count &&
+    prevProps.post?.is_liked === nextProps.post?.is_liked &&
+    prevProps.post?.is_saved === nextProps.post?.is_saved &&
+    prevProps.post?.comment_count === nextProps.post?.comment_count &&
+    prevProps.post?.follow_status === nextProps.post?.follow_status &&
     JSON.stringify(prevProps.selectedDates) ===
       JSON.stringify(nextProps.selectedDates)
   );

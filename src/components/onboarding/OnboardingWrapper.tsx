@@ -1,14 +1,20 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
 import { supabase } from "../../lib/supabaseClient";
+import { SKIP_WELCOME_ONBOARDING } from "../../lib/featureFlags";
+import {
+  clearAuthCache,
+  invalidateProfileByUserIdCache,
+} from "../../api/services/follows";
+import { clearCachedFollowCounts } from "../../lib/followCountsCache";
 import OnboardingFlow from "./OnboardingFlow";
 import FullScreenProfileCreation from "../profile/FullScreenProfileCreation";
 
 interface OnboardingCheck {
   needsProfile: boolean;
   needsOnboarding: boolean;
-  userNumber: number;
+  memberNo: number;
   profileId: string;
 }
 
@@ -25,20 +31,33 @@ export default function OnboardingWrapper({
   const [loading, setLoading] = useState(true);
   const [showProfileCreation, setShowProfileCreation] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // [OPTIMIZATION] Fetch-once-per-session guard: avoid repeated getProfileByUserId when auth events fire
+  const lastCheckedUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!authLoading) {
-      // Add timeout protection to prevent getting stuck
-      const timeoutId = setTimeout(() => {
-        console.warn("Onboarding check timed out after 10 seconds");
-        setLoading(false);
-      }, 10000);
+    if (authLoading) return;
 
-      checkOnboardingStatus().finally(() => {
-        clearTimeout(timeoutId);
-      });
+    if (!user?.id) {
+      lastCheckedUserIdRef.current = null;
+      setLoading(false);
+      return;
     }
-  }, [user, authLoading]);
+
+    if (lastCheckedUserIdRef.current === user.id) {
+      setLoading(false);
+      return;
+    }
+
+    // Add timeout protection to prevent getting stuck
+    const timeoutId = setTimeout(() => {
+      console.warn("Onboarding check timed out after 10 seconds");
+      setLoading(false);
+    }, 10000);
+
+    checkOnboardingStatus().finally(() => {
+      clearTimeout(timeoutId);
+    });
+  }, [user?.id, authLoading]);
 
   const checkOnboardingStatus = async () => {
     if (!user?.id) {
@@ -47,87 +66,151 @@ export default function OnboardingWrapper({
     }
 
     try {
-      // Get user profile to check onboarding status
-      const { data: profile, error } = await supabase
-        .from("profiles")
-        .select(
-          "id, display_name, username, user_number, onboarding_completed, onboarding_step, user_id"
-        )
-        .eq("user_id", user.id)
-        .single();
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+      // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
+      // getProfileByUserId() now includes onboarding fields (member_no, onboarding_completed, onboarding_step)
+      const { getProfileByUserId } = await import("../../api/services/follows");
+      const profile = await getProfileByUserId(user.id);
 
-      if (error) {
-        console.error("Error checking onboarding status:", error);
+      if (!profile) {
+        // [POST-DELETE FIX] getProfileByUserId excludes soft-deleted profiles.
+        // If a soft-deleted row exists, reset it to fresh-user state (not restore).
+        // Truly new users (no row) use the insert flow below.
+        const tryResetSoftDeleted = async () => {
+          const { data: reset } = await supabase
+            .from("profiles")
+            .update({
+              deleted_at: null,
+              display_name: null,
+              username: null,
+              avatar_url: null,
+              bio: null,
+              instagram_url: null,
+              tiktok_url: null,
+              telegram_url: null,
+              selected_tags: [],
+              referral_source: null,
+              onboarding_completed: false,
+              onboarding_step: 0,
+              is_private: false,
+              social_media_public: false,
+              xp: 0,
+            })
+            .eq("user_id", user.id)
+            .not("deleted_at", "is", null)
+            .select(
+              "id, display_name, username, member_no, onboarding_completed, onboarding_step"
+            )
+            .maybeSingle();
+          return reset;
+        };
 
-        // If no profile exists, try to create one automatically
-        if (error.code === "PGRST116") {
-          // No rows found
-          console.log(
-            "No profile found, attempting to create one for user:",
-            user.id
-          );
+        const clearResetCaches = (profileId: string, userId: string) => {
+          clearAuthCache();
+          invalidateProfileByUserIdCache(userId);
+          clearCachedFollowCounts(profileId);
           try {
-            const { data: newProfile, error: createError } = await supabase
-              .from("profiles")
-              .insert({
-                user_id: user.id,
-                display_name: null,
-                username: null,
-                onboarding_completed: false,
-                onboarding_step: 0,
-              })
-              .select(
-                "id, display_name, username, user_number, onboarding_completed, onboarding_step"
-              )
-              .single();
+            localStorage.removeItem("my_profile_id");
+          } catch (_) {}
+        };
 
-            if (createError) {
-              console.error("Failed to create profile:", createError);
-              setLoading(false);
-              return;
-            }
-
-            // Use the newly created profile
-            const needsProfile =
-              !newProfile.display_name || !newProfile.username;
-            const needsOnboarding = !newProfile.onboarding_completed;
-
-            setOnboardingCheck({
-              needsProfile,
-              needsOnboarding,
-              userNumber: newProfile.user_number || 0,
-              profileId: newProfile.id,
-            });
-
-            setShowProfileCreation(false);
-            setShowOnboarding(false);
-
-            if (needsProfile) {
-              setShowProfileCreation(true);
-            } else if (needsOnboarding) {
-              setShowOnboarding(true);
-            }
-
-            setLoading(false);
-            return;
-          } catch (createErr) {
-            console.error("Error creating profile:", createErr);
-            setLoading(false);
-            return;
-          }
-        } else {
+        // Step 1: Try reset soft-deleted profile first (treat returning user as new)
+        let resolvedProfile = await tryResetSoftDeleted();
+        if (resolvedProfile) {
+          clearResetCaches(resolvedProfile.id, user.id);
+          // Reset always sets display_name/username null → needsProfile = true
+          setOnboardingCheck({
+            needsProfile: true,
+            needsOnboarding:
+              !resolvedProfile.onboarding_completed && !SKIP_WELCOME_ONBOARDING,
+            memberNo: resolvedProfile.member_no || 0,
+            profileId: resolvedProfile.id,
+          });
+          setShowProfileCreation(true);
+          setShowOnboarding(false);
+          lastCheckedUserIdRef.current = user.id;
           setLoading(false);
           return;
         }
+
+        // Step 2: No soft-deleted row - create new profile (truly new user)
+        try {
+          const { data: newProfile, error: createError } = await supabase
+            .from("profiles")
+            .insert({
+              user_id: user.id,
+              display_name: null,
+              username: null,
+              onboarding_completed: false,
+              onboarding_step: 0,
+            })
+            .select(
+              "id, display_name, username, member_no, onboarding_completed, onboarding_step"
+            )
+            .single();
+
+          if (createError) {
+            // [POST-DELETE FIX] Duplicate key = soft-deleted row exists, reset it
+            const isDuplicateKey =
+              createError.code === "23505" ||
+              String(createError.message || "").includes("duplicate key") ||
+              String(createError.message || "").includes(
+                "profiles_user_id_key"
+              );
+            if (isDuplicateKey) {
+              resolvedProfile = await tryResetSoftDeleted();
+              if (resolvedProfile) {
+                clearResetCaches(resolvedProfile.id, user.id);
+                setOnboardingCheck({
+                  needsProfile: true,
+                  needsOnboarding:
+                    !resolvedProfile.onboarding_completed &&
+                    !SKIP_WELCOME_ONBOARDING,
+                  memberNo: resolvedProfile.member_no || 0,
+                  profileId: resolvedProfile.id,
+                });
+                setShowProfileCreation(true);
+                setShowOnboarding(false);
+                lastCheckedUserIdRef.current = user.id;
+                setLoading(false);
+                return;
+              }
+            }
+            console.error("Failed to create profile:", createError);
+            setLoading(false);
+            return;
+          }
+
+          const needsProfile = !newProfile.display_name || !newProfile.username;
+          const needsOnboarding =
+            !newProfile.onboarding_completed && !SKIP_WELCOME_ONBOARDING;
+          setOnboardingCheck({
+            needsProfile,
+            needsOnboarding,
+            memberNo: newProfile.member_no || 0,
+            profileId: newProfile.id,
+          });
+          setShowProfileCreation(false);
+          setShowOnboarding(false);
+          if (needsProfile) setShowProfileCreation(true);
+          else if (needsOnboarding) setShowOnboarding(true);
+          lastCheckedUserIdRef.current = user.id;
+        } catch (createErr) {
+          console.error("Error creating profile:", createErr);
+          setLoading(false);
+        }
+        setLoading(false);
+        return;
       }
 
       const needsProfile = !profile.display_name || !profile.username;
-      const needsOnboarding = !profile.onboarding_completed;
+      const needsOnboarding =
+        !profile.onboarding_completed && !SKIP_WELCOME_ONBOARDING;
 
       setOnboardingCheck({
         needsProfile,
         needsOnboarding,
-        userNumber: profile.user_number || 0,
+        memberNo: profile.member_no || 0,
         profileId: profile.id,
       });
 
@@ -139,6 +222,8 @@ export default function OnboardingWrapper({
       } else if (needsOnboarding) {
         setShowOnboarding(true);
       }
+
+      lastCheckedUserIdRef.current = user.id;
     } catch (error) {
       console.error("Error checking onboarding status:", error);
     } finally {
@@ -187,7 +272,7 @@ export default function OnboardingWrapper({
     return (
       <OnboardingFlow
         userId={onboardingCheck.profileId}
-        userNumber={onboardingCheck.userNumber}
+        memberNo={onboardingCheck.memberNo}
         onComplete={handleOnboardingComplete}
       />
     );

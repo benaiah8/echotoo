@@ -1,11 +1,78 @@
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
 
+const TTL_MS = 120_000; // 2 minutes
+
+// In-flight deduplication: concurrent identical requests share one RPC call
+const postDetailInFlight = new Map<
+  string,
+  Promise<{ data: FeedItem | null; error: any }>
+>();
+
+// Short TTL in-memory cache: reopening same post within TTL returns cached value
+const postDetailCache = new Map<
+  string,
+  { ts: number; value: { data: FeedItem | null; error: any } }
+>();
+
+function cacheKey(postId: string, viewerUserId: string | null): string {
+  return `post:${postId}:${viewerUserId ?? "null"}`;
+}
+
 // [OPTIMIZATION: Phase 3.4] Optimized version using PostgreSQL function
 // Returns post with all related data (follow_status, is_liked, is_saved, rsvp_data, comment_count, etc.)
 export async function getPostByIdOptimized(
   postId: string,
   viewerUserId: string | null = null
+): Promise<{ data: FeedItem | null; error: any }> {
+  if (!postId || postId.startsWith("draft-")) {
+    return { data: null, error: { message: "draft_post" } };
+  }
+
+  const key = cacheKey(postId, viewerUserId);
+
+  // Cache hit (within TTL)
+  const cached = postDetailCache.get(key);
+  if (cached && Date.now() - cached.ts < TTL_MS) {
+    console.log("[detail-cache] hit", key);
+    return cached.value;
+  }
+
+  // In-flight: return existing promise
+  let promise = postDetailInFlight.get(key);
+  if (promise) {
+    console.log("[detail-cache] in-flight", key);
+    return promise;
+  }
+
+  // Miss: fetch and store
+  console.log("[detail-cache] miss -> fetch", key);
+  promise = getPostByIdOptimizedImpl(postId, viewerUserId)
+    .then((result) => {
+      postDetailCache.set(key, { ts: Date.now(), value: result });
+      return result;
+    })
+    .finally(() => {
+      postDetailInFlight.delete(key);
+    });
+  postDetailInFlight.set(key, promise);
+  return promise;
+}
+
+/** Deletes all cache and in-flight entries for a post (call after edit/delete) */
+export function invalidatePostDetailCache(postId: string): void {
+  const prefix = `post:${postId}:`;
+  for (const key of Array.from(postDetailCache.keys())) {
+    if (key.startsWith(prefix)) postDetailCache.delete(key);
+  }
+  for (const key of Array.from(postDetailInFlight.keys())) {
+    if (key.startsWith(prefix)) postDetailInFlight.delete(key);
+  }
+}
+
+async function getPostByIdOptimizedImpl(
+  postId: string,
+  viewerUserId: string | null
 ): Promise<{ data: FeedItem | null; error: any }> {
   try {
     console.log("[getPostByIdOptimized] Starting query with params:", {
@@ -28,7 +95,10 @@ export async function getPostByIdOptimized(
 
     if (!data || !data.post) {
       console.warn("[getPostByIdOptimized] Post not found or access denied");
-      return { data: null, error: { message: "Post not found or access denied" } };
+      return {
+        data: null,
+        error: { message: "Post not found or access denied" },
+      };
     }
 
     const post = data.post;
@@ -54,6 +124,8 @@ export async function getPostByIdOptimized(
         | undefined,
       is_liked: post.is_liked,
       is_saved: post.is_saved,
+      like_count: post.like_count,
+      save_count: post.save_count,
       comment_count: post.comment_count,
       has_images: post.has_images,
       rsvp_data: post.rsvp_data || null,
@@ -69,7 +141,7 @@ export async function getPostByIdOptimized(
 
     console.log("[getPostByIdOptimized] Query result:", {
       postId: feedItem.id,
-      hasActivities: (feedItem.activities?.length || 0),
+      hasActivities: feedItem.activities?.length || 0,
       error: null,
     });
 

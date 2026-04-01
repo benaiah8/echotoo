@@ -1,8 +1,11 @@
-import { useCallback } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
+import { onPostChanged } from "../../lib/postEvents";
+import { applyPostPatch } from "../../lib/applyPostPatch";
 import Hangout from "../../components/Hangout";
 import { type BatchLoadResult } from "../../types/legacy";
 import ProgressiveHorizontalRail from "../../components/ProgressiveHorizontalRail";
+import EmptyRailCard from "../../components/EmptyRailCard";
 
 /** Some feeds include extra fields; make them optional here */
 type FeedItemExtended = FeedItem & {
@@ -25,6 +28,13 @@ type Props = {
   getCachedItems?: () => FeedItem[] | null; // Cache getter
   setCachedItems?: (items: FeedItem[]) => void; // Cache setter
   previousRailItems?: FeedItem[]; // Previous rail items for slow connection fallback
+  // [ENHANCEMENT: Empty State + Visual Distinction] Filter metadata
+  filteredCount?: number; // Number of filtered items (for empty state and visual distinction)
+  hasActiveFilters?: boolean; // Whether filters are active
+  /** When false (e.g. Home tab hidden on /u/me), rail initial-load effect does not run */
+  isVisible?: boolean;
+  /** [DEBUG] Tab id for visibility logging */
+  tabId?: string;
 };
 
 export default function HomeHangoutSection({
@@ -38,19 +48,23 @@ export default function HomeHangoutSection({
   getCachedItems,
   setCachedItems,
   previousRailItems = [],
+  filteredCount,
+  hasActiveFilters = false,
+  isVisible = true,
+  tabId = "unknown",
 }: Props) {
   // Skeleton while loading (horizontal cards)
   // Don't return early when progressive loading is enabled - let ProgressiveHorizontalRail handle its own loading state
   if (loading && !useProgressiveLoading) {
     return (
-      <div className="mt-2 -mx-3 px-3">
+      <div className="mt-2 -mx-1.5 px-1.5">
         <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-hide">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
               className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0"
             >
-              <div className="relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3">
+              <div className="relative overflow-visible ui-card pt-2 px-3 pb-3 flex flex-col gap-2 mb-3">
                 {/* bookmark badge: bottom-left (skeleton style) */}
                 <div
                   className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
@@ -59,13 +73,11 @@ export default function HomeHangoutSection({
                   <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
                 </div>
 
-                {/* header (avatar + two lines) */}
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-full bg-[var(--text)]/10 animate-pulse" />
-                  <div className="flex-1 min-w-0">
-                    <div className="h-3 w-24 rounded bg-[var(--text)]/10 animate-pulse mb-1" />
-                  </div>
-                  <div className="h-3 w-12 rounded bg-[var(--text)]/10 animate-pulse" />
+                {/* date strip + author row (matches Hangout layout) */}
+                <div className="h-5 w-full rounded-full bg-[var(--text)]/10 animate-pulse mb-2" />
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-6 h-6 shrink-0 rounded-full bg-[var(--text)]/10 animate-pulse" />
+                  <div className="h-3 flex-1 min-w-0 rounded bg-[var(--text)]/10 animate-pulse" />
                 </div>
 
                 {/* caption (3 lines to match clamp) */}
@@ -126,6 +138,12 @@ export default function HomeHangoutSection({
         : p.author?.display_name || p.author?.username || "Unknown";
       const avatarUrl = p.author?.avatar_url ?? null;
 
+      // [ENHANCEMENT: Visual Distinction] Determine if this item is filtered
+      const isFiltered =
+        hasActiveFilters &&
+        filteredCount !== undefined &&
+        index < filteredCount;
+
       return (
         <Hangout
           key={p.id}
@@ -142,12 +160,16 @@ export default function HomeHangoutSection({
           status={p.status || "published"}
           selectedDates={p.selected_dates}
           type={p.type}
-          isSaved={batchedData?.saveStatuses.get(p.id)}
-          followStatus={batchedData?.followStatuses.get(p.author_id)}
+          // [FIX] Use PostgreSQL data from FeedItem instead of old batchedData
+          isSaved={p.is_saved}
+          followStatus={p.follow_status}
+          // [ENHANCEMENT: Visual Distinction] Pass isFiltered prop
+          isFiltered={isFiltered}
+          post={p}
         />
       );
     },
-    [batchedData, onDelete]
+    [onDelete, filteredCount, hasActiveFilters]
   );
 
   // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveHorizontalRail if enabled
@@ -160,23 +182,26 @@ export default function HomeHangoutSection({
         getCachedItems={getCachedItems}
         setCachedItems={setCachedItems}
         loading={loading}
+        isVisible={isVisible}
+        tabId={tabId}
+        emptyComponent={<EmptyRailCard />}
+        filteredCount={filteredCount}
+        hasActiveFilters={hasActiveFilters}
         visibleItems={3}
         bufferSize="adaptive"
         pageSize={4}
         loadingComponent={
           <div className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0">
-            <div className="relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3">
+            <div className="relative overflow-visible ui-card pt-2 px-3 pb-3 flex flex-col gap-2 mb-3">
               {/* Save button skeleton: bottom-left */}
               <div className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg">
                 <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
               </div>
-              {/* Header (avatar + name + date) */}
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-full bg-[var(--text)]/10 animate-pulse" />
-                <div className="flex-1 min-w-0">
-                  <div className="h-3 w-24 rounded bg-[var(--text)]/10 animate-pulse mb-1" />
-                </div>
-                <div className="h-3 w-12 rounded bg-[var(--text)]/10 animate-pulse" />
+              {/* Date strip + author row (matches Hangout) */}
+              <div className="h-5 w-full rounded-full bg-[var(--text)]/10 animate-pulse mb-2" />
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-6 h-6 shrink-0 rounded-full bg-[var(--text)]/10 animate-pulse" />
+                <div className="h-3 flex-1 min-w-0 rounded bg-[var(--text)]/10 animate-pulse" />
               </div>
               {/* Caption (3 lines to match clamp) */}
               <div className="mt-1 space-y-2">
@@ -202,13 +227,33 @@ export default function HomeHangoutSection({
     );
   }
 
-  // Legacy mode: render all items at once
+  // Legacy mode: render all items at once (state so we can patch on post:changed)
   const data = (items as FeedItemExtended[]) || [];
+  const [railItems, setRailItems] = useState<FeedItemExtended[]>(data);
+  useEffect(() => {
+    setRailItems(data);
+  }, [items]);
+  useEffect(() => {
+    const cleanup = onPostChanged((e) => {
+      const { postId, patch } = e.detail;
+      setRailItems((prev) =>
+        prev.map((item) =>
+          item.id !== postId
+            ? item
+            : (applyPostPatch(
+                item as Record<string, unknown>,
+                patch
+              ) as FeedItemExtended)
+        )
+      );
+    });
+    return cleanup;
+  }, []);
 
   return (
     <div className="overflow-x-auto scroll-hide py-2">
       <div className="flex gap-3 w-max rail-pad">
-        {data.map((p) => {
+        {railItems.map((p) => {
           const locationsCount = p.activities_count?.[0]?.count ?? 0;
           // if you later want to show author:
           // const authorHandle = p.author?.display_name || p.author?.username || "Unknown";
@@ -227,15 +272,16 @@ export default function HomeHangoutSection({
               avatarUrl={avatarUrl}
               authorId={p.author_id}
               isAnonymous={p.is_anonymous || false}
-              capacity={20} // Default capacity
-              isOwner={p.isOwner || false} // Pass isOwner prop
-              onDelete={() => onDelete?.(p.id)} // Pass onDelete callback
-              status={p.status || "published"} // Default to published if status not available
-              selectedDates={p.selected_dates} // Pass selected dates for priority sorting
-              type={p.type} // Pass post type for avatar indicator
-              // [OPTIMIZATION: Phase 1 - Batch] Pass batched data for SaveButton and FollowButton
-              isSaved={batchedData?.saveStatuses.get(p.id)}
-              followStatus={batchedData?.followStatuses.get(p.author_id)}
+              capacity={20}
+              isOwner={p.isOwner || false}
+              onDelete={() => onDelete?.(p.id)}
+              status={p.status || "published"}
+              selectedDates={p.selected_dates}
+              type={p.type}
+              // [FIX] Use PostgreSQL data from FeedItem instead of old batchedData
+              isSaved={p.is_saved}
+              followStatus={p.follow_status}
+              post={p}
             />
           );
         })}

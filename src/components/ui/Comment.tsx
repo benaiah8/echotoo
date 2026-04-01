@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { CommentWithDetails } from "../../types/comment";
+import { imgUrlPublic } from "../../lib/img";
 import Avatar from "./Avatar";
 import CommentLikeButton from "./CommentLikeButton";
 import { DeleteConfirmModal } from "./DeleteConfirmModal";
+import ImageLightbox from "../ImageLightbox";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
-import { Paths } from "../../router/Paths";
 
 interface Props {
   comment: CommentWithDetails;
@@ -28,6 +29,8 @@ export default function Comment({
   const [editContent, setEditContent] = useState(comment.content);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
+  const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const isOwner = currentUserId === comment.author_id;
@@ -158,18 +161,39 @@ export default function Comment({
             </div>
           )}
 
-          {/* Comment Images */}
+          {/* Comment Images — natural aspect in-thread; tap opens in-app lightbox (not browser tab). */}
           {comment.images && comment.images.length > 0 && (
-            <div className="mb-2 flex gap-2 flex-wrap">
-              {comment.images.slice(0, 2).map((imageUrl, index) => (
-                <img
-                  key={index}
-                  src={imageUrl}
-                  alt={`Comment image ${index + 1}`}
-                  className="max-w-32 max-h-32 rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => window.open(imageUrl, "_blank")}
-                />
-              ))}
+            <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              {comment.images
+                .slice(0, 2)
+                .map((imageUrl) => imgUrlPublic(imageUrl))
+                .filter((u): u is string => !!u)
+                .map((resolved, index) => (
+                  <button
+                    key={`${comment.id}-img-${index}`}
+                    type="button"
+                    className="block max-w-full shrink-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--text)_6%,transparent)] p-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/45 sm:max-w-md"
+                    aria-label={`View comment image ${index + 1} full screen`}
+                    onClick={() => {
+                      setImageLightboxSrc(resolved);
+                      setImageLightboxOpen(true);
+                    }}
+                  >
+                    <img
+                      src={resolved}
+                      alt={
+                        comment.author?.display_name || comment.author?.username
+                          ? `Photo from ${
+                              comment.author?.display_name ||
+                              comment.author?.username
+                            }`
+                          : `Comment image ${index + 1}`
+                      }
+                      className="max-h-72 w-full object-contain"
+                      draggable={false}
+                    />
+                  </button>
+                ))}
             </div>
           )}
 
@@ -216,6 +240,22 @@ export default function Comment({
       </div>
 
       {/* Replies */}
+      {imageLightboxSrc ? (
+        <ImageLightbox
+          src={imageLightboxSrc}
+          alt={
+            comment.author?.display_name ||
+            comment.author?.username ||
+            "Comment photo"
+          }
+          open={imageLightboxOpen}
+          onClose={() => {
+            setImageLightboxOpen(false);
+            setImageLightboxSrc(null);
+          }}
+        />
+      ) : null}
+
       {comment.replies && comment.replies.length > 0 && (
         <div className="mt-2">
           {comment.replies.map((reply) => (

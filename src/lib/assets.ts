@@ -1,11 +1,11 @@
 /**
  * Centralized asset configuration
- * 
+ *
  * TO UPDATE THE OWL LOGO:
  * 1. Replace the file at: /public/owlicon.svg
  * 2. The change will automatically appear everywhere after a page refresh
  * 3. If you see the old logo, do a hard refresh (Ctrl+Shift+R or Cmd+Shift+R)
- * 
+ *
  * All logo references in the app use this constant, so updating the file
  * in /public/owlicon.svg will update it everywhere.
  */
@@ -22,3 +22,9 @@ export const getOwlLogoPath = (): string => {
   return `${OWL_LOGO_PATH}?v=${LOGO_VERSION}`;
 };
 
+/** Instagram story 9:16 template — place PNG at `public/instagram-story-bg.png`. */
+export const INSTAGRAM_STORY_BG_PATH = "/instagram-story-bg.png";
+const INSTAGRAM_STORY_BG_VERSION = "1";
+
+export const getInstagramStoryBackgroundPath = (): string =>
+  `${INSTAGRAM_STORY_BG_PATH}?v=${INSTAGRAM_STORY_BG_VERSION}`;

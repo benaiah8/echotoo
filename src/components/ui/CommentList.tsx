@@ -8,13 +8,19 @@ import {
 import Comment from "./Comment";
 import FloatingCommentInput from "./FloatingCommentInput";
 import { supabase } from "../../lib/supabaseClient";
+import { getViewerAuthUserId } from "../../api/services/follows";
 
 interface Props {
   postId: string;
   onCommentCountChange?: (count: number) => void;
+  isModal?: boolean;
 }
 
-export default function CommentList({ postId, onCommentCountChange }: Props) {
+export default function CommentList({
+  postId,
+  onCommentCountChange,
+  isModal = false,
+}: Props) {
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,10 +32,8 @@ export default function CommentList({ postId, onCommentCountChange }: Props) {
   // Get current user ID and profile
   useEffect(() => {
     const getUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setCurrentUserId(user?.id || null);
+      const userId = await getViewerAuthUserId();
+      setCurrentUserId(userId);
 
       // Get user profile from cache
       const cachedProfile = localStorage.getItem("my_avatar_url");
@@ -179,6 +183,7 @@ export default function CommentList({ postId, onCommentCountChange }: Props) {
           postId={postId}
           onComment={handleNewComment}
           placeholder="Write a comment..."
+          isModal={isModal}
         />
       </div>
     );
@@ -220,6 +225,7 @@ export default function CommentList({ postId, onCommentCountChange }: Props) {
         onComment={handleNewComment}
         onCancel={replyingTo ? () => setReplyingTo(null) : undefined}
         placeholder={replyingTo ? "Write a reply..." : "Write a comment..."}
+        isModal={isModal}
       />
     </div>
   );

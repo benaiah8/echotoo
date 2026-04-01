@@ -1,5 +1,7 @@
 // Image optimization utilities for better performance
 
+import { imgUrlPublic } from "./img";
+
 export interface ImageSize {
   width: number;
   height: number;
@@ -78,8 +80,22 @@ export function getBestImageUrl(
 ): string {
   if (!path) return "";
 
-  // If it's already optimized or external, return as-is
+  // [CLOUDINARY GATE] When Cloudinary disallowed, return "" so callers fall back to placeholder
+  if (/^https?:\/\//i.test(path) && !imgUrlPublic(path)) {
+    return "";
+  }
+
+  // If it's already optimized or external, check if it's Cloudinary and optimize it
   if (/^https?:\/\//i.test(path) || path.startsWith("data:image/")) {
+    try {
+      const url = new URL(path);
+      if (url.hostname.includes("res.cloudinary.com")) {
+        return path;
+      }
+    } catch (e) {
+      // If URL parsing fails (shouldn't happen with valid URLs), return as-is
+      // This is a safety fallback
+    }
     return path;
   }
 
@@ -104,7 +120,8 @@ export function getBestImageUrl(
       format: formats[0], // Use the best supported format
     });
 
-    return `${path}?${params.toString()}`;
+    const finalUrl = `${path}?${params.toString()}`;
+    return finalUrl;
   } catch (error) {
     console.warn("Error generating best image URL:", error);
     return path; // Fallback to original
@@ -112,7 +129,7 @@ export function getBestImageUrl(
 }
 
 /**
- * Legacy function for backward compatibility - used by MediaCarousel and Avatar
+ * Legacy function for backward compatibility - used by Avatar
  */
 export function optimizeImageUrl(
   url: string,

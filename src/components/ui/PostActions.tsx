@@ -1,11 +1,10 @@
-import { FaCommentDots } from "react-icons/fa";
-import { MdShare } from "react-icons/md";
+import { PiChatCircleDots, PiShareFat } from "react-icons/pi";
 import LikeButton from "./LikeButton";
 import SaveButton from "./SaveButton";
 import FollowButton from "./FollowButton";
 import RSVPComponent from "./RSVPComponent";
 import ShareDrawer from "./ShareDrawer";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
 import { useState, useEffect, useRef } from "react";
 import { getCommentCount } from "../../api/services/comments";
@@ -14,6 +13,7 @@ import { setAuthModal } from "../../reducers/modalReducer";
 import { RootState } from "../../app/store";
 import { type BatchLoadResult } from "../../types/legacy";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
+import { storyCreatorFromPost } from "../../lib/shareStoryCreator";
 
 interface PostActionsProps {
   postId: string;
@@ -49,6 +49,7 @@ export default function PostActions({
   batchedData, // [OPTIMIZATION: Phase 1 - Batch] Fallback for backward compatibility
 }: PostActionsProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
   // [OPTIMIZATION: Phase 1 - PostgreSQL] Use provided comment_count, fallback to 0
   const [commentCount, setCommentCount] = useState<number>(
@@ -60,6 +61,17 @@ export default function PostActions({
   const authLoading = authState?.loading ?? true;
   const commentButtonRef = useRef<HTMLButtonElement>(null);
   const hasLoadedCommentCountRef = useRef(false);
+
+  // [DEBUG] Verify PostgreSQL data is being received
+  // [PHASE 1.2] Disabled after verification - PostgreSQL data confirmed working
+  // useEffect(() => {
+  //   console.log("[PostActions] Data check:", {
+  //     postId: postId.slice(0, 8) + "...",
+  //     hasPost: !!post,
+  //     is_liked: post?.is_liked,
+  //     is_saved: post?.is_saved,
+  //   });
+  // }, []);
 
   // Update comment count when post prop changes (if provided from PostgreSQL)
   useEffect(() => {
@@ -107,6 +119,8 @@ export default function PostActions({
     };
   }, [postId, post?.comment_count]);
 
+  const storyCreator = storyCreatorFromPost(post, postAuthor);
+
   const handleCommentClick = () => {
     // Check auth immediately, but don't block if still loading
     if (!authLoading && !isAuthenticated) {
@@ -114,14 +128,20 @@ export default function PostActions({
       return;
     }
 
-    // Navigate to post detail page
+    // Navigate to post detail page (as overlay with background preserved)
     const postType = window.location.pathname.includes("/hangout")
       ? "hangout"
       : "experience";
     navigate(
       `${Paths[
         postType === "hangout" ? "hangoutDetail" : "experienceDetail"
-      ].replace(":id", postId)}`
+      ].replace(":id", postId)}`,
+      {
+        state: {
+          backgroundLocation: location,
+          initialPost: post ?? undefined,
+        },
+      }
     );
 
     // Scroll to comments section after navigation
@@ -157,19 +177,30 @@ export default function PostActions({
         <SaveButton
           postId={postId}
           size={16}
-          isSaved={post?.is_saved ?? batchedData?.saveStatuses.get(postId)}
+          isSaved={post?.is_saved ?? batchedData?.saveStatuses?.get(postId)}
+          saveCount={post?.save_count ?? 0}
+          showCount={true}
+          post={post} // [PHASE 3] Pass post for personalization
         />
         <LikeButton
           postId={postId}
           size={16}
-          isLiked={post?.is_liked ?? batchedData?.likeStatuses.get(postId)}
+          isLiked={post?.is_liked ?? batchedData?.likeStatuses?.get(postId)}
+          likeCount={post?.like_count ?? 0}
+          showCount={true}
+          post={post} // [PHASE 3] Pass post for personalization
         />
         <button
           className="flex items-center gap-1"
           aria-label="Share"
           onClick={handleShareClick}
         >
-          <MdShare size={16} />
+          <PiShareFat size={16} />
+          {(post?.share_count ?? 0) > 0 && (
+            <span className="text-xs font-medium">
+              {post?.share_count ?? 0}
+            </span>
+          )}
         </button>
         <button
           ref={commentButtonRef}
@@ -177,7 +208,7 @@ export default function PostActions({
           aria-label="Comment"
           onClick={handleCommentClick}
         >
-          <FaCommentDots size={16} />
+          <PiChatCircleDots size={16} />
           {commentCount > 0 && (
             <span className="text-xs font-medium">{commentCount}</span>
           )}
@@ -203,13 +234,17 @@ export default function PostActions({
                     is_anonymous: false,
                   }
                 }
-                rsvpData={post?.rsvp_data ?? batchedData?.rsvpData.get(postId)}
+                rsvpData={post?.rsvp_data ?? batchedData?.rsvpData?.get(postId)}
+                post={post} // [PHASE 3] Pass post for personalization
               />
             ) : (
               // Show Follow button for experiences
               <FollowButton
                 targetId={authorId}
-                followStatus={post?.follow_status ?? batchedData?.followStatuses.get(authorId)}
+                followStatus={
+                  post?.follow_status ??
+                  batchedData?.followStatuses?.get(authorId)
+                }
               />
             )}
           </div>
@@ -224,12 +259,13 @@ export default function PostActions({
         postType={postType || "experience"}
         caption={caption ?? null}
         postImageUrl={postImageUrl}
-        creatorName={postAuthor?.display_name || undefined}
-        creatorHandle={
-          postAuthor?.username ? `@${postAuthor.username}` : undefined
-        }
-        creatorAvatarUrl={postAuthor?.avatar_url || undefined}
+        creatorName={storyCreator.creatorName ?? undefined}
+        creatorHandle={storyCreator.creatorHandle ?? undefined}
+        creatorAvatarUrl={storyCreator.creatorAvatarUrl ?? undefined}
         onInvite={onInvite}
+        selectedDates={post?.selected_dates}
+        isRecurring={post?.is_recurring}
+        recurrenceDays={post?.recurrence_days}
       />
     </div>
   );

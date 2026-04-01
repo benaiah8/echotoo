@@ -3,7 +3,7 @@ import { supabase } from "../../lib/supabaseClient";
 
 interface OnboardingInterestsProps {
   userId: string;
-  userNumber: number;
+  memberNo: number;
   onNext: () => void;
   onBack: () => void;
 }
@@ -57,7 +57,7 @@ const categoryLabels: Record<string, string> = {
 
 export default function OnboardingInterests({
   userId,
-  userNumber,
+  memberNo,
   onNext,
   onBack,
 }: OnboardingInterestsProps) {
@@ -224,7 +224,7 @@ export default function OnboardingInterests({
               color: "var(--brand-dark)",
             }}
           >
-            #{userNumber.toLocaleString()}
+            #{memberNo.toLocaleString()}
           </div>
         </div>
 

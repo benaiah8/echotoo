@@ -1,4 +1,6 @@
 import React from "react";
+import { getFollowCounts } from "../../api/services/follows";
+import { getCachedFollowCounts, setCachedFollowCounts } from "../../lib/followCountsCache";
 
 interface ProfileStatsProps {
   following: number;
@@ -30,8 +32,6 @@ export default function ProfileStats({
   const handleMouseEnter = (mode: "followers" | "following") => {
     if (mode === "followers" || mode === "following") {
       // Prefetch follow list data in background
-      const { getFollowCounts } = require("../../api/services/follows");
-      const { getCachedFollowCounts, setCachedFollowCounts } = require("../../lib/followCountsCache");
       
       // Check cache first
       const cached = getCachedFollowCounts(profileId);

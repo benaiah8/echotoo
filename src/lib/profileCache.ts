@@ -21,6 +21,11 @@ interface ProfileCacheEntry {
   // Why: Instant display of privacy status without flicker, prevents "Sign in" message
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields so getProfileByUserId() can be reused everywhere
+  // Why: Allows OnboardingWrapper to use getProfileByUserId(), reducing 5 requests to 1
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
   timestamp: number;
 }
 
@@ -50,7 +55,12 @@ function getCacheDuration(): number {
 }
 
 // [OPTIMIZATION: Phase 3.2] Get StorageManager instance (with fallback)
-function getStorage(): { get: (key: string) => Promise<any>; set: (key: string, value: any, ttl?: number) => Promise<void>; delete: (key: string) => Promise<void>; keys: () => Promise<string[]> } | null {
+function getStorage(): {
+  get: (key: string) => Promise<any>;
+  set: (key: string, value: any, ttl?: number) => Promise<void>;
+  delete: (key: string) => Promise<void>;
+  keys: () => Promise<string[]>;
+} | null {
   try {
     return getStorageManager();
   } catch {
@@ -94,6 +104,10 @@ export function getCachedProfile(profileId: string): {
   telegram_url: string | null;
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
 } | null {
   try {
     // [OPTIMIZATION: Phase 3.2] Use legacy localStorage for synchronous access (backward compatibility)
@@ -128,6 +142,10 @@ export function getCachedProfile(profileId: string): {
       telegram_url: entry.telegram_url,
       is_private: entry.is_private,
       social_media_public: entry.social_media_public,
+      // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
+      user_number: entry.user_number,
+      onboarding_completed: entry.onboarding_completed,
+      onboarding_step: entry.onboarding_step,
     };
   } catch (error) {
     console.error("Error reading profile cache:", error);
@@ -171,12 +189,29 @@ export function setCachedProfile(profileData: {
   telegram_url: string | null;
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
 }): void {
   try {
     const storage = getStorage();
     const storageKey = `${STORAGE_PREFIX}${profileData.id}`;
+
+    // [FIX] Preserve onboarding fields when incoming data is partial (e.g. from Post prefetch, FollowListDrawer)
+    // Prevents OnboardingWrapper from incorrectly showing onboarding after cache overwrite
+    const existing = getCachedProfile(profileData.id);
     const entry: ProfileCacheEntry = {
       ...profileData,
+      // Preserve onboarding_completed/onboarding_step if incoming does not provide them
+      onboarding_completed:
+        profileData.onboarding_completed !== undefined
+          ? profileData.onboarding_completed
+          : existing?.onboarding_completed,
+      onboarding_step:
+        profileData.onboarding_step !== undefined
+          ? profileData.onboarding_step
+          : existing?.onboarding_step,
       timestamp: Date.now(),
     };
     const ttl = getCacheDuration();
@@ -184,7 +219,10 @@ export function setCachedProfile(profileData: {
     // [OPTIMIZATION: Phase 3.2] Store in StorageManager (primary path)
     if (storage) {
       storage.set(storageKey, entry, ttl).catch((error) => {
-        console.warn("[ProfileCache] StorageManager failed, using localStorage fallback:", error);
+        console.warn(
+          "[ProfileCache] StorageManager failed, using localStorage fallback:",
+          error
+        );
       });
     }
 
@@ -247,12 +285,19 @@ export function clearAllProfileCache(): void {
 
     // [OPTIMIZATION: Phase 3.2] Clear all profile entries from StorageManager
     if (storage && storage.keys) {
-      storage.keys().then((keys: string[]) => {
-        const profileKeys = keys.filter((key: string) => key.startsWith(STORAGE_PREFIX));
-        return Promise.all(profileKeys.map((key: string) => storage!.delete(key)));
-      }).catch(() => {
-        // Ignore errors
-      });
+      storage
+        .keys()
+        .then((keys: string[]) => {
+          const profileKeys = keys.filter((key: string) =>
+            key.startsWith(STORAGE_PREFIX)
+          );
+          return Promise.all(
+            profileKeys.map((key: string) => storage!.delete(key))
+          );
+        })
+        .catch(() => {
+          // Ignore errors
+        });
     }
 
     // [OPTIMIZATION: Phase 3.2] Clear from legacy localStorage
@@ -299,7 +344,7 @@ export function getProfileCached(usernameOrId: string): {
     for (const [id, entry] of Object.entries(cache)) {
       // Check if cache is expired
       // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
-    if (Date.now() - entry.timestamp > getCacheDuration()) {
+      if (Date.now() - entry.timestamp > getCacheDuration()) {
         continue;
       }
 
@@ -315,7 +360,7 @@ export function getProfileCached(usernameOrId: string): {
           avatar_url: entry.avatar_url,
           bio: entry.bio,
           xp: entry.xp,
-          member_no: entry.member_no,
+          member_no: entry.member_no ?? entry.user_number ?? null,
           instagram_url: entry.instagram_url,
           tiktok_url: entry.tiktok_url,
           telegram_url: entry.telegram_url,
@@ -373,6 +418,10 @@ export function setCachedProfiles(
     telegram_url: string | null;
     is_private?: boolean | null;
     social_media_public?: boolean | null;
+    // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
+    user_number?: number | null;
+    onboarding_completed?: boolean | null;
+    onboarding_step?: number | null;
   }>
 ): void {
   try {
@@ -382,8 +431,17 @@ export function setCachedProfiles(
     const ttl = getCacheDuration();
 
     profiles.forEach((profile) => {
+      const existing = getCachedProfile(profile.id);
       const entry: ProfileCacheEntry = {
         ...profile,
+        onboarding_completed:
+          profile.onboarding_completed !== undefined
+            ? profile.onboarding_completed
+            : existing?.onboarding_completed,
+        onboarding_step:
+          profile.onboarding_step !== undefined
+            ? profile.onboarding_step
+            : existing?.onboarding_step,
         timestamp: Date.now(),
       };
       const storageKey = `${STORAGE_PREFIX}${profile.id}`;

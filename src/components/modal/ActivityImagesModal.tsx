@@ -1,4 +1,4 @@
-import { MdArrowBack, MdArrowForward, MdClose } from "react-icons/md";
+import { PiCaretLeft, PiCaretRight, PiX } from "react-icons/pi";
 import Modal from "./Modal";
 import { useRef } from "react";
 
@@ -44,7 +44,7 @@ const ActivityImagesModal = ({ isOpen, onClose }: LoginModalProps) => {
         <div className="w-full flex justify-end text-[var(--text)] mb-2">
           <button className="" onClick={() => onClose()}>
             {" "}
-            <MdClose />{" "}
+            <PiX />{" "}
           </button>
         </div>
         <div
@@ -69,13 +69,13 @@ const ActivityImagesModal = ({ isOpen, onClose }: LoginModalProps) => {
             onClick={prevImage}
             className=" bg-[var(--surface)] text-[var(--text)] p-2 rounded-full z-10"
           >
-            <MdArrowBack size={24} />
+            <PiCaretLeft size={24} />
           </button>
           <button
             onClick={nextImage}
             className=" bg-[var(--surface)] text-[var(--text)] p-2 rounded-full z-10"
           >
-            <MdArrowForward size={24} />
+            <PiCaretRight size={24} />
           </button>
         </div>
       </div>

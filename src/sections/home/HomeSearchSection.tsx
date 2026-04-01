@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FiSearch, FiFilter, FiSun, FiMoon } from "react-icons/fi";
+import { PiFunnelSimple, PiMagnifyingGlass } from "react-icons/pi";
 import {
   getInitialTheme,
   toggleTheme,
@@ -31,7 +31,7 @@ export default function HomeSearchSection({
   const items = [
     { label: "Friends", value: "friends" },
     { label: "Today", value: "today" },
-    { label: "Anonymous", value: "anonymous" },
+    // [LAUNCH] Anonymous posting disabled - filter not exposed
   ];
   const toggleFilterChip = (value: string) => {
     const newSelected = selected.includes(value)
@@ -57,7 +57,7 @@ export default function HomeSearchSection({
         <Logo size={28} onClick={onLogoClick} className="shrink-0" />
 
         <div className="relative flex items-center h-9 flex-1 rounded-xl px-3 bg-transparent border border-[var(--border)] text-[var(--text)] focus-within:border-[color-mix(in_oklab,var(--text)_40%,transparent)]">
-          <FiSearch size={18} />
+          <PiMagnifyingGlass size={18} />
           <input
             type="text"
             placeholder="Where To?"
@@ -77,7 +77,7 @@ export default function HomeSearchSection({
           aria-label="Open filters"
           className="relative shrink-0 w-9 h-9 rounded-xl border border-[var(--border)] text-[var(--text)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
         >
-          <FiFilter size={16} />
+          <PiFunnelSimple size={16} />
           {hasActiveFilters && (
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-primary" />
           )}

@@ -16,7 +16,7 @@ export async function searchProfiles(
 ): Promise<ProfileSearchRow[]> {
   if (!q) return [];
 
-  // basic name/username match
+  // basic name/username match (exclude soft-deleted profiles)
   let q1 = supabase
     .from("profiles")
     .select(
@@ -24,6 +24,7 @@ export async function searchProfiles(
       id, username, display_name, avatar_url, member_no
     `
     )
+    .is("deleted_at", null)
     .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
     .order("display_name", { ascending: true })
     .limit(25);

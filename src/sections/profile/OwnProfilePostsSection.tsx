@@ -33,6 +33,8 @@ import { enrichFeedItemsWithCounts } from "../../lib/postCountsEnrichment";
  */
 interface OwnProfilePostsSectionProps {
   visible?: boolean; // [OPTIMIZATION] Only load data when tab is visible
+  /** Bumps when user taps profile tab again — remount feeds + drop tab caches */
+  feedRefreshEpoch?: number;
 }
 
 // [DEBUG] Toggle for console logs
@@ -40,6 +42,7 @@ const DEBUG_OWN_PROFILE = false;
 
 export default function OwnProfilePostsSection({
   visible = true, // Default to true for backward compatibility
+  feedRefreshEpoch = 0,
 }: OwnProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
@@ -583,10 +586,11 @@ export default function OwnProfilePostsSection({
         isSaved={post.is_saved}
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
+        slideshowHostVisible={visible && tab === "created"}
       />
     ),
-    [handlePostDelete]
-  ); // Only depend on handlePostDelete
+    [handlePostDelete, visible, tab]
+  );
 
   const renderInteractedItem = useCallback(
     (post: FeedItem) => (
@@ -612,10 +616,11 @@ export default function OwnProfilePostsSection({
         isSaved={post.is_saved}
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
+        slideshowHostVisible={visible && tab === "interacted"}
       />
     ),
-    []
-  ); // No dependencies - Post component is pure
+    [visible, tab]
+  );
 
   const renderSavedItem = useCallback(
     (post: FeedItem) => (
@@ -641,10 +646,11 @@ export default function OwnProfilePostsSection({
         isSaved={post.is_saved}
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
+        slideshowHostVisible={visible && tab === "saved"}
       />
     ),
-    []
-  ); // No dependencies - Post component is pure
+    [visible, tab]
+  );
 
   // Theme-aware tab styling
   const base =
@@ -654,7 +660,7 @@ export default function OwnProfilePostsSection({
     "bg-transparent text-[var(--text)]/80 border-[var(--border)] hover:border-[var(--text)]/40";
 
   return (
-    <section className="w-full max-w-[640px] mx-auto px-3">
+    <section className="w-full max-w-[640px] mx-auto px-1.5">
       {/* Tab Navigation - Always visible (static) */}
       <div className="flex items-center justify-center gap-2 pt-4">
         <button
@@ -695,7 +701,7 @@ export default function OwnProfilePostsSection({
         {tabsInitialized.created && (
           <div style={{ display: tab === "created" ? "block" : "none" }}>
             <ProgressiveFeed
-              key={`created-${userId}`} // Stable key - NO tab dependency!
+              key={`created-${userId}-r${feedRefreshEpoch}`}
               isVisible={visible && tab === "created"}
               tabId="profile"
               loadItems={loadCreatedItems}
@@ -737,7 +743,7 @@ export default function OwnProfilePostsSection({
         {tabsInitialized.saved && (
           <div style={{ display: tab === "saved" ? "block" : "none" }}>
             <ProgressiveFeed
-              key={`saved-${userId}`} // Stable key
+              key={`saved-${userId}-r${feedRefreshEpoch}`}
               isVisible={visible && tab === "saved"}
               tabId="profile"
               loadItems={loadSavedItems}

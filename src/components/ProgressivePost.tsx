@@ -29,6 +29,7 @@ interface ProgressivePostProps {
   selectedDates?: any;
   // [OPTIMIZATION: Phase 1 - Batch] Batched data for components
   batchedData?: BatchLoadResult | null;
+  slideshowHostVisible?: boolean;
 }
 
 export default function ProgressivePost(props: ProgressivePostProps) {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { FaBell, FaBellSlash } from "react-icons/fa";
+import { PiBell, PiBellSlash } from "react-icons/pi";
 import { supabase } from "../../lib/supabaseClient";
 import toast from "react-hot-toast";
 import { getViewerId } from "../../api/services/follows";
@@ -42,7 +42,10 @@ export default function NotificationBell({
         viewerProfileId = storedProfileId;
 
         // Load cached settings immediately (synchronous, instant)
-        cachedEnabled = getCachedNotificationSettings(viewerProfileId, targetId);
+        cachedEnabled = getCachedNotificationSettings(
+          viewerProfileId,
+          targetId
+        );
         if (cachedEnabled !== null) {
           console.log(
             "[NotificationBell] Using cached notification settings (instant):",
@@ -84,38 +87,25 @@ export default function NotificationBell({
 
       // Fetch fresh settings in background
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
+        // [PHASE 2.3 - OPTIMIZATION] Use finalViewerId from getViewerId() instead of redundant query
+        // Why: getViewerId() already returns profile ID with caching, no need for duplicate query
+        if (!finalViewerId) {
           setInitializing(false);
           return;
         }
 
-        // Get current user's profile ID
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("user_id", user.id)
-          .single();
-
-        if (!profile?.id) {
-          setInitializing(false);
-          return;
-        }
-
-        // Check if notifications are enabled for this user
+        // Check if notifications are enabled for this user (use finalViewerId directly)
         const { data: notificationSettings } = await supabase
           .from("notification_settings")
           .select("enabled")
-          .eq("user_id", profile.id)
+          .eq("user_id", finalViewerId)
           .eq("target_user_id", targetId)
           .single();
 
         const freshEnabled = notificationSettings?.enabled ?? true; // Default to enabled when following
 
-        // Cache the fresh settings
-        setCachedNotificationSettings(profile.id, targetId, freshEnabled);
+        // Cache the fresh settings (use finalViewerId directly)
+        setCachedNotificationSettings(finalViewerId, targetId, freshEnabled);
         setIsEnabled(freshEnabled);
       } catch (error) {
         console.error("Error loading notification status:", error);
@@ -134,7 +124,7 @@ export default function NotificationBell({
 
     setLoading(true);
     const previousEnabled = isEnabled;
-    
+
     try {
       const viewerId = await getViewerId();
       if (!viewerId) {
@@ -144,7 +134,7 @@ export default function NotificationBell({
       }
 
       const newEnabled = !isEnabled;
-      
+
       // Update UI immediately (optimistic update)
       setIsEnabled(newEnabled);
       // Update cache immediately
@@ -208,9 +198,9 @@ export default function NotificationBell({
       title={isEnabled ? "Disable notifications" : "Enable notifications"}
     >
       {isEnabled ? (
-        <FaBell className="text-sm" />
+        <PiBell className="text-sm" />
       ) : (
-        <FaBellSlash className="text-sm" />
+        <PiBellSlash className="text-sm" />
       )}
     </button>
   );

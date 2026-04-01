@@ -24,6 +24,7 @@ The logo automatically appears in these places:
 - ✅ Top navigation bar (Logo component)
 - ✅ Instagram Story generator (owl above cards)
 - ✅ Any other component using the Logo component
+- ✅ **App icon** (Android, iOS) – generated from `assets/logo.png` via `npm run generate:icons`
 
 ## Technical Details
 

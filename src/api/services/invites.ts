@@ -1,4 +1,5 @@
 import { supabase } from "../../lib/supabaseClient";
+import { getViewerAuthUserId } from "./follows";
 
 export type InviteStatus = "pending" | "accepted" | "declined" | "expired";
 
@@ -44,12 +45,10 @@ export async function sendInvites(
   try {
     console.log("Sending invites for post:", postId, "to users:", inviteeIds);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
-    console.log("Current user:", user.id);
+    console.log("Current user:", userId);
 
     // Check if user owns the post
     const { data: post, error: postError } = await supabase
@@ -65,7 +64,7 @@ export async function sendInvites(
 
     console.log("Post author:", post.author_id);
 
-    if (post.author_id !== user.id) throw new Error("Not authorized");
+    if (post.author_id !== userId) throw new Error("Not authorized");
 
     // Check for existing invites to avoid duplicates
     const { data: existingInvites, error: existingError } = await supabase
@@ -101,7 +100,7 @@ export async function sendInvites(
     // Create invites only for new users
     const invites = newInviteeIds.map((inviteeId) => ({
       post_id: postId,
-      inviter_id: user.id,
+      inviter_id: userId,
       invitee_id: inviteeId,
     }));
 
@@ -123,7 +122,7 @@ export async function sendInvites(
 
     // Invites inserted successfully
     console.log("Successfully inserted invites:", data);
-    
+
     // Create notifications for sent invites (for the inviter)
     // This happens even if notification creation fails (don't fail invite creation)
     if (data && data.length > 0) {
@@ -136,32 +135,47 @@ export async function sendInvites(
           .single();
 
         if (postDataError) {
-          console.error("Error fetching post data for notifications:", postDataError);
+          console.error(
+            "Error fetching post data for notifications:",
+            postDataError
+          );
         }
 
         // Get invitee profile IDs for actor info
         const inviteeUserIds = data.map((invite) => invite.invitee_id);
-        const { data: inviteeProfiles, error: profilesError } = await supabase
-          .from("profiles")
-          .select("user_id, username, display_name, avatar_url")
-          .in("user_id", inviteeUserIds);
 
-        if (profilesError) {
-          console.error("Error fetching invitee profiles for notifications:", profilesError);
+        // [PHASE 2.3 - OPTIMIZATION] Use getProfilesByUserIds() for caching and deduplication
+        const { getProfilesByUserIds } = await import("./follows");
+        let inviteeProfiles: any[] = [];
+
+        try {
+          const profiles = await getProfilesByUserIds(inviteeUserIds);
+          // Map to expected format: user_id, username, display_name, avatar_url
+          inviteeProfiles = profiles.map((p) => ({
+            user_id: p.user_id,
+            username: p.username,
+            display_name: p.display_name,
+            avatar_url: p.avatar_url,
+          }));
+        } catch (error) {
+          console.error(
+            "Error fetching invitee profiles for notifications:",
+            error
+          );
         }
 
-        const inviteeMap = new Map(
-          inviteeProfiles?.map((p) => [p.user_id, p]) || []
-        );
+        const inviteeMap = new Map(inviteeProfiles.map((p) => [p.user_id, p]));
 
         // Create sent invite notifications for the inviter
         const sentInviteNotifications = data.map((invite) => {
           const inviteeProfile = inviteeMap.get(invite.invitee_id);
           return {
-            user_id: user.id, // The inviter (current user)
+            user_id: userId, // The inviter (current user)
             actor_id: invite.invitee_id, // The invitee (person being invited)
             type: "invite" as const,
-            entity_type: (postData?.type || "hangout") as "hangout" | "experience",
+            entity_type: (postData?.type || "hangout") as
+              | "hangout"
+              | "experience",
             entity_id: postId,
             additional_data: {
               post_id: postId,
@@ -174,26 +188,46 @@ export async function sendInvites(
           };
         });
 
-        console.log("Creating sent invite notifications:", sentInviteNotifications.length, "notifications");
+        console.log(
+          "Creating sent invite notifications:",
+          sentInviteNotifications.length,
+          "notifications"
+        );
 
         // Insert sent invite notifications
-        const { data: insertedNotifications, error: notificationError } = await supabase
-          .from("notifications")
-          .insert(sentInviteNotifications)
-          .select();
+        const { data: insertedNotifications, error: notificationError } =
+          await supabase
+            .from("notifications")
+            .insert(sentInviteNotifications)
+            .select();
 
         if (notificationError) {
-          console.error("Error creating sent invite notifications:", notificationError);
-          console.error("Notification error details:", JSON.stringify(notificationError, null, 2));
+          console.error(
+            "Error creating sent invite notifications:",
+            notificationError
+          );
+          console.error(
+            "Notification error details:",
+            JSON.stringify(notificationError, null, 2)
+          );
         } else {
-          console.log("Successfully created sent invite notifications:", insertedNotifications?.length || 0);
+          console.log(
+            "Successfully created sent invite notifications:",
+            insertedNotifications?.length || 0
+          );
           if (insertedNotifications && insertedNotifications.length > 0) {
-            console.log("Sample notification:", JSON.stringify(insertedNotifications[0], null, 2));
+            console.log(
+              "Sample notification:",
+              JSON.stringify(insertedNotifications[0], null, 2)
+            );
           }
         }
       } catch (notificationCreationError) {
         // Don't fail invite creation if notification creation fails
-        console.error("Exception during notification creation:", notificationCreationError);
+        console.error(
+          "Exception during notification creation:",
+          notificationCreationError
+        );
       }
     }
 
@@ -216,10 +250,8 @@ export async function getSentInvites(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { data: null, error: new Error("Not authenticated") };
+    const userId = await getViewerAuthUserId();
+    if (!userId) return { data: null, error: new Error("Not authenticated") };
 
     const { data, error } = await supabase
       .from("invites")
@@ -229,7 +261,7 @@ export async function getSentInvites(): Promise<{
         post:posts(id, caption, type, created_at)
       `
       )
-      .eq("inviter_id", user.id)
+      .eq("inviter_id", userId)
       .order("created_at", { ascending: false });
 
     return { data, error };
@@ -246,10 +278,8 @@ export async function getReceivedInvites(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { data: null, error: new Error("Not authenticated") };
+    const userId = await getViewerAuthUserId();
+    if (!userId) return { data: null, error: new Error("Not authenticated") };
 
     const { data, error } = await supabase
       .from("invites")
@@ -259,7 +289,7 @@ export async function getReceivedInvites(): Promise<{
         post:posts(id, caption, type, created_at)
       `
       )
-      .eq("invitee_id", user.id)
+      .eq("invitee_id", userId)
       .order("created_at", { ascending: false });
 
     return { data, error };
@@ -276,18 +306,22 @@ export async function updateInviteStatus(
   status: "accepted" | "declined" | "pending"
 ): Promise<{ data: Invite | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("invites")
       .update({ status })
       .eq("id", inviteId)
-      .eq("invitee_id", user.id) // Security: only invitee can update
+      .eq("invitee_id", userId) // Security: only invitee can update
       .select("*")
       .single();
+
+    // [OPTIMIZATION] Update cache with new data if update was successful
+    if (data && !error) {
+      const { setCachedInviteData } = await import("../../lib/inviteDataCache");
+      setCachedInviteData(inviteId, data);
+    }
 
     return { data, error };
   } catch (error) {
@@ -311,16 +345,22 @@ export async function deleteInvite(
   inviteId: string
 ): Promise<{ data: any; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("invites")
       .delete()
       .eq("id", inviteId)
-      .eq("inviter_id", user.id); // Security: only inviter can delete
+      .eq("inviter_id", userId); // Security: only inviter can delete
+
+    // [OPTIMIZATION] Clear cache if delete was successful
+    if (!error) {
+      const { clearCachedInviteData } = await import(
+        "../../lib/inviteDataCache"
+      );
+      clearCachedInviteData(inviteId);
+    }
 
     return { data, error };
   } catch (error) {
@@ -335,10 +375,8 @@ export async function getPostInvites(
   postId: string
 ): Promise<{ data: InviteWithDetails[] | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { data: null, error: new Error("Not authenticated") };
+    const userId = await getViewerAuthUserId();
+    if (!userId) return { data: null, error: new Error("Not authenticated") };
 
     // Check if user owns the post
     const { data: post, error: postError } = await supabase
@@ -348,7 +386,7 @@ export async function getPostInvites(
       .single();
 
     if (postError || !post) throw new Error("Post not found");
-    if (post.author_id !== user.id) throw new Error("Not authorized");
+    if (post.author_id !== userId) throw new Error("Not authorized");
 
     const { data, error } = await supabase
       .from("invites")
@@ -370,10 +408,8 @@ export async function getPendingInvites(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { data: null, error: new Error("Not authenticated") };
+    const userId = await getViewerAuthUserId();
+    if (!userId) return { data: null, error: new Error("Not authenticated") };
 
     const { data, error } = await supabase
       .from("invites")
@@ -384,7 +420,7 @@ export async function getPendingInvites(): Promise<{
         inviter:profiles!inviter_id(id, username, display_name, avatar_url)
       `
       )
-      .eq("invitee_id", user.id)
+      .eq("invitee_id", userId)
       .eq("status", "pending")
       .order("created_at", { ascending: false });
 
@@ -401,18 +437,22 @@ export async function acceptInvite(
   inviteId: string
 ): Promise<{ data: Invite | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("invites")
       .update({ status: "accepted" })
       .eq("id", inviteId)
-      .eq("invitee_id", user.id) // Security: only invitee can accept
+      .eq("invitee_id", userId) // Security: only invitee can accept
       .select("*")
       .single();
+
+    // [OPTIMIZATION] Update cache with new data if update was successful
+    if (data && !error) {
+      const { setCachedInviteData } = await import("../../lib/inviteDataCache");
+      setCachedInviteData(inviteId, data);
+    }
 
     return { data, error };
   } catch (error) {
@@ -427,18 +467,22 @@ export async function declineInvite(
   inviteId: string
 ): Promise<{ data: Invite | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("invites")
       .update({ status: "declined" })
       .eq("id", inviteId)
-      .eq("invitee_id", user.id) // Security: only invitee can decline
+      .eq("invitee_id", userId) // Security: only invitee can decline
       .select("*")
       .single();
+
+    // [OPTIMIZATION] Update cache with new data if update was successful
+    if (data && !error) {
+      const { setCachedInviteData } = await import("../../lib/inviteDataCache");
+      setCachedInviteData(inviteId, data);
+    }
 
     return { data, error };
   } catch (error) {
@@ -448,24 +492,107 @@ export async function declineInvite(
 
 /**
  * Get invite by ID (to check status)
+ * [OPTIMIZATION: Phase 2] Uses RequestManager for deduplication + short cache for sequential requests
  */
 export async function getInviteById(
   inviteId: string
 ): Promise<{ data: Invite | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { data: null, error: new Error("Not authenticated") };
+    const userId = await getViewerAuthUserId();
+    if (!userId) return { data: null, error: new Error("Not authenticated") };
 
-    const { data, error } = await supabase
-      .from("invites")
-      .select("*")
-      .eq("id", inviteId)
-      .single();
+    // [OPTIMIZATION] Check cache first (fast, synchronous path)
+    // This prevents duplicate sequential requests (e.g., determineInviteDirection + useEffect)
+    const { getCachedInviteData, setCachedInviteData } = await import(
+      "../../lib/inviteDataCache"
+    );
+    const cachedInvite = getCachedInviteData(inviteId);
+    if (cachedInvite) {
+      return { data: cachedInvite, error: null };
+    }
 
-    return { data, error };
+    // [OPTIMIZATION] Use RequestManager for deduplication
+    // Multiple components calling this simultaneously will share the same request
+    const { requestManager } = await import("../../lib/requestManager");
+    const dedupeKey = `invite_by_id_${inviteId}`;
+
+    const result = await requestManager.execute(
+      dedupeKey,
+      async (signal) => {
+        // [RACE CONDITION FIX] Check cache again inside RequestManager
+        // Another call might have populated it
+        const cachedInviteAgain = getCachedInviteData(inviteId);
+        if (cachedInviteAgain) {
+          return { data: cachedInviteAgain, error: null };
+        }
+
+        // [ABORT CHECK] Check if aborted before making request
+        if (signal.aborted) {
+          return { data: null, error: new Error("Request aborted") };
+        }
+
+        const { data, error } = await supabase
+          .from("invites")
+          .select("*")
+          .eq("id", inviteId)
+          .single();
+
+        // [ABORT CHECK] Check if aborted after async operation
+        if (signal.aborted) {
+          return { data: null, error: new Error("Request aborted") };
+        }
+
+        // [CACHE UPDATE] Cache the result for 30 seconds
+        // This prevents duplicate sequential requests
+        if (data && !error) {
+          setCachedInviteData(inviteId, data);
+        }
+
+        return { data, error };
+      },
+      "medium" // Medium priority
+    );
+
+    return result.data ?? { data: null, error: new Error("Request failed") };
   } catch (error) {
     return { data: null, error };
   }
+}
+
+/**
+ * Batch fetch invites by IDs (for notification list optimization).
+ * Single query instead of N per-row getInviteById calls.
+ * Returns minimal fields needed for invite_direction and status.
+ */
+export async function getBatchInvitesByIds(
+  inviteIds: string[]
+): Promise<
+  Array<{
+    id: string;
+    inviter_id: string;
+    invitee_id: string;
+    status: InviteStatus;
+  }>
+> {
+  if (!inviteIds || inviteIds.length === 0) return [];
+
+  const uniqueIds = Array.from(new Set(inviteIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("invites")
+    .select("id, inviter_id, invitee_id, status")
+    .in("id", uniqueIds);
+
+  if (error) {
+    console.warn("[getBatchInvitesByIds] Error:", error);
+    return [];
+  }
+
+  return (data || []) as Array<{
+    id: string;
+    inviter_id: string;
+    invitee_id: string;
+    status: InviteStatus;
+  }>;
 }

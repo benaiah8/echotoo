@@ -2,133 +2,868 @@
 import { supabase } from "../../lib/supabaseClient";
 import { retry } from "../../lib/retry";
 import { dataCache } from "../../lib/dataCache";
+import { clearAllMutualFriendsCache } from "../../lib/mutualFriendsCache";
+import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
+
+// [OPTIMIZATION] Dedupe + cooldown for profiles?select=... to prevent burst calls
+const DEBUG_PROFILE_FETCH = false;
+const PROFILE_COOLDOWN_MS = 30 * 1000; // 30 seconds
+
+type ProfileResult = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  xp: number | null;
+  member_no: number | null;
+  instagram_url: string | null;
+  tiktok_url: string | null;
+  telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
+} | null;
+
+const profileByUserIdDedupe = new Map<
+  string,
+  { promise: Promise<ProfileResult>; ts: number }
+>();
+const profileByIdOrUsernameDedupe = new Map<
+  string,
+  { promise: Promise<ProfileResult>; ts: number }
+>();
 
 // Cache for authentication to prevent multiple calls
-let authCache: { userId: string | null; timestamp: number } | null = null;
+// [FIX] Now caches BOTH userId AND profileId to eliminate redundant profile queries
+let authCache: {
+  userId: string | null;
+  profileId: string | null;
+  timestamp: number;
+} | null = null;
 const AUTH_CACHE_DURATION = 30 * 1000; // 30 seconds
 
+// [OPTIMIZATION] TTL cache for viewer profile id keyed by auth user id
+// Reduces profiles.select(id).eq(user_id,...) on repeated opens within TTL
+const viewerProfileIdCache = new Map<
+  string,
+  { ts: number; profileId: string }
+>();
+const VIEWER_PROFILE_ID_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 // Function to clear auth cache (call when auth state changes)
-// [CACHE FIX] Now also clears feed cache to prevent cross-user data leakage
+// [PHASE 2.3 - FIX] Removed feed cache clearing - cache keys already include viewerProfileId
+// Feed cache is user-specific, so no cross-user data leakage risk
 export function clearAuthCache() {
   authCache = null;
-  // Clear feed cache when auth state changes
-  // This prevents User A's cached feed from being shown to User B
-  // [CACHE FIX] Use static import instead of require() for browser compatibility
-  // [OPTIMIZATION: Phase 1 - Storage Abstraction] clearFeedCache is now async
+  viewerProfileIdCache.clear();
+  // [FIX] Removed feed cache clearing - cache keys already include viewerProfileId
+  // Feed cache entries are user-specific: feed:all::::5:0:guest vs feed:all::::5:0:userId
+  // No need to clear feed cache on auth change - only clear on explicit logout (SIGNED_OUT)
+  // This prevents cache from being cleared when user ID changes from guest → actual user
+  // Clearing on auth change was causing cache misses and duplicate RPC calls
+
+  // [PHASE 2.3 - FIX] DO NOT clear localStorage.my_profile_id here
+  // Why: clearAuthCache() is called on every auth state change (token refresh, etc.)
+  // localStorage.my_profile_id should only be cleared on SIGNED_OUT event
+  // Clearing it here causes localStorage to be cleared even when user is still logged in
+  // This defeats the purpose of localStorage persistence for getViewerId()
+  // localStorage.my_profile_id is cleared separately in App.tsx on SIGNED_OUT event
+
+  // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Clear mutual friends cache on auth change
+  // Why: Prevents cross-user data leakage when user logs out/in
   try {
-    dataCache.clearFeedCache().catch((error) => {
-      console.warn("[clearAuthCache] Failed to clear feed cache:", error);
-      // Don't throw - auth cache clearing should still succeed
-    });
+    clearAllMutualFriendsCache();
   } catch (error) {
-    console.warn("[clearAuthCache] Failed to clear feed cache:", error);
+    console.warn(
+      "[clearAuthCache] Failed to clear mutual friends cache:",
+      error
+    );
     // Don't throw - auth cache clearing should still succeed
   }
+}
+
+/** Clear profileByUserId dedupe for a user (call after reset so re-check gets fresh data). */
+export function invalidateProfileByUserIdCache(userId: string) {
+  profileByUserIdDedupe.delete(userId);
 }
 
 /** Return the viewer's *profile id* (not auth user id). */
 export async function getViewerId(): Promise<string | null> {
   try {
-    // Check cache first
-    if (authCache && Date.now() - authCache.timestamp < AUTH_CACHE_DURATION) {
-      if (authCache.userId) {
-        // Still need to get profile ID from cached user ID
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("user_id", authCache.userId)
-          .maybeSingle();
-
-        if (!profileError && profile?.id) {
-          return profile.id;
-        }
-      }
-      // If profile lookup failed, fall through to fresh auth check
-    }
-
-    // Try multiple methods to get the auth user ID
-    let authId: string | null = null;
-
-    // Method 1: Try getSession first (most reliable)
+    // [PHASE 2.3 - FIX] Check localStorage first (fast, synchronous path)
+    // Why: Eliminates profiles?select=id requests on page reloads
+    // Components already use this pattern (NotificationBell, OtherProfilePage, FollowButton)
+    // This centralizes it in getViewerId() for consistency and performance
     try {
-      const { data: sessionData, error: sessionError } =
-        await supabase.auth.getSession();
-      if (!sessionError && sessionData.session?.user?.id) {
-        authId = sessionData.session.user.id;
+      const storedProfileId = localStorage.getItem("my_profile_id");
+      if (storedProfileId) {
+        // [OPTIMIZATION] Fast path: Return stored profile ID immediately
+        // Note: We don't validate it here for speed (validation happens naturally on first use)
+        // If invalid, database queries will fail and components will handle it gracefully
+        // This eliminates redundant profiles?select=id requests on page reloads
+        return storedProfileId;
       }
-    } catch (error) {
-      console.log("Session method failed, trying getUser");
+    } catch (localStorageError) {
+      // localStorage might be unavailable (private browsing, quota exceeded, etc.)
+      // Fall through to normal flow - in-memory cache and RequestManager still work
+      // Reduced log level - only log if it's a real issue
+      // console.debug("[getViewerId] localStorage unavailable, using normal flow:", localStorageError);
     }
 
-    // Method 2: Fallback to getUser
-    if (!authId) {
-      try {
-        const { data: userData, error: userError } =
-          await supabase.auth.getUser();
-        if (!userError && userData.user?.id) {
-          authId = userData.user.id;
+    // [FIX: Phase 2.3] Check in-memory cache second (after localStorage)
+    // This avoids RequestManager overhead for cached values (most common case)
+    if (authCache && Date.now() - authCache.timestamp < AUTH_CACHE_DURATION) {
+      // [FIX] Return cached profileId directly - eliminates redundant profile queries
+      if (authCache.profileId) {
+        // [PHASE 2.3 - FIX] Also store in localStorage for persistence
+        // This ensures it's available on next page load
+        try {
+          localStorage.setItem("my_profile_id", authCache.profileId);
+        } catch (localStorageError) {
+          // Ignore localStorage errors - in-memory cache still works
         }
-      } catch (error) {
-        console.log("getUser method failed");
+        return authCache.profileId;
       }
+      // If cached but no profileId (user not logged in), return null
+      if (authCache.userId === null) {
+        return null;
+      }
+      // If userId exists but profileId missing, fall through to fetch it (use RequestManager)
     }
 
-    if (!authId) {
-      console.log("No auth user ID found");
-      // Cache the null result to prevent repeated failed checks
-      authCache = { userId: null, timestamp: Date.now() };
-      return null;
-    }
+    // [FIX: Phase 2.3] Use RequestManager for deduplication when cache miss
+    // Why: Multiple components calling getViewerId() simultaneously will share the same request
+    // Pattern matches getFollowStatus() for consistency
+    const { requestManager } = await import("../../lib/requestManager");
+    const dedupeKey = "get_viewer_id"; // Single key for all calls (only one viewer per session)
 
-    // console.log("Found auth user ID:", authId);
+    const result = await requestManager.execute(
+      dedupeKey,
+      async (signal) => {
+        // Check cache again inside RequestManager (another call might have populated it)
+        // This handles race conditions where multiple calls happen before first one completes
+        if (
+          authCache &&
+          Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
+        ) {
+          if (authCache.profileId) {
+            return authCache.profileId;
+          }
+          if (authCache.userId === null) {
+            return null;
+          }
+        }
 
-    // Cache the auth result
-    authCache = { userId: authId, timestamp: Date.now() };
+        // Check if aborted before making requests
+        if (signal.aborted) {
+          return null;
+        }
 
-    // Get the profile ID for this auth user
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", authId)
-      .maybeSingle();
+        // Try multiple methods to get the auth user ID
+        let authId: string | null = null;
 
-    if (profileError) {
-      console.error("Error fetching profile:", profileError);
-      return null;
-    }
+        // Method 1: Try getSession first (most reliable)
+        try {
+          const { data: sessionData, error: sessionError } =
+            await supabase.auth.getSession();
 
-    if (!profile?.id) {
-      console.error("No profile found for auth user:", authId);
-      return null;
-    }
+          // Check if aborted after async operation
+          if (signal.aborted) {
+            return null;
+          }
 
-    console.log("Found profile ID:", profile.id);
-    return profile.id;
+          if (!sessionError && sessionData.session?.user?.id) {
+            authId = sessionData.session.user.id;
+          }
+        } catch (error) {
+          // Reduced log - session method failure is expected fallback
+          // console.log("Session method failed, trying getUser");
+        }
+
+        // Method 2: Fallback to getUser
+        if (!authId) {
+          try {
+            const { data: userData, error: userError } =
+              await supabase.auth.getUser();
+
+            // Check if aborted after async operation
+            if (signal.aborted) {
+              return null;
+            }
+
+            if (!userError && userData.user?.id) {
+              authId = userData.user.id;
+            }
+          } catch (error) {
+            // Reduced log - getUser method failure is expected fallback
+            // console.log("getUser method failed");
+          }
+        }
+
+        if (!authId) {
+          // Cache the null result to prevent repeated failed checks
+          authCache = { userId: null, profileId: null, timestamp: Date.now() };
+          return null;
+        }
+
+        // [OPTIMIZATION] Check TTL cache keyed by auth user id
+        const cachedViewer = viewerProfileIdCache.get(authId);
+        if (
+          cachedViewer &&
+          Date.now() - cachedViewer.ts < VIEWER_PROFILE_ID_TTL_MS
+        ) {
+          authCache = {
+            userId: authId,
+            profileId: cachedViewer.profileId,
+            timestamp: Date.now(),
+          };
+          return cachedViewer.profileId;
+        }
+
+        // Check if aborted before database query
+        if (signal.aborted) {
+          return null;
+        }
+
+        // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() instead of separate profiles?select=id query
+        // Why: Reuses the same RequestManager call, reducing 5 requests to 1
+        // getProfileByUserId() already handles caching, deduplication, and returns the full profile
+        const profile = await getProfileByUserId(authId);
+
+        // Check if aborted after async operation
+        if (signal.aborted) {
+          return null;
+        }
+
+        if (!profile?.id) {
+          // Profile not found or error occurred (getProfileByUserId already logged the error)
+          // Cache failure to avoid retry spam
+          authCache = {
+            userId: authId,
+            profileId: null,
+            timestamp: Date.now(),
+          };
+          return null;
+        }
+
+        // [FIX] Cache BOTH userId AND profileId to avoid redundant profile queries
+        authCache = {
+          userId: authId,
+          profileId: profile.id,
+          timestamp: Date.now(),
+        };
+        viewerProfileIdCache.set(authId, {
+          ts: Date.now(),
+          profileId: profile.id,
+        });
+
+        // [PHASE 2.3 - FIX] Store in localStorage for persistence across page reloads
+        // This eliminates profiles?select=id requests on subsequent page loads
+        try {
+          localStorage.setItem("my_profile_id", profile.id);
+        } catch (localStorageError) {
+          // Ignore localStorage errors - in-memory cache still works
+        }
+
+        return profile.id;
+      },
+      "high" // High priority - needed by many components on mount
+    );
+
+    return result.data ?? null;
   } catch (error) {
     console.error("getViewerId error:", error);
     return null;
   }
 }
 
+/**
+ * [PHASE 1 - OPTIMIZATION] Get viewer's auth user ID (not profile ID) with caching and deduplication
+ *
+ * Returns the auth user ID (user.id from supabase.auth), cached and deduplicated via RequestManager.
+ * This eliminates duplicate "user" requests when multiple components call supabase.auth.getUser().
+ *
+ * Why: 19 files were calling supabase.auth.getUser() directly, causing 11+ duplicate requests.
+ * This function centralizes auth user ID fetching and reduces 11 requests to 1.
+ *
+ * Architecture:
+ * - Shares same authCache with getViewerId() (both populate userId and profileId)
+ * - Uses different RequestManager key to avoid conflicts but allow deduplication
+ * - If getViewerId() already ran, returns cached userId immediately (no DB query)
+ * - If cache miss, fetches auth user ID and caches it (getViewerId() can use it later)
+ * - Aligns with PostgreSQL RPC functions which use p_viewer_user_id (auth user ID)
+ *
+ * Edge cases handled:
+ * - Auth state changes: clearAuthCache() clears cache on onAuthStateChange
+ * - Session expiration: Falls back to getUser() if getSession() fails
+ * - Concurrent requests: RequestManager deduplicates via pendingRequests map
+ * - Race conditions: Double-checks cache inside RequestManager
+ * - Network failures: Error handling with null return
+ * - localStorage unavailable: Graceful fallback (try/catch)
+ * - Abort signals: Checks signal.aborted before/after async operations
+ *
+ * @returns Auth user ID (string) or null if not authenticated
+ */
+export async function getViewerAuthUserId(): Promise<string | null> {
+  try {
+    // [OPTIMIZATION] Check in-memory cache first (fastest path)
+    // If getViewerId() already ran, userId is already cached - return immediately
+    if (authCache && Date.now() - authCache.timestamp < AUTH_CACHE_DURATION) {
+      if (authCache.userId) {
+        return authCache.userId;
+      }
+      // If cached but no userId (user not logged in), return null
+      if (authCache.userId === null) {
+        return null;
+      }
+      // If profileId exists but userId missing (rare edge case), fall through to fetch
+    }
+
+    // [OPTIMIZATION] Use RequestManager for deduplication when cache miss
+    // Different key from getViewerId() to avoid conflicts, but both share same cache
+    const { requestManager } = await import("../../lib/requestManager");
+    const dedupeKey = "get_viewer_auth_user_id"; // Different key for deduplication
+
+    const result = await requestManager.execute(
+      dedupeKey,
+      async (signal) => {
+        // [RACE CONDITION FIX] Check cache again inside RequestManager
+        // Another call (getViewerId or getViewerAuthUserId) might have populated it
+        if (
+          authCache &&
+          Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
+        ) {
+          if (authCache.userId) {
+            return authCache.userId;
+          }
+          if (authCache.userId === null) {
+            return null;
+          }
+        }
+
+        // [ABORT CHECK] Check if aborted before making requests
+        if (signal.aborted) {
+          return null;
+        }
+
+        // [SESSION HANDLING] Try multiple methods to get the auth user ID
+        let authId: string | null = null;
+
+        // Method 1: Try getSession first (most reliable, no extra query)
+        // This is what PostgreSQL RPC functions use (p_viewer_user_id)
+        try {
+          const { data: sessionData, error: sessionError } =
+            await supabase.auth.getSession();
+
+          // [ABORT CHECK] Check if aborted after async operation
+          if (signal.aborted) {
+            return null;
+          }
+
+          if (!sessionError && sessionData.session?.user?.id) {
+            authId = sessionData.session.user.id;
+          }
+        } catch (error) {
+          // Session method failed, fall through to getUser
+          // This handles session expiration, network failures, etc.
+        }
+
+        // Method 2: Fallback to getUser (handles session expiration)
+        if (!authId) {
+          try {
+            const { data: userData, error: userError } =
+              await supabase.auth.getUser();
+
+            // [ABORT CHECK] Check if aborted after async operation
+            if (signal.aborted) {
+              return null;
+            }
+
+            if (!userError && userData.user?.id) {
+              authId = userData.user.id;
+            }
+          } catch (error) {
+            // Both methods failed - user not authenticated or network error
+            // Cache null to prevent repeated failed checks
+          }
+        }
+
+        if (!authId) {
+          // [CACHE NULL RESULT] Cache the null result to prevent repeated failed checks
+          // This prevents spam requests when user is not authenticated
+          authCache = { userId: null, profileId: null, timestamp: Date.now() };
+          return null;
+        }
+
+        // [CACHE UPDATE] Update cache with userId
+        // Preserve profileId if it exists (from getViewerId() call)
+        // This allows both functions to work together seamlessly
+        authCache = {
+          userId: authId,
+          profileId: authCache?.profileId || null, // Preserve existing profileId
+          timestamp: Date.now(),
+        };
+
+        return authId;
+      },
+      "high" // High priority - needed by many components on mount
+    );
+
+    return result.data ?? null;
+  } catch (error) {
+    // [ERROR HANDLING] Log error but don't throw - return null gracefully
+    // This prevents breaking the app if auth check fails
+    console.error("getViewerAuthUserId error:", error);
+    return null;
+  }
+}
+
+/**
+ * [PHASE 2.3 - OPTIMIZATION] Get profile by user_id with caching and deduplication
+ *
+ * Returns full profile data, cached for 5 minutes
+ * Uses RequestManager to deduplicate simultaneous requests from multiple components
+ *
+ * Why: Multiple components (OwnProfilePage, RSVPComponent, BottomTab, etc.) were
+ * making separate profiles?select=id queries for the same user_id, causing 6+ duplicate requests.
+ * This function centralizes profile fetching and reduces 6 requests to 1.
+ *
+ * @param userId - The auth user ID (not profile ID)
+ * @returns Full profile data or null if not found
+ */
+const AUTH_USER_ID_UUID_RE = /^[0-9a-f-]{36}$/i;
+
+export async function getProfileByUserId(userId: string): Promise<{
+  id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  xp: number | null;
+  member_no: number | null;
+  instagram_url: string | null;
+  tiktok_url: string | null;
+  telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
+  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields so OnboardingWrapper can use this too
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
+} | null> {
+  if (!userId) return null;
+  // profiles.user_id is uuid — avoid invalid REST calls (e.g. sentinel "me", typos)
+  if (!AUTH_USER_ID_UUID_RE.test(userId)) return null;
+
+  try {
+    // Helper function to search cache by user_id
+    // ProfileCache stores by profile ID, so we need to search through entries
+    const searchCacheByUserId = (searchUserId: string) => {
+      try {
+        const cacheStr = localStorage.getItem("profile_cache");
+        if (!cacheStr) return null;
+
+        const cache = JSON.parse(cacheStr);
+        for (const [profileId, entry] of Object.entries(cache)) {
+          const cachedEntry = entry as any;
+          // Check if cache is expired (5 minutes)
+          const cacheAge = Date.now() - (cachedEntry.timestamp || 0);
+          if (cacheAge > 5 * 60 * 1000) continue; // Skip expired entries
+
+          if (cachedEntry.user_id === searchUserId) {
+            return getCachedProfile(profileId);
+          }
+        }
+      } catch (error) {
+        // Ignore cache search errors
+      }
+      return null;
+    };
+
+    // Step 1: Check cache first (search by user_id)
+    const cachedProfile = searchCacheByUserId(userId);
+    if (cachedProfile) {
+      if (DEBUG_PROFILE_FETCH)
+        console.debug("[getProfileByUserId] cache hit", userId);
+      return cachedProfile;
+    }
+
+    // Step 1.5: [OPTIMIZATION] In-flight dedupe + 30s cooldown per userId
+    // Prevents burst calls from multiple components (BottomTab, FollowListDrawer, FollowButton, etc.)
+    const existingDedupe = profileByUserIdDedupe.get(userId);
+    if (
+      existingDedupe &&
+      Date.now() - existingDedupe.ts < PROFILE_COOLDOWN_MS
+    ) {
+      if (DEBUG_PROFILE_FETCH)
+        console.debug(
+          "[getProfileByUserId] dedupe hit (in-flight/cooldown)",
+          userId
+        );
+      return existingDedupe.promise;
+    }
+    if (existingDedupe) {
+      profileByUserIdDedupe.delete(userId); // cooldown expired
+    }
+
+    // Step 2: Use RequestManager for deduplication
+    // Multiple components calling this simultaneously will share the same request
+    const fetchPromise = (async (): Promise<ProfileResult> => {
+      const { requestManager } = await import("../../lib/requestManager");
+      const dedupeKey = `profile_by_user_id_${userId}`;
+
+      if (DEBUG_PROFILE_FETCH)
+        console.debug("[getProfileByUserId] requestManager execute", dedupeKey);
+
+      const result = await requestManager.execute(
+        dedupeKey,
+        async (signal) => {
+          // Check cache again inside RequestManager (another call might have populated it)
+          const cachedAgain = searchCacheByUserId(userId);
+          if (cachedAgain) {
+            console.log(
+              `[getProfileByUserId] ✅ Cache HIT (during RequestManager execution) for userId: ${userId}`
+            );
+            return cachedAgain;
+          }
+
+          // Check if aborted before making request
+          if (signal.aborted) {
+            console.log(
+              `[getProfileByUserId] Request aborted for userId: ${userId}`
+            );
+            return null;
+          }
+
+          // Step 3: Fetch full profile from database (including onboarding fields)
+          // [PHASE 2.3 - OPTIMIZATION] Fetch ALL fields so all components can reuse this function
+          // Strategy: One network request with all fields is better than 5 separate requests
+          console.log(
+            `[getProfileByUserId] 🚀 Making actual DB call for userId: ${userId}`
+          );
+          const { data: profile, error: profileError } = await supabase
+            .from("profiles")
+            .select(
+              "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
+            )
+            .eq("user_id", userId)
+            .is("deleted_at", null)
+            .maybeSingle();
+
+          // Check if aborted after async operation
+          if (signal.aborted) {
+            console.log(
+              `[getProfileByUserId] Request aborted after DB call for userId: ${userId}`
+            );
+            return null;
+          }
+
+          if (profileError) {
+            console.error(
+              "[getProfileByUserId] Error fetching profile:",
+              profileError
+            );
+            return null;
+          }
+
+          if (!profile) {
+            console.log(
+              `[getProfileByUserId] No profile found in DB for userId: ${userId}`
+            );
+            return null;
+          }
+
+          // Step 4: Cache result for future use (including onboarding fields)
+          setCachedProfile({
+            id: profile.id,
+            user_id: profile.user_id,
+            username: profile.username,
+            display_name: profile.display_name,
+            avatar_url: profile.avatar_url,
+            bio: profile.bio,
+            xp: profile.xp,
+            member_no: profile.member_no,
+            instagram_url: profile.instagram_url,
+            tiktok_url: profile.tiktok_url,
+            telegram_url: profile.telegram_url,
+            is_private: profile.is_private,
+            social_media_public: profile.social_media_public,
+            // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
+            user_number: profile.user_number,
+            onboarding_completed: profile.onboarding_completed,
+            onboarding_step: profile.onboarding_step,
+          });
+          console.log(
+            `[getProfileByUserId] ✅ Profile cached for userId: ${userId}`
+          );
+
+          return {
+            id: profile.id,
+            user_id: profile.user_id,
+            username: profile.username,
+            display_name: profile.display_name,
+            avatar_url: profile.avatar_url,
+            bio: profile.bio,
+            xp: profile.xp,
+            member_no: profile.member_no,
+            instagram_url: profile.instagram_url,
+            tiktok_url: profile.tiktok_url,
+            telegram_url: profile.telegram_url,
+            is_private: profile.is_private,
+            social_media_public: profile.social_media_public,
+            // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
+            user_number: profile.user_number,
+            onboarding_completed: profile.onboarding_completed,
+            onboarding_step: profile.onboarding_step,
+          };
+        },
+        "medium" // Medium priority - profile data is important but not critical
+      );
+
+      if (result.error && result.error.message !== "Aborted") {
+        throw result.error;
+      }
+
+      return result.data ?? null;
+    })();
+
+    profileByUserIdDedupe.set(userId, {
+      promise: fetchPromise,
+      ts: Date.now(),
+    });
+    fetchPromise.finally(() => {
+      setTimeout(() => {
+        profileByUserIdDedupe.delete(userId);
+      }, PROFILE_COOLDOWN_MS);
+    });
+
+    return fetchPromise;
+  } catch (error) {
+    console.error("[getProfileByUserId] Unexpected error:", error);
+    return null;
+  }
+}
+
+/**
+ * [PHASE 2.3 - OPTIMIZATION] Get profile ID by user_id (for FollowButton conversion)
+ * Uses getProfileByUserId() internally for caching and deduplication
+ *
+ * Why: FollowButton needs to convert user_id to profile_id, but doesn't need full profile.
+ * However, using getProfileByUserId() is better because:
+ * - Reuses cache (if profile already loaded)
+ * - RequestManager deduplicates (no extra network requests)
+ * - Caches full profile for future use
+ *
+ * @param userId - The auth user ID
+ * @returns Profile ID or null if not found
+ */
+export async function getProfileIdByUserId(
+  userId: string
+): Promise<string | null> {
+  const profile = await getProfileByUserId(userId);
+  return profile?.id ?? null;
+}
+
+/**
+ * [PHASE 2.3 - OPTIMIZATION] Get profile by ID, username, or user_id (for OtherProfilePage)
+ * Uses cache first, then smart query with OR clause (single query, not multiple)
+ *
+ * Strategy:
+ * 1. Check cache by profile ID (if identifier is UUID)
+ * 2. Try getProfileByUserId (if identifier is user_id) - uses cache + RequestManager
+ * 3. Query by username or profile ID (single OR query) - only if not found in cache
+ *
+ * Why: OtherProfilePage queries by id/username/user_id with fallback chain.
+ * This function consolidates all lookups into cache-first + single query approach.
+ *
+ * @param identifier - Can be profile ID, username, or user_id
+ * @returns Full profile data or null if not found
+ */
+export async function getProfileByIdOrUsername(
+  identifier: string
+): Promise<ReturnType<typeof getProfileByUserId> | null> {
+  if (!identifier) return null;
+
+  // Step 1: Try cache by profile ID (if identifier is a UUID)
+  const isUuid = /^[0-9a-f-]{36}$/i.test(identifier);
+  if (isUuid) {
+    const cached = getCachedProfile(identifier);
+    if (cached) {
+      console.log(
+        `[getProfileByIdOrUsername] ✅ Cache HIT by profile ID: ${identifier}`
+      );
+      return cached;
+    }
+
+    // Step 2: Try getProfileByUserId (if identifier is a UUID that might be a user_id)
+    // This handles caching and RequestManager deduplication
+    // [FIX] Only try this if identifier is a UUID (user_id is also a UUID)
+    // If identifier is a username (not a UUID), skip this step to avoid errors
+    const profileByUserId = await getProfileByUserId(identifier);
+    if (profileByUserId) {
+      console.log(
+        `[getProfileByIdOrUsername] ✅ Found via getProfileByUserId: ${identifier}`
+      );
+      return profileByUserId;
+    }
+  }
+
+  // Step 3: Query by username or profile ID (only if not found in cache)
+  // [OPTIMIZATION] In-flight dedupe + 30s cooldown per identifier
+  const dedupeKey = `id_or_username:${identifier}`;
+  const existingDedupe = profileByIdOrUsernameDedupe.get(dedupeKey);
+  if (existingDedupe && Date.now() - existingDedupe.ts < PROFILE_COOLDOWN_MS) {
+    if (DEBUG_PROFILE_FETCH)
+      console.debug(
+        "[getProfileByIdOrUsername] dedupe hit (in-flight/cooldown)",
+        identifier
+      );
+    return existingDedupe.promise;
+  }
+
+  if (existingDedupe) {
+    profileByIdOrUsernameDedupe.delete(dedupeKey);
+  }
+
+  const fetchPromise = (async (): Promise<ProfileResult> => {
+    if (DEBUG_PROFILE_FETCH)
+      console.debug(
+        "[getProfileByIdOrUsername] querying",
+        isUuid ? "id/username" : "username",
+        identifier
+      );
+
+    let query = supabase
+      .from("profiles")
+      .select(
+        "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
+      )
+      .is("deleted_at", null);
+
+    if (isUuid) {
+      query = query.or(`id.eq.${identifier},username.ilike.${identifier}`);
+    } else {
+      query = query.ilike("username", identifier);
+    }
+
+    const { data, error } = await query.maybeSingle();
+
+    if (error) {
+      console.error(
+        "[getProfileByIdOrUsername] Error querying profile:",
+        error
+      );
+      return null;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    setCachedProfile(data);
+    return data;
+  })();
+
+  profileByIdOrUsernameDedupe.set(dedupeKey, {
+    promise: fetchPromise,
+    ts: Date.now(),
+  });
+  fetchPromise.finally(() => {
+    setTimeout(() => {
+      profileByIdOrUsernameDedupe.delete(dedupeKey);
+    }, PROFILE_COOLDOWN_MS);
+  });
+
+  return fetchPromise;
+}
+
+/**
+ * [PHASE 2.3 - OPTIMIZATION] Get multiple profiles by user_ids (batch)
+ * Single profiles.in('user_id', ids) query instead of N getProfileByUserId calls
+ *
+ * Callers: notifications (actor profiles), invites (invitee profiles), RSVPComponent, comments
+ *
+ * @param userIds - Array of auth user IDs (may contain duplicates)
+ * @returns Array of profile data (filtered to remove nulls)
+ */
+export async function getProfilesByUserIds(
+  userIds: string[]
+): Promise<Array<NonNullable<Awaited<ReturnType<typeof getProfileByUserId>>>>> {
+  if (!userIds || userIds.length === 0) return [];
+
+  const uniqueIds = Array.from(new Set(userIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select(
+        "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
+      )
+      .in("user_id", uniqueIds)
+      .is("deleted_at", null);
+
+    if (error) {
+      console.error("[getProfilesByUserIds] Error:", error);
+      return [];
+    }
+
+    const profiles = (data || []) as ProfileResult[];
+    const validProfiles = profiles.filter(
+      (p): p is NonNullable<ProfileResult> => p != null
+    );
+
+    // Write each to profile cache for reuse by getProfileByUserId / other components
+    validProfiles.forEach((p) => {
+      setCachedProfile({
+        id: p.id,
+        user_id: p.user_id,
+        username: p.username,
+        display_name: p.display_name,
+        avatar_url: p.avatar_url,
+        bio: p.bio,
+        xp: p.xp,
+        member_no: p.member_no,
+        instagram_url: p.instagram_url,
+        tiktok_url: p.tiktok_url,
+        telegram_url: p.telegram_url,
+        is_private: p.is_private,
+        social_media_public: p.social_media_public,
+        user_number: p.user_number,
+        onboarding_completed: p.onboarding_completed,
+        onboarding_step: p.onboarding_step,
+      });
+    });
+
+    return validProfiles;
+  } catch (err) {
+    console.error("[getProfilesByUserIds] Unexpected error:", err);
+    return [];
+  }
+}
+
 export async function getFollowCounts(profileId: string) {
   try {
-    // Only count approved follows (not pending or declined)
-    const [followingRes, followersRes] = await Promise.all([
-      supabase
-        .from("follows")
-        .select("*", { count: "exact", head: true })
-        .eq("follower_id", profileId)
-        .eq("status", "approved"),
-      supabase
-        .from("follows")
-        .select("*", { count: "exact", head: true })
-        .eq("following_id", profileId)
-        .eq("status", "approved"),
-    ]);
+    const { data, error } = await supabase.rpc("get_follow_counts", {
+      p_profile_id: profileId,
+    });
 
+    if (error) throw error;
+
+    // RETURNS TABLE comes back as an array of rows, RETURNS JSONB comes back as object
+    // Handle both cases defensively
     return {
-      following: followingRes.count ?? 0,
-      followers: followersRes.count ?? 0,
+      following: Number(
+        data?.[0]?.following_count ?? data?.following_count ?? 0
+      ),
+      followers: Number(
+        data?.[0]?.followers_count ?? data?.followers_count ?? 0
+      ),
     };
   } catch (error) {
     console.error("Error getting follow counts:", error);
@@ -166,20 +901,43 @@ export async function getFollowStatus(
   viewerProfileId: string,
   targetProfileId: string
 ): Promise<"none" | "pending" | "following" | "friends"> {
+  // [OPTIMIZATION] Check cache first (fast, synchronous path)
+  // This prevents duplicate sequential requests (e.g., multiple components checking same status)
+  const { getCachedFollowStatus, setCachedFollowStatus } = await import(
+    "../../lib/followStatusCache"
+  );
+  const cachedStatus = getCachedFollowStatus(viewerProfileId, targetProfileId);
+  if (cachedStatus !== null) {
+    return cachedStatus;
+  }
+
   // [OPTIMIZATION: Phase 3 - Dedupe] Prevent duplicate follow status checks for same user
   // Why: Multiple components checking same follow status won't trigger duplicate requests
   const { requestManager } = await import("../../lib/requestManager");
   const dedupeKey = `follow_status_${viewerProfileId}_${targetProfileId}`;
-  
+
   const result = await requestManager.execute(
     dedupeKey,
     async (signal) => {
+      // [RACE CONDITION FIX] Check cache again inside RequestManager
+      // Another call might have populated it
+      const cachedStatusAgain = getCachedFollowStatus(
+        viewerProfileId,
+        targetProfileId
+      );
+      if (cachedStatusAgain !== null) {
+        return cachedStatusAgain;
+      }
+
       try {
         if (!viewerProfileId || !targetProfileId) {
           return "none";
         }
 
-        // Get the actual follow relationship with status
+        // [OPTIMIZATION: Phase 2] Use Promise.all() for parallel queries
+        // Why: OR query with nested and() not supported by Supabase PostgREST
+        // Strategy: Execute 2 queries in parallel (acceptable performance)
+        // Note: Cache + RequestManager deduplication already prevent redundant calls
         const [followingRes, followedByRes] = await Promise.all([
           supabase
             .from("follows")
@@ -195,29 +953,47 @@ export async function getFollowStatus(
             .maybeSingle(),
         ]);
 
+        if (followingRes.error) {
+          console.error(
+            "Error fetching follow status (following):",
+            followingRes.error
+          );
+        }
+        if (followedByRes.error) {
+          console.error(
+            "Error fetching follow status (followed by):",
+            followedByRes.error
+          );
+        }
+
         const userFollowing = followingRes.data;
         const targetFollowing = followedByRes.data;
+
+        let finalStatus: "none" | "pending" | "following" | "friends" = "none";
 
         // Check if user is following target
         if (userFollowing) {
           // If status is 'pending', return 'pending'
           if (userFollowing.status === "pending") {
-            return "pending";
+            finalStatus = "pending";
           }
           // If status is 'approved', check if mutual
-          if (userFollowing.status === "approved") {
+          else if (userFollowing.status === "approved") {
             // Check if target is also following (mutual follow)
             if (targetFollowing && targetFollowing.status === "approved") {
-              return "friends";
+              finalStatus = "friends";
+            } else {
+              finalStatus = "following";
             }
-            return "following";
           }
           // If status is 'declined', treat as not following
-          return "none";
+          // finalStatus remains "none"
         }
 
-        // User is not following target
-        return "none";
+        // [CACHE UPDATE] Cache the result
+        setCachedFollowStatus(viewerProfileId, targetProfileId, finalStatus);
+
+        return finalStatus;
       } catch (error) {
         console.error("Error getting follow status:", error);
         return "none";
@@ -236,35 +1012,29 @@ export async function getFollowStatus(
 export async function getBatchFollowStatuses(
   viewerProfileId: string,
   targetProfileIds: string[]
-): Promise<{ [targetId: string]: "none" | "pending" | "following" | "friends" }> {
+): Promise<{
+  [targetId: string]: "none" | "pending" | "following" | "friends";
+}> {
   try {
     if (!viewerProfileId || targetProfileIds.length === 0) {
       return {};
     }
 
-    // [OPTIMIZATION: Phase 7.2] Add retry logic to database queries
-    // Why: Handles transient network failures gracefully, improves reliability
+    // [OPTIMIZATION] Single query: (viewer follows target) OR (target follows viewer)
+    // PostgREST .or() format: and(col.eq.val,col2.in.(v1,v2)),and(col3.eq.val,col4.in.(v1,v2))
+    // targetProfileIds are UUIDs - safe to join with comma (no commas in UUIDs)
+    const csvTargets = targetProfileIds.join(",");
+    const orFilter = `and(follower_id.eq.${viewerProfileId},following_id.in.(${csvTargets})),and(following_id.eq.${viewerProfileId},follower_id.in.(${csvTargets}))`;
+
     const result = await retry(
       async () => {
-        // Get all follows where viewer follows any of the targets (with status)
-        const { data: followingData, error: followingError } = await supabase
+        const { data, error } = await supabase
           .from("follows")
-          .select("following_id, status")
-          .eq("follower_id", viewerProfileId)
-          .in("following_id", targetProfileIds);
+          .select("follower_id, following_id, status")
+          .or(orFilter);
 
-        if (followingError) throw followingError;
-
-        // Get all follows where targets follow the viewer (mutual follows, with status)
-        const { data: followedByData, error: followedByError } = await supabase
-          .from("follows")
-          .select("follower_id, status")
-          .eq("following_id", viewerProfileId)
-          .in("follower_id", targetProfileIds);
-
-        if (followedByError) throw followedByError;
-
-        return { followingData, followedByData };
+        if (error) throw error;
+        return data || [];
       },
       {
         maxRetries: 3,
@@ -278,19 +1048,21 @@ export async function getBatchFollowStatuses(
       }
     );
 
-    const { followingData, followedByData } = result;
-
-    // Create maps with status information
-    const followingMap = new Map(
-      (followingData || []).map((f) => [f.following_id, f.status])
-    );
-    const followedByMap = new Map(
-      (followedByData || []).map((f) => [f.follower_id, f.status])
-    );
+    // Build same maps as before: viewer->target (following) and target->viewer (followedBy)
+    const followingMap = new Map<string, string>();
+    const followedByMap = new Map<string, string>();
+    for (const row of result) {
+      if (row.follower_id === viewerProfileId) {
+        followingMap.set(row.following_id, row.status);
+      } else if (row.following_id === viewerProfileId) {
+        followedByMap.set(row.follower_id, row.status);
+      }
+    }
 
     // [FIX] Rename to avoid variable name collision with retry result
-    const statusMap: { [targetId: string]: "none" | "pending" | "following" | "friends" } =
-      {};
+    const statusMap: {
+      [targetId: string]: "none" | "pending" | "following" | "friends";
+    } = {};
 
     for (const targetId of targetProfileIds) {
       const userFollowingStatus = followingMap.get(targetId);
@@ -352,6 +1124,7 @@ export async function follow(targetProfileId: string) {
       .from("profiles")
       .select("id, user_id, is_private")
       .eq("id", targetProfileId)
+      .is("deleted_at", null)
       .single();
 
     if (profileError || !targetProfile) {
@@ -441,56 +1214,71 @@ export async function follow(targetProfileId: string) {
     // Step 5: Create follow request notifications if account is private
     if (isPrivateAccount) {
       // Enhanced logging to debug notification creation issues
-      console.log("Creating notifications for private account follow request:", {
-        followerProfile_user_id: followerProfile?.user_id,
-        targetProfile_user_id: targetProfile.user_id,
-        follower_id: me,
-        following_id: targetProfileId,
-      });
+      console.log(
+        "Creating notifications for private account follow request:",
+        {
+          followerProfile_user_id: followerProfile?.user_id,
+          targetProfile_user_id: targetProfile.user_id,
+          follower_id: me,
+          following_id: targetProfileId,
+        }
+      );
 
       if (!followerProfile?.user_id) {
-        console.error("Cannot create notifications: followerProfile.user_id is missing", {
-          followerProfile,
-          follower_profile_id: me,
-        });
+        console.error(
+          "Cannot create notifications: followerProfile.user_id is missing",
+          {
+            followerProfile,
+            follower_profile_id: me,
+          }
+        );
       } else if (!targetProfile.user_id) {
-        console.error("Cannot create notifications: targetProfile.user_id is missing", {
-          targetProfile,
-          following_profile_id: targetProfileId,
-        });
+        console.error(
+          "Cannot create notifications: targetProfile.user_id is missing",
+          {
+            targetProfile,
+            following_profile_id: targetProfileId,
+          }
+        );
       } else {
         try {
           // Use database function to bypass RLS (SECURITY DEFINER)
           // Use entity_type: 'post' to match database constraint and existing trigger pattern
           // The actual follow request info is stored in additional_data
-          
+
           // Notification for account owner (received request)
-          const { error: receivedError } = await supabase.rpc('create_notification', {
-            p_user_id: targetProfile.user_id, // Account owner (receives notification)
-            p_actor_id: followerProfile.user_id, // Follower (person requesting)
-            p_type: 'follow',
-            p_entity_type: 'post', // Use 'post' to match database constraint (matches existing trigger pattern)
-            p_entity_id: me, // Follower's profile ID
-            p_additional_data: {
-              follow_request_status: 'pending',
-              follower_profile_id: me,
-              following_profile_id: targetProfileId,
+          const { error: receivedError } = await supabase.rpc(
+            "create_notification",
+            {
+              p_user_id: targetProfile.user_id, // Account owner (receives notification)
+              p_actor_id: followerProfile.user_id, // Follower (person requesting)
+              p_type: "follow",
+              p_entity_type: "post", // Use 'post' to match database constraint (matches existing trigger pattern)
+              p_entity_id: me, // Follower's profile ID
+              p_additional_data: {
+                follow_request_status: "pending",
+                follower_profile_id: me,
+                following_profile_id: targetProfileId,
+              },
             }
-          });
+          );
 
           // Notification for requester (sent request)
-          const { error: sentError } = await supabase.rpc('create_notification', {
-            p_user_id: followerProfile.user_id, // Requester (receives notification)
-            p_actor_id: targetProfile.user_id, // Account owner
-            p_type: 'follow',
-            p_entity_type: 'post', // Use 'post' to match database constraint (matches existing trigger pattern)
-            p_entity_id: targetProfileId, // Account owner's profile ID
-            p_additional_data: {
-              follow_request_status: 'pending',
-              follower_profile_id: me,
-              following_profile_id: targetProfileId,
+          const { error: sentError } = await supabase.rpc(
+            "create_notification",
+            {
+              p_user_id: followerProfile.user_id, // Requester (receives notification)
+              p_actor_id: targetProfile.user_id, // Account owner
+              p_type: "follow",
+              p_entity_type: "post", // Use 'post' to match database constraint (matches existing trigger pattern)
+              p_entity_id: targetProfileId, // Account owner's profile ID
+              p_additional_data: {
+                follow_request_status: "pending",
+                follower_profile_id: me,
+                following_profile_id: targetProfileId,
+              },
             }
-          });
+          );
 
           if (receivedError || sentError) {
             console.error("Error creating follow request notifications:", {
@@ -498,7 +1286,9 @@ export async function follow(targetProfileId: string) {
               sentError,
             });
           } else {
-            console.log("Follow request notifications created successfully (received and sent)");
+            console.log(
+              "Follow request notifications created successfully (received and sent)"
+            );
           }
         } catch (notificationError) {
           console.error("Exception creating follow request notifications:", {
@@ -523,6 +1313,20 @@ export async function follow(targetProfileId: string) {
         console.error("Failed to enable notifications:", notificationError);
         // Don't fail the follow if notification setup fails
       }
+    }
+
+    // [OPTIMIZATION] Update cache with new follow status
+    try {
+      const { setCachedFollowStatus } = await import(
+        "../../lib/followStatusCache"
+      );
+      // Map followStatus to cache status
+      const cacheStatus: "pending" | "following" =
+        followStatus === "pending" ? "pending" : "following";
+      setCachedFollowStatus(me, targetProfileId, cacheStatus);
+    } catch (cacheError) {
+      console.warn("Failed to update follow status cache:", cacheError);
+      // Don't fail the follow if cache update fails
     }
 
     // Return the actual status created (pending or approved)
@@ -583,10 +1387,38 @@ export async function approveFollowRequest(
     // [OPTIMIZATION: Phase 2 - Cache] Update cache immediately when status changes
     // Why: Instant UI updates, prevents flickering, cache both sent and received statuses
     try {
-      const { setCachedFollowRequestStatus } = await import("../../lib/followRequestStatusCache");
+      const { setCachedFollowRequestStatus } = await import(
+        "../../lib/followRequestStatusCache"
+      );
       setCachedFollowRequestStatus(followerProfileId, me, "approved");
     } catch (cacheError) {
       console.error("Error updating follow request cache:", cacheError);
+      // Don't fail the approval if cache update fails
+    }
+
+    // [OPTIMIZATION] Update follow status cache
+    // Check if mutual follow (friends) or just following
+    try {
+      const { setCachedFollowStatus } = await import(
+        "../../lib/followStatusCache"
+      );
+      // Check if follower is also following the account owner (mutual follow)
+      const { data: mutualFollow } = await supabase
+        .from("follows")
+        .select("status")
+        .eq("follower_id", me)
+        .eq("following_id", followerProfileId)
+        .eq("status", "approved")
+        .maybeSingle();
+
+      const cacheStatus: "following" | "friends" = mutualFollow
+        ? "friends"
+        : "following";
+      setCachedFollowStatus(followerProfileId, me, cacheStatus);
+      // Also update reverse direction
+      setCachedFollowStatus(me, followerProfileId, cacheStatus);
+    } catch (cacheError) {
+      console.warn("Failed to update follow status cache:", cacheError);
       // Don't fail the approval if cache update fails
     }
 
@@ -598,11 +1430,7 @@ export async function approveFollowRequest(
         .select("user_id")
         .eq("id", followerProfileId)
         .single(),
-      supabase
-        .from("profiles")
-        .select("user_id")
-        .eq("id", me)
-        .single(),
+      supabase.from("profiles").select("user_id").eq("id", me).single(),
     ]);
 
     const followerProfile = followerProfileRes.data;
@@ -613,26 +1441,35 @@ export async function approveFollowRequest(
       try {
         // Use database function to bypass RLS (SECURITY DEFINER)
         // Use entity_type: 'post' to match database constraint and existing trigger pattern
-        const { error: notificationError } = await supabase.rpc('create_notification', {
-          p_user_id: followerProfile.user_id, // Requester (receives notification)
-          p_actor_id: ownerProfile.user_id, // Account owner (person who approved)
-          p_type: 'follow',
-          p_entity_type: 'post', // Use 'post' to match database constraint (matches existing trigger pattern)
-          p_entity_id: me, // Account owner's profile ID
-          p_additional_data: {
-            follow_request_status: 'approved',
-            follower_profile_id: followerProfileId,
-            following_profile_id: me,
+        const { error: notificationError } = await supabase.rpc(
+          "create_notification",
+          {
+            p_user_id: followerProfile.user_id, // Requester (receives notification)
+            p_actor_id: ownerProfile.user_id, // Account owner (person who approved)
+            p_type: "follow",
+            p_entity_type: "post", // Use 'post' to match database constraint (matches existing trigger pattern)
+            p_entity_id: me, // Account owner's profile ID
+            p_additional_data: {
+              follow_request_status: "approved",
+              follower_profile_id: followerProfileId,
+              following_profile_id: me,
+            },
           }
-        });
+        );
 
         if (notificationError) {
-          console.error("Error creating approval notification:", notificationError);
+          console.error(
+            "Error creating approval notification:",
+            notificationError
+          );
         } else {
           console.log("Approval notification created");
         }
       } catch (notificationError) {
-        console.error("Exception creating approval notification:", notificationError);
+        console.error(
+          "Exception creating approval notification:",
+          notificationError
+        );
         // Don't fail the approval if notification creation fails
       }
     }
@@ -707,10 +1544,25 @@ export async function declineFollowRequest(
     // [OPTIMIZATION: Phase 2 - Cache] Update cache immediately when status changes
     // Why: Instant UI updates, prevents flickering, cache both sent and received statuses
     try {
-      const { setCachedFollowRequestStatus } = await import("../../lib/followRequestStatusCache");
+      const { setCachedFollowRequestStatus } = await import(
+        "../../lib/followRequestStatusCache"
+      );
       setCachedFollowRequestStatus(followerProfileId, me, "declined");
     } catch (cacheError) {
       console.error("Error updating follow request cache:", cacheError);
+      // Don't fail the decline if cache update fails
+    }
+
+    // [OPTIMIZATION] Update follow status cache to "none"
+    try {
+      const { setCachedFollowStatus } = await import(
+        "../../lib/followStatusCache"
+      );
+      setCachedFollowStatus(followerProfileId, me, "none");
+      // Also update reverse direction
+      setCachedFollowStatus(me, followerProfileId, "none");
+    } catch (cacheError) {
+      console.warn("Failed to update follow status cache:", cacheError);
       // Don't fail the decline if cache update fails
     }
 
@@ -722,11 +1574,7 @@ export async function declineFollowRequest(
         .select("user_id")
         .eq("id", followerProfileId)
         .single(),
-      supabase
-        .from("profiles")
-        .select("user_id")
-        .eq("id", me)
-        .single(),
+      supabase.from("profiles").select("user_id").eq("id", me).single(),
     ]);
 
     const followerProfile = followerProfileRes.data;
@@ -737,21 +1585,27 @@ export async function declineFollowRequest(
         // Use database function to bypass RLS (SECURITY DEFINER)
         // Use entity_type: 'post' to match database constraint and existing trigger pattern
         // Note: We can't set is_read via create_notification function, so we'll create it and then mark as read
-        const { error: notificationError } = await supabase.rpc('create_notification', {
-          p_user_id: followerProfile.user_id, // Requester (receives notification)
-          p_actor_id: ownerProfile.user_id, // Account owner (person who declined)
-          p_type: 'follow',
-          p_entity_type: 'post', // Use 'post' to match database constraint (matches existing trigger pattern)
-          p_entity_id: me, // Account owner's profile ID
-          p_additional_data: {
-            follow_request_status: 'declined',
-            follower_profile_id: followerProfileId,
-            following_profile_id: me,
+        const { error: notificationError } = await supabase.rpc(
+          "create_notification",
+          {
+            p_user_id: followerProfile.user_id, // Requester (receives notification)
+            p_actor_id: ownerProfile.user_id, // Account owner (person who declined)
+            p_type: "follow",
+            p_entity_type: "post", // Use 'post' to match database constraint (matches existing trigger pattern)
+            p_entity_id: me, // Account owner's profile ID
+            p_additional_data: {
+              follow_request_status: "declined",
+              follower_profile_id: followerProfileId,
+              following_profile_id: me,
+            },
           }
-        });
+        );
 
         if (notificationError) {
-          console.error("Error creating decline notification:", notificationError);
+          console.error(
+            "Error creating decline notification:",
+            notificationError
+          );
         } else {
           console.log("Decline notification created");
           // Mark declined notifications as read (don't count as unread)
@@ -760,7 +1614,10 @@ export async function declineFollowRequest(
           // we'll mark it as read via a separate query (optional, non-critical)
         }
       } catch (notificationError) {
-        console.error("Exception creating decline notification:", notificationError);
+        console.error(
+          "Exception creating decline notification:",
+          notificationError
+        );
         // Don't fail the decline if notification creation fails
       }
     }
@@ -850,7 +1707,10 @@ export async function unfollow(targetProfileId: string) {
       .eq("following_id", targetProfileId)
       .maybeSingle();
 
-    console.log("Follow relationship check before unfollow:", { followRelationship, fetchError });
+    console.log("Follow relationship check before unfollow:", {
+      followRelationship,
+      fetchError,
+    });
 
     if (!followRelationship) {
       console.log("No follow relationship found");
@@ -891,7 +1751,7 @@ export async function unfollow(targetProfileId: string) {
           // We delete notifications where:
           // 1. Owner receives: user_id = followingUser, actor_id = followerUser, type = follow
           // 2. Requester receives: user_id = followerUser, actor_id = followingUser, type = follow
-          
+
           // Delete notification for account owner (received request)
           // Note: entity_type is 'post' to match database constraint (matches existing trigger pattern)
           await supabase
@@ -922,12 +1782,16 @@ export async function unfollow(targetProfileId: string) {
 
     // Clear caches after successful unfollow
     try {
-      const { clearCachedFollowStatus } = await import("../../lib/followStatusCache");
-      const { clearCachedFollowRequestStatus } = await import("../../lib/followRequestStatusCache");
-      
+      const { clearCachedFollowStatus } = await import(
+        "../../lib/followStatusCache"
+      );
+      const { clearCachedFollowRequestStatus } = await import(
+        "../../lib/followRequestStatusCache"
+      );
+
       // Clear follow status cache (clears all relationships for this profile)
       clearCachedFollowStatus(me);
-      
+
       // Clear follow request status cache if it was a pending request
       if (followRelationship?.status === "pending") {
         clearCachedFollowRequestStatus(me, targetProfileId);
@@ -967,7 +1831,9 @@ export async function updateProfilePrivacy(
 
     // Ensure the current user is the owner of the profile
     if (me !== profileId) {
-      console.error("Update privacy failed: Not authorized to update this profile.");
+      console.error(
+        "Update privacy failed: Not authorized to update this profile."
+      );
       return { error: { message: "Not authorized" } };
     }
 
@@ -1028,7 +1894,11 @@ export async function updateProfilePrivacy(
           .eq("following_id", profileId)
           .eq("status", "approved");
 
-        console.log(`Account went private. ${approvedCount ?? 0} existing approved followers will retain access.`);
+        console.log(
+          `Account went private. ${
+            approvedCount ?? 0
+          } existing approved followers will retain access.`
+        );
         // No database update needed - approved followers are already approved
       } catch (error) {
         console.error("Error checking existing followers:", error);
@@ -1051,7 +1921,10 @@ export async function updateProfilePrivacy(
           console.log("Pending requests auto-approved");
         }
       } catch (approveError) {
-        console.error("Exception auto-approving pending requests:", approveError);
+        console.error(
+          "Exception auto-approving pending requests:",
+          approveError
+        );
         // Don't fail the privacy update if auto-approve fails
       }
     }

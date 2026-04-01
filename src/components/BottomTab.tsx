@@ -1,27 +1,42 @@
-import { BsPersonFill } from "react-icons/bs";
-import { FaHome } from "react-icons/fa";
-import { IoGameController, IoNotifications } from "react-icons/io5";
-import { RiAddBoxFill } from "react-icons/ri";
+import {
+  PiBell,
+  PiHouseFill,
+  PiPlusBold,
+  PiPlusSquareFill,
+  PiUserCircleFill,
+} from "react-icons/pi";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../router/Paths";
 import AuthModal from "./modal/AuthModal";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import Avatar from "./ui/Avatar";
 import {
   getCachedAvatar,
   setCachedAvatar,
   preloadAvatar,
 } from "../lib/avatarCache";
+import { imgUrlPublic } from "../lib/img";
 import { supabase } from "../lib/supabaseClient";
 import { getUnreadNotificationCount } from "../api/services/notifications";
 import { dbg } from "../lib/authDebug";
 import { isDraftDirty, discardAllDrafts, hasAnyDraftData } from "../lib/drafts";
+import ConfirmDialog from "./ui/ConfirmDialog";
+import {
+  HOME_TAB_REFRESH_EVENT,
+  PROFILE_TAB_REFRESH_EVENT,
+  NOTIFICATIONS_TAB_REFRESH_EVENT,
+} from "../lib/homeRefreshEvents";
+import { useCreateChooser } from "../context/CreateChooserContext";
+import {
+  CREATE_FLOW_REQUEST_LEAVE_EVENT,
+  type CreateFlowRequestLeaveDetail,
+} from "../lib/createFlowLeaveRequest";
 
 function BottomTab() {
   const dispatch = useDispatch();
-  const navigate = useNavigate();
+  const navigate = useNavigate(); // [TAB ARCHITECTURE] Handles all navigation via URL changes
   const location = useLocation();
 
   const [myHandle, setMyHandle] = useState<string>(
@@ -31,6 +46,14 @@ function BottomTab() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const navTargetRef = useRef<null | (() => void)>(null);
+  const {
+    isOpen: createChooserOpen,
+    openChooser,
+    closeChooser,
+  } = useCreateChooser();
+  // [PHASE 1.2] Guard to prevent infinite loop in requireAuth
+  const requireAuthCallCountRef = useRef(0);
+  const requireAuthLastPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     const sync = () => {
@@ -86,6 +109,9 @@ function BottomTab() {
     const loadNotificationCount = async () => {
       if (isAuthedFinal) {
         try {
+          // [OPTIMIZATION] getUnreadNotificationCount() already checks cache first
+          // It will return cached value if not expired, or fetch if expired/missing
+          // RequestManager ensures deduplication if multiple calls happen simultaneously
           const count = await getUnreadNotificationCount();
           if (isActive) {
             setUnreadNotificationCount(count);
@@ -103,6 +129,8 @@ function BottomTab() {
     loadNotificationCount();
 
     // Refresh count when tab becomes visible (user might have read notifications elsewhere)
+    // [OPTIMIZATION] Cache-aware refresh: getUnreadNotificationCount() checks cache first
+    // Only makes network call if cache is expired (60s TTL) or missing
     const handleVisibilityChange = () => {
       if (!document.hidden && isAuthedFinal) {
         loadNotificationCount();
@@ -148,14 +176,57 @@ function BottomTab() {
     return Date.now() < until;
   };
 
+  // Logged-out variant: protected tabs only open AuthModal, never navigate to protected routes
+  const isLoggedOut = !isAuthedFinal && !suppressAuth();
+  const onProtectedTabClickLoggedOut = () => {
+    dispatch(setAuthModal(true));
+    if (location.pathname !== Paths.home) navigate(Paths.home);
+  };
+
   // If not authed (and not suppressed), show modal and keep user on feed
   const requireAuth = (nav: () => void) => {
+    // [PHASE 1.2] Guard against infinite loop - reset counter if path changed
+    if (requireAuthLastPathRef.current !== location.pathname) {
+      requireAuthCallCountRef.current = 0;
+      requireAuthLastPathRef.current = location.pathname;
+    }
+
+    requireAuthCallCountRef.current++;
+
+    // [PHASE 1.2] Prevent infinite loop - if called more than 5 times in a row, stop
+    if (requireAuthCallCountRef.current > 5) {
+      console.error(
+        "[CRITICAL] requireAuth called",
+        requireAuthCallCountRef.current,
+        "times in a row! Preventing infinite loop. Path:",
+        location.pathname
+      );
+      return; // Prevent infinite loop
+    }
+
     const suppressed = suppressAuth();
-    dbg("requireAuth", { isAuthedFinal, suppressed, path: location.pathname });
+    // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
+    // console.log(
+    //   "🟡 [NAV DEBUG] requireAuth called - isAuthedFinal:",
+    //   isAuthedFinal,
+    //   "suppressed:",
+    //   suppressed,
+    //   "current path:",
+    //   location.pathname
+    // );
     if (isAuthedFinal || suppressed) {
+      // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
+      // console.log(
+      //   "🟡 [NAV DEBUG] requireAuth - PASSED, executing nav callback"
+      // );
+      requireAuthCallCountRef.current = 0; // Reset counter on success
       nav();
       return;
     }
+    // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
+    // console.log(
+    //   "🟡 [NAV DEBUG] requireAuth - FAILED, redirecting to home or showing modal"
+    // );
     if (location.pathname !== Paths.home) navigate(Paths.home);
     dispatch(setAuthModal(true));
   };
@@ -213,16 +284,16 @@ function BottomTab() {
         return; // Use cached values if available, but don't make invalid query
       }
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("avatar_url, display_name")
-        .eq("user_id", authedId)
-        .single();
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+      // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
+      // getProfileByUserId() already returns avatar_url and display_name
+      const { getProfileByUserId } = await import("../api/services/follows");
+      const profile = await getProfileByUserId(authedId);
 
       if (!on) return;
 
-      const url = error ? null : data?.avatar_url ?? null;
-      const name = error ? null : data?.display_name ?? null;
+      const url = profile?.avatar_url ?? null;
+      const name = profile?.display_name ?? null;
 
       setAvatarUrl(url);
       setDisplayName(name);
@@ -258,15 +329,15 @@ function BottomTab() {
   useEffect(() => {
     const reload = async () => {
       if (!authedId) return;
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("avatar_url, display_name")
-        .eq("user_id", authedId)
-        .single();
 
-      if (error) return;
-      const url = data?.avatar_url ?? null;
-      const name = data?.display_name ?? null;
+      // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+      // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
+      const { getProfileByUserId } = await import("../api/services/follows");
+      const profile = await getProfileByUserId(authedId);
+
+      if (!profile) return;
+      const url = profile.avatar_url ?? null;
+      const name = profile.display_name ?? null;
 
       setAvatarUrl(url);
       setDisplayName(name);
@@ -305,13 +376,13 @@ function BottomTab() {
         window.requestAnimationFrame(() => {
           const delta = current - lastY.current;
 
-          // ignore tiny jitters
-          if (Math.abs(delta) > 6) {
-            if (delta > 0 && current > 60) {
-              // scrolling down
+          // Low threshold (4px) for instant response
+          if (Math.abs(delta) > 4) {
+            if (delta > 0 && current > 40) {
+              // scrolling down → hide (instant)
               setHidden(true);
             } else {
-              // scrolling up (or near top)
+              // scrolling up (or near top) → show
               setHidden(false);
             }
             lastY.current = current;
@@ -327,94 +398,138 @@ function BottomTab() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Safe helpers for optional routes (avoid TS errors + runtime crashes)
-  const toGames = (Paths as any).games ?? (Paths as any).game ?? null; // may not exist yet
+  // Hide: instant (75ms) with scale-down. Show: smooth ease-out (300ms)
+  const transitionClass = hidden
+    ? "duration-75 ease-out"
+    : "duration-300 ease-[cubic-bezier(0.33,1,0.68,1)]";
+  const transformClass = hidden
+    ? "translate-y-full scale-95 origin-bottom"
+    : "translate-y-0 scale-100 origin-bottom";
 
   const goProfile = () => {
-    // Always navigate to own profile page (not /u/:username)
-    navigate(Paths.profile);
+    if (import.meta.env.DEV) {
+      console.log("🎯 [NAV-DEBUG] goProfile:", {
+        currentPath: location.pathname,
+        targetPath: Paths.profileMe,
+      });
+    }
+    navigate(Paths.profileMe);
   };
 
-  // [FROSTED GLASS] Determine which icon is active based on current route
+  // [FROSTED GLASS] Determine which icon is active based on current route (Games tab removed)
   const getActiveIconIndex = (): number | null => {
     const path = location.pathname;
 
     // Home icon (index 0)
     if (path === Paths.home || path === "/") return 0;
 
-    // Games icon (index 1) - check if games route exists and matches
-    if (
-      toGames &&
-      (path === toGames ||
-        path.startsWith("/games") ||
-        path.startsWith("/game"))
-    )
-      return 1;
+    // Create icon (index 1)
+    if (path.startsWith("/create")) return 1;
 
-    // Create icon (index 2) - match all create routes
-    if (path.startsWith("/create")) return 2;
-
-    // Notifications icon (index 3)
+    // Notifications icon (index 2)
     if (
       path === Paths.notification ||
       path.startsWith("/notifications") ||
       path.startsWith("/notification")
     )
-      return 3;
+      return 2;
 
-    // Profile icon (index 4) - match own profile or other user profiles
+    // Profile icon (index 3)
     if (
       path === Paths.profile ||
       path === Paths.profileMe ||
       path === "/u/me" ||
       path.startsWith("/u/")
     )
-      return 4;
+      return 3;
 
     return null;
   };
 
-  const activeIconIndex = getActiveIconIndex();
+  /** When the create chooser overlay is open (still on e.g. Home), highlight + like Home/Notifs — not Home + Create both “active”. */
+  const activeIconIndex = createChooserOpen ? 1 : getActiveIconIndex();
 
-  const tryNavigateAwayFromCreate = (go: () => void) => {
-    const inCreate = location.pathname.startsWith("/create");
-    const editMode = localStorage.getItem("editPostData") !== null;
-    const dirty = isDraftDirty() && hasAnyDraftData();
+  const tryNavigateAwayFromCreate = useCallback(
+    (go: () => void) => {
+      const inCreate = location.pathname.startsWith("/create");
+      const editMode = localStorage.getItem("editPostData") !== null;
+      const dirty = isDraftDirty() && hasAnyDraftData();
 
-    if (inCreate && (dirty || editMode)) {
-      setIsEditMode(editMode);
-      navTargetRef.current = go;
-      setLeaveOpen(true);
+      if (inCreate && (dirty || editMode)) {
+        setIsEditMode(editMode);
+        navTargetRef.current = go;
+        setLeaveOpen(true);
+        return;
+      }
+      go();
+    },
+    [location.pathname]
+  );
+
+  useEffect(() => {
+    const onRequestLeave = (e: Event) => {
+      const ce = e as CustomEvent<CreateFlowRequestLeaveDetail>;
+      const go = ce.detail?.go;
+      if (typeof go !== "function") return;
+      tryNavigateAwayFromCreate(go);
+    };
+    window.addEventListener(
+      CREATE_FLOW_REQUEST_LEAVE_EVENT,
+      onRequestLeave as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        CREATE_FLOW_REQUEST_LEAVE_EVENT,
+        onRequestLeave as EventListener
+      );
+  }, [tryNavigateAwayFromCreate]);
+
+  // Logged-out: show auth modal instead of navigating (don't navigate to protected routes)
+  const handleProtectedClick = (nav: () => void) => {
+    if (isLoggedOut) {
+      onProtectedTabClickLoggedOut();
       return;
     }
-    go();
+    nav();
   };
 
   const menu = [
     {
-      icon: <FaHome />,
-      onClick: () => tryNavigateAwayFromCreate(() => navigate(Paths.home)),
+      icon: <PiHouseFill />,
+      onClick: () => {
+        closeChooser();
+        tryNavigateAwayFromCreate(() => {
+          const p = location.pathname;
+          const onHome = p === Paths.home || p === "/" || p === Paths.games;
+          if (onHome) {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            window.dispatchEvent(new CustomEvent(HOME_TAB_REFRESH_EVENT));
+            return;
+          }
+          navigate(Paths.home);
+        });
+      },
     },
     {
-      icon: <IoGameController />,
+      // Rendered specially in tab map: inactive = square+plus, active = plus on inverted pill
+      icon: <PiPlusSquareFill />,
       onClick: () =>
-        tryNavigateAwayFromCreate(() =>
-          requireAuth(() => {
-            if (toGames) navigate(toGames);
-          })
-        ),
-    },
-    {
-      icon: <RiAddBoxFill />,
-      onClick: () =>
-        requireAuth(() =>
-          tryNavigateAwayFromCreate(() => navigate(Paths.create))
+        handleProtectedClick(() =>
+          requireAuth(() =>
+            tryNavigateAwayFromCreate(() => {
+              if (createChooserOpen) {
+                closeChooser();
+                return;
+              }
+              openChooser();
+            })
+          )
         ),
     },
     {
       icon: (
         <div className="relative">
-          <IoNotifications />
+          <PiBell />
           {unreadNotificationCount > 0 && (
             <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center min-w-[20px]">
               {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
@@ -423,17 +538,25 @@ function BottomTab() {
         </div>
       ),
       onClick: () =>
-        tryNavigateAwayFromCreate(() =>
-          requireAuth(() => {
-            // Always navigate to notifications and reset filter to "all"
-            navigate(Paths.notification);
-            // Dispatch an event to reset the filter
-            window.dispatchEvent(
-              new CustomEvent("notification:resetFilter", {
-                detail: { filter: "all" },
-              })
-            );
-          })
+        handleProtectedClick(() =>
+          tryNavigateAwayFromCreate(() =>
+            requireAuth(() => {
+              closeChooser();
+              const p = location.pathname;
+              const onNotif =
+                p === Paths.notification ||
+                p.startsWith("/notifications") ||
+                p.startsWith("/notification");
+              if (onNotif) {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+                window.dispatchEvent(
+                  new CustomEvent(NOTIFICATIONS_TAB_REFRESH_EVENT)
+                );
+                return;
+              }
+              navigate(Paths.notification);
+            })
+          )
         ),
     },
     {
@@ -441,145 +564,218 @@ function BottomTab() {
         <Avatar
           url={avatarUrl || undefined}
           name={displayName || " "}
-          size={28}
-          userId={authedId || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
+          size={32}
+          userId={authedId || null}
         />
       ) : (
-        <BsPersonFill />
+        <PiUserCircleFill />
       ),
       onClick: () =>
-        tryNavigateAwayFromCreate(() => requireAuth(() => goProfile())),
+        handleProtectedClick(() =>
+          tryNavigateAwayFromCreate(() =>
+            requireAuth(() => {
+              closeChooser();
+              const p = location.pathname;
+              const onOwnProfile =
+                p === Paths.profileMe ||
+                p === Paths.profile ||
+                p === "/u/me" ||
+                p === Paths.me;
+              // Only "already on my profile" matches home-tab behavior (scroll + refresh).
+              // Other /u/:username routes must still navigate to /u/me via goProfile().
+              if (onOwnProfile) {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+                window.dispatchEvent(
+                  new CustomEvent(PROFILE_TAB_REFRESH_EVENT)
+                );
+                return;
+              }
+              goProfile();
+            })
+          )
+        ),
     },
   ];
 
   return (
-    <div
-      id="bottom-tab"
-      data-bottomtab
-      className={[
-        "fixed left-0 right-0 bottom-0 z-40 border-t border-[var(--border)]",
-        "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-        "transition-transform duration-300",
-        hidden ? "translate-y-[110%]" : "translate-y-0",
-      ].join(" ")}
-    >
+    <>
       <AuthModal />
+      {/* Gradient: flush with physical screen bottom (1px overlap to eliminate subpixel gap) */}
+      <div
+        className={[
+          "fixed left-0 right-0 z-[35] pointer-events-none",
+          `transition-all ${transitionClass}`,
+          transformClass,
+        ].join(" ")}
+        style={{
+          bottom: "calc(-1px + -1 * var(--safe-area-bottom-layout))",
+          height: "calc(66px + var(--safe-area-bottom-layout))",
+          width: "100%",
+          background: "var(--gradient-from-bottom)",
+        }}
+      />
+      {/* System nav / home-indicator strip: theme fade so content does not read through buttons */}
+      <div
+        className={[
+          "fixed left-0 right-0 z-[37] pointer-events-none",
+          `transition-all ${transitionClass}`,
+          transformClass,
+        ].join(" ")}
+        style={{
+          bottom: 0,
+          height: "var(--safe-area-bottom-layout)",
+          background: "var(--gradient-bottom-system-scrim)",
+        }}
+        aria-hidden
+      />
+      {/* Wrapper: tab pill only. Hide: instant + scale. Show: smooth ease-out. */}
+      <div
+        className={[
+          "fixed left-0 right-0 bottom-0 z-40 min-h-[80px] pointer-events-none flex flex-col justify-end",
+          `transition-all ${transitionClass}`,
+          transformClass,
+        ].join(" ")}
+      >
+        {/* Tab pill: content-sized, full rounded pill, visible outline */}
+        <div
+          id="bottom-tab"
+          data-bottomtab
+          className={[
+            "absolute left-1/2 -translate-x-1/2 z-40 pointer-events-auto",
+            "rounded-full",
+            "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+            "border border-[var(--bottom-tab-border)]",
+          ].join(" ")}
+          style={{
+            bottom: "calc(5px + var(--safe-area-bottom-layout))",
+          }}
+        >
+          <div className="py-[5px] px-[5px] flex items-center justify-center gap-2">
+            {menu.map((item, index) => {
+              const isActive = activeIconIndex === index;
+              /** True create flow route: inverted white pill. Overlay-only: same frosted pill as Home/Notifs. */
+              const createRouteActive = inCreate && !createChooserOpen;
 
-      <div className="max-w-[640px] mx-auto px-[var(--gutter)]">
-        <div className="pt-2 pb-2 flex px-4 items-center justify-between min-h-[50px]">
-          {menu.map((item, index) => {
-            const isActive = activeIconIndex === index;
-
-            return (
-              <button
-                key={index}
-                onClick={item.onClick}
-                className="relative text-[var(--text)] text-[24px] transition-all flex items-center justify-center"
-                aria-label={`tab-${index}`}
-              >
-                {/* Always use consistent container size to prevent layout jumping - reduced from w-14 h-14 to w-12 h-12 */}
-                <div
-                  className={`flex items-center justify-center w-12 h-12 rounded-lg transition-all ${
-                    isActive
-                      ? "bg-[var(--glass-active-bg)] backdrop-blur-[var(--glass-blur)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
-                      : "border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
-                  }`}
-                >
-                  {/* Special wrapper for Avatar to ensure proper centering - only apply when Avatar is present */}
-                  {index === 4 && shouldShowAvatar ? (
-                    // Profile icon (Avatar) - use special wrapper to fix inline-block alignment issue
-                    <div className="bottom-tab-avatar-wrapper flex items-center justify-center w-full h-full">
-                      {item.icon}
-                    </div>
-                  ) : (
-                    // Regular icons (including BsPersonFill when not logged in)
-                    <div className="flex items-center justify-center">
-                      {item.icon}
-                    </div>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{ height: "env(safe-area-inset-bottom)" }} />
-      {leaveOpen && (
-        <div className="fixed inset-0 z-[1000]">
-          <div
-            className="absolute inset-0 bg-black/50"
-            onClick={() => setLeaveOpen(false)}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 mx-auto max-w-[640px]
-                    rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)]
-                    p-4"
-          >
-            <div className="text-sm font-semibold mb-1">
-              {isEditMode ? "Exit edit mode?" : "Save draft?"}
-            </div>
-            <p className="text-xs text-[var(--text)]/70 mb-3">
-              {isEditMode
-                ? "You're leaving the edit flow. All your changes will not be saved."
-                : "You're leaving the create flow. Save your progress as a draft, discard it, or stay here."}
-            </p>
-            <div className="flex gap-2">
-              <button
-                className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs"
-                onClick={() => setLeaveOpen(false)}
-              >
-                Stay
-              </button>
-              {isEditMode ? (
+              return (
                 <button
-                  className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-semibold"
-                  onClick={() => {
-                    localStorage.removeItem("editPostData");
-                    setLeaveOpen(false);
-                    const go = navTargetRef.current;
-                    navTargetRef.current = null;
-                    go && go();
-                  }}
+                  key={index}
+                  onClick={item.onClick}
+                  className={`relative text-[var(--text)] transition-all flex items-center justify-center shrink-0 ${
+                    index === 3 ? "bottom-tab-profile-btn" : ""
+                  }`}
+                  aria-label={`tab-${index}`}
                 >
-                  Exit
+                  {/* Same pill size for active and inactive - no shifting when switching tabs */}
+                  <div
+                    className={`flex items-center justify-center h-10 min-w-[60px] px-4 rounded-full relative overflow-hidden ${
+                      index === 1 ? "transition-none" : "transition-colors"
+                    } ${
+                      isActive
+                        ? index === 1 && createRouteActive
+                          ? "bg-[var(--bottom-tab-create-active-bg)] border border-[var(--bottom-tab-create-active-bg)] shadow-[var(--glass-active-shadow)]"
+                          : index === 1 && !createRouteActive
+                          ? "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
+                          : index === 3 && imgUrlPublic(avatarUrl)
+                          ? "shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
+                          : "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
+                        : "bg-transparent border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
+                    }`}
+                  >
+                    {/* Profile tab active: blurred avatar as faint "mirror" background. Same URL as Avatar img = browser cache reuse, no extra egress */}
+                    {isActive && index === 3 && imgUrlPublic(avatarUrl) && (
+                      <div
+                        className="absolute inset-0 rounded-full"
+                        style={{
+                          backgroundImage: `url(${imgUrlPublic(avatarUrl)})`,
+                          backgroundSize: "250%",
+                          backgroundPosition: "center",
+                          filter: "blur(4px)",
+                          opacity: 0.88,
+                        }}
+                        aria-hidden
+                      />
+                    )}
+                    {/* Profile tab active but no avatar: fallback to solid pill */}
+                    {isActive && index === 3 && !imgUrlPublic(avatarUrl) && (
+                      <div
+                        className="absolute inset-0 rounded-full bg-[var(--bottom-tab-active-bg)]"
+                        aria-hidden
+                      />
+                    )}
+                    <div className="relative z-10 flex items-center justify-center w-full h-full">
+                      {index === 3 && shouldShowAvatar ? (
+                        <div className="bottom-tab-avatar-wrapper bottom-tab-profile-avatar flex items-center justify-center w-full h-full">
+                          {item.icon}
+                        </div>
+                      ) : index === 1 ? (
+                        /* Create: route /create = inverted pill + bold plus; overlay open = same frosted pill as Home + bold plus */
+                        <div
+                          className={`flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0 [&_svg]:origin-center transition-transform duration-200 ease-out ${
+                            isActive && createRouteActive
+                              ? "text-[var(--bottom-tab-create-active-fg)] scale-[1.07]"
+                              : isActive
+                              ? "text-[var(--text)] scale-[1.05]"
+                              : "text-[var(--text)] scale-[0.93]"
+                          }`}
+                        >
+                          {isActive ? <PiPlusBold /> : <PiPlusSquareFill />}
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0">
+                          {item.icon}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </button>
-              ) : (
-                <>
-                  <button
-                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--brand)] text-[var(--brand-ink)] text-xs font-semibold border border-[var(--brand)]"
-                    onClick={() => {
-                      // "Save" = keep localStorage drafts (you already auto-save)
-                      setLeaveOpen(false);
-                      const go = navTargetRef.current;
-                      navTargetRef.current = null;
-                      go && go();
-                    }}
-                  >
-                    Save draft
-                  </button>
-                  <button
-                    className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs"
-                    onClick={() => {
-                      discardAllDrafts();
-                      setLeaveOpen(false);
-                      const go = navTargetRef.current;
-                      navTargetRef.current = null;
-                      go && go();
-                    }}
-                  >
-                    Discard
-                  </button>
-                </>
-              )}
-            </div>
+              );
+            })}
           </div>
         </div>
-      )}
-
-      {/* AuthModal for global use */}
-      <AuthModal />
-    </div>
+      </div>
+      <ConfirmDialog
+        open={leaveOpen}
+        onClose={() => setLeaveOpen(false)}
+        title={isEditMode ? "Exit edit mode?" : "Save draft?"}
+        message={
+          isEditMode
+            ? "You're leaving the edit flow. All your changes will not be saved."
+            : "You're leaving the create flow. Save your progress as a draft, discard it, or stay here."
+        }
+        cancelLabel="Stay"
+        {...(isEditMode
+          ? {
+              confirmLabel: "Exit",
+              confirmVariant: "danger" as const,
+              onConfirm: () => {
+                localStorage.removeItem("editPostData");
+                setLeaveOpen(false);
+                const go = navTargetRef.current;
+                navTargetRef.current = null;
+                go?.();
+              },
+            }
+          : {
+              secondaryLabel: "Save draft",
+              onSecondary: () => {
+                setLeaveOpen(false);
+                const go = navTargetRef.current;
+                navTargetRef.current = null;
+                go?.();
+              },
+              secondaryVariant: "primary" as const,
+              confirmLabel: "Discard",
+              confirmVariant: "default" as const,
+              onConfirm: () => {
+                discardAllDrafts();
+                setLeaveOpen(false);
+                const go = navTargetRef.current;
+                navTargetRef.current = null;
+                go?.();
+              },
+            })}
+      />
+    </>
   );
 }
 

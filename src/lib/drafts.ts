@@ -1,4 +1,9 @@
 export const DRAFT_KEYS = ["draftMeta", "draftActivities", "draftCategories"];
+
+/** Returns true if id is falsy, "draft", or "draft-*". Use to skip DB/RPC for draft previews. */
+export function isDraftPostId(id?: string | null): boolean {
+  return !id || id === "draft" || id.startsWith("draft-");
+}
 const DIRTY_FLAG = "draftDirty";
 
 export function markDraftDirty() {

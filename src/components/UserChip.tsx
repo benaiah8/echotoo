@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { getViewerAuthUserId } from "../api/services/follows";
 
 export default function UserChip() {
   const [email, setEmail] = useState<string | null>(null);
@@ -8,9 +9,10 @@ export default function UserChip() {
     let mounted = true;
 
     const load = async () => {
-      const { data } = await supabase.auth.getUser();
+      // Use getSession() instead of getUser() - faster and no extra query
+      const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      setEmail(data.user?.email ?? null);
+      setEmail(data.session?.user?.email ?? null);
     };
 
     load();

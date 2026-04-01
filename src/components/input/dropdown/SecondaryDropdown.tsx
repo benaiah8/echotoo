@@ -1,5 +1,5 @@
-import React, { useRef, useState } from "react";
-import { IoIosArrowDown, IoIosCheckmark } from "react-icons/io";
+import React, { useRef, useState, type ReactNode } from "react";
+import { PiCaretDown, PiCheck } from "react-icons/pi";
 import DropdownContainer from "./DropdownContainer";
 
 interface Option {
@@ -21,6 +21,16 @@ interface Props {
   options: Option[];
   className?: string;
   dropdownClassName?: string;
+  /** Replaces default trigger chrome (border, height, padding). Portal/dropdown unchanged. */
+  triggerClassName?: string;
+  /** Optional icon or element before the label (e.g. search affordance). */
+  triggerPrefix?: ReactNode;
+  /**
+   * Create-flow / Activities: themed menu surface, search row, and option rows
+   * (portal positioning unchanged).
+   */
+  createFlowMenu?: boolean;
+  disabled?: boolean;
 }
 
 const SecondaryDropdown: React.FC<Props> = ({
@@ -33,6 +43,10 @@ const SecondaryDropdown: React.FC<Props> = ({
   options,
   className = "",
   dropdownClassName = "",
+  triggerClassName,
+  triggerPrefix,
+  createFlowMenu = false,
+  disabled = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -71,14 +85,50 @@ const SecondaryDropdown: React.FC<Props> = ({
       : label || "Select"
     : selectedSingle?.label || label || "Select";
 
+  const menuShellClass = createFlowMenu
+    ? "flex w-full min-w-[260px] max-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl text-[var(--text)]"
+    : "flex w-fit max-w-[320px] flex-col text-[var(--text)]";
+
+  const searchClass = createFlowMenu
+    ? "w-full border-b border-[var(--border)]/50 bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] px-3 py-2.5 text-xs text-[var(--text)] placeholder:text-[var(--text)]/38 outline-none transition focus-visible:bg-[color-mix(in_oklab,var(--surface)_30%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/35"
+    : "border-b border-gray-500 bg-transparent px-3 py-2 text-sm outline-none";
+
+  const optionBtnClass = (isSelected: boolean) =>
+    createFlowMenu
+      ? [
+          "mx-1 flex w-[calc(100%-8px)] items-center justify-between rounded-lg px-3 py-2 text-left text-xs text-[var(--text)]/92 transition",
+          "hover:bg-[color-mix(in_oklab,var(--surface)_42%,transparent)] active:scale-[0.99] active:bg-[color-mix(in_oklab,var(--surface)_32%,transparent)]",
+          isSelected
+            ? "bg-[color-mix(in_oklab,var(--surface)_28%,transparent)]"
+            : "",
+        ].join(" ")
+      : `px-4 py-2 text-left text-xs w-full flex items-center justify-between ${
+          isSelected ? "hover:bg-[rgba(255,255,255,0.08)]" : ""
+        }`;
+
+  const emptyClass = createFlowMenu
+    ? "px-4 py-3 text-xs text-[var(--text)]/45"
+    : "px-4 py-2 text-sm text-gray-400";
+
+  const portalMenuClass = createFlowMenu
+    ? `!max-h-none !overflow-hidden min-w-[260px] max-w-[min(320px,calc(100vw-32px))] !rounded-xl !border !border-[var(--border)]/50 !bg-[var(--surface-2)] !text-[var(--text)] !shadow-[0_12px_40px_rgba(0,0,0,0.14)] dark:!shadow-[0_12px_40px_rgba(0,0,0,0.45] ${dropdownClassName}`
+    : `w-fit ${dropdownClassName}`;
+
+  const defaultTrigger =
+    "flex h-10 w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2";
+  const triggerMerged = triggerClassName
+    ? [triggerClassName, triggerPrefix ? "gap-2" : ""].filter(Boolean).join(" ")
+    : defaultTrigger;
+
   return (
     <DropdownContainer
       className={className}
-      dropdownClassName={`w-fit ${dropdownClassName}`}
+      dropdownClassName={portalMenuClass}
       left
+      disabled={disabled}
       parentToggle={handleParentToggle}
       dropdown={(closeDropdown) => (
-        <div className="flex flex-col w-fit max-w-[320px] text-[var(--text)]">
+        <div className={menuShellClass}>
           {showSearch && (
             <input
               ref={searchInputRef}
@@ -86,10 +136,16 @@ const SecondaryDropdown: React.FC<Props> = ({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search..."
-              className="px-3 py-2 text-sm border-b border-gray-500 outline-none bg-transparent"
+              className={searchClass}
             />
           )}
-          <div className="max-h-56 overflow-y-auto scroll-hide">
+          <div
+            className={
+              createFlowMenu
+                ? "max-h-56 scroll-hide overflow-y-auto py-1"
+                : "max-h-56 scroll-hide overflow-y-auto"
+            }
+          >
             {filtered.length > 0 ? (
               filtered.map((option) => {
                 const isSelected = multi
@@ -99,9 +155,8 @@ const SecondaryDropdown: React.FC<Props> = ({
                 return (
                   <button
                     key={option.value}
-                    className={`px-4 py-2 text-left text-xs w-full flex items-center justify-between ${
-                      isSelected ? "hover:bg-[rgba(255,255,255,0.08)]" : ""
-                    }`}
+                    type="button"
+                    className={optionBtnClass(isSelected)}
                     onClick={() => {
                       if (multi) {
                         toggleMulti(option.value);
@@ -113,22 +168,21 @@ const SecondaryDropdown: React.FC<Props> = ({
                     }}
                   >
                     <span>{option.label}</span>
-                    {multi && isSelected && <IoIosCheckmark />}
+                    {multi && isSelected && <PiCheck />}
                   </button>
                 );
               })
             ) : (
-              <div className="px-4 py-2 text-sm text-gray-400">
-                No matches found
-              </div>
+              <div className={emptyClass}>No matches found</div>
             )}
           </div>
 
           {multi && (
-            <div className="p-2 border-t border-[var(--border)]">
+            <div className="border-t border-[var(--border)] p-2">
               <button
+                type="button"
                 onClick={() => closeDropdown()}
-                className="w-full py-2 text-xs bg-primary text-black rounded"
+                className="w-full rounded py-2 text-xs bg-primary text-black"
               >
                 Done
               </button>
@@ -137,9 +191,18 @@ const SecondaryDropdown: React.FC<Props> = ({
         </div>
       )}
     >
-      <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-[var(--border)] w-full h-10">
+      <div className={triggerMerged}>
+        {triggerPrefix ? (
+          <span className="pointer-events-none flex shrink-0 items-center">
+            {triggerPrefix}
+          </span>
+        ) : null}
         <span
-          className={`text-sm ${
+          className={`${
+            triggerClassName
+              ? "min-w-0 flex-1 text-left text-[11px] font-medium leading-snug"
+              : "text-sm"
+          } ${
             value || values.length
               ? "text-[var(--text)]"
               : "text-[var(--text)]/60"
@@ -147,8 +210,8 @@ const SecondaryDropdown: React.FC<Props> = ({
         >
           {displayLabel}
         </span>
-        <IoIosArrowDown
-          className={`transition-all ${open ? "rotate-180" : ""}`}
+        <PiCaretDown
+          className={`shrink-0 transition-all ${open ? "rotate-180" : ""}`}
         />
       </div>
     </DropdownContainer>

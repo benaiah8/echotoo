@@ -1,5 +1,6 @@
 // Avatar cache to reduce egress
 // [OPTIMIZATION: Phase 3.2] Migrated to StorageManager for better performance and Capacitor support
+import { imgUrlPublic } from "./img";
 import { getStorageManager } from "./storage/StorageManager";
 import { getCacheDurationMultiplier } from "./connectionAware";
 
@@ -20,7 +21,11 @@ function getCacheDuration(): number {
 }
 
 // [OPTIMIZATION: Phase 3.2] Get StorageManager instance (with fallback)
-function getStorage(): { get: (key: string) => Promise<any>; set: (key: string, value: any, ttl?: number) => Promise<void>; delete: (key: string) => Promise<void> } | null {
+function getStorage(): {
+  get: (key: string) => Promise<any>;
+  set: (key: string, value: any, ttl?: number) => Promise<void>;
+  delete: (key: string) => Promise<void>;
+} | null {
   try {
     return getStorageManager();
   } catch {
@@ -97,12 +102,16 @@ export function setCachedAvatar(userId: string, url: string): void {
     // [OPTIMIZATION: Phase 3.2] Store in StorageManager (primary path)
     if (storage) {
       storage.set(storageKey, entry, ttl).catch((error) => {
-        console.warn("[AvatarCache] StorageManager failed, using localStorage fallback:", error);
+        console.warn(
+          "[AvatarCache] StorageManager failed, using localStorage fallback:",
+          error
+        );
       });
     }
 
     // [OPTIMIZATION: Phase 3.2] Also store in legacy localStorage (for backward compatibility and sync access)
-    const cache = getFromLocalStorageLegacy<AvatarCache>(AVATAR_CACHE_KEY) || {};
+    const cache =
+      getFromLocalStorageLegacy<AvatarCache>(AVATAR_CACHE_KEY) || {};
     cache[userId] = entry;
     setToLocalStorageLegacy(AVATAR_CACHE_KEY, cache);
   } catch (error) {
@@ -113,8 +122,11 @@ export function setCachedAvatar(userId: string, url: string): void {
 export function preloadAvatar(url: string): void {
   if (!url) return;
 
+  const resolved = imgUrlPublic(url);
+  if (!resolved) return;
+
   const img = new Image();
-  img.src = url;
+  img.src = resolved;
 }
 
 // [OPTIMIZATION: Phase 3 - Cache] Clear cached avatar for a specific user

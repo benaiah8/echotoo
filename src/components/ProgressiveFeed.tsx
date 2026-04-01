@@ -34,6 +34,7 @@ import {
 import { onPostChanged } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
+import { batchFetchActivitiesForPosts } from "../api/services/activitiesBatch";
 
 export interface ProgressiveFeedProps<T> {
   // Data loading
@@ -183,6 +184,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const loadingRef = useRef(false);
   const offsetRef = useRef(initialOffset); // Initialize with calculated offset
   const initialLoadCompleteRef = useRef(false); // Track if initial load has completed
+  const initialLoadRunCountRef = useRef(0);
+  const initialLoadGuardRef = useRef(false);
 
   // [FIX] Track current items via ref for cache updates
   // This avoids calling setCachedItems inside setItems callback (causes infinite loops)
@@ -201,6 +204,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const PREFETCH_PX = 600;
   const MAX_CHAINED_LOADS = 1; // One chain max - prevents rapid multiple RPCs
   const chainCountRef = useRef(0);
+
+  // [HASMORE] Track consecutive short pages to avoid infinite loading when backend keeps returning < limit
+  const shortPageStreakRef = useRef(0);
 
   // [PASS 2] Mount + visibility guards: track scheduled work and clear on hide/unmount
   const mountedRef = useRef(true);
@@ -244,7 +250,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const logId = logIdRef.current;
 
   // [DEBUG] Toggle for console noise - [STEP 1] TEMP: Enable for repro
-  const DEBUG_PF = true;
+  const DEBUG_PF = false;
 
   // [FIX] Keep itemsRef in sync with items state
   // This allows us to read current items without using setItems callback
@@ -296,6 +302,20 @@ export default function ProgressiveFeed<T extends { id: string }>({
       clearScheduled();
     }
   }, [isVisible, clearScheduled]);
+
+  /**
+   * Persistent tabs: when hidden, clear guard/loading. Use itemsRef (not items in deps) so
+   * hidden feeds aren’t touched on every items update from other tabs / background completes.
+   */
+  useEffect(() => {
+    if (isVisible) return;
+    initialLoadGuardRef.current = false;
+    loadingRef.current = false;
+    setIsLoadingMore(false);
+    if (itemsRef.current.length === 0) {
+      initialLoadCompleteRef.current = false;
+    }
+  }, [isVisible]);
 
   // Component mount tracking (removed excessive logs)
   useEffect(() => {
@@ -515,8 +535,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
       const loadResult = await loadWithRetry();
 
       // [PAGINATION FIX] Normalize result - offset/hasMore use backend rows only, never client dedupe
-      const { items: fetchedItems, consumedOffset, count } =
-        normalizeLoadResult(loadResult);
+      const {
+        items: fetchedItems,
+        consumedOffset,
+        count,
+      } = normalizeLoadResult(loadResult);
 
       const oldOffset = offsetRef.current;
       const requestedLimit = actualPageSize;
@@ -527,32 +550,42 @@ export default function ProgressiveFeed<T extends { id: string }>({
       const nextOffset = oldOffset + backendConsumed;
       offsetRef.current = nextOffset;
 
-      // Rule 3 — hasMore from backend count/limit, NOT from dedupe results
+      // Rule 3 — hasMore: do NOT rely on count unless plausibly a true total
+      // count often equals page size (e.g. count=5 with 5 posts), not total
       let nextHasMore: boolean;
       if (fetchedLen === 0) {
-        nextHasMore = false; // End reached
-      } else if (count != null) {
+        nextHasMore = false;
+        shortPageStreakRef.current = 0;
+      } else if (
+        count != null &&
+        count > requestedLimit &&
+        count >= nextOffset
+      ) {
+        // Plausibly a true total: use it
         nextHasMore = nextOffset < count;
+        shortPageStreakRef.current = 0;
+      } else if (fetchedLen >= requestedLimit) {
+        nextHasMore = true;
+        shortPageStreakRef.current = 0;
       } else {
-        nextHasMore = fetchedLen >= requestedLimit; // No count: assume more if full page
+        // fetchedLen < requestedLimit: short page, don't end early unless streak >= 2
+        shortPageStreakRef.current += 1;
+        nextHasMore = shortPageStreakRef.current < 2;
       }
       setHasMore(nextHasMore);
 
-      // [DEBUG] One log per successful fetch
       if (DEBUG_PF) {
-        const existingIds = new Set(itemsRef.current.map((p) => p.id));
-        const addedUnique = fetchedItems.filter((i) => !existingIds.has(i.id))
-          .length;
-        console.log("[PF] loadMore result", {
-          logId,
-          requestedLimit,
-          oldOffset,
-          fetchedLen,
-          addedUnique,
-          nextOffset,
-          count: count ?? "n/a",
-          hasMore: nextHasMore,
-        });
+        const ids = fetchedItems.map((i) => i.id);
+        const first5 = ids.slice(0, 5).join(",");
+        const last5 = ids.length > 5 ? ids.slice(-5).join(",") : "";
+        const idsStr = ids.length <= 5 ? first5 : `${first5}...${last5}`;
+        console.log(
+          `[PF] page | requestedLimit=${requestedLimit} oldOffset=${oldOffset} fetchedLen=${fetchedLen} consumedOffset=${consumedOffset} nextOffset=${nextOffset} count=${
+            count ?? "n/a"
+          } shortStreak=${
+            shortPageStreakRef.current
+          } hasMore=${nextHasMore} ids=${idsStr}`
+        );
       }
 
       if (fetchedLen === 0) {
@@ -572,6 +605,17 @@ export default function ProgressiveFeed<T extends { id: string }>({
           timeoutId = null;
         }
 
+        // Kick off batch activities fetch BEFORE setItems (feed returns first_image_url only; batch gets full carousel)
+        const idsNeedingActivities = fetchedItems
+          .filter(
+            (item: T & { activity_count?: number }) =>
+              (item.activity_count ?? 0) > 0
+          )
+          .map((item) => item.id);
+        if (idsNeedingActivities.length > 0) {
+          batchFetchActivitiesForPosts(idsNeedingActivities);
+        }
+
         // [ORDERING] Keep prev in stable order, append only truly-new items (dedupe by id)
         setItems((prev) => {
           const existingIds = new Set(prev.map((p) => p.id));
@@ -581,6 +625,18 @@ export default function ProgressiveFeed<T extends { id: string }>({
           const merged = [...prev, ...toAppend];
           if (maxItems > 0 && merged.length >= maxItems) {
             setHasMore(false);
+          }
+          // [TASK B] Feed pipeline debug - items appended vs deduped, final UI length
+          if (DEBUG_PF) {
+            const dedupedCount = fetchedItems.length - toAppend.length;
+            console.log("[FeedPipeline] ProgressiveFeed setItems", {
+              logId,
+              prevLen: prev.length,
+              fetchedLen: fetchedItems.length,
+              appended: toAppend.length,
+              deduped: dedupedCount,
+              mergedLen: merged.length,
+            });
           }
           return merged;
         });
@@ -647,6 +703,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
         clearTimeout(timeoutId);
         timeoutId = null;
       }
+      console.log("[PF loadMore] finally", {
+        offsetRef: offsetRef.current,
+        inFlightOffsetsRef: Array.from(inFlightOffsetsRef.current),
+        loadingRef: loadingRef.current,
+        isLoadingMore,
+      });
       // [PASS 2 C] Post-load scheduling removed. Rely on IO + user scroll for more loads.
     }
   }, [
@@ -692,10 +754,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   // [REMOVED] SWR data update effect - SWR is disabled to prevent conflicts
 
-  // [DIAGNOSTIC] Track initial load effect runs
-  const initialLoadRunCountRef = useRef(0);
-  const initialLoadGuardRef = useRef(false);
-
   // Initial load: fill viewport if no initial items
   // [FIX] Check cache in useEffect, not during render
   // This prevents re-render loops when getCachedItems reference changes
@@ -727,6 +785,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   useEffect(() => {
     if (!isVisible) return;
+
+    if (items.length === 0 && initialLoadCompleteRef.current) {
+      initialLoadCompleteRef.current = false;
+    }
 
     initialLoadRunCountRef.current += 1;
 
@@ -761,45 +823,68 @@ export default function ProgressiveFeed<T extends { id: string }>({
         logFetchStart("ProgressiveFeed", tabId, isVisible, undefined);
         loadItems(0, initialLoadSize)
           .then((loadResult) => {
-            const { items: fetchedItems, consumedOffset, count } =
-              normalizeLoadResult(loadResult);
+            const {
+              items: fetchedItems,
+              consumedOffset,
+              count,
+            } = normalizeLoadResult(loadResult);
 
             const fetchedLen = fetchedItems.length;
             const requestedLimit = initialLoadSize;
+            const oldOffset = 0;
+            const nextOffset = consumedOffset;
 
             // Rule 1 — Backend offset: advance by backend rows consumed
             offsetRef.current = consumedOffset;
 
-            // Rule 3 — hasMore from backend count/limit
+            // Rule 3 — hasMore: do NOT rely on count unless plausibly a true total
             let nextHasMore: boolean;
             if (fetchedLen === 0) {
               nextHasMore = false;
-            } else if (count != null) {
-              nextHasMore = consumedOffset < count;
+              shortPageStreakRef.current = 0;
+            } else if (
+              count != null &&
+              count > requestedLimit &&
+              count >= nextOffset
+            ) {
+              nextHasMore = nextOffset < count;
+              shortPageStreakRef.current = 0;
+            } else if (fetchedLen >= requestedLimit) {
+              nextHasMore = true;
+              shortPageStreakRef.current = 0;
             } else {
-              nextHasMore = fetchedLen >= requestedLimit;
+              shortPageStreakRef.current += 1;
+              nextHasMore = shortPageStreakRef.current < 2;
             }
             setHasMore(nextHasMore);
 
             if (DEBUG_PF) {
-              const existingIds = new Set(itemsRef.current.map((p) => p.id));
-              const addedUnique = fetchedItems.filter(
-                (i) => !existingIds.has(i.id)
-              ).length;
-              console.log("[PF] initialLoad result", {
-                logId,
-                requestedLimit,
-                oldOffset: 0,
-                fetchedLen,
-                addedUnique,
-                nextOffset: consumedOffset,
-                count: count ?? "n/a",
-                hasMore: nextHasMore,
-              });
+              const ids = fetchedItems.map((i) => i.id);
+              const first5 = ids.slice(0, 5).join(",");
+              const last5 = ids.length > 5 ? ids.slice(-5).join(",") : "";
+              const idsStr = ids.length <= 5 ? first5 : `${first5}...${last5}`;
+              console.log(
+                `[PF] page | requestedLimit=${requestedLimit} oldOffset=${oldOffset} fetchedLen=${fetchedLen} consumedOffset=${consumedOffset} nextOffset=${nextOffset} count=${
+                  count ?? "n/a"
+                } shortStreak=${
+                  shortPageStreakRef.current
+                } hasMore=${nextHasMore} ids=${idsStr}`
+              );
             }
 
             if (fetchedLen > 0) {
               initialLoadCompleteRef.current = true;
+
+              // Kick off batch activities fetch BEFORE setItems (feed returns first_image_url only; batch gets full carousel)
+              const idsNeedingActivities = fetchedItems
+                .filter(
+                  (item: T & { activity_count?: number }) =>
+                    (item.activity_count ?? 0) > 0
+                )
+                .map((item) => item.id);
+              if (idsNeedingActivities.length > 0) {
+                batchFetchActivitiesForPosts(idsNeedingActivities);
+              }
 
               const tryChainInitial = () => {
                 if (
@@ -822,7 +907,21 @@ export default function ProgressiveFeed<T extends { id: string }>({
                 const toAppend = fetchedItems.filter(
                   (item) => !existingIds.has(item.id)
                 );
-                return [...prev, ...toAppend];
+                const merged = [...prev, ...toAppend];
+                if (DEBUG_PF) {
+                  console.log(
+                    "[FeedPipeline] ProgressiveFeed initialLoad setItems",
+                    {
+                      logId,
+                      prevLen: prev.length,
+                      fetchedLen: fetchedItems.length,
+                      appended: toAppend.length,
+                      deduped: fetchedItems.length - toAppend.length,
+                      mergedLen: merged.length,
+                    }
+                  );
+                }
+                return merged;
               });
               loadingRef.current = false;
               setIsLoadingMore(false);
@@ -833,6 +932,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
                   setCachedItems(fetchedItems);
                 }, 0);
               }
+              initialLoadGuardRef.current = false;
             } else {
               setHasMore(false);
               loadingRef.current = false;
@@ -950,6 +1050,14 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
     const observer = new IntersectionObserver(
       (entries) => {
+        console.log("[PF IO] callback", {
+          isIntersecting: entries[0]?.isIntersecting,
+          initialLoadCompleteRef: initialLoadCompleteRef.current,
+          loadingRef: loadingRef.current,
+          isLoadingMore,
+          isVisibleRef: isVisibleRef.current,
+          hasMoreRef: hasMoreRef.current,
+        });
         // Double-check: Ensure initial load is complete AND not currently loading
         const canLoad =
           entries[0].isIntersecting &&
@@ -1125,7 +1233,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
           style={{ height: "1px", width: "100%" }}
         />
       )}
-
     </div>
   );
 }

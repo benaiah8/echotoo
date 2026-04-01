@@ -25,7 +25,15 @@ dist-ssr
 .vercel
 .env
 
+# Release signing (never commit keystore or passwords)
+*.keystore
+echotoo-release.keystore
+keystore.properties
+
 # Capacitor
 ios/
 android/
 .capacitor/
+
+# Generated icons (if created at project root when running without --android --ios)
+/icons

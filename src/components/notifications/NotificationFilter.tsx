@@ -1,15 +1,15 @@
 import React from "react";
 import { type NotificationType } from "../../types/notification";
 import {
-  IoHeart,
-  IoPersonAdd,
-  IoChatbubbleOutline,
-  IoMailUnread,
-  IoBookmarkOutline,
-  IoCalendarOutline,
-  IoGridOutline,
-  IoDocumentTextOutline,
-} from "react-icons/io5";
+  PiArticle,
+  PiBookmarkSimple,
+  PiCalendar,
+  PiChatCircle,
+  PiDotsNine,
+  PiEnvelopeSimpleOpen,
+  PiHeart,
+  PiUserPlus,
+} from "react-icons/pi";
 
 interface NotificationFilterProps {
   selectedFilter: NotificationType | "all";
@@ -20,49 +20,49 @@ const FILTER_OPTIONS = [
   {
     key: "all" as const,
     label: "All",
-    icon: IoGridOutline,
+    icon: PiDotsNine,
     color: "text-gray-600",
   },
   {
     key: "invite" as const,
     label: "Invites",
-    icon: IoMailUnread,
+    icon: PiEnvelopeSimpleOpen,
     color: "text-blue-500",
   },
   {
     key: "rsvp" as const,
     label: "RSVP",
-    icon: IoCalendarOutline,
+    icon: PiCalendar,
     color: "text-indigo-500",
   },
   {
     key: "follow" as const,
     label: "Follows",
-    icon: IoPersonAdd,
+    icon: PiUserPlus,
     color: "text-green-500",
   },
   {
     key: "like" as const,
     label: "Likes",
-    icon: IoHeart,
+    icon: PiHeart,
     color: "text-red-500",
   },
   {
     key: "comment" as const,
     label: "Comments",
-    icon: IoChatbubbleOutline,
+    icon: PiChatCircle,
     color: "text-yellow-500",
   },
   {
     key: "saved" as const,
     label: "Saved",
-    icon: IoBookmarkOutline,
+    icon: PiBookmarkSimple,
     color: "text-purple-500",
   },
   {
     key: "post" as const,
     label: "Posts",
-    icon: IoDocumentTextOutline,
+    icon: PiArticle,
     color: "text-orange-500",
   },
 ] as const;
@@ -72,7 +72,7 @@ export default function NotificationFilter({
   onFilterChange,
 }: NotificationFilterProps) {
   return (
-    <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur-md">
+    <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur-md safe-area-inset-top">
       <div className="px-3 py-2">
         <div className="flex gap-1 overflow-x-auto scrollbar-hide">
           {FILTER_OPTIONS.map(({ key, label, icon: Icon, color }) => (

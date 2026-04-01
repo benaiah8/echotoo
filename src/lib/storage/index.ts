@@ -61,6 +61,7 @@ export {
 // Utilities
 export {
   isCapacitor,
+  isNativeApp,
   isIOS,
   isAndroid,
   isWeb,

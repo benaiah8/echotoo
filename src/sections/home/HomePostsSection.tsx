@@ -23,9 +23,7 @@ interface Props {
   tagFallbackItems?: FeedItem[];
   tagFallbackLoading?: boolean;
   showTagFallback?: boolean;
-  // for the injected rail
-  hangouts?: FeedItem[];
-  hangoutsLoading?: boolean;
+  // [REMOVED: Phase 1.2] hangouts and hangoutsLoading props - no longer used, rails manage their own state
   // to know if we have tag filters active
   selectedTags?: string[];
   // [OPTIMIZATION: Phase 4 - Prefetch] Callback for prefetching next page
@@ -48,6 +46,16 @@ interface Props {
     tags?: string[];
     currentUserId?: string | null; // Include for feedKey to reset on auth change
   };
+  // [FIX: Phase 1.2 - Horizontal Rail] Props for injected rails filtering
+  railLoadItems?: (offset: number, limit: number) => Promise<FeedItem[]>;
+  railGetCachedItems?: (offset: number) => FeedItem[] | null;
+  railSetCachedItems?: (items: FeedItem[], offset: number) => void;
+  selectedFilters?: string[];
+  railFilteredCount?: number; // [ENHANCEMENT: Empty State + Visual Distinction] Filtered count for injected rails
+  /** When false (e.g. Home tab hidden on /u/me), ProgressiveFeed does not run initial load */
+  isVisible?: boolean;
+  /** [DEBUG] Tab id for visibility logging */
+  tabId?: string;
 }
 
 const INJECT_EVERY = 8;
@@ -61,8 +69,7 @@ export default function HomePostsSection({
   tagFallbackItems = [],
   tagFallbackLoading = false,
   showTagFallback = false,
-  hangouts = [],
-  hangoutsLoading,
+  // [REMOVED: Phase 1.2] hangouts and hangoutsLoading - no longer used
   selectedTags = [],
   onPrefetchNextPage,
   batchedData,
@@ -72,6 +79,13 @@ export default function HomePostsSection({
   getCachedItems,
   setCachedItems,
   feedOptions,
+  railLoadItems: railLoadItemsProp,
+  railGetCachedItems: railGetCachedItemsProp,
+  railSetCachedItems: railSetCachedItemsProp,
+  selectedFilters = [],
+  railFilteredCount,
+  isVisible = true,
+  tabId = "home",
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const renderedItemsCountRef = useRef(0);
@@ -80,27 +94,53 @@ export default function HomePostsSection({
   // [OPTIMIZATION: Phase 2 - Progressive] Client-side filtering removed
   // PostgreSQL now handles type filtering server-side, so no need for offsetAwareLoader wrapper
 
-  // [OPTIMIZATION: Phase 2 - Progressive] Load function for injected rails (hangouts only)
-  const railLoadItems = useCallback(
-    async (offset: number, limit: number) => {
-      if (!loadItems) return [];
-      const result = await loadItems(offset, limit * 2);
-      // Extract items from result (handles both array and OffsetAwareLoadResult formats)
-      const allItems = Array.isArray(result) ? result : result.items;
-      // Filter to hangouts only
-      return allItems.filter((item) => item.type === "hangout");
-    },
-    [loadItems]
-  );
+  // [FIX: Phase 1.2 - Horizontal Rail] Use railLoadItems prop if provided, otherwise fallback to old logic
+  const railLoadItems =
+    railLoadItemsProp ||
+    useCallback(
+      async (offset: number, limit: number) => {
+        if (!loadItems) return [];
+        // Use the vertical feed's loadItems which already handles viewMode filtering
+        // The offset ensures we get different items than the top rail
+        const result = await loadItems(offset, limit * 2);
+        // Extract items from result (handles both array and OffsetAwareLoadResult formats)
+        const allItems = Array.isArray(result) ? result : result.items;
+
+        // For injected rails: when viewMode is "all", show mixed content (like top rail)
+        // When viewMode is "hangouts" or "experiences", the loadItems already filtered by type
+        if (viewMode === "all") {
+          // Mix hangouts and experiences for injected rails (same as top rail)
+          const hangoutPosts = allItems.filter((p) => p.type === "hangout");
+          const experiencePosts = allItems.filter(
+            (p) => p.type === "experience"
+          );
+          const mixedPosts: FeedItem[] = [];
+          const maxLength = Math.max(
+            hangoutPosts.length,
+            experiencePosts.length
+          );
+          for (let i = 0; i < maxLength && mixedPosts.length < limit; i++) {
+            if (hangoutPosts[i]) mixedPosts.push(hangoutPosts[i]);
+            if (experiencePosts[i] && mixedPosts.length < limit)
+              mixedPosts.push(experiencePosts[i]);
+          }
+          return mixedPosts;
+        }
+
+        // For hangouts/experiences viewMode, return items as-is (already filtered by loadItems)
+        return allItems;
+      },
+      [loadItems, viewMode]
+    );
 
   // Render function with rail injection
   const renderItemWithRail = useCallback(
     (item: FeedItem, index: number) => {
       renderedItemsCountRef.current = index + 1;
+      // [FIX: Phase 1.2] Always show injected rails when viewMode is "all" (removed hangouts dependency)
       const shouldInjectRail =
         viewMode === "all" &&
-        renderedItemsCountRef.current % INJECT_EVERY === 0 &&
-        (hangoutsLoading || hangouts.length > 0);
+        renderedItemsCountRef.current % INJECT_EVERY === 0;
 
       return (
         <React.Fragment key={item.id}>
@@ -115,29 +155,39 @@ export default function HomePostsSection({
             anonymousName={item.anonymous_name}
             anonymousAvatar={item.anonymous_avatar}
             selectedDates={item.selected_dates}
-            batchedData={batchedData}
+            post={item}
+            slideshowHostVisible={isVisible}
           />
           {shouldInjectRail && (
             <React.Fragment key={`rail-${item.id}`}>
-              <div
-                key={`rail-header-${item.id}`}
-                className="text-[var(--text)]/90 text-sm font-medium"
-              >
-                {hangoutsLoading ? (
-                  <span className="inline-block h-4 w-40 rounded bg-[var(--text)]/10 animate-pulse" />
-                ) : (
-                  "Discover More"
-                )}
+              {/* Add spacing and separator line */}
+              <div className="mt-6 mb-4">
+                <div className="h-px bg-[var(--border)]/100 mb-4" />
+                <div className="text-[var(--text)]/90 text-sm font-medium">
+                  Discover More
+                </div>
               </div>
               <div key={`rail-content-${item.id}`}>
                 <HomeHangoutSection
-                  items={hangouts}
-                  loading={!!hangoutsLoading}
+                  items={[]}
+                  loading={false}
                   batchedData={batchedData}
-                  // [OPTIMIZATION: Phase 2 - Progressive] Enable progressive loading for injected rails
+                  // [FIX: Phase 1.2 - Horizontal Rail] Use rail-specific cache functions for filters
                   useProgressiveLoading={true}
                   loadItems={railLoadItems}
-                  initialItems={hangouts}
+                  initialItems={[]}
+                  getCachedItems={
+                    railGetCachedItemsProp
+                      ? () => railGetCachedItemsProp(0)
+                      : getCachedItems
+                  }
+                  setCachedItems={
+                    railSetCachedItemsProp
+                      ? (items: FeedItem[]) => railSetCachedItemsProp(items, 0)
+                      : setCachedItems
+                  }
+                  filteredCount={railFilteredCount}
+                  hasActiveFilters={selectedFilters.length > 0}
                 />
               </div>
             </React.Fragment>
@@ -145,7 +195,18 @@ export default function HomePostsSection({
         </React.Fragment>
       );
     },
-    [viewMode, hangouts, hangoutsLoading, batchedData, railLoadItems]
+    [
+      viewMode,
+      batchedData,
+      railLoadItems,
+      railGetCachedItemsProp,
+      railSetCachedItemsProp,
+      getCachedItems,
+      setCachedItems,
+      railFilteredCount,
+      selectedFilters,
+      isVisible,
+    ]
   );
 
   // getCachedItemsFiltered removed - getCachedItems from HomePage already filters by type
@@ -214,7 +275,10 @@ export default function HomePostsSection({
   // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveFeed if enabled
   if (useProgressiveFeed && loadItems) {
     return (
-      <div ref={containerRef} className="flex flex-col w-full px-3 gap-4 mt-4">
+      <div
+        ref={containerRef}
+        className="flex flex-col w-full px-1.5 gap-4 mt-3"
+      >
         <ProgressiveFeed
           key={feedKey} // Reset when filters change
           loadItems={loadItems} // PostgreSQL already filters by type
@@ -222,6 +286,8 @@ export default function HomePostsSection({
           initialItems={initialItems}
           getCachedItems={getCachedItems} // Already filters by type in HomePage
           setCachedItems={setCachedItems}
+          isVisible={isVisible}
+          tabId={tabId}
           enableVirtualScrolling={false} // Disable for now, can enable later
           bufferSize="adaptive"
           enableLazyLoading={true}
@@ -233,7 +299,7 @@ export default function HomePostsSection({
               ? "No posts match your current filters."
               : "No posts to show right now."
           }
-          pageSize={5} // Increased from 2 to 5 for better performance (fewer API calls, faster loading)
+          pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
         />
 
         {/* Show fallback posts when tag filters are active */}
@@ -261,6 +327,7 @@ export default function HomePostsSection({
                 selectedDates={p.selected_dates}
                 post={p}
                 batchedData={batchedData}
+                slideshowHostVisible={isVisible}
               />
             ))}
           </>
@@ -272,7 +339,7 @@ export default function HomePostsSection({
   // Legacy mode: use items prop (backward compatibility)
   if (shouldShowEmptyState) {
     return (
-      <div className="text-[var(--text)]/70 text-sm px-3 py-4">
+      <div className="text-[var(--text)]/70 text-sm px-1.5 py-4">
         {hasActiveFilters ? (
           <>
             <div className="font-medium mb-1">Oops, sorry!</div>
@@ -286,7 +353,7 @@ export default function HomePostsSection({
   }
 
   return (
-    <div ref={containerRef} className="flex flex-col w-full px-3 gap-4 mt-4">
+    <div ref={containerRef} className="flex flex-col w-full px-1.5 gap-4 mt-3">
       {/* Show skeleton only when no posts are available yet */}
       {loading &&
         displayItems.length === 0 &&
@@ -321,28 +388,42 @@ export default function HomePostsSection({
             selectedDates={p.selected_dates}
             post={p}
             batchedData={batchedData}
+            slideshowHostVisible={isVisible}
           />
 
-          {/* Inject horizontal rail every 8 posts */}
-          {viewMode === "all" &&
-            (idx + 1) % INJECT_EVERY === 0 &&
-            (hangoutsLoading || hangouts.length > 0) && (
-              <>
+          {/* Inject horizontal rail every 8 posts - Legacy mode (not used when useProgressiveFeed=true) */}
+          {viewMode === "all" && (idx + 1) % INJECT_EVERY === 0 && (
+            <>
+              {/* Add spacing and separator line */}
+              <div className="mt-6 mb-4">
+                <div className="h-px bg-[var(--border)]/100 mb-4" />
                 <div className="text-[var(--text)]/90 text-sm font-medium">
-                  {hangoutsLoading ? (
-                    <span className="inline-block h-4 w-40 rounded bg-[var(--text)]/10 animate-pulse" />
-                  ) : (
-                    "Discover More"
-                  )}
+                  Discover More
                 </div>
-
-                <HomeHangoutSection
-                  items={hangouts}
-                  loading={!!hangoutsLoading}
-                  batchedData={batchedData}
-                />
-              </>
-            )}
+              </div>
+              <HomeHangoutSection
+                items={[]}
+                loading={false}
+                batchedData={batchedData}
+                useProgressiveLoading={true}
+                isVisible={isVisible}
+                tabId={tabId}
+                loadItems={railLoadItems}
+                initialItems={[]}
+                // [FIX: Phase 1.2 - Horizontal Rail] Use rail-specific cache functions for filters
+                getCachedItems={
+                  railGetCachedItemsProp
+                    ? () => railGetCachedItemsProp(0)
+                    : getCachedItems
+                }
+                setCachedItems={
+                  railSetCachedItemsProp
+                    ? (items: FeedItem[]) => railSetCachedItemsProp(items, 0)
+                    : setCachedItems
+                }
+              />
+            </>
+          )}
         </React.Fragment>
       ))}
 
@@ -384,6 +465,7 @@ export default function HomePostsSection({
                 selectedDates={p.selected_dates}
                 post={p}
                 batchedData={batchedData}
+                slideshowHostVisible={isVisible}
               />
             </React.Fragment>
           ))}

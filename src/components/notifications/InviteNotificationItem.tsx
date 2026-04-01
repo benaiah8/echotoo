@@ -1,15 +1,40 @@
 import React, { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { type NotificationWithActor } from "../../types/notification";
 import { markNotificationAsRead } from "../../api/services/notifications";
-import { acceptInvite, declineInvite, getInviteById, revertInviteToPending } from "../../api/services/invites";
+import {
+  acceptInvite,
+  declineInvite,
+  getInviteById,
+  revertInviteToPending,
+} from "../../api/services/invites";
 import { formatDistanceToNow } from "date-fns";
 import Avatar from "../ui/Avatar";
 import { Paths } from "../../router/Paths";
 import { toast } from "react-hot-toast";
 import { supabase } from "../../lib/supabaseClient";
-import { getViewerId } from "../../api/services/follows";
-import { getCachedInviteStatus, setCachedInviteStatus } from "../../lib/inviteStatusCache";
+import { getViewerId, getViewerAuthUserId } from "../../api/services/follows";
+import {
+  getCachedInviteStatus,
+  setCachedInviteStatus,
+} from "../../lib/inviteStatusCache";
+
+/** Module-level cache for getInviteById results to avoid duplicate fetches per invite row. TTL 3 min. */
+const INVITE_BY_ID_TTL_MS = 3 * 60 * 1000;
+const inviteByIdCache = new Map<string, { data: any; ts: number }>();
+
+function getCachedInviteById(inviteId: string): any | null {
+  const entry = inviteByIdCache.get(inviteId);
+  if (!entry || Date.now() - entry.ts > INVITE_BY_ID_TTL_MS) {
+    if (entry) inviteByIdCache.delete(inviteId);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedInviteById(inviteId: string, data: any): void {
+  inviteByIdCache.set(inviteId, { data, ts: Date.now() });
+}
 
 interface Props {
   notification: NotificationWithActor;
@@ -19,40 +44,6 @@ interface Props {
   onInviteAccepted?: (postId: string) => void; // NEW: callback when invite is accepted
 }
 
-// Helper function to determine if invite is sent or received
-const getInviteDirection = async (notification: NotificationWithActor): Promise<"sent" | "received"> => {
-  // Check additional_data first (if set when notification was created)
-  const direction = notification.additional_data?.invite_direction;
-  if (direction === "sent" || direction === "received") {
-    return direction;
-  }
-
-  // Otherwise, check the invites table to see if current user is inviter or invitee
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return "received"; // Default to received if not authenticated
-
-    const inviteId = notification.additional_data?.invite_id;
-    if (inviteId) {
-      const { data: invite, error } = await getInviteById(inviteId);
-      if (!error && invite) {
-        // invite.inviter_id and invite.invitee_id are auth user_ids
-        if (invite.inviter_id === user.id) {
-          return "sent";
-        } else if (invite.invitee_id === user.id) {
-          return "received";
-        }
-      }
-    }
-
-    // Default to received if we can't determine
-    return "received";
-  } catch (error) {
-    console.error("Error determining invite direction:", error);
-    return "received"; // Default to received on error
-  }
-};
-
 export default function InviteNotificationItem({
   notification,
   onMarkAsRead,
@@ -60,11 +51,14 @@ export default function InviteNotificationItem({
   showGoToPostButton = true,
   onInviteAccepted,
 }: Props) {
+  const location = useLocation();
   const inviteId = notification.additional_data?.invite_id;
-  
+
   // Initialize inviteStatus from cache synchronously (prevents flickering)
   const [isProcessing, setIsProcessing] = useState(false);
-  const [inviteStatus, setInviteStatus] = useState<"pending" | "accepted" | "declined">(() => {
+  const [inviteStatus, setInviteStatus] = useState<
+    "pending" | "accepted" | "declined"
+  >(() => {
     if (inviteId) {
       const cached = getCachedInviteStatus(inviteId);
       if (cached) return cached;
@@ -72,47 +66,74 @@ export default function InviteNotificationItem({
     return "pending";
   });
   const [isFadingOut, setIsFadingOut] = useState(false);
-  const [inviteDirection, setInviteDirection] = useState<"sent" | "received" | null>(null);
+  const [inviteDirection, setInviteDirection] = useState<
+    "sent" | "received" | null
+  >(null);
 
-  // Determine invite direction and check status on mount (stale-while-revalidate)
+  // Determine invite direction and status on mount. At most one getInviteById per inviteId (cached).
+  // If notification.additional_data has invite_direction or invite_status, skip getInviteById entirely.
+  // Deps: [inviteId] only to avoid re-fetch on parent re-renders (notification ref can change).
   useEffect(() => {
-    const initializeInvite = async () => {
-      // Determine direction
-      const direction = await getInviteDirection(notification);
-      setInviteDirection(direction);
+    const additionalData = notification.additional_data;
+    const directionFromData = additionalData?.invite_direction;
+    const statusFromData =
+      additionalData?.invite_status ?? additionalData?.status;
 
-      if (!inviteId) return;
-
-      // Check cache first (already done in useState initializer, but verify)
-      const cachedStatus = getCachedInviteStatus(inviteId);
-      if (cachedStatus && cachedStatus !== inviteStatus) {
-        setInviteStatus(cachedStatus);
+    // Skip getInviteById when direction/status already in additional_data
+    if (directionFromData === "sent" || directionFromData === "received") {
+      setInviteDirection(directionFromData);
+      const validStatus =
+        statusFromData === "accepted" ||
+        statusFromData === "declined" ||
+        statusFromData === "pending"
+          ? statusFromData
+          : inviteId
+          ? getCachedInviteStatus(inviteId)
+          : null;
+      if (validStatus) {
+        setInviteStatus(validStatus);
       }
+      return;
+    }
 
-      // Fetch fresh status from database in background (stale-while-revalidate)
-      try {
-        const { data, error } = await getInviteById(inviteId);
-        if (!error && data) {
-          const freshStatus = data.status === "accepted" || data.status === "declined" 
-            ? data.status 
-            : "pending";
-          
-          // Update cache with fresh status
-          setCachedInviteStatus(inviteId, freshStatus);
-          
-          // Only update UI if status changed (prevents unnecessary re-renders)
-          if (freshStatus !== inviteStatus) {
+    if (!inviteId) return;
+
+    let invite: any = getCachedInviteById(inviteId);
+    if (!invite) {
+      getInviteById(inviteId)
+        .then(({ data, error }) => {
+          if (error || !data) return;
+          setCachedInviteById(inviteId, data);
+          const userId = getViewerAuthUserId();
+          return userId.then((uid) => {
+            const dir: "sent" | "received" =
+              data.inviter_id === uid ? "sent" : "received";
+            setInviteDirection(dir);
+            const freshStatus =
+              data.status === "accepted" || data.status === "declined"
+                ? data.status
+                : "pending";
+            setCachedInviteStatus(inviteId, freshStatus);
             setInviteStatus(freshStatus);
-          }
-        }
-      } catch (error) {
-        console.error("Error checking invite status:", error);
-        // Keep cached status on error
-      }
-    };
+          });
+        })
+        .catch((err) => console.error("Error fetching invite:", err));
+      return;
+    }
 
-    initializeInvite();
-  }, [inviteId, notification]); // Use inviteId as dependency instead of entire notification
+    // Cached invite: sync path, no fetch
+    getViewerAuthUserId().then((userId) => {
+      const dir: "sent" | "received" =
+        userId && invite.inviter_id === userId ? "sent" : "received";
+      setInviteDirection(dir);
+      const freshStatus =
+        invite.status === "accepted" || invite.status === "declined"
+          ? invite.status
+          : "pending";
+      setCachedInviteStatus(inviteId, freshStatus);
+      setInviteStatus(freshStatus);
+    });
+  }, [inviteId]); // inviteId only - prevents re-run on parent re-renders
 
   const handleClick = async () => {
     if (!notification.is_read) {
@@ -264,9 +285,14 @@ export default function InviteNotificationItem({
   const postType = notification.additional_data?.post_type || "hangout";
 
   // Determine notification text based on direction
-  const notificationText = inviteDirection === "sent"
-    ? `You invited ${actorName} to ${postType === "hangout" ? "a hangout" : "an experience"}`
-    : `${actorName} invited you to ${postType === "hangout" ? "a hangout" : "an experience"}`;
+  const notificationText =
+    inviteDirection === "sent"
+      ? `You invited ${actorName} to ${
+          postType === "hangout" ? "a hangout" : "an experience"
+        }`
+      : `${actorName} invited you to ${
+          postType === "hangout" ? "a hangout" : "an experience"
+        }`;
 
   const linkTo = notification.additional_data?.post_id
     ? `${Paths.experience}/${notification.additional_data.post_id}`
@@ -277,9 +303,10 @@ export default function InviteNotificationItem({
   });
 
   // Determine bottom border color based on direction
-  const bottomBorderColor = inviteDirection === "sent"
-    ? "border-b-blue-500" // Blue for sent invites
-    : "border-b-yellow-500"; // Yellow for received invites
+  const bottomBorderColor =
+    inviteDirection === "sent"
+      ? "border-b-blue-500" // Blue for sent invites
+      : "border-b-yellow-500"; // Yellow for received invites
 
   if (compact) {
     return (
@@ -320,11 +347,16 @@ export default function InviteNotificationItem({
                 // Sent invite: Show "Invited" status and "View Post" button
                 <>
                   <div className="px-3 py-1.5 text-xs rounded-full bg-blue-500/20 text-blue-500 border border-blue-500/30">
-                    {inviteStatus === "accepted" ? "Accepted" : inviteStatus === "declined" ? "Declined" : "Invited"}
+                    {inviteStatus === "accepted"
+                      ? "Accepted"
+                      : inviteStatus === "declined"
+                      ? "Declined"
+                      : "Invited"}
                   </div>
                   {showGoToPostButton && (
                     <Link
                       to={linkTo}
+                      state={{ backgroundLocation: location }}
                       onClick={handleClick}
                       className="px-3 py-1.5 text-xs text-blue-500 bg-blue-500/10 border border-blue-500/20 rounded-full hover:bg-blue-500/20 transition-colors"
                     >
@@ -332,45 +364,47 @@ export default function InviteNotificationItem({
                     </Link>
                   )}
                 </>
-              ) : (
-                // Received invite: Show Accept/Decline buttons or status
-                inviteStatus === "pending" ? (
-                  <div
-                    className={`flex flex-wrap gap-2 transition-opacity duration-300 ${
-                      isFadingOut ? "opacity-0" : "opacity-100"
-                    }`}
-                  >
-                    <button
-                      onClick={handleAcceptInvite}
-                      disabled={isProcessing}
-                      className="px-3 py-1.5 text-xs bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors disabled:opacity-50"
-                    >
-                      {isProcessing ? "..." : "Accept"}
-                    </button>
-                    <button
-                      onClick={handleDeclineInvite}
-                      disabled={isProcessing}
-                      className="px-3 py-1.5 text-xs bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors disabled:opacity-50"
-                    >
-                      {isProcessing ? "..." : "Decline"}
-                    </button>
-                  </div>
-                ) : (
+              ) : // Received invite: Show Accept/Decline buttons or status
+              inviteStatus === "pending" ? (
+                <div
+                  className={`flex flex-wrap gap-2 transition-opacity duration-300 ${
+                    isFadingOut ? "opacity-0" : "opacity-100"
+                  }`}
+                >
                   <button
-                    onClick={handleRevertStatus}
+                    onClick={handleAcceptInvite}
                     disabled={isProcessing}
-                    className={`px-3 py-1.5 text-xs rounded-full transition-opacity duration-300 cursor-pointer hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed ${
-                      isFadingOut ? "opacity-0" : "opacity-100"
-                    } ${
-                      inviteStatus === "accepted"
-                        ? "bg-green-500/20 text-green-500 border border-green-500/30 hover:bg-green-500/30"
-                        : "bg-gray-500/20 text-gray-400 border border-gray-500/30 hover:bg-gray-500/30"
-                    }`}
-                    title="Click to undo"
+                    className="px-3 py-1.5 text-xs bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors disabled:opacity-50"
                   >
-                    {isProcessing ? "..." : inviteStatus === "accepted" ? "Accepted" : "Declined"}
+                    {isProcessing ? "..." : "Accept"}
                   </button>
-                )
+                  <button
+                    onClick={handleDeclineInvite}
+                    disabled={isProcessing}
+                    className="px-3 py-1.5 text-xs bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors disabled:opacity-50"
+                  >
+                    {isProcessing ? "..." : "Decline"}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleRevertStatus}
+                  disabled={isProcessing}
+                  className={`px-3 py-1.5 text-xs rounded-full transition-opacity duration-300 cursor-pointer hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isFadingOut ? "opacity-0" : "opacity-100"
+                  } ${
+                    inviteStatus === "accepted"
+                      ? "bg-green-500/20 text-green-500 border border-green-500/30 hover:bg-green-500/30"
+                      : "bg-gray-500/20 text-gray-400 border border-gray-500/30 hover:bg-gray-500/30"
+                  }`}
+                  title="Click to undo"
+                >
+                  {isProcessing
+                    ? "..."
+                    : inviteStatus === "accepted"
+                    ? "Accepted"
+                    : "Declined"}
+                </button>
               )}
             </div>
           </div>
@@ -416,20 +450,23 @@ export default function InviteNotificationItem({
           )}
         </div>
 
-        <div className="text-xs text-[var(--text)]/50 mt-1.5">
-          {timeAgo}
-        </div>
+        <div className="text-xs text-[var(--text)]/50 mt-1.5">{timeAgo}</div>
 
         <div className="flex flex-wrap items-center gap-2 mt-3">
           {inviteDirection === "sent" ? (
             // Sent invite: Show "Invited" status badge and "View Post" button
             <>
               <div className="px-3 py-1 text-xs rounded-full bg-blue-500/20 text-blue-500 border border-blue-500/30">
-                {inviteStatus === "accepted" ? "Accepted" : inviteStatus === "declined" ? "Declined" : "Invited"}
+                {inviteStatus === "accepted"
+                  ? "Accepted"
+                  : inviteStatus === "declined"
+                  ? "Declined"
+                  : "Invited"}
               </div>
               {showGoToPostButton && (
                 <Link
                   to={linkTo}
+                  state={{ backgroundLocation: location }}
                   onClick={handleClick}
                   className="px-3 py-1 text-xs text-blue-500 bg-blue-500/10 border border-blue-500/20 rounded-full hover:bg-blue-500/20 transition-colors"
                 >
@@ -474,12 +511,17 @@ export default function InviteNotificationItem({
                   }`}
                   title="Click to undo"
                 >
-                  {isProcessing ? "..." : inviteStatus === "accepted" ? "Accepted" : "Declined"}
+                  {isProcessing
+                    ? "..."
+                    : inviteStatus === "accepted"
+                    ? "Accepted"
+                    : "Declined"}
                 </button>
               )}
               {showGoToPostButton && (
                 <Link
                   to={linkTo}
+                  state={{ backgroundLocation: location }}
                   onClick={handleClick}
                   className="px-3 py-1 text-xs text-blue-500 bg-blue-500/10 border border-blue-500/20 rounded-full hover:bg-blue-500/20 transition-colors"
                 >

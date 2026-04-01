@@ -32,41 +32,31 @@ interface Props {
 }
 
 // Helper function to determine if follow request is sent or received
-const getFollowRequestDirection = async (
-  notification: NotificationWithActor
-): Promise<"sent" | "received"> => {
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return "received"; // Default to received if not authenticated
+// [PHASE 2.3 - OPTIMIZATION] Accept viewerProfileId as parameter to avoid duplicate getViewerId() calls
+const getFollowRequestDirection = (
+  notification: NotificationWithActor,
+  viewerProfileId: string | null
+): "sent" | "received" => {
+  if (!viewerProfileId) return "received"; // Default to received if not authenticated
 
-    // Check additional_data first
-    const followerProfileId = notification.additional_data?.follower_profile_id;
-    const followingProfileId =
-      notification.additional_data?.following_profile_id;
+  // Check additional_data first
+  const followerProfileId = notification.additional_data?.follower_profile_id;
+  const followingProfileId =
+    notification.additional_data?.following_profile_id;
 
-    if (!followerProfileId || !followingProfileId) {
-      return "received"; // Default to received if data is missing
-    }
-
-    // Get current user's profile ID
-    const viewerProfileId = await getViewerId();
-    if (!viewerProfileId) return "received";
-
-    // If current user is the follower (requester), it's a sent request
-    // If current user is the following (account owner), it's a received request
-    if (viewerProfileId === followerProfileId) {
-      return "sent";
-    } else if (viewerProfileId === followingProfileId) {
-      return "received";
-    }
-
-    return "received"; // Default to received
-  } catch (error) {
-    console.error("Error determining follow request direction:", error);
-    return "received"; // Default to received on error
+  if (!followerProfileId || !followingProfileId) {
+    return "received"; // Default to received if data is missing
   }
+
+  // If current user is the follower (requester), it's a sent request
+  // If current user is the following (account owner), it's a received request
+  if (viewerProfileId === followerProfileId) {
+    return "sent";
+  } else if (viewerProfileId === followingProfileId) {
+    return "received";
+  }
+
+  return "received"; // Default to received
 };
 
 export default function FollowRequestNotificationItem({
@@ -99,6 +89,10 @@ export default function FollowRequestNotificationItem({
   const [requestDirection, setRequestDirection] = useState<
     "sent" | "received" | null
   >(null);
+  
+  // [PHASE 2.3 - OPTIMIZATION] Cache viewerProfileId at component level
+  // Why: Eliminates 6 duplicate getViewerId() calls per component instance
+  const [viewerProfileId, setViewerProfileId] = useState<string | null>(null);
 
   // [OPTIMIZATION: Phase 1 - Batch] Use batched follow status if provided
   // Why: Skip individual API calls when we have batched data, reduces queries and egress
@@ -138,20 +132,34 @@ export default function FollowRequestNotificationItem({
     followRequestStatus,
   ]);
 
+  // [PHASE 2.3 - OPTIMIZATION] Get viewerProfileId once on mount
+  // Why: Cache at component level to avoid duplicate getViewerId() calls
+  useEffect(() => {
+    const loadViewerId = async () => {
+      const id = await getViewerId();
+      setViewerProfileId(id);
+    };
+    loadViewerId();
+  }, []);
+
   // [OPTIMIZATION: Phase 2 - Cache] Determine request direction and check status on mount (stale-while-revalidate)
   // Why: Cache both sent and received request statuses, fetch fresh data in background
   // Note: Only runs if initialFollowStatus is not provided (fallback to individual query)
   useEffect(() => {
+    // Skip if we don't have viewerProfileId yet
+    if (!viewerProfileId) return;
+
     // Skip if we already have batched status
     if (initialFollowStatus !== undefined) {
-      // Still need to determine direction for UI
-      getFollowRequestDirection(notification).then(setRequestDirection);
+      // Still need to determine direction for UI (now synchronous)
+      const direction = getFollowRequestDirection(notification, viewerProfileId);
+      setRequestDirection(direction);
       return;
     }
 
     const initializeRequest = async () => {
-      // Determine direction
-      const direction = await getFollowRequestDirection(notification);
+      // Determine direction (now synchronous, uses cached viewerProfileId)
+      const direction = getFollowRequestDirection(notification, viewerProfileId);
       setRequestDirection(direction);
 
       if (!followerProfileId || !followingProfileId) return;
@@ -161,8 +169,6 @@ export default function FollowRequestNotificationItem({
 
       // Fetch fresh status from database in background (stale-while-revalidate)
       try {
-        const viewerProfileId = await getViewerId();
-        if (!viewerProfileId) return;
 
         // [OPTIMIZATION: Phase 2 - Cache] Cache both sent and received request statuses
         // Why: Both directions need status tracking, cache for instant display
@@ -224,6 +230,7 @@ export default function FollowRequestNotificationItem({
     notification,
     followRequestStatus,
     initialFollowStatus,
+    viewerProfileId, // [PHASE 2.3 - OPTIMIZATION] Add viewerProfileId as dependency
   ]);
 
   const handleClick = async () => {
@@ -259,8 +266,7 @@ export default function FollowRequestNotificationItem({
           followingProfileId,
           "approved"
         );
-        // Update follow status cache
-        const viewerProfileId = await getViewerId();
+        // Update follow status cache (use cached viewerProfileId)
         if (viewerProfileId) {
           setCachedFollowStatus(
             viewerProfileId,
@@ -310,8 +316,7 @@ export default function FollowRequestNotificationItem({
           followingProfileId,
           "declined"
         );
-        // Clear follow status cache (they're no longer following)
-        const viewerProfileId = await getViewerId();
+        // Clear follow status cache (use cached viewerProfileId)
         if (viewerProfileId) {
           clearCachedFollowStatus(followerProfileId);
         }
@@ -350,8 +355,7 @@ export default function FollowRequestNotificationItem({
     setIsProcessing(true);
     try {
       // To revert, we need to update the follow status back to pending
-      // This requires updating the follows table directly
-      const viewerProfileId = await getViewerId();
+      // This requires updating the follows table directly (use cached viewerProfileId)
       if (!viewerProfileId || viewerProfileId !== followingProfileId) {
         toast.error("Not authorized to revert this request");
         return;
@@ -368,15 +372,14 @@ export default function FollowRequestNotificationItem({
         return;
       }
 
-      // Update caches immediately
+      // Update caches immediately (use cached viewerProfileId)
       setCachedFollowRequestStatus(
         followerProfileId,
         followingProfileId,
         "pending"
       );
-      const currentViewerId = await getViewerId();
-      if (currentViewerId) {
-        setCachedFollowStatus(currentViewerId, followerProfileId, "pending");
+      if (viewerProfileId) {
+        setCachedFollowStatus(viewerProfileId, followerProfileId, "pending");
       }
 
       // Fade out status text first, then show buttons again

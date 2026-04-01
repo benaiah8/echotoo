@@ -1,5 +1,5 @@
 import { useState, forwardRef } from "react";
-import { MdCalendarMonth, MdErrorOutline } from "react-icons/md";
+import { PiCalendar, PiWarningCircle } from "react-icons/pi";
 import DatePicker from "./DatePicker";
 import DropdownContainer from "../dropdown/DropdownContainer.tsx";
 import moment from "moment";
@@ -72,7 +72,7 @@ const PrimaryDateRangePicker = forwardRef<
         >
           <div className="w-full flex items-center justify-between gap-2 h-full">
             <h5 className="text-pText ">
-              <MdCalendarMonth />
+              <PiCalendar />
             </h5>
 
             <div className="flex flex-col flex-1 items-start transition-all duration-500 justify-center">
@@ -118,7 +118,7 @@ const PrimaryDateRangePicker = forwardRef<
 
             {error && (
               <span className="text-tertiary !text-2xl">
-                <MdErrorOutline />
+                <PiWarningCircle />
               </span>
             )}
           </div>

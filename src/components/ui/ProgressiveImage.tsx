@@ -1,8 +1,8 @@
 /**
  * [OPTIMIZATION FILE: Phase 5]
- * 
+ *
  * ProgressiveImage component with blur-up placeholder
- * 
+ *
  * Optimizations included:
  * - Progressive Loading: Shows low-quality placeholder first, loads high-quality in background
  * - Smooth Transition: Fade-in animation when high-quality image loads
@@ -13,15 +13,20 @@
 import React, { useState, useEffect, useRef } from "react";
 import { getBestImageUrl } from "../../lib/imageOptimization";
 import { imgUrlPublic } from "../../lib/img";
-import { getImageQuality, shouldSkipPrefetching, getConnectionType } from "../../lib/connectionAware";
+import {
+  getImageQuality,
+  shouldSkipPrefetching,
+  getConnectionType,
+} from "../../lib/connectionAware";
 
 interface ProgressiveImageProps {
   src: string;
   alt?: string;
   className?: string;
-  placeholderClassName?: string;
   viewportWidth?: number;
   rootMargin?: string; // For Intersection Observer
+  /** When true, load immediately without waiting for IntersectionObserver (carousel preload) */
+  priority?: boolean;
   onLoad?: () => void;
   onError?: () => void;
 }
@@ -30,23 +35,30 @@ interface ProgressiveImageProps {
 // Why: Show something immediately while high-quality loads, better perceived performance
 // [OPTIMIZATION: Phase 6 - Connection] Adjust quality based on connection speed
 // Why: Lower quality on slow connections saves bandwidth
-function getLowQualityUrl(url: string, connectionQuality?: "low" | "medium" | "high"): string {
+function getLowQualityUrl(
+  url: string,
+  connectionQuality?: "low" | "medium" | "high"
+): string {
   if (!url) return "";
-  
+
+  // [CLOUDINARY GATE] Do not generate Cloudinary placeholder URLs when disallowed
+  if (!imgUrlPublic(url)) return "";
+
   // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware quality
   const quality = connectionQuality || "low";
   const width = quality === "low" ? 50 : quality === "medium" ? 100 : 200;
-  
+
   // If it's a Cloudinary URL, add quality/width parameters for low-quality version
   if (url.includes("cloudinary.com") || url.includes("res.cloudinary.com")) {
     // Add q_auto:low and width parameter for placeholder
-    const params = quality === "low" ? `q_auto:low&w_${width}` : `q_auto:eco&w_${width}`;
+    const params =
+      quality === "low" ? `q_auto:low&w_${width}` : `q_auto:eco&w_${width}`;
     if (url.includes("?")) {
       return `${url}&${params}`;
     }
     return `${url}?${params}`;
   }
-  
+
   // For other URLs, try to add query params if supported
   // Fallback to original if we can't optimize
   return url;
@@ -56,33 +68,48 @@ export default function ProgressiveImage({
   src,
   alt = "",
   className = "",
-  placeholderClassName = "",
   viewportWidth = 400,
   rootMargin = "200px",
+  priority = false,
   onLoad,
   onError,
 }: ProgressiveImageProps) {
   const [lowQualityLoaded, setLowQualityLoaded] = useState(false);
   const [highQualityLoaded, setHighQualityLoaded] = useState(false);
-  const [shouldLoad, setShouldLoad] = useState(false);
+  const [shouldLoad, setShouldLoad] = useState(!!priority);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const highQualityImgRef = useRef<HTMLImageElement | null>(null);
 
-  // Get public URL
-  const publicUrl = imgUrlPublic(src) || src;
-  
+  // When priority becomes true (e.g. slide became adjacent), start loading
+  useEffect(() => {
+    if (priority && !shouldLoad) setShouldLoad(true);
+  }, [priority, shouldLoad]);
+
+  // Get public URL (undefined when Cloudinary blocked - show placeholder)
+  const publicUrl = imgUrlPublic(src);
+  if (!publicUrl) {
+    return (
+      <div
+        className={`relative overflow-hidden ${className}`}
+        style={{ minHeight: "200px" }}
+      >
+        <div className="absolute inset-0 bg-[var(--surface-2)] animate-pulse" />
+      </div>
+    );
+  }
+
   // [OPTIMIZATION: Phase 6 - Connection] Get connection-aware image quality
   // Why: Adjust image quality based on connection speed
   const connectionQuality = getImageQuality();
-  
+
   // Adjust viewport width based on connection quality
-  const adjustedViewportWidth = connectionQuality === "low" 
-    ? Math.min(viewportWidth, 300) 
-    : connectionQuality === "medium" 
-    ? Math.min(viewportWidth, 600) 
-    : viewportWidth;
-  
+  const adjustedViewportWidth =
+    connectionQuality === "low"
+      ? Math.min(viewportWidth, 300)
+      : connectionQuality === "medium"
+      ? Math.min(viewportWidth, 600)
+      : viewportWidth;
+
   const optimizedUrl = getBestImageUrl(publicUrl, adjustedViewportWidth);
   const lowQualityUrl = getLowQualityUrl(optimizedUrl, connectionQuality);
 
@@ -116,14 +143,11 @@ export default function ProgressiveImage({
 
     const img = new Image();
     img.onload = () => {
-      // [OPTIMIZATION: Phase 5 - Rendering] Use requestAnimationFrame for smooth updates
-      // Why: Ensures smooth rendering, prevents layout thrashing
       requestAnimationFrame(() => {
         setLowQualityLoaded(true);
       });
     };
     img.onerror = () => {
-      // If low-quality fails, try to load high-quality directly
       setLowQualityLoaded(true);
       setHighQualityLoaded(true);
     };
@@ -138,8 +162,11 @@ export default function ProgressiveImage({
     if (!lowQualityLoaded || highQualityLoaded) return;
 
     // [OPTIMIZATION: Phase 6 - Connection] Skip high-quality on slow connections
-    if (shouldSkipPrefetching() || getConnectionType() === "2g" || getConnectionType() === "slow-2g") {
-      // On very slow connections, just use low-quality image
+    if (
+      shouldSkipPrefetching() ||
+      getConnectionType() === "2g" ||
+      getConnectionType() === "slow-2g"
+    ) {
       setHighQualityLoaded(true);
       if (onLoad) onLoad();
       return;
@@ -147,7 +174,6 @@ export default function ProgressiveImage({
 
     const img = new Image();
     img.onload = () => {
-      // [OPTIMIZATION: Phase 5 - Rendering] Use requestAnimationFrame for smooth transition
       requestAnimationFrame(() => {
         setHighQualityLoaded(true);
         if (onLoad) onLoad();
@@ -158,7 +184,6 @@ export default function ProgressiveImage({
       if (onError) onError();
     };
     img.src = optimizedUrl;
-    highQualityImgRef.current = img;
   }, [lowQualityLoaded, optimizedUrl, highQualityLoaded, onLoad, onError]);
 
   return (
@@ -175,7 +200,7 @@ export default function ProgressiveImage({
           alt={alt}
           className={`absolute inset-0 w-full h-full object-cover ${
             highQualityLoaded ? "opacity-0" : "opacity-100"
-          } transition-opacity duration-300 blur-sm ${placeholderClassName}`}
+          } transition-opacity duration-300 blur-sm`}
           style={{
             filter: highQualityLoaded ? "none" : "blur(10px)",
             transform: "scale(1.1)", // Slight scale to hide blur edges
@@ -202,4 +227,3 @@ export default function ProgressiveImage({
     </div>
   );
 }
-

@@ -22,6 +22,9 @@ import React, {
 } from "react";
 import { useScrollStopDetection } from "../hooks/useScrollStopDetection";
 import { useAdaptiveBuffer } from "../hooks/useAdaptiveBuffer";
+import { onPostChanged } from "../lib/postEvents";
+import { applyPostPatch } from "../lib/applyPostPatch";
+import { logFetchStart } from "../lib/tabVisibilityDebug";
 
 export interface ProgressiveHorizontalRailProps<T> {
   // Data loading
@@ -42,6 +45,13 @@ export interface ProgressiveHorizontalRailProps<T> {
   // Loading skeleton component
   loadingComponent?: React.ReactNode;
 
+  // Empty state
+  emptyComponent?: React.ReactNode; // Component to show when items.length === 0 and not loading
+
+  // Filter metadata (for separator and visual distinction)
+  filteredCount?: number; // Number of filtered items (items at index < filteredCount are filtered)
+  hasActiveFilters?: boolean; // Whether filters are active (for conditional rendering)
+
   // Container ref (the horizontal scroll container)
   containerRef?: React.RefObject<HTMLElement>;
 
@@ -51,6 +61,10 @@ export interface ProgressiveHorizontalRailProps<T> {
   pageSize?: number; // Items to load per page (default: 4)
   maxItems?: number; // Maximum items to load (0 = unlimited)
   loadMoreThreshold?: number; // Pixels from right edge to trigger load (default: 200px)
+  /** When false (e.g. Home tab hidden on /u/me), initial-load effect does not run */
+  isVisible?: boolean;
+  /** [DEBUG] Tab id for visibility logging */
+  tabId?: string;
 }
 
 /**
@@ -77,35 +91,62 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   loading: externalLoading = false,
   error: externalError = null,
   loadingComponent,
+  emptyComponent,
+  filteredCount,
+  hasActiveFilters = false,
   containerRef: externalContainerRef,
   visibleItems = 3,
   bufferSize = "adaptive",
   pageSize = 4,
   maxItems = 0,
   loadMoreThreshold = 200,
+  isVisible = true,
+  tabId = "unknown",
 }: ProgressiveHorizontalRailProps<T>) {
-  // Calculate initial items and offset together to keep them in sync
-  // This ensures offsetRef matches items.length from the start
-  const getInitialItems = (): T[] => {
-    let initial: T[] = [];
+  // [FIX] Only use initialItems prop for initial state
+  // Do NOT call getCachedItems() during render - it causes re-render loops
+  // getCachedItems() is created with useCallback and gets new reference on every render
+  // Calling it during render causes component to re-render when cache populates
+  const initialItemsArray = useMemo(() => {
     if (initialItems && initialItems.length > 0) {
-      initial = initialItems;
-    } else if (getCachedItems) {
-      const cached = getCachedItems();
-      if (cached && cached.length > 0) {
-        initial = cached;
-      }
+      // Deduplicate by ID to prevent duplicate keys
+      return Array.from(
+        new Map(initialItems.map((item) => [item.id, item])).values()
+      );
     }
-    // Deduplicate by ID to prevent duplicate keys
-    return Array.from(new Map(initial.map((item) => [item.id, item])).values());
-  };
+    return [];
+  }, []); // Empty deps - only run on mount, ignore initialItems changes
 
-  const initialItemsArray = getInitialItems();
   const initialOffset = initialItemsArray.length;
 
   // Internal state
   const [items, setItems] = useState<T[]>(initialItemsArray);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // [POST EVENTS] Patch rail items on save/like/follow so cards update immediately
+  useEffect(() => {
+    const cleanup = onPostChanged((e) => {
+      const { postId, patch } = e.detail;
+      setItems((prev) => {
+        const next = prev.map((item) =>
+          item.id !== postId
+            ? item
+            : (applyPostPatch(item as Record<string, unknown>, patch) as T)
+        );
+        if (setCachedItems && next.some((n, i) => n !== prev[i])) {
+          setTimeout(() => {
+            if (aliveRef.current) setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    });
+    return cleanup;
+  }, [setCachedItems]);
+  // [FIX] Initialize isLoadingMore to true if we have no initial items
+  // This ensures skeleton shows immediately instead of blank screen
+  const [isLoadingMore, setIsLoadingMore] = useState(
+    initialItemsArray.length === 0
+  );
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(externalError);
 
@@ -116,6 +157,17 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   const loadingRef = useRef(false);
   const offsetRef = useRef(initialOffset); // Initialize with calculated offset
   const shouldLoadRef = useRef(true);
+  /** False after unmount — in-flight loads must not write cache/state (stale vs home refresh purge). */
+  const aliveRef = useRef(true);
+  const isVisibleRef = useRef(isVisible);
+  isVisibleRef.current = isVisible;
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   // Adaptive buffer
   const { bufferSize: adaptiveBufferSize, isWiFi } = useAdaptiveBuffer({
@@ -159,6 +211,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   const loadMoreRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const loadMore = useCallback(async () => {
+    if (!isVisible) return;
     if (loadingRef.current || !hasMore || !shouldLoadRef.current) return;
     if (maxItems > 0 && items.length >= maxItems) {
       setHasMore(false);
@@ -170,7 +223,10 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
     setError(null);
 
     try {
+      logFetchStart("ProgressiveHorizontalRail", tabId, isVisible, undefined);
       const newItems = await loadItems(offsetRef.current, pageSize);
+
+      if (!aliveRef.current || !isVisibleRef.current) return;
 
       if (newItems.length === 0) {
         setHasMore(false);
@@ -191,7 +247,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
         offsetRef.current += newItems.length;
 
         // Update cache with deduplicated items
-        if (setCachedItems) {
+        if (setCachedItems && aliveRef.current) {
           const cachedItems = getCachedItems?.() || [];
           const itemsMap = new Map<string, T>();
           // Add previous cached items
@@ -209,67 +265,120 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
         }
       }
     } catch (err) {
+      if (!aliveRef.current) return;
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
       console.error("[ProgressiveHorizontalRail] Failed to load items:", err);
     } finally {
       loadingRef.current = false;
-      setIsLoadingMore(false);
+      if (aliveRef.current) setIsLoadingMore(false);
     }
-  }, [hasMore, items, loadItems, pageSize, maxItems, setCachedItems]);
+  }, [
+    hasMore,
+    items,
+    loadItems,
+    pageSize,
+    maxItems,
+    setCachedItems,
+    getCachedItems,
+    isVisible,
+    tabId,
+  ]);
 
   // Store loadMore in ref for use in other hooks
   loadMoreRef.current = loadMore;
 
-  // Initial load - simplified: just load visible + buffer items
+  // [FIX] Initial load - check cache ONCE on mount (or when isVisible turns true), not during render
+  // When isVisible is false (e.g. Home tab hidden on /u/me), skip to avoid duplicate get_feed_with_related_data
   useEffect(() => {
-    if (items.length > 0) return; // Already loaded
+    if (!isVisible) return;
+    if (items.length > 0) return; // Already have items from initialItems prop
+
+    let cancelled = false;
 
     const loadInitial = async () => {
       loadingRef.current = true;
       setIsLoadingMore(true);
 
       try {
-        // Use initialItems if provided, otherwise load
+        // Step 1: Check cache ONCE on mount (not during render)
+        // This prevents re-render loops when getCachedItems reference changes
+        if (getCachedItems) {
+          const cached = getCachedItems();
+          if (cancelled || !aliveRef.current) return;
+          if (cached && cached.length > 0) {
+            // Deduplicate by ID
+            const deduplicated = Array.from(
+              new Map(cached.map((item) => [item.id, item])).values()
+            );
+            if (cancelled || !aliveRef.current) return;
+            setItems(deduplicated);
+            offsetRef.current = deduplicated.length;
+            if (setCachedItems && aliveRef.current) {
+              setCachedItems(deduplicated);
+            }
+            loadingRef.current = false;
+            if (aliveRef.current) setIsLoadingMore(false);
+            return;
+          }
+        }
+
+        // Step 2: Use initialItems if provided (shouldn't happen, already checked)
         if (initialItems && initialItems.length > 0) {
-          setItems(initialItems);
-          offsetRef.current = initialItems.length;
-          // Don't set hasMore = false here - only set it when we actually try to load and get 0 items
+          const deduplicated = Array.from(
+            new Map(initialItems.map((item) => [item.id, item])).values()
+          );
+          if (cancelled || !aliveRef.current) return;
+          setItems(deduplicated);
+          offsetRef.current = deduplicated.length;
           loadingRef.current = false;
-          setIsLoadingMore(false);
+          if (aliveRef.current) setIsLoadingMore(false);
           return;
         }
 
-        // Load initial batch (visible + buffer)
+        // Step 3: No cache, load from API
+        logFetchStart("ProgressiveHorizontalRail", tabId, isVisible, undefined);
         const loadedItems = await loadItems(0, initialLoadSize);
+        if (cancelled || !aliveRef.current) return;
         offsetRef.current = loadedItems.length;
 
-        setItems(loadedItems);
+        // Deduplicate by ID
+        const deduplicated = Array.from(
+          new Map(loadedItems.map((item) => [item.id, item])).values()
+        );
+        setItems(deduplicated);
 
         // Update cache
-        if (setCachedItems) {
-          setCachedItems(loadedItems);
+        if (setCachedItems && aliveRef.current) {
+          setCachedItems(deduplicated);
         }
 
         // Check if we have more items
-        if (loadedItems.length < initialLoadSize) {
+        if (deduplicated.length < initialLoadSize) {
           setHasMore(false);
         }
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setError(errorMessage);
-        console.error(
-          "[ProgressiveHorizontalRail] Failed to load initial items:",
-          err
-        );
+        if (!cancelled && aliveRef.current) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          setError(errorMessage);
+          console.error(
+            "[ProgressiveHorizontalRail] Failed to load initial items:",
+            err
+          );
+        }
       } finally {
         loadingRef.current = false;
-        setIsLoadingMore(false);
+        if (!cancelled && aliveRef.current) setIsLoadingMore(false);
       }
     };
 
     loadInitial();
-  }, [initialItems, initialLoadSize, loadItems, setCachedItems]); // Include dependencies
+    // Re-run when isVisible turns true (e.g. user navigates to Home) so we load then
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible]);
 
   // Intersection Observer for horizontal lazy loading
   useEffect(() => {
@@ -363,18 +472,61 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
     );
   }
 
+  // Empty state: Only show if completely empty AND no filters (or filters returned nothing AND no fallback)
+  // If filteredCount === 0, we show empty card + unfiltered items, so don't return early
+  if (
+    !isLoading &&
+    items.length === 0 &&
+    emptyComponent &&
+    filteredCount !== 0
+  ) {
+    return (
+      <div
+        ref={containerRef as React.RefObject<HTMLDivElement>}
+        className="overflow-x-auto scroll-hide py-2"
+      >
+        <div className="flex gap-3 w-max rail-pad">{emptyComponent}</div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef as React.RefObject<HTMLDivElement>}
       className="overflow-x-auto scroll-hide py-2"
     >
       <div className="flex gap-3 w-max rail-pad">
+        {/* [ENHANCEMENT: Empty State] Show empty card as first item when filteredCount === 0 */}
+        {filteredCount === 0 && emptyComponent && (
+          <div className="shrink-0">{emptyComponent}</div>
+        )}
+
         {/* Render all items - renderItem should return elements with keys */}
         {items.map((item, index) => {
           const rendered = renderItem(item, index);
           // renderItem should return ReactNode with key already set
           // If it's a Fragment or element, it should have a key
-          return rendered;
+
+          // Render separator after last filtered item (if we have both filtered and unfiltered)
+          const shouldShowSeparator =
+            hasActiveFilters &&
+            filteredCount !== undefined &&
+            filteredCount > 0 &&
+            index === filteredCount - 1 &&
+            filteredCount < items.length;
+
+          return (
+            <React.Fragment key={item.id}>
+              {rendered}
+              {shouldShowSeparator && (
+                <div
+                  className="w-px h-full bg-blue-500/50 mx-2 shrink-0"
+                  aria-hidden="true"
+                  style={{ minHeight: "208px" }} // Match Hangout card height (date strip + author + caption + footer)
+                />
+              )}
+            </React.Fragment>
+          );
         })}
 
         {/* Loading skeleton for next item */}

@@ -1,4 +1,6 @@
 import { supabase } from "../../lib/supabaseClient";
+import { isDraftPostId } from "../../lib/drafts";
+import { emitPostChanged } from "../../lib/postEvents";
 import {
   Comment,
   CommentWithAuthor,
@@ -8,6 +10,7 @@ import {
   UpdateCommentData,
   CommentCount,
 } from "../../types/comment";
+import { getViewerAuthUserId } from "./follows";
 
 // Cache configuration
 const COMMENTS_CACHE_KEY = "comments_cache";
@@ -74,163 +77,159 @@ const invalidateCommentsCache = (postId: string): void => {
   }
 };
 
+// In-flight deduplication: concurrent identical requests share one network call
+const commentsInFlight = new Map<string, Promise<CommentWithDetails[]>>();
+
+async function fetchCommentsForPostImpl(
+  postId: string
+): Promise<CommentWithDetails[]> {
+  console.log("Loading comments for post:", postId); // Debug log
+
+  // First, get comments
+  const { data: comments, error } = await supabase
+    .from("comments")
+    .select("*")
+    .eq("post_id", postId)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("Supabase error:", error);
+    throw error;
+  }
+
+  console.log("Raw comments:", comments); // Debug log
+
+  // Debug: Check if images are in the raw comments
+  comments.forEach((comment, index) => {
+    console.log(`Comment ${index} images:`, comment.images);
+  });
+
+  if (!comments || comments.length === 0) {
+    console.log("No comments found for post:", postId);
+    return [];
+  }
+
+  // [OPTIMIZATION: Phase 2 - Batch] Batch fetch all comment author profiles in one query
+  // Why: Single database query instead of multiple sequential queries, much faster
+  const authorIds = [...new Set(comments.map((c) => c.author_id))];
+  console.log("Author IDs:", authorIds); // Debug log
+
+  let profiles: any[] = [];
+  if (authorIds.length > 0) {
+    console.log("Fetching profiles for author IDs:", authorIds); // Debug log
+
+    // [PHASE 2.3 - OPTIMIZATION] Use getProfilesByUserIds() for caching and deduplication
+    // Note: getProfilesByUserIds() handles errors internally and returns empty array on failure
+    // This simplifies the code by removing the fallback query logic
+    const { getProfilesByUserIds } = await import("./follows");
+
+    try {
+      const fetchedProfiles = await getProfilesByUserIds(authorIds);
+      // Map to expected format: user_id, username, display_name, avatar_url
+      profiles = fetchedProfiles.map((p) => ({
+        user_id: p.user_id,
+        username: p.username,
+        display_name: p.display_name,
+        avatar_url: p.avatar_url,
+      }));
+      console.log("Profiles fetched successfully:", profiles); // Debug log
+    } catch (error) {
+      console.error("Error fetching profiles:", error);
+      profiles = []; // Fallback to empty array (same as old fallback behavior)
+    }
+  } else {
+    console.log("No author IDs found, skipping profiles fetch");
+  }
+
+  // Combine comments with author data
+  const commentsWithAuthors = comments.map((comment) => {
+    const author = profiles?.find((p) => p.user_id === comment.author_id);
+    return {
+      ...comment,
+      author: author
+        ? {
+            id: author.user_id,
+            username: author.username,
+            display_name: author.display_name,
+            avatar_url: author.avatar_url,
+          }
+        : {
+            id: comment.author_id,
+            username: "Unknown",
+            display_name: "Unknown User",
+            avatar_url: null,
+          },
+    };
+  });
+
+  console.log("Comments with authors:", commentsWithAuthors); // Debug log
+
+  // Get like counts for each comment
+  const commentIds = commentsWithAuthors?.map((c) => c.id) || [];
+  const { data: likes } = await supabase
+    .from("comment_likes")
+    .select("comment_id")
+    .in("comment_id", commentIds);
+
+  // Get current user's likes
+  const userId = await getViewerAuthUserId();
+  const { data: userLikes } = userId
+    ? await supabase
+        .from("comment_likes")
+        .select("comment_id")
+        .eq("user_id", userId)
+        .in("comment_id", commentIds)
+    : { data: [] };
+
+  // Build comment details with like counts
+  const commentsWithDetails: CommentWithDetails[] = (
+    commentsWithAuthors || []
+  ).map((comment) => {
+    const likeCount =
+      likes?.filter((like) => like.comment_id === comment.id).length || 0;
+    const isLiked =
+      userLikes?.some((like) => like.comment_id === comment.id) || false;
+
+    return {
+      ...comment,
+      like_count: likeCount,
+      is_liked: isLiked,
+      replies: [], // Will be populated by buildCommentTree
+    };
+  });
+
+  console.log("Comments with details:", commentsWithDetails); // Debug log
+
+  // Build comment tree (top-level comments with nested replies)
+  const commentTree = buildCommentTree(commentsWithDetails);
+
+  console.log("Final comment tree:", commentTree); // Debug log
+
+  // Cache the results
+  setCachedComments(postId, commentTree);
+
+  return commentTree;
+}
+
 // Get comments for a post with author details and like counts
 export const getCommentsForPost = async (
   postId: string
 ): Promise<CommentWithDetails[]> => {
-  // Check cache first
+  // Check cache first - return immediately, no in-flight map
   const cached = getCachedComments(postId);
   if (cached) return cached;
 
-  try {
-    console.log("Loading comments for post:", postId); // Debug log
-
-    // First, get comments
-    const { data: comments, error } = await supabase
-      .from("comments")
-      .select("*")
-      .eq("post_id", postId)
-      .eq("is_deleted", false)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error("Supabase error:", error);
-      throw error;
-    }
-
-    console.log("Raw comments:", comments); // Debug log
-
-    // Debug: Check if images are in the raw comments
-    comments.forEach((comment, index) => {
-      console.log(`Comment ${index} images:`, comment.images);
+  // Check in-flight deduplication
+  const key = `comments:${postId}`;
+  let promise = commentsInFlight.get(key);
+  if (!promise) {
+    promise = fetchCommentsForPostImpl(postId).finally(() => {
+      commentsInFlight.delete(key);
     });
-
-    if (!comments || comments.length === 0) {
-      console.log("No comments found for post:", postId);
-      return [];
-    }
-
-    // [OPTIMIZATION: Phase 2 - Batch] Batch fetch all comment author profiles in one query
-    // Why: Single database query instead of multiple sequential queries, much faster
-    const authorIds = [...new Set(comments.map((c) => c.author_id))];
-    console.log("Author IDs:", authorIds); // Debug log
-
-    let profiles: any[] = [];
-    if (authorIds.length > 0) {
-      console.log("Fetching profiles for author IDs:", authorIds); // Debug log
-
-      // Try the main query first
-      const { data: profilesData, error: profilesError } = await supabase
-        .from("profiles")
-        .select("user_id, username, display_name, avatar_url")
-        .in("user_id", authorIds);
-
-      if (profilesError) {
-        console.error("Profiles error:", profilesError);
-        console.error("Error details:", {
-          message: profilesError.message,
-          details: profilesError.details,
-          hint: profilesError.hint,
-          code: profilesError.code,
-        });
-
-        // Try alternative query without RLS restrictions
-        console.log("Trying alternative profile fetch...");
-        const { data: altProfiles, error: altError } = await supabase
-          .from("profiles")
-          .select("user_id, username, display_name, avatar_url")
-          .in("user_id", authorIds)
-          .limit(100);
-
-        if (altError) {
-          console.error("Alternative profiles error:", altError);
-          profiles = [];
-        } else {
-          profiles = altProfiles || [];
-          console.log("Alternative profiles fetched:", profiles);
-        }
-      } else {
-        profiles = profilesData || [];
-        console.log("Profiles fetched successfully:", profiles); // Debug log
-      }
-    } else {
-      console.log("No author IDs found, skipping profiles fetch");
-    }
-
-    // Combine comments with author data
-    const commentsWithAuthors = comments.map((comment) => {
-      const author = profiles?.find((p) => p.user_id === comment.author_id);
-      return {
-        ...comment,
-        author: author
-          ? {
-              id: author.user_id,
-              username: author.username,
-              display_name: author.display_name,
-              avatar_url: author.avatar_url,
-            }
-          : {
-              id: comment.author_id,
-              username: "Unknown",
-              display_name: "Unknown User",
-              avatar_url: null,
-            },
-      };
-    });
-
-    console.log("Comments with authors:", commentsWithAuthors); // Debug log
-
-    // Get like counts for each comment
-    const commentIds = commentsWithAuthors?.map((c) => c.id) || [];
-    const { data: likes } = await supabase
-      .from("comment_likes")
-      .select("comment_id")
-      .in("comment_id", commentIds);
-
-    // Get current user's likes
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const { data: userLikes } = user
-      ? await supabase
-          .from("comment_likes")
-          .select("comment_id")
-          .eq("user_id", user.id)
-          .in("comment_id", commentIds)
-      : { data: [] };
-
-    // Build comment details with like counts
-    const commentsWithDetails: CommentWithDetails[] = (
-      commentsWithAuthors || []
-    ).map((comment) => {
-      const likeCount =
-        likes?.filter((like) => like.comment_id === comment.id).length || 0;
-      const isLiked =
-        userLikes?.some((like) => like.comment_id === comment.id) || false;
-
-      return {
-        ...comment,
-        like_count: likeCount,
-        is_liked: isLiked,
-        replies: [], // Will be populated by buildCommentTree
-      };
-    });
-
-    console.log("Comments with details:", commentsWithDetails); // Debug log
-
-    // Build comment tree (top-level comments with nested replies)
-    const commentTree = buildCommentTree(commentsWithDetails);
-
-    console.log("Final comment tree:", commentTree); // Debug log
-
-    // Cache the results
-    setCachedComments(postId, commentTree);
-
-    return commentTree;
-  } catch (error) {
-    console.error("Error fetching comments:", error);
-    throw error;
+    commentsInFlight.set(key, promise);
   }
+  return promise;
 };
 
 // Build comment tree from flat list
@@ -270,22 +269,19 @@ export const createComment = async (
 ): Promise<Comment> => {
   try {
     // Get current user
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-    if (authError || !user) {
+    const userId = await getViewerAuthUserId();
+    if (!userId) {
       throw new Error("User not authenticated");
     }
 
     console.log("Creating comment:", commentData); // Debug log
-    console.log("User ID:", user.id); // Debug log
+    console.log("User ID:", userId); // Debug log
 
     const { data, error } = await supabase
       .from("comments")
       .insert({
         post_id: commentData.post_id,
-        author_id: user.id, // Add missing author_id
+        author_id: userId, // Add missing author_id
         parent_id: commentData.parent_id || null,
         content: commentData.content.trim(),
         images: commentData.images || [], // Include images field
@@ -302,6 +298,9 @@ export const createComment = async (
 
     // Invalidate cache for this post
     invalidateCommentsCache(commentData.post_id);
+    const { invalidateOnComment } = await import("../../lib/cacheInvalidation");
+    invalidateOnComment(commentData.post_id);
+    emitPostChanged(commentData.post_id, { commentsDelta: 1 });
 
     return data;
   } catch (error) {
@@ -330,6 +329,8 @@ export const updateComment = async (
 
     // Invalidate cache for this post
     invalidateCommentsCache(data.post_id);
+    const { invalidateOnComment } = await import("../../lib/cacheInvalidation");
+    invalidateOnComment(data.post_id);
 
     return data;
   } catch (error) {
@@ -361,6 +362,11 @@ export const deleteComment = async (commentId: string): Promise<void> => {
     // Invalidate cache for this post
     if (comment) {
       invalidateCommentsCache(comment.post_id);
+      const { invalidateOnComment } = await import(
+        "../../lib/cacheInvalidation"
+      );
+      invalidateOnComment(comment.post_id);
+      emitPostChanged(comment.post_id, { commentsDelta: -1 });
     }
   } catch (error) {
     console.error("Error deleting comment:", error);
@@ -422,6 +428,7 @@ export const unlikeComment = async (commentId: string): Promise<void> => {
 // Get comment count for a post
 export const getCommentCount = async (postId: string): Promise<number> => {
   try {
+    if (isDraftPostId(postId)) return 0;
     const { count, error } = await supabase
       .from("comments")
       .select("*", { count: "exact", head: true })

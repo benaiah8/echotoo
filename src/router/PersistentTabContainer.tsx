@@ -57,15 +57,30 @@ export function PersistentTabContainer() {
     const path = location.pathname;
     const tab = getTabFromRoute(path);
 
+    console.log("🔍 [TAB-SYNC] URL changed, syncing tab state:", {
+      currentPath: path,
+      computedTab: tab,
+      currentActiveTab: activeTab,
+      willUpdate: tab !== activeTab,
+      profileUsername: profileUsername,
+    });
+
     // Only update if tab changed (avoid unnecessary re-renders)
     if (tab !== activeTab) {
+      console.log("✅ [TAB-SYNC] Updating active tab:", activeTab, "→", tab);
       setActiveTab(tab, path);
+    } else {
+      console.log(
+        "⚠️ [TAB-SYNC] Tab already active, skipping update:",
+        activeTab
+      );
     }
 
     // Extract and store username for other-profile tab
     if (path.startsWith("/u/") && path !== "/u/me") {
       const username = path.split("/u/")[1].split("/")[0]; // Handle /u/username/tab routes
       if (username !== profileUsername) {
+        console.log("👤 [TAB-SYNC] Setting profile username:", username);
         setProfileUsername(username);
       }
     }
@@ -160,4 +175,3 @@ export function PersistentTabContainer() {
  * The memory trade-off is absolutely worth it for the dramatic UX improvement
  * and cost savings from reduced API calls.
  */
-

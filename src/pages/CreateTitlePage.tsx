@@ -9,13 +9,13 @@ import CalendarModal from "../components/CalendarModal";
 import DurationSelect from "../components/DurationSelect";
 import { Paths } from "../router/Paths";
 
+// [LAUNCH] Anonymous posting disabled - removed anonymous from DraftMeta
 type DraftMeta = {
   caption?: string;
   duration?: string;
   durationNotes?: string;
   isRecurring?: boolean;
   selectedDates?: string[]; // ISO strings
-  anonymous?: boolean;
 };
 
 export default function CreateTitlePage() {
@@ -56,14 +56,6 @@ export default function CreateTitlePage() {
     new Date(), // preselect "today"
   ]);
   const [isRecurring, setIsRecurring] = useState(false);
-  const [anonymous, setAnonymous] = useState(() => {
-    try {
-      const raw = localStorage.getItem("draftMeta");
-      return raw ? Boolean(JSON.parse(raw).anonymous) : false;
-    } catch {
-      return false;
-    }
-  });
 
   // persist as-you-type
   useEffect(() => {
@@ -73,12 +65,11 @@ export default function CreateTitlePage() {
       durationNotes,
       isRecurring,
       selectedDates: selectedDates.map((d) => d.toISOString()),
-      anonymous,
     };
     try {
       localStorage.setItem("draftMeta", JSON.stringify(payload));
     } catch {}
-  }, [caption, duration, durationNotes, isRecurring, selectedDates, anonymous]);
+  }, [caption, duration, durationNotes, isRecurring, selectedDates]);
 
   // wizard URLs
   const base = `?type=${postType}`;
@@ -93,7 +84,7 @@ export default function CreateTitlePage() {
   const handleNext = () => navigate(paths[1]);
 
   return (
-    <PrimaryPageContainer back>
+    <PrimaryPageContainer back capacitorNotchScrim>
       <CalendarModal
         show={showCal}
         selectedDates={selectedDates}
@@ -143,14 +134,6 @@ export default function CreateTitlePage() {
           <div className="flex items-center gap-3">
             <span className="text-xs text-[var(--text)]">Repeat weekly?</span>
             <PrimaryToggle value={isRecurring} onChange={setIsRecurring} />
-          </div>
-        </div>
-
-        {/* Anonymous */}
-        <div className="w-full mt-4 bg-[var(--surface-2)] p-4 rounded-md">
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-[var(--text)]">Post anonymously</span>
-            <PrimaryToggle value={anonymous} onChange={setAnonymous} />
           </div>
         </div>
 

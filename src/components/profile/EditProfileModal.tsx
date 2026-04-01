@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { uploadToCloudinary } from "../../api/services/cloudinaryUpload";
+import { imgUrlPublic } from "../../lib/img";
+import { uploadImage } from "../../api/services/mediaUpload";
+
+const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
+
+function mapProfileAvatarUploadError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("not authenticated")) return msg;
+  if (msg.includes("Supabase Storage")) return msg;
+  return "Could not prepare image. Try a different photo.";
+}
 
 type Props = {
   open: boolean;
@@ -150,7 +160,7 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
         className="absolute inset-0 bg-[var(--surface)]/60"
         onClick={onClose}
       />
-      <div className="absolute left-0 right-0 bottom-0 rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)] p-4">
+      <div className="absolute left-0 right-0 bottom-0 rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)] p-4 safe-area-inset-bottom">
         <div className="flex items-center justify-between mb-2">
           <div className="text-sm font-semibold">Edit profile</div>
           <button className="text-xs text-[var(--text)]/70" onClick={onClose}>
@@ -164,9 +174,9 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
         <div className="flex items-center justify-between rounded-xl p-3 border border-[var(--border)] bg-[var(--surface-2)]">
           <div className="flex items-center gap-3">
             {/* preview */}
-            {avatarUrl ? (
+            {imgUrlPublic(avatarUrl) ? (
               <img
-                src={avatarUrl}
+                src={imgUrlPublic(avatarUrl)!}
                 className="w-12 h-12 rounded-full object-cover"
                 alt=""
               />
@@ -195,18 +205,43 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
                   setError("Please choose an image file.");
                   return;
                 }
-                if (file.size > 5 * 1024 * 1024) {
-                  setError("Max image size is 5MB.");
-                  return;
-                }
+                console.log(PROFILE_AVATAR_UPLOAD_LOG, "selection_ok", {
+                  name: file.name,
+                  bytes: file.size,
+                  type: file.type,
+                });
                 setError(null);
                 setUploading(true);
                 try {
-                  // Cloudinary helper should return a URL string (adjust if your API differs)
-                  const url = await uploadToCloudinary(file);
-                  setAvatarUrl(url);
-                } catch (err: any) {
-                  setError(err?.message || "Upload failed.");
+                  // Get userId from session for uploadImage
+                  const {
+                    data: { session },
+                  } = await supabase.auth.getSession();
+                  if (!session?.user?.id) {
+                    throw new Error("User not authenticated");
+                  }
+                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "upload_start", {
+                    userId: session.user.id,
+                    bytes: file.size,
+                  });
+                  const result = await uploadImage(file, {
+                    userId: session.user.id,
+                    kind: "avatar",
+                  });
+                  setAvatarUrl(result);
+                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "success");
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  const phase = msg.includes("Supabase Storage")
+                    ? "upload"
+                    : msg.includes("not authenticated")
+                    ? "auth"
+                    : "preparation_or_unknown";
+                  console.warn(PROFILE_AVATAR_UPLOAD_LOG, "failed", {
+                    phase,
+                    message: msg,
+                  });
+                  setError(mapProfileAvatarUploadError(err));
                 } finally {
                   setUploading(false);
                   // reset input so selecting the same file again still triggers change

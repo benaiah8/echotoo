@@ -86,8 +86,13 @@
   /* your dark palette */
   --rdp-background-color: var(--bg) !important;
   --rdp-text-color: var(--text) !important;
-  /* make selected days gray, not yellow */
-  --rdp-accent-color: var(--text) !important;
+  /* v9 default styles use --rdp-accent-* for selection chrome; keep brand-aligned */
+  --rdp-accent-color: var(--brand) !important;
+  --rdp-accent-background-color: color-mix(
+    in oklab,
+    var(--brand) 22%,
+    var(--bg)
+  ) !important;
 }
 
 /* ensure the container itself is dark */
@@ -424,6 +429,113 @@
 }
 .rdp-theme .rdp-month {
   width: 100% !important;
+}
+
+/* CalendarModal only: centered grid, transparent on glass card, softer range shapes */
+.rdp-theme.rdp-theme--modal {
+  padding: 0.25rem 0.5rem 0.5rem !important;
+  background-color: transparent !important;
+}
+.rdp-theme.rdp-theme--modal .rdp-nav,
+.rdp-theme.rdp-theme--modal .rdp-month_caption {
+  background-color: transparent !important;
+}
+.rdp-theme.rdp-theme--modal .rdp-months {
+  max-width: 100% !important;
+  width: 100%;
+  justify-content: center;
+}
+.rdp-theme.rdp-theme--modal .rdp-month {
+  width: 100%;
+  max-width: 100%;
+}
+.rdp-theme.rdp-theme--modal .rdp-month_caption {
+  justify-content: center;
+  width: 100%;
+}
+.rdp-theme.rdp-theme--modal .rdp-day_selected,
+.rdp-theme.rdp-theme--modal button[aria-selected="true"] {
+  border-radius: 0.5rem !important;
+  font-weight: 600 !important;
+}
+.rdp-theme.rdp-theme--modal .range-start {
+  border-radius: 0.45rem 0.2rem 0.2rem 0.45rem !important;
+  font-weight: 600 !important;
+}
+.rdp-theme.rdp-theme--modal .range-end {
+  border-radius: 0.2rem 0.45rem 0.45rem 0.2rem !important;
+  font-weight: 600 !important;
+}
+.rdp-theme.rdp-theme--modal .single-only {
+  border-radius: 0.5rem !important;
+  font-weight: 600 !important;
+}
+
+/* Modal: stop square cell borders / outlines from clashing with rounded fills */
+.rdp-theme.rdp-theme--modal [role="gridcell"] {
+  border: none !important;
+  vertical-align: middle !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day {
+  border: none !important;
+  background: transparent !important;
+}
+.rdp-theme.rdp-theme--modal .rdp-day_button {
+  overflow: visible !important;
+}
+/*
+ * react-day-picker v9: `rdp-selected` / range classes are on the td; the day
+ * button is `.rdp-day_button` only (no aria-selected on the button).
+ */
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-selected .rdp-day_button {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: var(--brand) !important;
+  color: var(--brand-ink) !important;
+  border-radius: 0.5rem !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-selected .rdp-day_button * {
+  color: var(--brand-ink) !important;
+  background: transparent !important;
+  opacity: 1 !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day.range-middle .rdp-day_button {
+  border-radius: 0.2rem !important;
+  font-weight: 500 !important;
+  background-color: color-mix(
+    in oklab,
+    var(--brand) 32%,
+    var(--calendar-range-bg)
+  ) !important;
+  color: var(--text) !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day.range-middle .rdp-day_button * {
+  color: var(--text) !important;
+  background: transparent !important;
+  opacity: 1 !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day.range-start .rdp-day_button *,
+.rdp-theme.rdp-theme--modal td.rdp-day.range-end .rdp-day_button *,
+.rdp-theme.rdp-theme--modal td.rdp-day.single-only .rdp-day_button * {
+  color: var(--brand-ink) !important;
+}
+/* Global .rdp-theme rule sets nested * to border-radius: 0 — keep pill shape without hiding label */
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-selected .rdp-day_button *,
+.rdp-theme.rdp-theme--modal .range-start *,
+.rdp-theme.rdp-theme--modal .range-end *,
+.rdp-theme.rdp-theme--modal .range-middle *,
+.rdp-theme.rdp-theme--modal .single-only * {
+  border-radius: inherit !important;
+}
+
+/* Selected days that are “outside” the caption month were nearly invisible (opacity). */
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-outside.rdp-selected {
+  opacity: 1 !important;
+}
+.rdp-theme.rdp-theme--modal .rdp-day_button:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--brand) 45%, transparent) !important;
+  outline-offset: 0 !important;
 }
 
 /* pill container must be position:relative */

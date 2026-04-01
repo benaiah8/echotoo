@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import React, { useState, useEffect, useRef } from "react";
 import {
   type NotificationWithActor,
   type NotificationType,
@@ -15,14 +14,31 @@ import { toast } from "react-hot-toast";
 import {
   getBatchFollowStatuses,
   getViewerId,
+  getViewerAuthUserId,
 } from "../../api/services/follows";
+import { getBatchInvitesByIds } from "../../api/services/invites";
+import { setCachedInviteData } from "../../lib/inviteDataCache";
+import { setCachedInviteStatus } from "../../lib/inviteStatusCache";
+import { logFetchStart } from "../../lib/tabVisibilityDebug";
+import { NOTIFICATIONS_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
 
 interface Props {
   className?: string;
+  /** When false, skips initial fetch (e.g. tab hidden). When true, fetches immediately. */
+  isVisible?: boolean;
 }
 
-export default function NotificationList({ className = "" }: Props) {
-  const [searchParams, setSearchParams] = useSearchParams();
+/**
+ * NotificationList Component
+ *
+ * [FIX: Phase 1 - Navigation Bug] Switched to LOCAL STATE for filter (like Profile page)
+ * Previously used URL search params which caused race condition with navigate()
+ * Now uses simple React state - no URL manipulation, no event listeners needed
+ */
+export default function NotificationList({
+  className = "",
+  isVisible = true,
+}: Props) {
   const [notifications, setNotifications] = useState<NotificationWithActor[]>(
     []
   );
@@ -30,18 +46,24 @@ export default function NotificationList({ className = "" }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // [FIX] Local state only - no URL params (matches Profile page pattern)
   const [selectedFilter, setSelectedFilter] = useState<
     NotificationType | "all"
-  >(() => {
-    const filterParam = searchParams.get("filter");
-    return (filterParam as NotificationType | "all") || "all";
-  });
+  >("all");
 
   // [OPTIMIZATION: Phase 1 - Batch] Store batched follow statuses for follow request notifications
   // Why: Batch load all follow statuses at once instead of individual queries per notification
   const [batchedFollowStatuses, setBatchedFollowStatuses] = useState<
     Record<string, "none" | "pending" | "following" | "friends">
   >({});
+
+  // [OPTIMIZATION: StrictMode Guard] Prevent duplicate loadNotifications on React 18 StrictMode double-mount
+  const initialLoadInFlightRef = useRef(false);
+
+  // [OPTIMIZATION: Stale Window] Skip refetch when switching tabs quickly (Notifications → Home → Notifications)
+  const NOTIF_STALE_MS = 15000;
+  const lastLoadedAtRef = useRef<number>(0);
 
   const loadNotifications = async (offset = 0, append = false) => {
     try {
@@ -52,12 +74,148 @@ export default function NotificationList({ className = "" }: Props) {
         setLoadingMore(true);
       }
 
+      logFetchStart("NotificationList", "notifications", isVisible, undefined);
       const data = await getNotifications(20, offset);
+
+      // [OPTIMIZATION] Batch hydrate invite direction/status to eliminate N+1 getInviteById
+      const inviteIdsToHydrate = data
+        .filter(
+          (n) =>
+            n.type === "invite" &&
+            n.additional_data?.invite_id &&
+            !n.additional_data?.invite_direction
+        )
+        .map((n) => n.additional_data!.invite_id as string);
+      if (inviteIdsToHydrate.length > 0) {
+        try {
+          const viewerUserId = await getViewerAuthUserId();
+          const batchInvites = await getBatchInvitesByIds(inviteIdsToHydrate);
+          const inviteMetaMap: Record<
+            string,
+            {
+              direction: "sent" | "received";
+              status: "pending" | "accepted" | "declined";
+            }
+          > = {};
+          for (const inv of batchInvites) {
+            const direction: "sent" | "received" =
+              viewerUserId && inv.inviter_id === viewerUserId
+                ? "sent"
+                : "received";
+            const status: "pending" | "accepted" | "declined" =
+              inv.status === "accepted" || inv.status === "declined"
+                ? inv.status
+                : "pending";
+            inviteMetaMap[inv.id] = { direction, status };
+            setCachedInviteData(inv.id, inv);
+            setCachedInviteStatus(inv.id, status);
+          }
+          // Enrich notifications with batch data
+          for (let i = 0; i < data.length; i++) {
+            const n = data[i];
+            if (n.type !== "invite") continue;
+            const inviteId = n.additional_data?.invite_id;
+            if (!inviteId || !inviteMetaMap[inviteId]) continue;
+            data[i] = {
+              ...n,
+              additional_data: {
+                ...n.additional_data,
+                invite_direction: inviteMetaMap[inviteId].direction,
+                invite_status: inviteMetaMap[inviteId].status,
+              },
+            };
+          }
+        } catch (err) {
+          console.warn(
+            "[NotificationList] Batch invite hydration failed:",
+            err
+          );
+        }
+      }
+
+      // [OPTIMIZATION] Batch load follow statuses BEFORE setting notifications
+      // so rows get initialFollowStatus on first render, avoiding per-row getFollowStatus
+      const followRequestNotifications = data.filter(
+        (n) =>
+          n.type === "follow" &&
+          n.additional_data?.follow_request_status &&
+          n.additional_data?.follower_profile_id &&
+          n.additional_data?.following_profile_id
+      );
+
+      let statusMap: Record<
+        string,
+        "none" | "pending" | "following" | "friends"
+      > = {};
+
+      if (followRequestNotifications.length > 0) {
+        try {
+          const viewerProfileId = await getViewerId();
+          if (viewerProfileId) {
+            const profileIdsToCheck = new Set<string>();
+            followRequestNotifications.forEach((notification) => {
+              const followerProfileId =
+                notification.additional_data?.follower_profile_id;
+              const followingProfileId =
+                notification.additional_data?.following_profile_id;
+
+              if (followerProfileId && followingProfileId) {
+                if (viewerProfileId === followingProfileId) {
+                  profileIdsToCheck.add(followerProfileId);
+                } else if (viewerProfileId === followerProfileId) {
+                  profileIdsToCheck.add(followingProfileId);
+                }
+              }
+            });
+
+            if (profileIdsToCheck.size > 0) {
+              const followStatuses = await getBatchFollowStatuses(
+                viewerProfileId,
+                Array.from(profileIdsToCheck)
+              );
+
+              followRequestNotifications.forEach((notification) => {
+                const followerProfileId =
+                  notification.additional_data?.follower_profile_id;
+                const followingProfileId =
+                  notification.additional_data?.following_profile_id;
+
+                if (followerProfileId && followingProfileId) {
+                  let status:
+                    | "none"
+                    | "pending"
+                    | "following"
+                    | "friends"
+                    | undefined;
+
+                  if (viewerProfileId === followingProfileId) {
+                    status = followStatuses[followerProfileId];
+                  } else if (viewerProfileId === followerProfileId) {
+                    status = followStatuses[followingProfileId];
+                  }
+
+                  if (status) {
+                    statusMap[notification.id] = status;
+                  }
+                }
+              });
+            }
+          }
+        } catch (error) {
+          console.warn(
+            "[NotificationList] Failed to batch load follow statuses:",
+            error
+          );
+        }
+      }
 
       if (append) {
         setNotifications((prev) => [...prev, ...data]);
+        setBatchedFollowStatuses((prev) => ({ ...prev, ...statusMap }));
       } else {
         setNotifications(data);
+        setBatchedFollowStatuses(statusMap);
+        lastLoadedAtRef.current = Date.now();
       }
 
       setHasMore(data.length === 20);
@@ -68,136 +226,50 @@ export default function NotificationList({ className = "" }: Props) {
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      if (offset === 0) {
+        initialLoadInFlightRef.current = false;
+      }
     }
   };
 
+  const loadNotificationsRef = useRef(loadNotifications);
+  loadNotificationsRef.current = loadNotifications;
+
   useEffect(() => {
-    loadNotifications();
-  }, []);
-
-  // [OPTIMIZATION: Phase 1 - Batch] Batch load follow statuses for all follow request notifications
-  // Why: Reduces N individual API calls to 1 batched call, saves egress and improves performance
-  useEffect(() => {
-    const batchLoadFollowStatuses = async () => {
-      // Find all follow request notifications
-      const followRequestNotifications = notifications.filter(
-        (n) =>
-          n.type === "follow" &&
-          n.additional_data?.follow_request_status &&
-          n.additional_data?.follower_profile_id &&
-          n.additional_data?.following_profile_id
-      );
-
-      if (followRequestNotifications.length === 0) {
-        setBatchedFollowStatuses({});
-        return;
+    const onTabRefresh = () => {
+      if (!isVisible) return;
+      lastLoadedAtRef.current = 0;
+      initialLoadInFlightRef.current = false;
+      setError(null);
+      if (import.meta.env.DEV) {
+        console.debug("[notifications-tab-refresh] refetch");
       }
-
-      try {
-        const viewerProfileId = await getViewerId();
-        if (!viewerProfileId) return;
-
-        // Collect all unique profile IDs that need follow status checks
-        // For follow requests, we need to check status between follower and following
-        const profileIdsToCheck = new Set<string>();
-
-        followRequestNotifications.forEach((notification) => {
-          const followerProfileId =
-            notification.additional_data?.follower_profile_id;
-          const followingProfileId =
-            notification.additional_data?.following_profile_id;
-
-          if (followerProfileId && followingProfileId) {
-            // We need to check status from viewer's perspective
-            // If viewer is the following (account owner), check status with follower
-            // If viewer is the follower (requester), check status with following
-            if (viewerProfileId === followingProfileId) {
-              profileIdsToCheck.add(followerProfileId);
-            } else if (viewerProfileId === followerProfileId) {
-              profileIdsToCheck.add(followingProfileId);
-            }
-          }
-        });
-
-        if (profileIdsToCheck.size === 0) return;
-
-        // Batch load all follow statuses
-        const followStatuses = await getBatchFollowStatuses(
-          viewerProfileId,
-          Array.from(profileIdsToCheck)
-        );
-
-        // Create a map keyed by notification ID for easy lookup
-        const statusMap: Record<
-          string,
-          "none" | "pending" | "following" | "friends"
-        > = {};
-
-        followRequestNotifications.forEach((notification) => {
-          const followerProfileId =
-            notification.additional_data?.follower_profile_id;
-          const followingProfileId =
-            notification.additional_data?.following_profile_id;
-
-          if (followerProfileId && followingProfileId) {
-            let status:
-              | "none"
-              | "pending"
-              | "following"
-              | "friends"
-              | undefined;
-
-            if (viewerProfileId === followingProfileId) {
-              // Received request: check status with follower
-              status = followStatuses[followerProfileId];
-            } else if (viewerProfileId === followerProfileId) {
-              // Sent request: check status with following
-              status = followStatuses[followingProfileId];
-            }
-
-            if (status) {
-              statusMap[notification.id] = status;
-            }
-          }
-        });
-
-        setBatchedFollowStatuses(statusMap);
-      } catch (error) {
-        console.warn(
-          "[NotificationList] Failed to batch load follow statuses:",
-          error
-        );
-        // Silent fail - components will fall back to individual queries
-      }
+      loadNotificationsRef.current(0, false);
     };
+    window.addEventListener(NOTIFICATIONS_TAB_REFRESH_EVENT, onTabRefresh);
+    return () =>
+      window.removeEventListener(NOTIFICATIONS_TAB_REFRESH_EVENT, onTabRefresh);
+  }, [isVisible]);
 
-    if (notifications.length > 0) {
-      batchLoadFollowStatuses();
+  useEffect(() => {
+    if (!isVisible) {
+      initialLoadInFlightRef.current = false;
+      setLoading(false);
+      return;
     }
-  }, [notifications]);
-
-  // Listen for filter reset events from bottom tab
-  useEffect(() => {
-    const handleResetFilter = (event: CustomEvent) => {
-      const { filter } = event.detail;
-      setSelectedFilter(filter);
-      // Clear URL params when resetting to "all"
-      if (filter === "all") {
-        setSearchParams({});
-      }
-    };
-
-    window.addEventListener(
-      "notification:resetFilter",
-      handleResetFilter as EventListener
-    );
-    return () => {
-      window.removeEventListener(
-        "notification:resetFilter",
-        handleResetFilter as EventListener
-      );
-    };
-  }, [setSearchParams]);
+    if (initialLoadInFlightRef.current) return;
+    // [Stale Window] Skip refetch if we have cached data and it's fresh (< 15s)
+    if (
+      notifications.length > 0 &&
+      Date.now() - lastLoadedAtRef.current < NOTIF_STALE_MS
+    ) {
+      return;
+    }
+    initialLoadInFlightRef.current = true;
+    loadNotifications(0, false);
+    // Note: Do NOT clear ref in cleanup - that would let StrictMode's second mount
+    // trigger a duplicate load. Ref is cleared in loadNotifications finally when offset===0.
+  }, [isVisible]);
 
   // Notify other components when notifications are loaded/updated
   useEffect(() => {
@@ -207,6 +279,7 @@ export default function NotificationList({ className = "" }: Props) {
   }, [notifications]);
 
   const handleMarkAsRead = (notificationId: string) => {
+    lastLoadedAtRef.current = 0;
     setNotifications((prev) =>
       prev.map((notification) =>
         notification.id === notificationId
@@ -226,6 +299,7 @@ export default function NotificationList({ className = "" }: Props) {
     if (notifications.some((n) => !n.is_read)) {
       try {
         await markAllNotificationsAsRead();
+        lastLoadedAtRef.current = 0;
         setNotifications((prev) =>
           prev.map((notification) => ({ ...notification, is_read: true }))
         );
@@ -240,18 +314,6 @@ export default function NotificationList({ className = "" }: Props) {
   const loadMore = () => {
     if (hasMore && !loadingMore) {
       loadNotifications(notifications.length, true);
-    }
-  };
-
-  // Wrapper function to handle type conversion for onFilterChange
-  const handleFilterChange = (filter: string) => {
-    const newFilter = filter as NotificationType | "all";
-    setSelectedFilter(newFilter);
-    // Update URL to reflect the current filter
-    if (newFilter === "all") {
-      setSearchParams({});
-    } else {
-      setSearchParams({ filter: newFilter });
     }
   };
 
@@ -281,7 +343,7 @@ export default function NotificationList({ className = "" }: Props) {
 
   if (loading) {
     return (
-      <div className={`w-full ${className}`}>
+      <div className={`w-full safe-area-inset-top ${className}`}>
         <div className="space-y-2">
           {[...Array(5)].map((_, i) => (
             <div

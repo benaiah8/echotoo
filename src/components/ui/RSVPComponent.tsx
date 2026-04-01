@@ -1,14 +1,19 @@
 // src/components/ui/RSVPComponent.tsx
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { getViewerAuthUserId } from "../../api/services/follows";
 import Avatar from "./Avatar";
 import RSVPListDrawer from "./RSVPListDrawer";
 import FollowButton from "./FollowButton";
 import { useDispatch } from "react-redux";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { imgUrlPublic } from "../../lib/img";
+import { isDraftPostId } from "../../lib/drafts";
 import { getCachedRSVPData, setCachedRSVPData } from "../../lib/rsvpCache";
 import { type RSVPData } from "../../types/legacy";
+import { recordSignal } from "../../lib/feedPersonalization";
+import { type FeedItem } from "../../api/queries/getPublicFeed";
+import { incrementMyXp } from "../../api/services/xp";
 
 interface RSVPUser {
   id: string;
@@ -33,6 +38,8 @@ interface RSVPComponentProps {
   };
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded RSVP data from batch loader
   rsvpData?: RSVPData;
+  // [PHASE 3] Optional post data for personalization
+  post?: FeedItem;
 }
 
 export default function RSVPComponent({
@@ -42,12 +49,14 @@ export default function RSVPComponent({
   align = "right", // Default to right for backward compatibility
   postAuthor,
   rsvpData: initialRsvpData, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded RSVP data
+  post, // [PHASE 3] Optional post data for personalization
 }: RSVPComponentProps) {
   const dispatch = useDispatch();
   const [rsvpUsers, setRsvpUsers] = useState<RSVPUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [showRSVPList, setShowRSVPList] = useState(false);
   const [currentUserRsvp, setCurrentUserRsvp] = useState<string | null>(null);
+  const [goingCountDelta, setGoingCountDelta] = useState(0); // Optimistic delta from drawer toggles
   const [isToggling, setIsToggling] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const componentRef = useRef<HTMLDivElement>(null);
@@ -78,37 +87,19 @@ export default function RSVPComponent({
             avatar_url: cachedAvatarUrl,
           });
         } else {
-          // Fetch from database if not cached
-          const { data: profileData, error: profileError } = await supabase
-            .from("profiles")
-            .select("id, username, display_name, avatar_url")
-            .eq("user_id", session.user.id)
-            .single();
+          // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+          // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
+          const { getProfileByUserId } = await import(
+            "../../api/services/follows"
+          );
+          const profileData = await getProfileByUserId(session.user.id);
 
-          if (profileError) {
-            console.error("Error loading current user profile:", profileError);
-
-            // If profile doesn't exist, try to create one
-            if (profileError.code === "PGRST116") {
-              console.log("Profile not found, attempting to create one");
-              const { data: newProfile, error: createError } = await supabase
-                .from("profiles")
-                .insert({
-                  user_id: session.user.id,
-                  username: session.user.email?.split("@")[0] || "user",
-                  display_name: session.user.email?.split("@")[0] || "User",
-                  avatar_url: null,
-                })
-                .select()
-                .single();
-
-              if (createError) {
-                console.error("Error creating profile:", createError);
-              } else {
-                console.log("Profile created successfully:", newProfile);
-                setCurrentUserProfile(newProfile);
-              }
-            }
+          if (!profileData) {
+            console.error(
+              "Error loading current user profile: Profile not found"
+            );
+            // Profile not found - getProfileByUserId() already handles errors internally
+            // No need to create profile here, as it's handled elsewhere
           } else {
             setCurrentUserProfile(profileData);
           }
@@ -118,17 +109,25 @@ export default function RSVPComponent({
     getCurrentUser();
   }, []);
 
-  // [OPTIMIZATION: Lazy Loading] Load RSVP data - lazy load when visible (like images)
+  // [DEBUG] Warn if falling back to individual query
+  // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
+  // useEffect(() => {
+  //   if (initialRsvpData === undefined && currentUser && !hasLoadedRef.current) {
+  //     console.warn('[RSVPComponent] ⚠️ No PostgreSQL data, falling back to query:', postId);
+  //   }
+  // }, [initialRsvpData, postId, currentUser]);
+
+  // [FIX: Request storm] Data-driven: use initialRsvpData when present, NEVER fetch for feed.
+  // Only fetch when initialRsvpData is undefined (e.g. legacy paths without rsvp_data).
   useEffect(() => {
-    // If data is provided, use it immediately (no API call, no lazy loading needed)
-    if (initialRsvpData !== undefined && currentUser) {
+    // Feed always passes post.rsvp_data; use it, never fetch (even before currentUser loads)
+    if (initialRsvpData !== undefined) {
       hasLoadedRef.current = true;
-      loadRSVPs();
+      applyInitialRsvpData(initialRsvpData);
       return;
     }
 
-    // Lazy load: Only make API call when component is visible (like images)
-    // This prevents blocking new posts from loading
+    // No data at all: lazy load only when visible (e.g. legacy paths)
     if (!currentUser || !componentRef.current) return;
 
     const observer = new IntersectionObserver(
@@ -139,57 +138,51 @@ export default function RSVPComponent({
           observer.disconnect();
         }
       },
-      { rootMargin: "100px" } // Load 100px before visible (similar to images which use 150px)
+      { rootMargin: "100px" }
     );
 
     observer.observe(componentRef.current);
+    return () => observer.disconnect();
+  }, [postId, currentUser, initialRsvpData]);
 
-    return () => {
-      observer.disconnect();
-    };
-  }, [postId, currentUser, initialRsvpData]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
+  /** Set state from feed data; no network calls. Used when initialRsvpData is provided. */
+  const applyInitialRsvpData = (data: RSVPData | null) => {
+    if (data === null) {
+      setRsvpUsers([]);
+      setCurrentUserRsvp(null);
+    } else {
+      const users = data.users ?? [];
+      const filteredUsers = users.filter((user) => {
+        if (postAuthor && user.id === postAuthor.id) return false;
+        return true;
+      });
+      setRsvpUsers(filteredUsers);
+      setCurrentUserRsvp(data.currentUserStatus ?? null);
+    }
+    setGoingCountDelta(0);
+    setLoading(false);
+    setIsInitialized(true);
+  };
 
   const loadRSVPs = async () => {
     setLoading(true);
     try {
-      // [OPTIMIZATION: Phase 1 - Batch] Use batched data if provided
-      // CRITICAL FIX: Check !== undefined instead of truthy check
-      // This prevents API calls when rsvp_data is null (non-hangout posts)
-      if (initialRsvpData !== undefined && currentUser) {
-        // If rsvp_data is null (non-hangout post), set empty state and return
-        if (initialRsvpData === null) {
-          setRsvpUsers([]);
-          setCurrentUserRsvp(null);
-          setLoading(false);
-          setIsInitialized(true);
-          return;
-        }
-
-        // Filter out creator from batched users
-        const filteredUsers = initialRsvpData.users.filter((user) => {
-          if (postAuthor && user.id === postAuthor.id) {
-            return false;
-          }
-          return true;
-        });
-
-        setRsvpUsers(filteredUsers);
-        setCurrentUserRsvp(initialRsvpData.currentUserStatus);
+      if (isDraftPostId(postId)) {
+        setRsvpUsers([]);
+        setCurrentUserRsvp(null);
         setLoading(false);
         setIsInitialized(true);
-        return; // Skip query if we have batched data
+        return;
       }
-
+      // loadRSVPs only runs when initialRsvpData is undefined (no feed data)
       // Try to get cached RSVP data first
       const cachedRSVP = getCachedRSVPData(postId);
       if (cachedRSVP && currentUser) {
         // console.log("[RSVPComponent] Using cached RSVP data for post:", postId);
 
         // Get current user's auth ID to check if cached data is for current user
-        const {
-          data: { user: authUser },
-        } = await supabase.auth.getUser();
-        if (authUser) {
+        const authUserId = await getViewerAuthUserId();
+        if (authUserId) {
           // Filter out creator from cached users
           const filteredUsers = cachedRSVP.users.filter((user) => {
             if (postAuthor && user.id === postAuthor.id) {
@@ -201,9 +194,10 @@ export default function RSVPComponent({
           setRsvpUsers(filteredUsers);
 
           // For current user's RSVP status, we need to check if it's still valid
-          if (cachedRSVP.currentUserRsvp !== null && authUser.id) {
+          if (cachedRSVP.currentUserRsvp !== null && authUserId) {
             // Check if current user is the creator (they're always "going")
-            if (postAuthor && authUser.id === postAuthor.id) {
+            // Compare profile IDs, not auth ID to profile ID
+            if (postAuthor && currentUserProfile?.id === postAuthor.id) {
               setCurrentUserRsvp("going");
             } else {
               setCurrentUserRsvp(cachedRSVP.currentUserRsvp);
@@ -213,12 +207,13 @@ export default function RSVPComponent({
           setLoading(false);
           setIsInitialized(true);
 
-          // Still fetch fresh data in background to ensure accuracy
-          // but don't block the UI
+          // [FIX] Return here to prevent unnecessary query
+          // Cache is fresh enough for display, no need to re-fetch
+          return;
         }
       }
 
-      // Get RSVP responses for this post
+      // Get RSVP responses for this post (only if no cache available)
       const { data: rsvpData, error } = await supabase
         .from("rsvp_responses")
         .select("id, user_id, status")
@@ -244,16 +239,19 @@ export default function RSVPComponent({
       let userProfiles: any[] = [];
 
       if (authUserIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase
-          .from("profiles")
-          .select("id, user_id, username, display_name, avatar_url")
-          .in("user_id", authUserIds); // Query by user_id (auth user ID)
-
-        if (profilesError) {
-          console.error("Error loading profiles:", profilesError);
-        } else {
-          userProfiles = profilesData || [];
-        }
+        // [PHASE 2.3 - OPTIMIZATION] Use getProfilesByUserIds() for batch loading with deduplication
+        // Why: RequestManager deduplicates simultaneous calls, reuses cache, and enables progressive loading
+        const { getProfilesByUserIds } = await import(
+          "../../api/services/follows"
+        );
+        const profilesData = await getProfilesByUserIds(authUserIds);
+        userProfiles = profilesData.map((p) => ({
+          id: p.id,
+          user_id: p.user_id,
+          username: p.username,
+          display_name: p.display_name,
+          avatar_url: p.avatar_url,
+        }));
       }
 
       // Transform the data
@@ -287,35 +285,41 @@ export default function RSVPComponent({
       // Check current user's RSVP status - need to check ALL statuses, not just "going"
       if (currentUser) {
         // Get current user's auth user ID for RSVP query
-        const {
-          data: { user: authUser },
-        } = await supabase.auth.getUser();
-        if (!authUser) return;
+        const authUserId = await getViewerAuthUserId();
+        // Don't return early - continue loading RSVP list even if authUserId is null
+        // The RSVP list should still display, just without current user's status
 
-        // Get current user's RSVP status (any status)
-        const { data: currentUserRsvpData, error: currentUserError } =
-          await supabase
-            .from("rsvp_responses")
-            .select("status")
-            .eq("post_id", postId)
-            .eq("user_id", authUser.id) // Use auth user ID
-            .maybeSingle(); // Use maybeSingle to handle 0 rows gracefully (prevents 406 errors)
+        if (authUserId) {
+          // Get current user's RSVP status (any status)
+          const { data: currentUserRsvpData, error: currentUserError } =
+            await supabase
+              .from("rsvp_responses")
+              .select("status")
+              .eq("post_id", postId)
+              .eq("user_id", authUserId) // Use auth user ID
+              .maybeSingle(); // Use maybeSingle to handle 0 rows gracefully (prevents 406 errors)
 
-        if (currentUserError && currentUserError.code !== "PGRST116") {
-          console.error("Error loading current user RSVP:", currentUserError);
-        }
+          if (currentUserError && currentUserError.code !== "PGRST116") {
+            console.error("Error loading current user RSVP:", currentUserError);
+          }
 
-        // If no RSVP found, check if current user is the creator
-        if (
-          !currentUserRsvpData &&
-          postAuthor &&
-          authUser.id === postAuthor.id
-        ) {
-          finalCurrentUserRsvp = "going"; // Creator is automatically "going"
-          setCurrentUserRsvp("going");
+          // If no RSVP found, check if current user is the creator
+          // Compare profile IDs, not auth ID to profile ID
+          if (
+            !currentUserRsvpData &&
+            postAuthor &&
+            currentUserProfile?.id === postAuthor.id
+          ) {
+            finalCurrentUserRsvp = "going"; // Creator is automatically "going"
+            setCurrentUserRsvp("going");
+          } else {
+            finalCurrentUserRsvp = currentUserRsvpData?.status || null;
+            setCurrentUserRsvp(finalCurrentUserRsvp);
+          }
         } else {
-          finalCurrentUserRsvp = currentUserRsvpData?.status || null;
-          setCurrentUserRsvp(finalCurrentUserRsvp);
+          // If authUserId is null, still set currentUserRsvp to null (user not authenticated)
+          finalCurrentUserRsvp = null;
+          setCurrentUserRsvp(null);
         }
       }
 
@@ -362,24 +366,28 @@ export default function RSVPComponent({
 
     setIsToggling(true);
     const previousStatus = currentUserRsvp;
+    const prevGoing = previousStatus === "going";
+    const nextGoing = status === "going";
+    const delta =
+      !prevGoing && nextGoing ? 1 : prevGoing && !nextGoing ? -1 : 0;
 
     try {
       // Update UI immediately for better UX
       setCurrentUserRsvp(status);
+      setGoingCountDelta((p) => p + delta);
 
       // Get current user's auth user ID for RSVP
-      const {
-        data: { user: authUser },
-      } = await supabase.auth.getUser();
-      if (!authUser) {
-        setCurrentUserRsvp(previousStatus); // Revert on error
+      const authUserId = await getViewerAuthUserId();
+      if (!authUserId) {
+        setCurrentUserRsvp(previousStatus);
+        setGoingCountDelta((p) => p - delta);
         return;
       }
 
       const { error } = await supabase.from("rsvp_responses").upsert(
         {
           post_id: postId,
-          user_id: authUser.id, // Use auth user ID
+          user_id: authUserId, // Use auth user ID
           status,
           updated_at: new Date().toISOString(),
         },
@@ -391,32 +399,102 @@ export default function RSVPComponent({
 
       if (error) {
         console.error("Error updating RSVP:", error);
-        setCurrentUserRsvp(previousStatus); // Revert on error
+        setCurrentUserRsvp(previousStatus);
+        setGoingCountDelta((p) => p - delta);
         return;
       }
 
       // Update the cache immediately with the new status
       setCachedRSVPData(postId, rsvpUsers, status);
 
-      // Reload RSVPs to sync with server state
-      loadRSVPs();
+      // [Step 5] Invalidate post detail cache so modal shows fresh rsvp_data
+      const { invalidateOnRSVP } = await import("../../lib/cacheInvalidation");
+      invalidateOnRSVP(postId);
+
+      // [PHASE 1] Update XP based on RSVP status change
+      // Delta: prev != "going" and next == "going" => +3
+      //        prev == "going" and next != "going" => -3
+      //        else 0
+      try {
+        const prevWasGoing = previousStatus === "going";
+        const nextIsGoing = status === "going";
+        if (!prevWasGoing && nextIsGoing) {
+          await incrementMyXp(3);
+        } else if (prevWasGoing && !nextIsGoing) {
+          await incrementMyXp(-3);
+        }
+        // else: no change or "maybe" -> "not_going" (no XP change)
+      } catch (err) {
+        // Fail silently - don't break RSVP action if XP fails
+      }
+
+      // [PHASE 3] Record signal for personalization (only for "going" status)
+      if (status === "going" && post) {
+        try {
+          recordSignal(post, "rsvp_going");
+        } catch (err) {
+          // Fail silently - don't break RSVP action if personalization fails
+        }
+      }
+
+      // Don't reload immediately - causes race condition
+      // The optimistic update is already in place (setCurrentUserRsvp(status) on line 361)
+      // The cache is updated, so the state will persist
+      // The drawer will refresh when opened, and the next natural refresh will sync
+
+      // Update rsvpUsers list optimistically to reflect the change immediately
+      if (status === "going" && currentUserProfile) {
+        // Don't add creator to rsvpUsers - they're shown separately
+        const isCreator = postAuthor && currentUserProfile.id === postAuthor.id;
+        if (!isCreator) {
+          // Add current user to the list if not already there
+          const userAlreadyInList = rsvpUsers.some(
+            (u) => u.id === currentUserProfile.id
+          );
+          if (!userAlreadyInList) {
+            setRsvpUsers([
+              ...rsvpUsers,
+              {
+                id: currentUserProfile.id,
+                username: currentUserProfile.username,
+                display_name: currentUserProfile.display_name,
+                avatar_url: currentUserProfile.avatar_url,
+                status: "going",
+                created_at: new Date().toISOString(),
+              },
+            ]);
+          }
+        }
+      } else if (status === "not_going") {
+        // Remove current user from the list (only if they're not the creator)
+        const isCreator =
+          postAuthor && currentUserProfile?.id === postAuthor.id;
+        if (!isCreator) {
+          setRsvpUsers(
+            rsvpUsers.filter((u) => u.id !== currentUserProfile?.id)
+          );
+        }
+      }
     } catch (error) {
       console.error("Error updating RSVP:", error);
-      setCurrentUserRsvp(previousStatus); // Revert on error
+      setCurrentUserRsvp(previousStatus);
+      setGoingCountDelta((p) => p - delta);
     } finally {
       setIsToggling(false);
     }
   };
 
-  // Calculate going count - creator is always included, plus RSVP users
+  // Calculate going count: use feed's going_count when available, else derive from users
   const creatorAlwaysGoing = postAuthor ? 1 : 0;
   const currentUserGoing =
     currentUserRsvp === "going" &&
     currentUserProfile &&
-    currentUser.id !== postAuthor?.id
+    currentUserProfile.id !== postAuthor?.id
       ? 1
       : 0;
-  const goingCount = creatorAlwaysGoing + rsvpUsers.length + currentUserGoing;
+  const derivedCount = creatorAlwaysGoing + rsvpUsers.length + currentUserGoing;
+  const goingCount =
+    (initialRsvpData?.going_count ?? derivedCount) + goingCountDelta;
   const spotsLeft = capacity - goingCount;
 
   // Always show creator as first circle, then current user if RSVP'd, then other RSVP users
@@ -433,12 +511,13 @@ export default function RSVPComponent({
         }
       : null,
     // Add current user if they RSVP'd and have profile data, but NOT if they are the creator (to avoid duplicates)
+    // Compare profile IDs, not auth ID to profile ID
     ...(currentUserRsvp === "going" &&
     currentUserProfile &&
-    currentUser.id !== postAuthor?.id
+    currentUserProfile.id !== postAuthor?.id
       ? [
           {
-            id: currentUser.id,
+            id: currentUserProfile.id, // Use profile ID, not currentUser.id
             username: currentUserProfile.username,
             display_name: currentUserProfile.display_name,
             avatar_url: currentUserProfile.avatar_url,
@@ -448,12 +527,13 @@ export default function RSVPComponent({
         ]
       : []),
     // Show other RSVP users (excluding current user and creator)
+    // Compare profile IDs consistently
     ...rsvpUsers
-      .filter((u) => u.id !== currentUser.id && u.id !== postAuthor?.id)
+      .filter((u) => u.id !== currentUserProfile?.id && u.id !== postAuthor?.id)
       .slice(0, 2),
   ].filter(Boolean);
 
-  // If post is anonymous, show Follow button instead of RSVP
+  // If post is anonymous, show nothing (do not render Follow—would leak author id)
   if (postAuthor?.is_anonymous) {
     return (
       <div
@@ -461,9 +541,7 @@ export default function RSVPComponent({
         className={`flex items-center ${
           align === "left" ? "justify-start" : "justify-end"
         } ${className}`}
-      >
-        <FollowButton targetId={postAuthor.id} />
-      </div>
+      />
     );
   }
 
@@ -527,9 +605,9 @@ export default function RSVPComponent({
                       }}
                       aria-label="avatar"
                     >
-                      {user.avatar_url ? (
+                      {imgUrlPublic(user.avatar_url) ? (
                         <img
-                          src={imgUrlPublic(user.avatar_url) || user.avatar_url}
+                          src={imgUrlPublic(user.avatar_url)!}
                           alt=""
                           className="w-full h-full object-cover rounded-full"
                           loading="lazy"
@@ -603,9 +681,9 @@ export default function RSVPComponent({
         onClose={() => setShowRSVPList(false)}
         postId={postId}
         postAuthor={postAuthor}
-        onRSVPChange={() => {
-          // Reload RSVPs when RSVP changes in drawer
-          loadRSVPs();
+        onRSVPChange={(newStatus, deltaGoingCount) => {
+          setCurrentUserRsvp(newStatus);
+          setGoingCountDelta((prev) => prev + deltaGoingCount);
         }}
       />
     </>

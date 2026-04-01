@@ -1,11 +1,10 @@
-import { FaBookmark, FaGlassCheers } from "react-icons/fa";
-import { MdLocationOn } from "react-icons/md";
+import { PiBookmarkSimpleFill, PiChampagne, PiMapPin } from "react-icons/pi";
 
 function ProfileHangoutSection() {
   const items = [
     { label: "Today" },
     { label: "3-hrs" },
-    { label: "2", icon: <MdLocationOn /> },
+    { label: "2", icon: <PiMapPin /> },
   ];
 
   return (
@@ -32,13 +31,13 @@ function ProfileHangoutSection() {
             <div className="flex flex-1"></div>
             <div className="flex w-full justify-end">
               <div className="text-xs px-2 py-1 rounded-md bg-[var(--surface-2)]200 text-[var(--text)]">
-                <FaGlassCheers />
+                <PiChampagne />
               </div>
             </div>
           </div>
           <div className="absolute bottom-0 left-4">
             <span>
-              <FaBookmark className="" />
+              <PiBookmarkSimpleFill className="" />
             </span>
           </div>
         </button>

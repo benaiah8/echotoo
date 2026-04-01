@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FaHeart } from "react-icons/fa";
+import { PiHeartFill } from "react-icons/pi";
 import { likeComment, unlikeComment } from "../../api/services/comments";
 
 interface Props {
@@ -62,7 +62,7 @@ export default function CommentLikeButton({
           : "text-[var(--text)]/60 hover:text-red-500"
       }`}
     >
-      <FaHeart
+      <PiHeartFill
         size={size}
         className={`transition-colors duration-200 ${
           isLiked ? "fill-current" : ""

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Navigate } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import { getPostByIdOptimized } from "../api/queries/getPostById";
 import PostDetailBody, { type Post } from "../components/detail/PostDetailBody";
@@ -19,6 +19,10 @@ export default function ExperiencePage() {
     (async () => {
       if (!id) {
         setError("Missing experience id");
+        setLoading(false);
+        return;
+      }
+      if (id.startsWith("draft-")) {
         setLoading(false);
         return;
       }
@@ -54,6 +58,9 @@ export default function ExperiencePage() {
     };
   }, [id]);
 
+  if (id?.startsWith("draft-")) {
+    return <Navigate to="/create/activities?type=experience" replace />;
+  }
   if (loading) {
     return (
       <PrimaryPageContainer>

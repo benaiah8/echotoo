@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
-import OnboardingWelcome from "./OnboardingWelcome";
 import OnboardingInterests from "./OnboardingInterests";
-import OnboardingReferral from "./OnboardingReferral";
 
 interface OnboardingFlowProps {
   userId: string;
-  userNumber: number;
+  memberNo: number;
   onComplete: () => void;
 }
 
@@ -15,7 +13,7 @@ type OnboardingStep = "interests" | "complete";
 
 export default function OnboardingFlow({
   userId,
-  userNumber,
+  memberNo,
   onComplete,
 }: OnboardingFlowProps) {
   const [currentStep, setCurrentStep] = useState<OnboardingStep>("interests");
@@ -62,7 +60,7 @@ export default function OnboardingFlow({
         return (
           <OnboardingInterests
             userId={userId}
-            userNumber={userNumber}
+            memberNo={memberNo}
             onNext={() => handleStepComplete("interests")}
             onBack={() => {}} // No back button needed
           />

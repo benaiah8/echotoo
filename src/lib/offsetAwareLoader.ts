@@ -48,10 +48,7 @@ export type FilterFunction<T> = (items: T[]) => T[];
 export function createOffsetAwareLoader<T>(
   baseLoader: LoadItemsFunction<T>,
   filterFn?: FilterFunction<T>
-): (
-  offset: number,
-  limit: number
-) => Promise<OffsetAwareLoadResult<T>> {
+): (offset: number, limit: number) => Promise<OffsetAwareLoadResult<T>> {
   return async (
     offset: number,
     limit: number
@@ -170,7 +167,9 @@ export interface NormalizedLoadResult<T> {
  * - { posts, count } (RPC shape) -> { items: posts, consumedOffset: posts.length, count }
  */
 export function normalizeLoadResult<T>(
-  result: T[] | { items?: T[]; posts?: T[]; consumedOffset?: number; count?: number }
+  result:
+    | T[]
+    | { items?: T[]; posts?: T[]; consumedOffset?: number; count?: number }
 ): NormalizedLoadResult<T> {
   if (Array.isArray(result)) {
     return {
@@ -183,7 +182,9 @@ export function normalizeLoadResult<T>(
     const items = result.items ?? result.posts ?? [];
     const arr = Array.isArray(items) ? items : [];
     const consumedOffset =
-      typeof result.consumedOffset === "number" ? result.consumedOffset : arr.length;
+      typeof result.consumedOffset === "number"
+        ? result.consumedOffset
+        : arr.length;
     return {
       items: arr,
       consumedOffset,
@@ -210,9 +211,7 @@ export function isOffsetAwareResult<T>(
 /**
  * Helper to extract items from either format (backward compatibility)
  */
-export function extractItems<T>(
-  result: T[] | OffsetAwareLoadResult<T>
-): T[] {
+export function extractItems<T>(result: T[] | OffsetAwareLoadResult<T>): T[] {
   if (isOffsetAwareResult(result)) {
     return result.items;
   }
@@ -262,4 +261,3 @@ export function extractCount<T>(
   }
   return undefined;
 }
-

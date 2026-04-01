@@ -64,13 +64,96 @@
   ); /* Light yellow background for special dates */
   --date-highlight-text: var(--text); /* Text color for highlighted dates */
   --gutter: 14px;
+  /* Raw env only (iOS home indicator, some Android gesture bars). */
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  /* Android 3-button nav: set on documentElement in app (native Android only). */
+  --android-extra-bottom: 0px;
+  /* Single source for layout: use this instead of env() in components. */
+  --safe-area-bottom-layout: calc(
+    env(safe-area-inset-bottom, 0px) + var(--android-extra-bottom, 0px)
+  );
+  /* Create flow: bottom tab + prev/next bar + safe area - sensible default before JS measures */
+  --create-actions-total-bottom: calc(
+    104px + 2 * var(--safe-area-bottom-layout)
+  );
+  /* Create flow only: extra bottom inset when keyboard is open (set by CreateFlowKeyboardShell) */
+  --create-keyboard-inset: 0px;
 
   /* Frosted glass effect variables (dark theme) */
-  --glass-bg: rgba(21, 21, 22, 0.4); /* Semi-transparent dark background - further reduced intensity */
+  --glass-bg: rgba(
+    21,
+    21,
+    22,
+    0.4
+  ); /* Semi-transparent dark background - further reduced intensity */
   --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
-  --glass-active-bg: rgba(255, 255, 255, 0.15); /* Active indicator background (square) */
+  --glass-active-bg: rgba(
+    255,
+    255,
+    255,
+    0.15
+  ); /* Active indicator background (square) */
+  --bottom-tab-active-bg: #151516; /* Solid black for bottom tab active state (dark mode) */
+  /* Create tab only: inverted chip (white pill, dark plus) */
+  --bottom-tab-create-active-bg: #ffffff;
+  --bottom-tab-create-active-fg: #0b0b0c;
   --glass-active-shadow: 0 4px 12px rgba(255, 255, 255, 0.1); /* Lighter drop shadow for active indicator (dark mode) */
-  --glass-active-border: rgba(255, 255, 255, 0.4); /* More prominent white-ish border for active indicator (dark mode) */
+  --glass-active-border: rgba(
+    255,
+    255,
+    255,
+    0.4
+  ); /* More prominent white-ish border for active indicator (dark mode) */
+  --drawer-backdrop: rgba(0, 0, 0, 0.5);
+  /* Centered confirmation dialogs - phone-sized even on tablets */
+  --floating-confirm-max-width: min(380px, 90vw);
+  --auth-google-btn-bg: #ffffff;
+  --auth-google-btn-text: #0b0b0c;
+  --auth-control-height: 34px; /* Shared height for auth tabs, inputs, buttons - change once to update all */
+  --bottom-tab-border: rgba(
+    255,
+    255,
+    255,
+    0.25
+  ); /* Visible outline for floating bottom tab (dark mode) */
+
+  /* Edit profile: scrim over blurred avatar pill so foreground pops */
+  --profile-avatar-pill-scrim: rgba(0, 0, 0, 0.42);
+
+  /* Horizontal rail: full-bleed image contrast (dark theme) */
+  --rail-card-image-scrim: rgba(0, 0, 0, 0.5);
+  --rail-card-pill-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+
+  /* Brand glass - yellow frosted glass for primary CTAs (dark theme) */
+  --brand-glass-bg: rgba(247, 208, 71, 0.25);
+  --brand-glass-border: rgba(247, 208, 71, 0.5);
+  --brand-glass-text: var(--brand-ink);
+
+  /* Edge gradients: theme-aware (use var(--bg)). Edit once, applies everywhere. */
+  --gradient-from-top: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    transparent 100%
+  ); /* Solid at top → transparent (top bar region) */
+  --gradient-from-bottom: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    transparent 100%
+  ); /* Solid at bottom → transparent (bottom tab region) */
+  /* Native shell: short scrim under status bar when main header scrolls away (Capacitor only in UI). */
+  --gradient-notch-cap: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    color-mix(in oklab, var(--bg) 28%, transparent) 52%,
+    transparent 100%
+  );
+  /* Short fade over system nav / home indicator strip (above tab chrome). */
+  --gradient-bottom-system-scrim: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    color-mix(in oklab, var(--bg) 42%, transparent) 45%,
+    transparent 100%
+  );
 }
 
 .theme-light {
@@ -135,11 +218,74 @@
   --date-highlight-text: var(--text); /* Text color for highlighted dates */
 
   /* Frosted glass effect variables (light theme) */
-  --glass-bg: rgba(242, 243, 246, 0.45); /* Semi-transparent light background - further reduced intensity */
+  --glass-bg: rgba(
+    242,
+    243,
+    246,
+    0.45
+  ); /* Semi-transparent light background - further reduced intensity */
   --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
-  --glass-active-bg: rgba(255, 255, 255, 0.9); /* Active indicator background (square) - more opaque in light mode */
+  --glass-active-bg: rgba(
+    255,
+    255,
+    255,
+    0.9
+  ); /* Active indicator background (square) - more opaque in light mode */
+  --bottom-tab-active-bg: #ffffff; /* Solid white for bottom tab active state (light mode) */
+  /* Create tab only: inverted chip (dark pill, light plus) */
+  --bottom-tab-create-active-bg: #0b0b0c;
+  --bottom-tab-create-active-fg: #ffffff;
   --glass-active-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); /* Darker drop shadow for active indicator (light mode) */
-  --glass-active-border: rgba(0, 0, 0, 0.25); /* More prominent dark border for active indicator (light mode) */
+  --glass-active-border: rgba(
+    0,
+    0,
+    0,
+    0.25
+  ); /* More prominent dark border for active indicator (light mode) */
+  --drawer-backdrop: rgba(0, 0, 0, 0.28);
+  --auth-google-btn-bg: #1a1a1a;
+  --auth-google-btn-text: #ffffff;
+  --bottom-tab-border: rgba(
+    0,
+    0,
+    0,
+    0.2
+  ); /* Visible outline for floating bottom tab (light mode) */
+
+  --profile-avatar-pill-scrim: rgba(255, 255, 255, 0.52);
+
+  /* Horizontal rail: full-bleed image contrast (light theme) */
+  --rail-card-image-scrim: rgba(255, 255, 255, 0.55);
+  --rail-card-pill-shadow: 0 2px 12px rgba(0, 0, 0, 0.14);
+
+  /* Brand glass - yellow frosted glass for primary CTAs (light theme) */
+  --brand-glass-bg: rgba(247, 208, 71, 0.35);
+  --brand-glass-border: rgba(247, 208, 71, 0.6);
+  --brand-glass-text: var(--brand-ink);
+
+  /* Edge gradients: inherit from :root (use var(--bg), already theme-aware). */
+  --gradient-from-top: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    transparent 100%
+  );
+  --gradient-from-bottom: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    transparent 100%
+  );
+  --gradient-notch-cap: linear-gradient(
+    to bottom,
+    var(--bg) 0%,
+    color-mix(in oklab, var(--bg) 28%, transparent) 52%,
+    transparent 100%
+  );
+  --gradient-bottom-system-scrim: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    color-mix(in oklab, var(--bg) 42%, transparent) 45%,
+    transparent 100%
+  );
 }
 
 html,
@@ -186,6 +332,118 @@ body,
 
 .ui-muted {
   color: var(--muted);
+}
+
+.ui-chip {
+  min-height: var(--auth-control-height, 36px);
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  background: transparent;
+  transition: border-color 0.2s, background 0.2s;
+}
+.ui-chip--active {
+  border-color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 12%, transparent);
+  color: var(--brand);
+}
+
+.ui-input {
+  width: 100%;
+  min-height: var(--auth-control-height, 36px);
+  padding: 0 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--glass-active-bg);
+  border: 1px solid var(--glass-active-border);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  box-sizing: border-box;
+}
+.ui-input::placeholder {
+  color: var(--muted);
+}
+.ui-input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 25%, transparent);
+}
+
+.ui-btn {
+  width: 100%;
+  min-height: var(--auth-control-height, 36px);
+  padding: 0 14px;
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface-2);
+  transition: opacity 0.2s, background 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ui-btn--primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+.ui-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Auth modal specific: Google button - pops, high contrast */
+.auth-google-btn {
+  background: var(--auth-google-btn-bg) !important;
+  color: var(--auth-google-btn-text) !important;
+  border: 1px solid var(--glass-active-border) !important;
+  box-shadow: var(--glass-active-shadow);
+  font-weight: 600;
+}
+.auth-google-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+/* Auth modal: Continue as guest - clearly clickable link-style */
+.auth-guest-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: var(--auth-control-height, 36px);
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-align: center;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.auth-guest-link:hover {
+  color: var(--text);
+  border-color: var(--glass-active-border);
+  background: var(--glass-active-bg);
+}
+
+/* Top safe area for fixed/sticky headers - use on any element at top-0 */
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Bottom safe area for bottom sheets/drawers - use on elements at bottom-0 */
+.safe-area-inset-bottom {
+  padding-bottom: var(--safe-area-bottom-layout);
 }
 
 /* Form elements */
@@ -286,4 +544,9 @@ input:focus {
 .bottom-tab-avatar-wrapper > div > div {
   display: block !important;
   vertical-align: middle;
+}
+
+/* Profile tab only: avatar drop shadow for separation */
+.bottom-tab-profile-avatar {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
 }

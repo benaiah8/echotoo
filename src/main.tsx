@@ -5,6 +5,13 @@ import { Provider } from "react-redux";
 import "./index.css";
 import App from "./App";
 import { store } from "./app/store";
+// [PHASE 1.1] Initialize storage manager before app starts
+// Why: Enables unified storage layer for all caches, better performance, Capacitor-ready
+import { initializeDefaultStorage } from "./lib/storage/initializeDefaultStorage";
+import { isCapacitor } from "./lib/storage/utils/capacitorDetection";
+
+// Initialize storage manager before app starts
+initializeDefaultStorage();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -15,19 +22,26 @@ createRoot(document.getElementById("root")!).render(
 );
 
 // PWA: Handle service worker (disable in development to prevent white screen issues)
-if ("serviceWorker" in navigator) {
+// In Capacitor: skip SW entirely (no registration, no unregister)
+if (
+  "serviceWorker" in navigator &&
+  process.env.NODE_ENV === "development" &&
+  !isCapacitor()
+) {
   // In development, unregister any existing service worker
-  if (process.env.NODE_ENV === "development") {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      registrations.forEach((registration) => {
-        console.log("Unregistering service worker in development");
-        registration.unregister();
-      });
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => {
+      console.log("Unregistering service worker in development");
+      registration.unregister();
     });
-  }
+  });
 }
 
-if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+if (
+  "serviceWorker" in navigator &&
+  process.env.NODE_ENV === "production" &&
+  !isCapacitor()
+) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("/sw.js")

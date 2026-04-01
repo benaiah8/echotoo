@@ -1,5 +1,9 @@
 import { supabase } from "../../lib/supabaseClient";
-import { clearCachedProfilePosts } from "../../lib/profilePostsCache";
+import { requestManager } from "../../lib/requestManager";
+import { isDraftPostId } from "../../lib/drafts";
+import { getViewerAuthUserId } from "./follows";
+import { invalidateOnSave } from "../../lib/cacheInvalidation";
+import { emitPostChanged } from "../../lib/postEvents";
 
 // Cache for saved posts to reduce egress
 const SAVED_POSTS_CACHE_KEY = "saved_posts_cache";
@@ -12,7 +16,9 @@ interface CachedSavedPosts {
 }
 
 // Helper functions for caching
-export function getCachedSavedPosts(userId: string): SavedPostWithDetails[] | null {
+export function getCachedSavedPosts(
+  userId: string
+): SavedPostWithDetails[] | null {
   try {
     const cached = localStorage.getItem(SAVED_POSTS_CACHE_KEY);
     if (!cached) return null;
@@ -112,25 +118,30 @@ export async function savePost(
   postId: string
 ): Promise<{ data: SavedPost | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
+    // Use upsert to handle duplicate saves gracefully (prevents 409 errors)
     const { data, error } = await supabase
       .from("saved_posts")
-      .insert({
-        user_id: user.id,
-        post_id: postId,
-      })
+      .upsert(
+        {
+          user_id: userId,
+          post_id: postId,
+        },
+        {
+          onConflict: "user_id,post_id", // Handle duplicate constraint
+          ignoreDuplicates: false, // Return the existing row if duplicate
+        }
+      )
       .select("*")
       .single();
 
     // Invalidate cache when saving
     if (!error) {
       invalidateSavedPostsCache();
-      // Also clear profile posts cache for saved tab
-      clearCachedProfilePosts(user.id, "saved");
+      invalidateOnSave(postId, userId);
+      emitPostChanged(postId, { viewerSaved: true });
     }
 
     return { data, error };
@@ -147,22 +158,20 @@ export async function unsavePost(
   postId: string
 ): Promise<{ data: any; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("saved_posts")
       .delete()
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("post_id", postId);
 
     // Invalidate cache when unsaving
     if (!error) {
       invalidateSavedPostsCache();
-      // Also clear profile posts cache for saved tab
-      clearCachedProfilePosts(user.id, "saved");
+      invalidateOnSave(postId, userId);
+      emitPostChanged(postId, { viewerSaved: false });
     }
 
     return { data, error };
@@ -179,15 +188,16 @@ export async function isPostSaved(
   postId: string
 ): Promise<{ data: boolean; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    if (isDraftPostId(postId)) {
+      return { data: false, error: null };
+    }
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("saved_posts")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("post_id", postId)
       .maybeSingle(); // Use maybeSingle instead of single to handle 0 rows gracefully
 
@@ -216,18 +226,36 @@ export async function getSavedPostsOptimized(
   data: SavedPostWithDetails[] | null;
   error: any;
 }> {
-  try {
-    console.log("[getSavedPostsOptimized] Starting query for user:", userId);
+  const dedupeKey = `saved_posts_${userId}_${offset}_${limit}_${
+    viewerUserId || "null"
+  }`;
 
-    const { data, error } = await supabase.rpc(
-      "get_user_posts_saved_with_related_data",
-      {
-        p_user_id: userId,
-        p_viewer_user_id: viewerUserId || null,
-        p_limit: limit,
-        p_offset: offset,
-      }
+  try {
+    const execResult = await requestManager.execute(
+      dedupeKey,
+      async (signal: AbortSignal) => {
+        if (signal.aborted) throw new Error("Request aborted");
+
+        const { data, error } = await supabase.rpc(
+          "get_user_posts_saved_with_related_data",
+          {
+            p_user_id: userId,
+            p_viewer_user_id: viewerUserId || null,
+            p_limit: limit,
+            p_offset: offset,
+          }
+        );
+
+        if (signal.aborted) throw new Error("Request aborted");
+        return { data, error };
+      },
+      "high"
     );
+
+    const { data, error } = execResult.data || {
+      data: null,
+      error: execResult.error,
+    };
 
     if (error) {
       console.error("[getSavedPostsOptimized] RPC error:", error);
@@ -240,6 +268,7 @@ export async function getSavedPostsOptimized(
     }
 
     // Transform PostgreSQL result to SavedPostWithDetails format
+    // Pass through like_count, comment_count, is_liked, is_saved, follow_status when RPC returns them
     const result: SavedPostWithDetails[] = data.posts.map((post: any) => ({
       id: post.saved_post_id,
       post_id: post.id,
@@ -259,15 +288,23 @@ export async function getSavedPostsOptimized(
           display_name: post.author?.display_name || null,
           avatar_url: post.author?.avatar_url || null,
         },
-        activities: [], // Activities not included in PostgreSQL function (can be lazy loaded)
-      },
+        activities: post.activities || [],
+        like_count: post.like_count,
+        comment_count: post.comment_count,
+        is_liked: post.is_liked,
+        is_saved: post.is_saved,
+        follow_status: post.follow_status,
+        has_images: post.has_images,
+      } as any,
     }));
 
-    console.log("[getSavedPostsOptimized] Query result:", {
-      dataLength: result.length,
-      error: null,
-    });
-
+    if (import.meta.env.DEV) {
+      console.log("[saved] getSavedPostsOptimized RETURN", {
+        dedupeKey,
+        offset,
+        limit,
+      });
+    }
     return { data: result, error: null };
   } catch (error: any) {
     console.error("[getSavedPostsOptimized] Error:", error);
@@ -284,15 +321,13 @@ export async function getSavedPosts(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
-    console.log("Getting saved posts for user:", user.id);
+    console.log("Getting saved posts for user:", userId);
 
     // Check cache first
-    const cachedData = getCachedSavedPosts(user.id);
+    const cachedData = getCachedSavedPosts(userId);
     if (cachedData) {
       return { data: cachedData, error: null };
     }
@@ -301,7 +336,7 @@ export async function getSavedPosts(): Promise<{
     const { data: savedPosts, error: savedError } = await supabase
       .from("saved_posts")
       .select("id, post_id, created_at")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
     if (savedError) {
@@ -313,7 +348,7 @@ export async function getSavedPosts(): Promise<{
 
     if (!savedPosts || savedPosts.length === 0) {
       const emptyResult: SavedPostWithDetails[] = [];
-      setCachedSavedPosts(user.id, emptyResult);
+      setCachedSavedPosts(userId, emptyResult);
       return { data: emptyResult, error: null };
     }
 
@@ -374,14 +409,16 @@ export async function getSavedPosts(): Promise<{
     // [OPTIMIZATION: Phase 1 - Privacy Filter] Filter saved posts by privacy
     // Why: Hide saved posts from private accounts that viewer can't access
     if (result.length > 0) {
-      const { filterPostsByPrivacy } = await import("../../lib/postPrivacyFilter");
+      const { filterPostsByPrivacy } = await import(
+        "../../lib/postPrivacyFilter"
+      );
       const { getViewerId } = await import("./follows");
       const viewerProfileId = await getViewerId();
       result = await filterPostsByPrivacy(result, viewerProfileId);
     }
 
     // Cache the result
-    setCachedSavedPosts(user.id, result as unknown as SavedPostWithDetails[]);
+    setCachedSavedPosts(userId, result as unknown as SavedPostWithDetails[]);
 
     return { data: result as unknown as SavedPostWithDetails[], error: null };
   } catch (error) {

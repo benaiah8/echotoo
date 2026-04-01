@@ -1,18 +1,32 @@
 import { supabase } from "../lib/supabaseClient";
 
+/** Gate: allow Cloudinary URLs only when VITE_ALLOW_CLOUDINARY === "true" (default: disallow to prevent 401 spam) */
+const ALLOW_CLOUDINARY = import.meta.env.VITE_ALLOW_CLOUDINARY === "true";
+
 /**
  * Return a public, directly loadable URL for a storage object path.
  * - Works whether `path` is already a full URL or just a key.
  * - No image transformation params (so it works without the add-on).
+ * - When VITE_ALLOW_CLOUDINARY is not "true", Cloudinary URLs return undefined (no 401 requests).
  */
 export function imgUrlPublic(
   path?: string | null,
-  bucket = "public"
+  bucket = "media"
 ): string | undefined {
   if (!path) return undefined;
 
-  // Check if it's already a full URL
-  if (/^https?:\/\//i.test(path)) return path;
+  // [CLOUDINARY GATE] Block Cloudinary URLs unless explicitly allowed
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      const url = new URL(path);
+      if (url.hostname.includes("res.cloudinary.com") && !ALLOW_CLOUDINARY) {
+        return undefined;
+      }
+    } catch {
+      // Invalid URL, fall through
+    }
+    return path;
+  }
 
   // Check if it's a valid base64 data URL (these are actually valid!)
   if (path.startsWith("data:image/")) {

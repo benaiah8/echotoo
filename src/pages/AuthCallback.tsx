@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { dbg, dumpAuthEnv } from "../lib/authDebug";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 
 export default function AuthCallback() {
   const nav = useNavigate();
@@ -66,27 +67,93 @@ export default function AuthCallback() {
       });
       if (s0.session) return finish();
 
-      // 2) If PKCE code present, try manual exchange.
-      if (loc.search.includes("code=") || loc.hash.includes("code=")) {
+      // 2a) Capacitor implicit flow: tokens in hash (access_token, refresh_token)
+      if (isNativeApp() && loc.hash) {
+        const hashParams = new URLSearchParams(loc.hash.replace(/^#/, ""));
+        const access_token = hashParams.get("access_token");
+        const refresh_token = hashParams.get("refresh_token");
+        if (access_token && refresh_token) {
+          console.log("Setting session from hash tokens");
+          try {
+            const { data, error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
+            if (!error && data?.session) {
+              dbg("AuthCallback:hash_session_success", {
+                userId: data.session.user?.id,
+              });
+              return finish();
+            }
+            if (error) {
+              console.error(
+                "[AuthCallback] setSession from hash failed:",
+                error
+              );
+              setError(`Sign-in error: ${error.message}`);
+              setTimeout(() => finish("/"), 5000);
+              return;
+            }
+          } catch (e: any) {
+            console.error("[AuthCallback] setSession exception:", e);
+            setError(`Sign-in error: ${e?.message || "Unknown error"}`);
+            setTimeout(() => finish("/"), 3000);
+            return;
+          }
+        }
+      }
+
+      // 2b) If PKCE code present (web / non-native), try manual exchange.
+      if (
+        !isNativeApp() &&
+        (loc.search.includes("code=") || loc.hash.includes("code="))
+      ) {
         try {
-          const { data, error } = await supabase.auth.exchangeCodeForSession(
-            window.location.href
+          const exchangeUrl = window.location.href;
+          console.log("[AuthCallback] EXCHANGE DEBUG:", {
+            locSearch: loc.search,
+            locHash: loc.hash,
+            exchangeUrl,
+            isNativeApp: isNativeApp(),
+          });
+          console.log(
+            "[AuthCallback] Calling exchangeCodeForSession with:",
+            exchangeUrl
           );
+          const { data, error } = await supabase.auth.exchangeCodeForSession(
+            exchangeUrl
+          );
+          console.log("EXCHANGE RESULT", data, error);
+          if (error) {
+            console.log(
+              "[AuthCallback] exchange error.message:",
+              error.message
+            );
+            console.log("[AuthCallback] exchange error.status:", error.status);
+          }
           if (!error && data?.session) {
-            dbg("AuthCallback:exchange_success", { userId: data.session.user?.id });
+            dbg("AuthCallback:exchange_success", {
+              userId: data.session.user?.id,
+            });
             return finish();
           }
           if (error) {
+            const suggestedRedirect = `${window.location.origin}/auth/callback`;
             console.error("[AuthCallback] exchange failed:", error);
-            console.error("[AuthCallback] Current URL that failed:", window.location.href);
-            console.error("[AuthCallback] Make sure this redirect URL is in Supabase:", `${window.location.origin}/auth/callback`);
+            console.error("[AuthCallback] URL used for exchange:", exchangeUrl);
+            console.error(
+              "[AuthCallback] Make sure this redirect URL is in Supabase:",
+              suggestedRedirect
+            );
             dbg("AuthCallback:exchange_error", {
               message: error.message,
               status: error.status,
-              currentUrl: window.location.href,
-              redirectUrl: `${window.location.origin}/auth/callback`,
+              exchangeUrlUsed: exchangeUrl,
+              redirectUrl: suggestedRedirect,
             });
-            setError(`Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`);
+            setError(
+              `Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`
+            );
             setTimeout(() => finish("/"), 5000);
             return;
           }
@@ -125,7 +192,7 @@ export default function AuthCallback() {
     return () => {
       void cleanup;
     };
-  }, [nav, loc.search]);
+  }, [nav, loc.search, loc.hash]);
 
   return (
     <div className="w-full min-h-[40vh] flex flex-col items-center justify-center text-[var(--text)]/80 px-4">

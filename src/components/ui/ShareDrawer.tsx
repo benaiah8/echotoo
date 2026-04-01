@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { MdShare, MdClose, MdPersonAdd } from "react-icons/md";
-import { FaInstagram } from "react-icons/fa";
+import { PiInstagramLogo, PiShareFat, PiUserPlus } from "react-icons/pi";
 import InstagramStoryGenerator from "./InstagramStoryGenerator";
+import BottomDrawer from "./BottomDrawer";
 import toast from "react-hot-toast";
+import { sharePost } from "../../api/services/shares";
 
 interface ShareDrawerProps {
   isOpen: boolean;
@@ -15,8 +16,17 @@ interface ShareDrawerProps {
   creatorHandle?: string;
   creatorAvatarUrl?: string | null;
   onInvite?: () => void; // NEW: callback for invite action
+  /** Hangout meta for story date line */
+  selectedDates?: string[] | null;
+  isRecurring?: boolean | null;
+  recurrenceDays?: string[] | null;
 }
 
+/**
+ * [PHASE 3.1] Migrated to BottomDrawer for consistency and proper z-index
+ * Why: Fixes z-index issue (was z-[90], now z-[100]), matches RSVPListDrawer pattern
+ * Features: Frosted glass styling, proper backdrop, safe area handling
+ */
 export default function ShareDrawer({
   isOpen,
   onClose,
@@ -28,10 +38,11 @@ export default function ShareDrawer({
   creatorHandle,
   creatorAvatarUrl,
   onInvite,
+  selectedDates,
+  isRecurring,
+  recurrenceDays,
 }: ShareDrawerProps) {
   const [showStoryGenerator, setShowStoryGenerator] = useState(false);
-
-  if (!isOpen) return null;
 
   const handleInvite = () => {
     if (onInvite) {
@@ -44,6 +55,15 @@ export default function ShareDrawer({
     try {
       const postUrl = window.location.href;
       await navigator.clipboard.writeText(postUrl);
+
+      // Track share when link is copied successfully
+      try {
+        await sharePost(postId);
+      } catch (shareError) {
+        // Fail silently - don't break copy action if share tracking fails
+        console.error("Error tracking share:", shareError);
+      }
+
       toast.success("Link copied to clipboard!");
       onClose();
     } catch (error) {
@@ -56,18 +76,37 @@ export default function ShareDrawer({
     try {
       const postUrl = window.location.href;
       const shareData = {
-        title: `Check out this ${postType === "hangout" ? "hangout" : "experience"}`,
+        title: `Check out this ${
+          postType === "hangout" ? "hangout" : "experience"
+        }`,
         url: postUrl,
       };
 
-      if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+      if (
+        navigator.share &&
+        navigator.canShare &&
+        navigator.canShare(shareData)
+      ) {
         await navigator.share(shareData);
+
+        // Track share when Web Share API succeeds
+        try {
+          await sharePost(postId);
+        } catch (shareError) {
+          // Fail silently - don't break share action if share tracking fails
+          console.error("Error tracking share:", shareError);
+        }
+
         onClose();
       } else {
         // Fallback to copy
         handleCopyLink();
       }
     } catch (error) {
+      // User cancelled share - don't track
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
       console.error("Error sharing:", error);
       // Fallback to copy
       handleCopyLink();
@@ -76,68 +115,55 @@ export default function ShareDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 z-[90] flex items-end justify-center" onClick={onClose}>
-        {/* Backdrop */}
-        <div className="absolute inset-0 bg-black/50" />
-
-        {/* Drawer */}
-        <div
-          className="relative w-full max-w-md bg-[var(--bg)] rounded-t-2xl shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
-            <h2 className="text-lg font-bold text-[var(--text)]">Share</h2>
+      <BottomDrawer
+        open={isOpen}
+        onClose={onClose}
+        title="Share"
+        maxHeight="auto"
+      >
+        {/* Compact rows; pt/pb so actions breathe below header and above drawer bottom (drawer adds safe area + 1rem) */}
+        <div className="flex flex-col gap-2 px-5 pt-3 pb-6 sm:px-6">
+          <div
+            className={`grid gap-2 ${onInvite ? "grid-cols-2" : "grid-cols-1"}`}
+          >
             <button
-              onClick={onClose}
-              className="p-2 text-[var(--text)]/60 hover:text-[var(--text)] transition"
+              type="button"
+              onClick={handleWebShare}
+              className="flex min-h-11 flex-row items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80"
             >
-              <MdClose size={24} />
+              <PiShareFat size={20} className="shrink-0 text-[var(--text)]" />
+              <span>
+                {typeof navigator.share === "function" ? "Share" : "Copy Link"}
+              </span>
             </button>
-          </div>
 
-          {/* Share Options */}
-          <div className="p-4">
-            <div className="flex gap-4">
-              {/* Instagram Stories - Large button on left */}
+            {onInvite && (
               <button
-                onClick={() => setShowStoryGenerator(true)}
-                className="flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 transition text-white flex-1"
+                type="button"
+                onClick={handleInvite}
+                className="flex min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition hover:bg-yellow-600"
               >
-                <FaInstagram size={32} />
-                <span className="font-semibold text-sm">Instagram Stories</span>
+                <PiUserPlus size={20} className="shrink-0" />
+                <span>Invite</span>
               </button>
-
-              {/* Share and Invite - Stacked on right */}
-              <div className="flex flex-col gap-2 flex-1">
-                {/* Share button */}
-                <button
-                  onClick={handleWebShare}
-                  className="flex flex-col items-center justify-center gap-2 py-4 px-4 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 transition border border-[var(--border)]"
-                >
-                  <MdShare size={24} className="text-[var(--text)]" />
-                  <span className="font-semibold text-xs text-[var(--text)]">
-                    {typeof navigator.share === "function" ? "Share" : "Copy Link"}
-                  </span>
-                </button>
-
-                {/* Invite button */}
-                {onInvite && (
-                  <button
-                    onClick={handleInvite}
-                    className="flex flex-col items-center justify-center gap-2 py-4 px-4 rounded-xl bg-yellow-500 hover:bg-yellow-600 transition text-black"
-                  >
-                    <MdPersonAdd size={24} />
-                    <span className="font-semibold text-xs">Invite</span>
-                  </button>
-                )}
-              </div>
-            </div>
+            )}
           </div>
-        </div>
-      </div>
 
-      {/* Instagram Story Generator */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowStoryGenerator(true);
+              onClose();
+            }}
+            className="flex min-h-11 w-full flex-row items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 px-3 py-2 text-sm font-semibold text-white transition hover:from-purple-600 hover:to-pink-600"
+          >
+            <PiInstagramLogo size={20} className="shrink-0" />
+            <span>Instagram Stories</span>
+          </button>
+        </div>
+      </BottomDrawer>
+
+      {/* Instagram Story Generator - Renders outside BottomDrawer so it can appear on top if needed */}
       {showStoryGenerator && (
         <InstagramStoryGenerator
           caption={caption || `Check out this ${postType}!`}
@@ -147,10 +173,19 @@ export default function ShareDrawer({
           creatorName={creatorName}
           creatorHandle={creatorHandle}
           creatorAvatarUrl={creatorAvatarUrl}
+          selectedDates={selectedDates}
+          isRecurring={isRecurring}
+          recurrenceDays={recurrenceDays}
           onClose={() => setShowStoryGenerator(false)}
+          onImageGenerated={async () => {
+            const { error } = await sharePost(postId);
+            if (error) {
+              // RLS / auth — do not block UX; fix policy on `post_shares` if counts should track
+              console.warn("[ShareDrawer] post_shares not recorded:", error);
+            }
+          }}
         />
       )}
     </>
   );
 }
-

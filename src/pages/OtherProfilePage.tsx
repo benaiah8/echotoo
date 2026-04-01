@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
+import React, {
+  useEffect,
+  useState,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import OtherProfilePostsSection from "../sections/profile/OtherProfilePostsSection";
@@ -8,8 +14,8 @@ import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 import { RootState } from "../app/store";
 import { Paths } from "../router/Paths";
-import { FiPhone, FiLock } from "react-icons/fi";
-import { FaInstagram, FaApple, FaGooglePlay } from "react-icons/fa";
+import { PiLock } from "react-icons/pi";
+import WelcomeModal from "../components/ui/WelcomeModal";
 import ProfileTopBar from "../components/profile/ProfileTopBar";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import {
@@ -23,6 +29,7 @@ import {
   follow as doFollow,
   unfollow as doUnfollow,
   getViewerId,
+  getViewerAuthUserId,
 } from "../api/services/follows";
 import {
   getCachedFollowStatus,
@@ -36,6 +43,7 @@ import {
   clearCachedFollowCounts,
 } from "../lib/followCountsCache";
 import { clearCachedNotificationSettings } from "../lib/notificationSettingsCache";
+import { imgUrlPublic } from "../lib/img";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
 import ImageLightbox from "../components/ImageLightbox";
 import Avatar from "../components/ui/Avatar";
@@ -45,6 +53,10 @@ import ProfileStats from "../components/profile/ProfileStats";
 import MemberNumberPill from "../components/profile/MemberNumberPill";
 import NotificationBell from "../components/ui/NotificationBell";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
+import { useTabActive } from "../router/PersistentTabContainer.new";
+import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
+import { dataCache } from "../lib/dataCache";
+import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 
 /**
  * OtherProfilePage - Page for /u/:username route
@@ -53,14 +65,90 @@ import { handleError, getErrorMessage } from "../lib/errorHandling";
  * - No conditional logic for ownership
  * - Uses OtherProfilePostsSection
  */
-export default function OtherProfilePage() {
-  const { username } = useParams<{ username?: string }>();
+interface OtherProfilePageProps {
+  username?: string; // [FIX] Accept username as prop when rendered inside PersistentTabContainer
+}
+
+export default function OtherProfilePage({
+  username: usernameProp,
+}: OtherProfilePageProps = {}) {
+  // [FIX] Get username from prop (when rendered in PersistentTabContainer) or useParams (when rendered by Route)
+  // This fixes the issue where useParams() doesn't work inside PersistentTabContainer
+  const paramsUsername = useParams<{ username?: string }>().username;
+  const username = usernameProp ?? paramsUsername; // Use ?? instead of || to handle empty strings
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.log("[OtherProfilePage] username:", {
+      fromProp: usernameProp,
+      fromParams: paramsUsername,
+      final: username,
+    });
+  }, [usernameProp, paramsUsername, username]);
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const location = useLocation();
 
+  // [FIX] Use parent tab active status from PersistentTabContainer - stops background fetches when Other Profile tab is display:none
+  const isOtherProfileVisible = useTabActive("other-profile");
+
+  const [otherProfileFeedRefreshEpoch, setOtherProfileFeedRefreshEpoch] =
+    useState(0);
+  const [profileReloadNonce, setProfileReloadNonce] = useState(0);
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // [FIX] Stabilize profile reference to prevent cascading re-renders
+  // ProfileProvider value changes on every profile reference change, causing all consumers to re-render
+  // This ensures ProfileProvider only updates when profile data actually changes, not just the reference
+  const stableProfileRef = useRef<Profile | null>(null);
+  const stableProfile = useMemo(() => {
+    // If profile is null, return null immediately
+    if (!profile) {
+      stableProfileRef.current = null;
+      return null;
+    }
+
+    const current = stableProfileRef.current;
+
+    // First render - set and return
+    if (!current) {
+      stableProfileRef.current = profile;
+      return profile;
+    }
+
+    // Deep equality check - only update if profile data actually changed
+    // Compare critical fields that affect rendering
+    const dataChanged =
+      current.id !== profile.id ||
+      current.user_id !== profile.user_id ||
+      current.username !== profile.username ||
+      current.display_name !== profile.display_name ||
+      current.avatar_url !== profile.avatar_url ||
+      current.is_private !== profile.is_private ||
+      current.bio !== profile.bio ||
+      current.member_no !== profile.member_no;
+
+    if (!dataChanged) {
+      // Data is same, keep old reference to prevent re-renders
+      return current;
+    }
+
+    // Data changed - update ref and return new profile
+    stableProfileRef.current = profile;
+    return profile;
+  }, [
+    profile?.id,
+    profile?.user_id,
+    profile?.username,
+    profile?.display_name,
+    profile?.avatar_url,
+    profile?.is_private,
+    profile?.bio,
+    profile?.member_no,
+  ]);
+
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
   const [headerHidden, setHeaderHidden] = useState(false);
@@ -89,24 +177,53 @@ export default function OtherProfilePage() {
   const isAuthenticated = !!authState?.user;
   const [showInfoModal, setShowInfoModal] = useState(false);
 
-  // Disable body scroll when modal is open
-  useEffect(() => {
-    if (showInfoModal) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [showInfoModal]);
-
   // Get viewer ID
   useEffect(() => {
-    supabase.auth
-      .getUser()
-      .then(({ data }) => setViewerId(data.user?.id ?? null));
-  }, []);
+    if (!isOtherProfileVisible) return;
+    let cancelled = false;
+    getViewerAuthUserId().then((uid) => {
+      if (!cancelled) setViewerId(uid);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOtherProfileVisible]);
+
+  useEffect(() => {
+    const onTabRefresh = () => {
+      if (!isOtherProfileVisible) return;
+      const uid = profile?.user_id;
+      if (uid) {
+        try {
+          dataCache.delete(`profile_created_${uid}`);
+          dataCache.delete(`profile_interacted_${uid}`);
+        } catch {
+          /* noop */
+        }
+      }
+      if (profile?.id) invalidateProfile(profile.id);
+      setProfileReloadNonce((n) => n + 1);
+      setOtherProfileFeedRefreshEpoch((n) => n + 1);
+      if (import.meta.env.DEV) {
+        console.debug("[profile-tab-refresh] other", { uid, username });
+      }
+    };
+    window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
+    return () =>
+      window.removeEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
+  }, [isOtherProfileVisible, profile?.user_id, profile?.id, username]);
+
+  const {
+    pullPx,
+    pullProgress,
+    isRefreshing: ptrRefreshing,
+  } = useHomePullToRefresh({
+    enabled: isOtherProfileVisible,
+    onCommit: () => {
+      window.dispatchEvent(new CustomEvent(PROFILE_TAB_REFRESH_EVENT));
+    },
+    refreshEpoch: otherProfileFeedRefreshEpoch,
+  });
 
   // Load profile by username/id
   useEffect(() => {
@@ -129,74 +246,51 @@ export default function OtherProfilePage() {
         };
 
         const raw = username;
-        const q = raw.startsWith("@") ? raw.slice(1) : raw;
-
-        // "uuidish" = 36 chars with dashes
-        const uuidish = /^[0-9a-f-]{36}$/i.test(q);
-
-        let prof: Profile | null = null;
-
-        if (uuidish) {
-          // Try id first
-          const { data, error } = await supabase
-            .from("profiles")
-            .select(
-              "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-            )
-            .eq("id", q)
-            .maybeSingle();
-          if (!error && data) {
-            prof = data as Profile;
-          } else {
-            // Try user_id next
-            if (!error && !data) {
-              const { data: byUserId, error: byUserIdErr } = await supabase
-                .from("profiles")
-                .select(
-                  "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-                )
-                .eq("user_id", q)
-                .maybeSingle();
-              if (!byUserIdErr && byUserId) {
-                prof = byUserId as Profile;
-              }
-            }
-
-            // Fallback: try username
-            const { data: byUser, error: byUserErr } = await supabase
-              .from("profiles")
-              .select(
-                "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-              )
-              .ilike("username", q)
-              .maybeSingle();
-            if (!byUserErr && byUser) prof = byUser as Profile;
-          }
-        } else {
-          // Try username first
-          const { data, error } = await supabase
-            .from("profiles")
-            .select(
-              "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-            )
-            .ilike("username", q)
-            .maybeSingle();
-          if (!error && data) {
-            prof = data as Profile;
-          } else {
-            // Fallback: if q happens to be an id, try id
-            const { data: byId, error: byIdErr } = await supabase
-              .from("profiles")
-              .select(
-                "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-              )
-              .eq("id", q)
-              .maybeSingle();
-            if (!byIdErr && byId) prof = byId as Profile;
-          }
+        // [FIX] Decode URL-encoded username before querying
+        // If username comes from location.pathname (via PersistentTabContainer), it's URL-encoded
+        // If it comes from useParams(), React Router already decoded it
+        // decodeURIComponent is safe to call on already-decoded strings (will return as-is if no encoding)
+        let decoded = raw;
+        try {
+          decoded = decodeURIComponent(raw);
+        } catch (e) {
+          // If decodeURIComponent fails (shouldn't happen with valid URLs), use raw (might already be decoded)
+          console.warn(
+            "[OtherProfilePage] Failed to decode username, using raw:",
+            raw,
+            e
+          );
+          decoded = raw;
         }
 
-        setSafe(() => setProfile(prof));
+        const q = decoded.startsWith("@") ? decoded.slice(1) : decoded;
+
+        // [PHASE 2.3 - OPTIMIZATION] Use getProfileByIdOrUsername() for unified lookup
+        // Why: Consolidates id/username/user_id lookups into cache-first + single query approach
+        // Replaces 3-4 separate queries with cache check + getProfileByUserId + single OR query
+        const { getProfileByIdOrUsername } = await import(
+          "../api/services/follows"
+        );
+        console.log("[OtherProfilePage] 🔍 Fetching profile for username:", q);
+        const prof = await getProfileByIdOrUsername(q);
+        console.log("[OtherProfilePage] 📥 Profile fetch result:", {
+          found: !!prof,
+          username: prof?.username || "null",
+          userId: prof?.user_id || "null",
+          profileId: prof?.id || "null",
+        });
+
+        setSafe(() =>
+          setProfile(
+            prof
+              ? ({
+                  ...prof,
+                  is_private: prof.is_private ?? undefined,
+                  social_media_public: prof.social_media_public ?? undefined,
+                } as Profile)
+              : null
+          )
+        );
         if (prof) {
           // [OPTIMIZATION: Phase 1 - Cache] Cache profile data including privacy settings
           // Why: Instant display of privacy status, prevents flicker on subsequent loads
@@ -211,7 +305,7 @@ export default function OtherProfilePage() {
         // [OPTIMIZATION: Phase 7.1.3] Use user-friendly error handling
         // Why: Shows clear error messages, graceful degradation to cached data
         handleError(e, "OtherProfilePage", false); // Don't show toast - graceful degradation
-        
+
         if (!cancelled) {
           // [OPTIMIZATION: Phase 7.1.5] Graceful degradation - keep cached profile on error
           // Why: User still sees profile even if network request fails
@@ -230,7 +324,7 @@ export default function OtherProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [username]);
+  }, [username, profileReloadNonce]);
 
   // Redirect to /profile if viewing own profile via /u/:username
   useEffect(() => {
@@ -247,23 +341,34 @@ export default function OtherProfilePage() {
 
       try {
         if (profile?.id && changedId === profile.id) {
-          const { data: p } = await supabase
-            .from("profiles")
-            .select(
-              "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
-            )
-            .eq("id", profile.id)
-            .maybeSingle();
-          setProfile((p as any) ?? null);
+          // [PHASE 2.3 - OPTIMIZATION] Use getCachedProfile() first, then getProfileByIdOrUsername if needed
+          // Why: Reuses cache, avoids unnecessary queries
+          let p = getProfileCached(profile.id);
+
+          if (!p) {
+            // If not in cache, use getProfileByIdOrUsername (handles caching)
+            const { getProfileByIdOrUsername } = await import(
+              "../api/services/follows"
+            );
+            p = await getProfileByIdOrUsername(profile.id);
+          }
+
           if (p) {
+            setProfile(p as Profile);
             // [OPTIMIZATION: Phase 1 - Cache] Cache profile data including privacy settings
             // Why: Instant display of updated privacy status, prevents flicker
             primeProfileCache({
               ...p,
               member_no: p.member_no ?? null,
-              is_private: p.is_private ?? null,
-              social_media_public: p.social_media_public ?? null,
+              is_private:
+                (p as Profile & { is_private?: boolean | null }).is_private ??
+                null,
+              social_media_public:
+                (p as Profile & { social_media_public?: boolean | null })
+                  .social_media_public ?? null,
             } as any);
+          } else {
+            setProfile(null);
           }
         }
       } catch {
@@ -365,7 +470,7 @@ export default function OtherProfilePage() {
       if (storedProfileId) {
         // Use stored profile ID to check cache immediately
         viewerProfileId = storedProfileId;
-        
+
         if (viewerProfileId === profile.id) {
           setFollowStatus("none");
           return;
@@ -390,14 +495,14 @@ export default function OtherProfilePage() {
 
       // Fetch viewer profile ID if not stored (or verify stored one is correct)
       const fetchedViewerId = await getViewerId();
-      
+
       // Update stored profile ID if we got a new one
       if (fetchedViewerId && fetchedViewerId !== storedProfileId) {
         localStorage.setItem("my_profile_id", fetchedViewerId);
       }
 
       const finalViewerId = fetchedViewerId || viewerProfileId;
-      
+
       if (!finalViewerId || finalViewerId === profile.id) {
         setFollowStatus("none");
         setFollowStatusLoading(false);
@@ -538,7 +643,11 @@ export default function OtherProfilePage() {
 
     try {
       // [FIX] Include "pending" in unfollow condition so "Requested" button can cancel
-      if (followStatus === "following" || followStatus === "friends" || followStatus === "pending") {
+      if (
+        followStatus === "following" ||
+        followStatus === "friends" ||
+        followStatus === "pending"
+      ) {
         // Unfollow or cancel pending request
         const newStatus: FollowStatus = "none";
         setFollowStatus(newStatus);
@@ -567,13 +676,13 @@ export default function OtherProfilePage() {
           ...prev,
           followers: newFollowersCount,
         }));
-        
+
         // Update cache with new counts
         setCachedFollowCounts(profile.id, {
           following: counts.following,
           followers: newFollowersCount,
         });
-        
+
         // Update viewer's following count in cache (fetch fresh to be accurate)
         getFollowCounts(viewerId)
           .then((viewerCounts) => {
@@ -587,10 +696,12 @@ export default function OtherProfilePage() {
         // No extra API call needed - this is instant and doesn't slow down public accounts
         const isPrivateAccount = profile.is_private === true;
         // For private accounts, set to "pending". For public, set to "following"
-        const optimisticStatus: FollowStatus = isPrivateAccount ? "pending" : "following";
-        
+        const optimisticStatus: FollowStatus = isPrivateAccount
+          ? "pending"
+          : "following";
+
         setFollowStatus(optimisticStatus);
-        
+
         // Don't cache pending status
         if (viewerId && optimisticStatus !== "pending") {
           setCachedFollowStatus(viewerId, profile.id, optimisticStatus);
@@ -601,7 +712,11 @@ export default function OtherProfilePage() {
           // Rollback on error
           setFollowStatus(previousStatus || "none");
           if (viewerId) {
-            setCachedFollowStatus(viewerId, profile.id, previousStatus || "none");
+            setCachedFollowStatus(
+              viewerId,
+              profile.id,
+              previousStatus || "none"
+            );
           }
           throw result.error;
         }
@@ -609,7 +724,7 @@ export default function OtherProfilePage() {
         // [FIX] Use the actual status returned from API to prevent flickering
         const apiStatus = (result as any).status;
         let actualStatus: FollowStatus;
-        
+
         if (apiStatus === "pending") {
           actualStatus = "pending";
         } else if (apiStatus === "approved") {
@@ -637,13 +752,13 @@ export default function OtherProfilePage() {
           ...prev,
           followers: newFollowersCount,
         }));
-        
+
         // Update cache with new counts
         setCachedFollowCounts(profile.id, {
           following: counts.following,
           followers: newFollowersCount,
         });
-        
+
         // Update viewer's following count in cache (fetch fresh to be accurate)
         getFollowCounts(viewerId)
           .then((viewerCounts) => {
@@ -660,20 +775,48 @@ export default function OtherProfilePage() {
 
   return (
     <>
-      <PrimaryPageContainer>
+      {isOtherProfileVisible && (pullPx > 2 || ptrRefreshing) ? (
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pullProgress * 100)}
+          aria-label={ptrRefreshing ? "Refreshing profile" : "Pull to refresh"}
+          className="pointer-events-none fixed left-0 right-0 z-[35] flex justify-center"
+          style={{
+            top: "calc(80px + env(safe-area-inset-top, 0px))",
+            opacity: ptrRefreshing
+              ? 1
+              : Math.min(1, 0.12 + pullProgress * 0.88),
+            transition: ptrRefreshing ? undefined : "opacity 80ms ease-out",
+          }}
+        >
+          <span
+            className={`inline-block h-7 w-7 rounded-full border-2 border-[#F7D047]/30 border-t-[#F7D047] ${
+              ptrRefreshing ? "animate-spin" : ""
+            }`}
+            aria-hidden
+          />
+        </div>
+      ) : null}
+      <PrimaryPageContainer capacitorNotchScrim>
         <div className="relative">
           <div
             className={[
-              "fixed left-0 right-0 top-0 z-40 border-b border-[var(--border)]",
-              "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+              "fixed left-0 right-0 top-0 z-40 flex flex-col items-center",
               "transition-transform duration-300",
               headerHidden ? "-translate-y-[110%]" : "translate-y-0",
             ].join(" ")}
+            style={{
+              paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
+            }}
           >
             <ProfileTopBar
               onLogoClick={handleLogoClick}
               onSearch={setUserQuery}
               profile={profile}
+              reportUserId={profile?.id}
+              reportUsername={profile?.username ?? undefined}
             />
           </div>
 
@@ -697,15 +840,24 @@ export default function OtherProfilePage() {
           )}
 
           {!loading && username && !profile && (
-            <div className="px-3 py-6 text-sm text-[var(--text)]/70 border-b border-white/14">
+            <div className="px-1.5 py-6 text-sm text-[var(--text)]/70 border-b border-white/14">
               User not found.
             </div>
           )}
 
-          <ProfileProvider value={{ profile, loading }}>
-            <div className="pt-[60px]">
+          <ProfileProvider
+            value={useMemo(
+              () => ({ profile: stableProfile, loading }),
+              [stableProfile, loading]
+            )}
+          >
+            <div
+              style={{
+                paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
+              }}
+            >
               {/* INLINE HERO SECTION - Hardcoded for other profile */}
-              <section className="w-full px-3 pt-4 pb-6 border-b border-[var(--border)]">
+              <section className="w-full px-1.5 pt-4 pb-6 border-b border-[var(--border)]">
                 {/* Lock icon on left - Private account indicator (only if viewer has access) */}
                 {!loading && profile?.is_private && hasAccess === true && (
                   <div className="flex w-full justify-start mb-1">
@@ -726,19 +878,24 @@ export default function OtherProfilePage() {
                         className="p-1.5 rounded-md border border-yellow-500/30 bg-yellow-500/10 hover:bg-yellow-500/20 transition flex items-center justify-center group"
                         aria-label="Private Account"
                       >
-                        <FiLock size={16} className="text-yellow-500 group-hover:text-yellow-400" />
+                        <PiLock
+                          size={16}
+                          className="text-yellow-500 group-hover:text-yellow-400"
+                        />
                       </button>
-                      
+
                       {/* Custom tooltip - appears next to lock icon */}
                       {showPrivateTooltip && (
-                        <div 
+                        <div
                           className="absolute left-full ml-2 top-1/2 -translate-y-1/2 z-50"
                           style={{
                             animation: "fadeInSlide 0.2s ease-out",
                           }}
                         >
                           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                            <p className="text-sm text-[var(--text)]">This account is private</p>
+                            <p className="text-sm text-[var(--text)]">
+                              This account is private
+                            </p>
                             {/* Arrow pointing to lock icon */}
                             <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2">
                               <div className="w-0 h-0 border-t-4 border-t-transparent border-r-4 border-r-[var(--border)] border-b-4 border-b-transparent"></div>
@@ -750,7 +907,7 @@ export default function OtherProfilePage() {
                     </div>
                   </div>
                 )}
-                
+
                 {loading ? (
                   <>
                     {/* Loading skeleton */}
@@ -794,11 +951,15 @@ export default function OtherProfilePage() {
                         onClick={() => profile.avatar_url && setLightbox(true)}
                         role="button"
                         aria-label="Open avatar"
-                        className={profile.avatar_url ? "cursor-pointer" : undefined}
+                        className={
+                          profile.avatar_url ? "cursor-pointer" : undefined
+                        }
                       >
                         <Avatar
                           url={profile.avatar_url || undefined}
-                          name={profile.display_name || profile.username || "User"}
+                          name={
+                            profile.display_name || profile.username || "User"
+                          }
                         />
                       </div>
 
@@ -834,19 +995,22 @@ export default function OtherProfilePage() {
                             disabled={busy}
                             onClick={onToggleFollow}
                             className={`h-6 px-2 rounded-md text-xs border transition-opacity inline-flex items-center justify-center ${
-                              followStatus === "following" || followStatus === "friends"
+                              followStatus === "following" ||
+                              followStatus === "friends"
                                 ? "bg-white text-black border-white"
                                 : followStatus === "pending"
                                 ? "bg-[var(--text)]/10 text-[var(--text)]/50 border-[var(--border)]"
                                 : "border-[var(--border)] text-[var(--text)]"
-                            } ${followStatusLoading ? "opacity-70" : ""} ${busy ? "cursor-wait" : "cursor-pointer"}`}
+                            } ${followStatusLoading ? "opacity-70" : ""} ${
+                              busy ? "cursor-wait" : "cursor-pointer"
+                            }`}
                           >
                             {followStatusLoading && followStatus === null ? (
                               <span className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
                             ) : followStatus === "pending" ? (
                               <>
                                 <span>Requested</span>
-                                <FiLock size={12} className="ml-1" />
+                                <PiLock size={12} className="ml-1" />
                               </>
                             ) : followStatus === "friends" ? (
                               "Friends"
@@ -858,7 +1022,8 @@ export default function OtherProfilePage() {
                           </button>
 
                           {/* Notification Bell - show if following or friends */}
-                          {(followStatus === "following" || followStatus === "friends") && (
+                          {(followStatus === "following" ||
+                            followStatus === "friends") && (
                             <NotificationBell
                               targetId={profile.id}
                               isFollowing={true}
@@ -903,8 +1068,14 @@ export default function OtherProfilePage() {
               </section>
             </div>
 
-            {/* Posts Section - Pass hasAccess prop */}
-            {profile && <OtherProfilePostsSection hasAccess={hasAccess} />}
+            {/* Posts Section - Pass hasAccess + visible (parent tab active) */}
+            {profile && (
+              <OtherProfilePostsSection
+                hasAccess={hasAccess}
+                visible={isOtherProfileVisible}
+                feedRefreshEpoch={otherProfileFeedRefreshEpoch}
+              />
+            )}
 
             {/* Modals and drawers */}
             {profile && (
@@ -917,9 +1088,9 @@ export default function OtherProfilePage() {
                     mode={drawerOpen}
                   />
                 )}
-                {profile.avatar_url && (
+                {profile.avatar_url && imgUrlPublic(profile.avatar_url) && (
                   <ImageLightbox
-                    src={profile.avatar_url}
+                    src={imgUrlPublic(profile.avatar_url)!}
                     alt={profile.display_name || ""}
                     open={lightbox}
                     onClose={() => setLightbox(false)}
@@ -937,83 +1108,10 @@ export default function OtherProfilePage() {
         </div>
       </PrimaryPageContainer>
 
-      {/* Info Modal for authenticated users */}
-      {showInfoModal && (
-        <div className="fixed inset-0 z-[9999] bg-[var(--bg)] flex flex-col">
-          <div className="flex justify-end p-4">
-            <button
-              onClick={() => setShowInfoModal(false)}
-              className="w-8 h-8 rounded-full bg-[var(--surface)] border border-[var(--border)] flex items-center justify-center text-[var(--text)] hover:bg-[var(--surface)]/80 transition"
-            >
-              ×
-            </button>
-          </div>
-          <div className="flex-1 flex flex-col justify-center items-center px-6">
-            <div className="text-center max-w-md">
-              <h2 className="text-2xl font-semibold text-[var(--text)] mb-6">
-                Welcome to Echotoo
-              </h2>
-              <p className="text-base text-[var(--text)]/80 mb-8 leading-relaxed">
-                The only place you need when you go out. Discover local hangouts
-                and experiences, connect with friends, and make the most of your
-                social life.
-              </p>
-              <div className="mb-8">
-                <p className="text-sm text-[var(--text)]/70 mb-4">
-                  If you want to reach out to work with us, talk to us, or
-                  invest in Echotoo, you can contact us:
-                </p>
-                <div className="flex flex-col gap-3">
-                  <a
-                    href="tel:0902327218"
-                    className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)] hover:bg-[var(--surface)]/80 transition"
-                  >
-                    <FiPhone className="text-[var(--brand)] text-lg" />
-                    <span className="text-[var(--text)]">0902327218</span>
-                  </a>
-                  <a
-                    href="https://www.instagram.com/benaiah.a.t/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)] hover:bg-[var(--surface)]/80 transition"
-                  >
-                    <FaInstagram className="text-[var(--brand)] text-lg" />
-                    <span className="text-[var(--text)]">@benaiah.a.t</span>
-                  </a>
-                </div>
-              </div>
-              <div className="mb-8">
-                <p className="text-sm text-[var(--text)]/70 mb-4">
-                  Download our mobile app:
-                </p>
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)] opacity-60">
-                    <FaApple className="text-[var(--brand)] text-lg" />
-                    <span className="text-[var(--text)]">App Store</span>
-                    <span className="text-xs text-[var(--text)]/50 ml-auto">
-                      Coming Soon
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)] opacity-60">
-                    <FaGooglePlay className="text-[var(--brand)] text-lg" />
-                    <span className="text-[var(--text)]">Google Play</span>
-                    <span className="text-xs text-[var(--text)]/50 ml-auto">
-                      Coming Soon
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowInfoModal(false)}
-                className="w-full bg-[var(--brand)] text-[var(--brand-ink)] py-3 rounded-lg text-sm font-medium hover:brightness-110 transition"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <WelcomeModal
+        isOpen={showInfoModal}
+        onClose={() => setShowInfoModal(false)}
+      />
     </>
   );
 }
-

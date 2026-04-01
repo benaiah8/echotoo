@@ -1,5 +1,5 @@
 import { useState, forwardRef } from "react";
-import { MdErrorOutline } from "react-icons/md";
+import { PiWarningCircle } from "react-icons/pi";
 import DatePicker from "./DatePicker";
 import DropdownContainer from "../dropdown/DropdownContainer";
 import moment from "moment";
@@ -80,7 +80,7 @@ const PrimaryDatePicker = forwardRef<HTMLInputElement, PrimaryDatePickerProps>(
               </span>
             </div>
 
-            {error && <MdErrorOutline className="text-tertiary text-2xl" />}
+            {error && <PiWarningCircle className="text-tertiary text-2xl" />}
           </div>
         </div>
       </DropdownContainer>

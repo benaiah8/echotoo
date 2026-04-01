@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { IoIosArrowBack, IoIosArrowForward } from "react-icons/io";
+import { PiCaretLeft, PiCaretRight } from "react-icons/pi";
 import moment, { Moment } from "moment";
 
 interface DatePickerHeaderProps {
@@ -85,7 +85,7 @@ const DatePickerHeader: React.FC<DatePickerHeaderProps> = ({
               : ""
           }`}
         >
-          <IoIosArrowBack />
+          <PiCaretLeft />
         </button>
       ) : (
         <div></div>
@@ -153,7 +153,7 @@ const DatePickerHeader: React.FC<DatePickerHeaderProps> = ({
               : ""
           }`}
         >
-          <IoIosArrowForward />
+          <PiCaretRight />
         </button>
       ) : (
         <div></div>

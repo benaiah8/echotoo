@@ -7,7 +7,7 @@ interface MemberNumberPillProps {
 export default function MemberNumberPill({ memberNo }: MemberNumberPillProps) {
   return (
     <div
-      className="mx-auto mb-6 w-max px-4 py-2 rounded-full text-base font-medium"
+      className="mx-auto mb-10 w-max px-4 py-2 rounded-full text-base font-medium"
       style={{
         background:
           "radial-gradient(120% 120% at 50% 50%, rgba(255,204,0,0.18), rgba(255,204,0,0.06))",
@@ -20,4 +20,3 @@ export default function MemberNumberPill({ memberNo }: MemberNumberPillProps) {
     </div>
   );
 }
-

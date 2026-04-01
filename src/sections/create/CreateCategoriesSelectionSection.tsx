@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Collapsible from "../../components/Collapsible";
-import { IoIosArrowDown } from "react-icons/io";
+import { PiCaretDown } from "react-icons/pi";
 import PrimarySelectable from "../../components/input/PrimarySelectable";
 
 interface CreateCategoriesSelectionSectionProps {
@@ -25,9 +25,7 @@ function CreateCategoriesSelectionSection({
         onClick={() => setOpen(!open)}
       >
         <small className="">{categories.label}</small>
-        <IoIosArrowDown
-          className={`transition-all ${open ? "rotate-180" : ""}`}
-        />
+        <PiCaretDown className={`transition-all ${open ? "rotate-180" : ""}`} />
       </div>
       <Collapsible open={open}>
         <div className="w-full py-2 flex gap-2 flex-wrap m-2">

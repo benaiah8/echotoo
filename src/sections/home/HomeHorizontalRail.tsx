@@ -1,6 +1,8 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Hangout from "../../components/Hangout";
+import { onPostChanged } from "../../lib/postEvents";
+import { applyPostPatch } from "../../lib/applyPostPatch";
 
 type Props = {
   recentItems: FeedItem[];
@@ -21,6 +23,39 @@ export default function HomeHorizontalRail({
   locationLoading = false,
   onDelete,
 }: Props) {
+  const [recent, setRecent] = useState<FeedItem[]>(recentItems);
+  const [friends, setFriends] = useState<FeedItem[]>(friendsItems);
+  const [location, setLocation] = useState<FeedItem[]>(locationItems);
+
+  useEffect(() => {
+    setRecent(recentItems);
+  }, [recentItems]);
+  useEffect(() => {
+    setFriends(friendsItems);
+  }, [friendsItems]);
+  useEffect(() => {
+    setLocation(locationItems);
+  }, [locationItems]);
+
+  useEffect(() => {
+    const cleanup = onPostChanged((e) => {
+      const { postId, patch } = e.detail;
+      const patchOne = (prev: FeedItem[]) =>
+        prev.map((item) =>
+          item.id !== postId
+            ? item
+            : (applyPostPatch(
+                item as Record<string, unknown>,
+                patch
+              ) as FeedItem)
+        );
+      setRecent((prev) => patchOne(prev));
+      setFriends((prev) => patchOne(prev));
+      setLocation((prev) => patchOne(prev));
+    });
+    return cleanup;
+  }, []);
+
   const renderSection = (
     title: string,
     items: FeedItem[],
@@ -29,17 +64,17 @@ export default function HomeHorizontalRail({
     if (loading) {
       return (
         <div className="mt-4">
-          <div className="text-[var(--text)]/90 text-sm font-medium mb-2 px-3">
+          <div className="text-[var(--text)]/90 text-sm font-medium mb-2 px-1.5">
             {title}
           </div>
-          <div className="mt-2 -mx-3 px-3">
+          <div className="mt-2 -mx-1.5 px-1.5">
             <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-hide">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div
                   key={i}
                   className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0"
                 >
-                  <div className="relative overflow-visible ui-card p-3 flex flex-col gap-2 mb-3">
+                  <div className="relative overflow-visible ui-card pt-2 px-3 pb-3 flex flex-col gap-2 mb-3">
                     {/* bookmark badge: bottom-left (skeleton style) */}
                     <div
                       className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
@@ -48,13 +83,11 @@ export default function HomeHorizontalRail({
                       <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
                     </div>
 
-                    {/* header (avatar + two lines) */}
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[var(--text)]/10 animate-pulse" />
-                      <div className="flex-1 min-w-0">
-                        <div className="h-3 w-24 rounded bg-[var(--text)]/10 animate-pulse mb-1" />
-                      </div>
-                      <div className="h-3 w-12 rounded bg-[var(--text)]/10 animate-pulse" />
+                    {/* date strip + author row (matches Hangout) */}
+                    <div className="h-5 w-full rounded-full bg-[var(--text)]/10 animate-pulse mb-2" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-6 h-6 shrink-0 rounded-full bg-[var(--text)]/10 animate-pulse" />
+                      <div className="h-3 flex-1 min-w-0 rounded bg-[var(--text)]/10 animate-pulse" />
                     </div>
 
                     {/* caption (3 lines to match clamp) */}
@@ -114,7 +147,7 @@ export default function HomeHorizontalRail({
 
     return (
       <div className="mt-4">
-        <div className="text-[var(--text)]/90 text-sm font-medium mb-2 px-3">
+        <div className="text-[var(--text)]/90 text-sm font-medium mb-2 px-1.5">
           {title}
         </div>
         <div className="overflow-x-auto scroll-hide py-2">
@@ -142,6 +175,7 @@ export default function HomeHorizontalRail({
                   status={(p as any).status || "published"} // Default to published if status not available
                   selectedDates={p.selected_dates} // Pass selected dates for priority sorting
                   type={p.type} // Pass post type for avatar indicator
+                  post={p}
                 />
               );
             })}
@@ -153,13 +187,9 @@ export default function HomeHorizontalRail({
 
   return (
     <div className="w-full max-w-[640px] mx-auto px-0">
-      {renderSection("Recent Uploads", recentItems, recentLoading)}
-      {renderSection("Friends Uploads", friendsItems, friendsLoading)}
-      {renderSection(
-        "Current Location Uploads",
-        locationItems,
-        locationLoading
-      )}
+      {renderSection("Recent Uploads", recent, recentLoading)}
+      {renderSection("Friends Uploads", friends, friendsLoading)}
+      {renderSection("Current Location Uploads", location, locationLoading)}
     </div>
   );
 }

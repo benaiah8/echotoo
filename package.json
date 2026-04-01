@@ -1,16 +1,27 @@
 {
   "name": "experience-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "start": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate:icons": "capacitor-assets generate --android --ios --iconBackgroundColor \"#EDBD00\" --iconBackgroundColorDark \"#0b0b0b\" --splashBackgroundColor \"#EDBD00\" --splashBackgroundColorDark \"#0b0b0b\""
   },
   "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/browser": "^8.0.1",
+    "@capacitor/cli": "^8.1.0",
+    "@capacitor/core": "^8.1.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/haptics": "^8.0.1",
+    "@capacitor/ios": "^8.1.0",
+    "@capacitor/keyboard": "^8.0.1",
+    "@capacitor/share": "^8.0.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@react-google-maps/api": "^2.20.7",
@@ -34,10 +45,12 @@
     "redux-state-sync": "^3.1.4",
     "reselect": "^5.1.1",
     "rrule": "^2.8.1",
+    "swiper": "^12.1.2",
     "tailwindcss": "^4.0.17",
     "zustand": "^5.0.9"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@eslint/js": "^9.21.0",
     "@types/leaflet": "^1.9.17",
     "@types/react": "^19.0.10",

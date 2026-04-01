@@ -1,5 +1,10 @@
 import { supabase } from "../../lib/supabaseClient";
-import { clearCachedProfilePosts } from "../../lib/profilePostsCache";
+import { requestManager } from "../../lib/requestManager";
+import { dataCache } from "../../lib/dataCache";
+import { isDraftPostId } from "../../lib/drafts";
+import { getViewerAuthUserId } from "./follows";
+import { invalidateOnLike } from "../../lib/cacheInvalidation";
+import { emitPostChanged } from "../../lib/postEvents";
 
 // Cache for likes to reduce egress
 const LIKES_CACHE_KEY = "likes_cache";
@@ -72,34 +77,50 @@ export interface LikeCount {
 }
 
 /**
- * Like a post for the current user
+ * Like a post for the current user.
+ * Uses upsert with ignoreDuplicates to avoid 409 - idempotent.
+ * Only emits likesDelta when a new row is actually created.
  */
 export async function likePost(
   postId: string
 ): Promise<{ data: PostLike | null; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("post_likes")
-      .insert({
-        user_id: user.id,
-        post_id: postId,
-      })
-      .select("*")
-      .single();
+      .upsert(
+        { user_id: userId, post_id: postId },
+        { onConflict: "user_id,post_id", ignoreDuplicates: true }
+      )
+      .select("id, user_id, post_id, created_at");
 
-    // Invalidate cache when liking
+    // With ignoreDuplicates: inserted -> returns row(s); conflict -> returns []
+    const inserted =
+      !error && data && (Array.isArray(data) ? data.length > 0 : !!data);
     if (!error) {
       invalidateLikesCache();
-      // Also clear profile posts cache for interacted tab
-      clearCachedProfilePosts(user.id, "interacted");
+      invalidateOnLike(postId, userId);
+      if (inserted) {
+        emitPostChanged(postId, { viewerLiked: true });
+      } else {
+        // Conflict: reconcile server count so stale local count (e.g. 0) gets fixed
+        const { count: likeCount } = await supabase
+          .from("post_likes")
+          .select("*", { count: "exact", head: true })
+          .eq("post_id", postId);
+        if (typeof likeCount === "number") {
+          emitPostChanged(postId, { viewerLiked: true, likeCount });
+        } else {
+          emitPostChanged(postId, { viewerLiked: true });
+        }
+      }
+      const row = Array.isArray(data) ? data[0] : data;
+      return { data: row as PostLike, error: null };
     }
 
-    return { data, error };
+    return { data: null, error };
   } catch (error) {
     console.error("Like post error:", error);
     return { data: null, error };
@@ -107,28 +128,42 @@ export async function likePost(
 }
 
 /**
- * Unlike a post for the current user
+ * Unlike a post for the current user.
+ * Only emits likesDelta when a row was actually deleted.
  */
 export async function unlikePost(
   postId: string
 ): Promise<{ data: any; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     const { data, error } = await supabase
       .from("post_likes")
       .delete()
-      .eq("user_id", user.id)
-      .eq("post_id", postId);
+      .eq("user_id", userId)
+      .eq("post_id", postId)
+      .select("post_id");
 
-    // Invalidate cache when unliking
+    const deleted =
+      !error && data && (Array.isArray(data) ? data.length > 0 : !!data);
     if (!error) {
       invalidateLikesCache();
-      // Also clear profile posts cache for interacted tab
-      clearCachedProfilePosts(user.id, "interacted");
+      invalidateOnLike(postId, userId);
+      if (deleted) {
+        emitPostChanged(postId, { viewerLiked: false });
+      } else {
+        // Already unliked: reconcile server count to fix stale local count
+        const { count: likeCount } = await supabase
+          .from("post_likes")
+          .select("*", { count: "exact", head: true })
+          .eq("post_id", postId);
+        if (typeof likeCount === "number") {
+          emitPostChanged(postId, { viewerLiked: false, likeCount });
+        } else {
+          emitPostChanged(postId, { viewerLiked: false });
+        }
+      }
     }
 
     return { data, error };
@@ -145,20 +180,18 @@ export async function isPostLiked(
   postId: string
 ): Promise<{ data: boolean; error: any }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
     // Skip checking for draft posts (they have invalid UUIDs)
-    if (postId.startsWith("draft-")) {
+    if (isDraftPostId(postId)) {
       return { data: false, error: null };
     }
 
     const { data, error } = await supabase
       .from("post_likes")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("post_id", postId)
       .maybeSingle();
 
@@ -225,15 +258,13 @@ export async function getLikedPosts(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
-    console.log("Getting liked posts for user:", user.id);
+    console.log("Getting liked posts for user:", userId);
 
     // Check cache first
-    const cachedData = getCachedLikes(user.id);
+    const cachedData = getCachedLikes(userId);
     if (cachedData) {
       const likedPostIds = Object.entries(cachedData)
         .filter(([_, isLiked]) => isLiked)
@@ -244,7 +275,7 @@ export async function getLikedPosts(): Promise<{
     const { data, error } = await supabase
       .from("post_likes")
       .select("post_id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -259,7 +290,7 @@ export async function getLikedPosts(): Promise<{
     likedPostIds.forEach((postId) => {
       likeMap[postId] = true;
     });
-    setCachedLikes(user.id, likeMap);
+    setCachedLikes(userId, likeMap);
 
     return { data: likedPostIds, error: null };
   } catch (error) {
@@ -307,30 +338,62 @@ export async function getLikedPostsWithDetailsForUserOptimized(
   data: LikedPostWithDetails[] | null;
   error: any;
 }> {
-  try {
-    console.log("[getLikedPostsWithDetailsForUserOptimized] Starting query for user:", userId);
+  const dedupeKey = `liked_posts_${userId}_${offset}_${limit}_${
+    viewerUserId || "null"
+  }`;
 
-    const { data, error } = await supabase.rpc(
-      "get_user_posts_liked_with_related_data",
-      {
-        p_user_id: userId,
-        p_viewer_user_id: viewerUserId || null,
-        p_limit: limit,
-        p_offset: offset,
-      }
+  if (import.meta.env.DEV) {
+    console.log("[likes] getLikedPostsWithDetailsForUserOptimized ENTER", {
+      dedupeKey,
+      offset,
+      limit,
+    });
+  }
+
+  try {
+    const execResult = await requestManager.execute(
+      dedupeKey,
+      async (signal: AbortSignal) => {
+        if (signal.aborted) throw new Error("Request aborted");
+
+        const { data, error } = await supabase.rpc(
+          "get_user_posts_liked_with_related_data",
+          {
+            p_user_id: userId,
+            p_viewer_user_id: viewerUserId || null,
+            p_limit: limit,
+            p_offset: offset,
+          }
+        );
+
+        if (signal.aborted) throw new Error("Request aborted");
+        return { data, error };
+      },
+      "high"
     );
 
+    const { data, error } = execResult.data || {
+      data: null,
+      error: execResult.error,
+    };
+
     if (error) {
-      console.error("[getLikedPostsWithDetailsForUserOptimized] RPC error:", error);
+      console.error(
+        "[getLikedPostsWithDetailsForUserOptimized] RPC error:",
+        error
+      );
       return { data: null, error };
     }
 
     if (!data || !data.posts) {
-      console.warn("[getLikedPostsWithDetailsForUserOptimized] Invalid response structure");
+      console.warn(
+        "[getLikedPostsWithDetailsForUserOptimized] Invalid response structure"
+      );
       return { data: [], error: null };
     }
 
     // Transform PostgreSQL result to LikedPostWithDetails format
+    // Pass through like_count, comment_count, is_liked, is_saved, follow_status when RPC returns them
     const result: LikedPostWithDetails[] = data.posts.map((post: any) => ({
       id: post.like_id,
       post_id: post.id,
@@ -350,15 +413,23 @@ export async function getLikedPostsWithDetailsForUserOptimized(
           display_name: post.author?.display_name || null,
           avatar_url: post.author?.avatar_url || null,
         },
-        activities: [], // Activities not included in PostgreSQL function (can be lazy loaded)
-      },
+        activities: post.activities || [],
+        like_count: post.like_count,
+        comment_count: post.comment_count,
+        is_liked: post.is_liked,
+        is_saved: post.is_saved,
+        follow_status: post.follow_status,
+        has_images: post.has_images,
+      } as any,
     }));
 
-    console.log("[getLikedPostsWithDetailsForUserOptimized] Query result:", {
-      dataLength: result.length,
-      error: null,
-    });
-
+    if (import.meta.env.DEV) {
+      console.log("[likes] getLikedPostsWithDetailsForUserOptimized RETURN", {
+        dedupeKey,
+        offset,
+        limit,
+      });
+    }
     return { data: result, error: null };
   } catch (error: any) {
     console.error("[getLikedPostsWithDetailsForUserOptimized] Error:", error);
@@ -461,18 +532,16 @@ export async function getLikedPostsWithDetails(): Promise<{
   error: any;
 }> {
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+    const userId = await getViewerAuthUserId();
+    if (!userId) throw new Error("Not authenticated");
 
-    console.log("Getting liked posts with details for user:", user.id);
+    console.log("Getting liked posts with details for user:", userId);
 
     // First, get the liked posts
     const { data: likedPosts, error: likedError } = await supabase
       .from("post_likes")
       .select("id, post_id, created_at")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
     if (likedError) {

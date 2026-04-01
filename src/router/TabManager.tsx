@@ -169,8 +169,8 @@ export const useTabStore = create<TabState & TabActions>((set, get) => ({
    * Determine tab from route path
    */
   getTabFromRoute: (path: string): TabId => {
-    // Home tab
-    if (path === "/") {
+    // Home tab (includes /games redirect)
+    if (path === "/" || path === "/games") {
       return "home";
     }
 
@@ -238,4 +238,3 @@ export function useTabNavigation() {
     }
   };
 }
-

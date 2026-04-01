@@ -2,7 +2,7 @@ export default function PostDetailSkeleton() {
   return (
     <>
       {/* Sticky interaction bar */}
-      <div className="fixed top-0 left-0 right-0 z-30 bg-[var(--surface)]/80 backdrop-blur-md border-b border-[var(--border)] px-3 py-3">
+      <div className="fixed top-0 left-0 right-0 z-30 bg-[var(--surface)]/80 backdrop-blur-md border-b border-[var(--border)] px-3 py-3 safe-area-inset-top">
         <div className="flex items-center justify-between max-w-[640px] mx-auto">
           <div className="flex items-center gap-6">
             <div className="w-6 h-6 rounded bg-[var(--text)]/10 animate-pulse" />

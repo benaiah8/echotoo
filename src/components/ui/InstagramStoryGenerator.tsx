@@ -1,8 +1,163 @@
-import { useRef, useEffect, useState } from "react";
+import {
+  useRef,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 import html2canvas from "html2canvas";
 import toast from "react-hot-toast";
+import { PiCalendarBlank } from "react-icons/pi";
 import { imgUrlPublic } from "../../lib/img";
-import { getOwlLogoPath } from "../../lib/assets";
+import { getInstagramStoryBackgroundPath } from "../../lib/assets";
+import { formatInstagramStoryEventLine } from "../../lib/instagramStoryEventLine";
+import { shareOrDownloadStoryImage } from "../../lib/instagramStoryExport";
+import {
+  STORY_EXPORT_BACKGROUND_HEX,
+  validateStoryExportCanvas,
+} from "../../lib/instagramStoryCanvasValidation";
+import { renderInstagramStoryToCanvas } from "../../lib/renderInstagramStoryToCanvas";
+import FrostedCenterModal, {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "./FrostedCenterModal";
+import StoryExportCard, {
+  CAPTION_MAX_LINES,
+  SEE_MORE_LABEL,
+  STORY_EXPORT_COLORS as S,
+} from "./StoryExportCard";
+
+/** Shorter portrait card (not full 9:16 story); background art should match ~this frame. */
+const STORY_CARD_ASPECT_RATIO = "3 / 4";
+
+/**
+ * Export pipeline: primary = manual Canvas 2D (`renderInstagramStoryToCanvas`); fallback = DOM capture
+ * via html2canvas on the off-screen `StoryExportCard`. When `true`, manual runs first; set `false` only
+ * for emergency rollback to html2canvas-only.
+ */
+const USE_MANUAL_STORY_CANVAS_EXPORT = true;
+
+/**
+ * html2canvas fallback only: strip `class` on the cloned capture subtree so global Tailwind (e.g.
+ * `oklab()`) cannot break html2canvas.
+ */
+function stripClassesOnStoryClone(_doc: Document, cloned: HTMLElement) {
+  const strip = (node: Element) => {
+    node.removeAttribute("class");
+    Array.from(node.children).forEach((c) => strip(c));
+  };
+  strip(cloned);
+}
+
+/**
+ * html2canvas fallback: capture the off-screen export subtree. Prefer foreignObject rendering; retry with
+ * the legacy renderer if it throws, or if validation detects a blank/near-background canvas.
+ */
+async function captureStoryToCanvas(
+  el: HTMLElement
+): Promise<HTMLCanvasElement> {
+  const base = {
+    useCORS: true,
+    allowTaint: false,
+    backgroundColor: STORY_EXPORT_BACKGROUND_HEX,
+    scale: 2,
+    logging: false,
+    onclone: stripClassesOnStoryClone,
+  } satisfies Parameters<typeof html2canvas>[1];
+
+  const logCapture = (
+    attempt: number,
+    renderer: "foreignObject" | "legacy",
+    canvas: HTMLCanvasElement,
+    validation: ReturnType<typeof validateStoryExportCanvas>
+  ) => {
+    console.info("[InstagramStoryGenerator]", {
+      attempt,
+      renderer,
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      validationOk: validation.ok,
+      nearBackgroundRatio: validation.stats.nearBackgroundRatio,
+      maxLuminance: validation.stats.maxLuminance,
+      luminanceVariance: validation.stats.luminanceVariance,
+    });
+  };
+
+  let foCanvas: HTMLCanvasElement;
+  try {
+    foCanvas = await html2canvas(el, {
+      ...base,
+      foreignObjectRendering: true,
+    });
+  } catch (foErr) {
+    console.warn(
+      "[InstagramStoryGenerator] foreignObject capture failed; retrying with legacy renderer",
+      foErr
+    );
+    const legacyCanvas = await html2canvas(el, {
+      ...base,
+      foreignObjectRendering: false,
+    });
+    const vLegacy = validateStoryExportCanvas(legacyCanvas);
+    logCapture(2, "legacy", legacyCanvas, vLegacy);
+    if (!vLegacy.ok) {
+      console.error("[InstagramStoryGenerator]", {
+        outcome: "capture_failed",
+        message: "invalid canvas after legacy rendering (foreignObject threw)",
+      });
+      throw new Error(
+        "Story export produced an invalid canvas after legacy rendering."
+      );
+    }
+    return legacyCanvas;
+  }
+
+  const vFo = validateStoryExportCanvas(foCanvas);
+  logCapture(1, "foreignObject", foCanvas, vFo);
+  if (vFo.ok) return foCanvas;
+
+  console.info("[InstagramStoryGenerator]", {
+    reason: "invalid_canvas",
+    retryingWith: "legacy",
+  });
+
+  const legacyCanvas = await html2canvas(el, {
+    ...base,
+    foreignObjectRendering: false,
+  });
+  const vLegacy = validateStoryExportCanvas(legacyCanvas);
+  logCapture(2, "legacy", legacyCanvas, vLegacy);
+  if (!vLegacy.ok) {
+    console.error("[InstagramStoryGenerator]", {
+      outcome: "capture_failed",
+      message: "invalid canvas after foreignObject and legacy rendering",
+    });
+    throw new Error(
+      "Story export produced an invalid canvas after foreignObject and legacy rendering."
+    );
+  }
+  return legacyCanvas;
+}
+
+function subscribeTheme(cb: () => void) {
+  const el = document.documentElement;
+  const mo = new MutationObserver(cb);
+  mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+  return () => mo.disconnect();
+}
+
+function getThemeIsDarkSnapshot() {
+  return !document.documentElement.classList.contains("theme-light");
+}
+
+function useIsDarkTheme() {
+  return useSyncExternalStore(
+    subscribeTheme,
+    getThemeIsDarkSnapshot,
+    () => true
+  );
+}
 
 interface InstagramStoryGeneratorProps {
   caption: string;
@@ -16,13 +171,15 @@ interface InstagramStoryGeneratorProps {
   creatorHandle?: string;
   creatorAvatarUrl?: string | null;
   activities?: string[];
-}
 
-const SITE_URL = import.meta.env.VITE_SITE_URL || "echotoo.com";
+  selectedDates?: string[] | null;
+  isRecurring?: boolean | null;
+  recurrenceDays?: string[] | null;
+}
 
 export default function InstagramStoryGenerator({
   caption,
-  postImageUrl,
+  postImageUrl: _postImageUrl,
   postId,
   postType,
   onImageGenerated,
@@ -30,66 +187,179 @@ export default function InstagramStoryGenerator({
   creatorName,
   creatorHandle,
   creatorAvatarUrl,
-  activities,
+  activities: _activities,
+  selectedDates,
+  isRecurring,
+  recurrenceDays,
 }: InstagramStoryGeneratorProps) {
-  const canvasRef = useRef<HTMLDivElement>(null);
+  /** Off-screen subtree (`StoryExportCard`) used by the html2canvas fallback path only. */
+  const exportCaptureRef = useRef<HTMLDivElement>(null);
+  const captionRef = useRef<HTMLParagraphElement>(null);
+  const [captionTruncated, setCaptionTruncated] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [logoLoaded, setLogoLoaded] = useState(false);
+  const [bgReady, setBgReady] = useState(false);
+  const [useBgImage, setUseBgImage] = useState(true);
+  const isDark = useIsDarkTheme();
 
-  const processedImageUrl = postImageUrl
-    ? imgUrlPublic(postImageUrl) || postImageUrl
+  const rawCaption =
+    caption?.trim() ||
+    (postType === "hangout"
+      ? "Check out this hangout!"
+      : "Check out this experience!");
+
+  const safeCreatorName = creatorName || "";
+  const safeCreatorHandle = creatorHandle || "";
+  const processedAvatarUrl = creatorAvatarUrl
+    ? imgUrlPublic(creatorAvatarUrl) ?? null
     : null;
+  const hasAvatar = !!processedAvatarUrl;
+
+  const storyFallbackInitial = (() => {
+    const fromName = safeCreatorName.trim().charAt(0);
+    if (fromName) return fromName.toUpperCase();
+    const fromHandle = safeCreatorHandle.replace(/^@/, "").trim().charAt(0);
+    if (fromHandle) return fromHandle.toUpperCase();
+    return "E";
+  })();
+
+  const eventLine = formatInstagramStoryEventLine({
+    postType,
+    selectedDates,
+    isRecurring,
+    recurrenceDays,
+  });
+
+  const storyBgSrc = getInstagramStoryBackgroundPath();
 
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.src = getOwlLogoPath();
-    img.onload = () => setLogoLoaded(true);
+    img.onload = () => setBgReady(true);
     img.onerror = () => {
-      console.error("Failed to load owl icon");
-      setLogoLoaded(true); // Still allow generation even if logo fails
+      setUseBgImage(false);
+      setBgReady(true);
     };
-  }, []);
+    img.src = storyBgSrc;
+  }, [storyBgSrc]);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = captionRef.current;
+      if (!el) return;
+      setCaptionTruncated(el.scrollHeight > el.clientHeight + 1.5);
+    };
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(measure);
+    });
+    return () => {
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
+  }, [rawCaption]);
+
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      setCaptionTruncated(el.scrollHeight > el.clientHeight + 1.5);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [rawCaption]);
+
+  const previewFrameStyle: CSSProperties = isDark
+    ? {
+        border: "2px solid rgba(255,255,255,0.9)",
+        boxShadow: "0 12px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.35)",
+      }
+    : {
+        border: "2px solid rgba(20,20,24,0.4)",
+        boxShadow: "0 12px 36px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08)",
+      };
 
   const generateImage = async () => {
-    if (!canvasRef.current) return;
+    if (!exportCaptureRef.current) return;
 
     setIsGenerating(true);
     toast.loading("Creating your Instagram Story...", { id: "generating" });
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const canvas = await html2canvas(canvasRef.current, {
-        useCORS: true,
-        backgroundColor: "#05060A",
-        logging: false,
-        scale: 3,
-      });
+      let canvas: HTMLCanvasElement;
+
+      if (USE_MANUAL_STORY_CANVAS_EXPORT) {
+        try {
+          canvas = await renderInstagramStoryToCanvas({
+            storyBgSrc,
+            useBgImage,
+            hasAvatar,
+            processedAvatarUrl,
+            storyFallbackInitial,
+            safeCreatorHandle,
+            safeCreatorName,
+            rawCaption,
+            captionShowSeeMore: captionTruncated,
+            eventLine,
+          });
+          const vManual = validateStoryExportCanvas(canvas);
+          if (!vManual.ok) {
+            console.warn(
+              "[InstagramStoryGenerator] manual canvas failed validation; falling back to html2canvas",
+              vManual.stats
+            );
+            canvas = await captureStoryToCanvas(exportCaptureRef.current);
+          }
+        } catch (manualErr) {
+          console.warn(
+            "[InstagramStoryGenerator] manual canvas render failed; falling back to html2canvas",
+            manualErr
+          );
+          canvas = await captureStoryToCanvas(exportCaptureRef.current);
+        }
+      } else {
+        canvas = await captureStoryToCanvas(exportCaptureRef.current);
+      }
 
       canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            toast.success("Story image created!", { id: "generating" });
+        async (blob) => {
+          if (!blob) {
+            toast.error("Failed to generate image", { id: "generating" });
+            setIsGenerating(false);
+            return;
+          }
+
+          try {
+            const outcome = await shareOrDownloadStoryImage(
+              blob,
+              `echotoo-story-${postId}`
+            );
+
+            if (outcome === "cancelled") {
+              toast.dismiss("generating");
+              setIsGenerating(false);
+              return;
+            }
+
             onImageGenerated?.(blob);
 
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `echotoo-story-${postId}.jpg`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-
+            toast.success(
+              outcome === "download"
+                ? "Image downloaded — check your files folder"
+                : "Story image ready!",
+              { id: "generating" }
+            );
             onClose?.();
-          } else {
-            toast.error("Failed to generate image", { id: "generating" });
+          } catch (err) {
+            console.error("Error sharing story image:", err);
+            toast.error("Failed to share image", { id: "generating" });
+          } finally {
+            setIsGenerating(false);
           }
-          setIsGenerating(false);
         },
         "image/jpeg",
-        0.95
+        0.92
       );
     } catch (error) {
       console.error("Error generating image:", error);
@@ -98,279 +368,413 @@ export default function InstagramStoryGenerator({
     }
   };
 
-  // caption + sample creator
-  const rawCaption = caption || "Check out this experience!";
-  const truncated =
-    rawCaption.length > 260 ? rawCaption.slice(0, 257) + "…" : rawCaption;
-
-  const storyUrl = `${SITE_URL}/${postType}/${postId}`;
-  const safeCreatorName = creatorName || "";
-  const safeCreatorHandle = creatorHandle || "";
-  const processedAvatarUrl = creatorAvatarUrl
-    ? imgUrlPublic(creatorAvatarUrl) || creatorAvatarUrl
-    : null;
-  const hasAvatar = !!processedAvatarUrl;
+  const captionClampStyle: CSSProperties = {
+    display: "-webkit-box",
+    WebkitLineClamp: CAPTION_MAX_LINES,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+    wordBreak: "break-word",
+    overflowWrap: "anywhere",
+    whiteSpace: "pre-line",
+    lineHeight: 1.38,
+    paddingTop: 0,
+    paddingBottom: 4,
+  };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4">
-      <div className="relative w-full max-w-sm bg-[var(--bg)] rounded-2xl p-6 mx-auto border border-[var(--border)] shadow-2xl">
-        <h2 className="text-xl font-bold mb-4 text-[var(--text)] text-center w-full">
+    <FrostedCenterModal
+      open
+      onBackdropClick={isGenerating || !onClose ? undefined : () => onClose()}
+      zTier="aboveDialog"
+      containerClassName="overflow-y-auto py-4"
+      aria-labelledby="instagram-story-title"
+    >
+      <div
+        className={frostedModalPanelClassName}
+        style={{
+          ...frostedModalPanelStyle,
+          maxWidth: "min(420px, 92vw)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2
+          id="instagram-story-title"
+          className="mb-4 w-full text-center text-xl font-bold text-[var(--text)]"
+        >
           Create Instagram Story
         </h2>
 
-        {/* Phone frame */}
         <div
-          className="mb-4 rounded-xl overflow-hidden border-2 border-[var(--border)] bg-black"
+          className="mb-4 overflow-hidden rounded-xl bg-black"
           style={{
-            aspectRatio: "9/16",
+            aspectRatio: STORY_CARD_ASPECT_RATIO,
             width: "100%",
             position: "relative",
+            ...previewFrameStyle,
           }}
         >
-          {/* Story canvas */}
           <div
-            ref={canvasRef}
-            className="relative w-full h-full"
-            style={{ boxSizing: "border-box" }}
+            style={{
+              position: "relative",
+              boxSizing: "border-box",
+              height: "100%",
+              width: "100%",
+              overflow: "hidden",
+              WebkitFontSmoothing: "antialiased",
+              fontFamily:
+                'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+            }}
           >
-            {/* BACKGROUND GRADIENT */}
             <div
-              className="absolute inset-0"
+              aria-hidden
               style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 0,
                 background:
-                  "linear-gradient(180deg, #181a35 0%, #070717 40%, #020308 100%)",
+                  "linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%)",
+                backgroundImage: `
+                  linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%),
+                  linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+                  linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)
+                `,
+                backgroundSize: "100% 100%, 24px 24px, 24px 24px",
               }}
             />
 
-            {/* blurred image texture */}
-            {processedImageUrl && (
-              <div className="absolute inset-0 opacity-10 overflow-hidden">
-                <img
-                  src={processedImageUrl}
-                  alt=""
-                  crossOrigin="anonymous"
-                  className="w-full h-full object-cover"
+            {useBgImage ? (
+              <img
+                src={storyBgSrc}
+                alt=""
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 1,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+                crossOrigin="anonymous"
+                draggable={false}
+              />
+            ) : null}
+
+            {/* Post block from top of safe area (not vertically centered — centering pushed content down and clipped captions). Brand pinned bottom-left. */}
+            <div
+              style={{
+                position: "relative",
+                zIndex: 10,
+                height: "100%",
+                boxSizing: "border-box",
+                color: S.text,
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  boxSizing: "border-box",
+                  paddingLeft: "8%",
+                  paddingRight: "8%",
+                  paddingTop: "5%",
+                  paddingBottom: "26%",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "flex-start",
+                  alignItems: "stretch",
+                }}
+              >
+                <div
                   style={{
-                    filter: "blur(4px) brightness(0.7) contrast(1.05)",
+                    width: "100%",
+                    maxWidth: 340,
+                    alignSelf: "center",
                   }}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              </div>
-            )}
-
-            {/* yellow splashes */}
-            <div
-              className="pointer-events-none absolute"
-              style={{
-                top: "-20%",
-                left: "50%",
-                transform: "translateX(-50%)",
-                width: "80%",
-                height: "50%",
-                background:
-                  "radial-gradient(circle, rgba(255,204,0,0.28) 0%, transparent 70%)",
-              }}
-            />
-            <div
-              className="pointer-events-none absolute"
-              style={{
-                bottom: "-25%",
-                right: "-10%",
-                width: "60%",
-                height: "50%",
-                background:
-                  "radial-gradient(circle at bottom right, rgba(255,204,0,0.22) 0%, transparent 70%)",
-              }}
-            />
-
-            {/* radial / pattern mix */}
-            <div
-              className="pointer-events-none absolute inset-0"
-              style={{
-                backgroundImage:
-                  "radial-gradient(circle at 50% 0%, rgba(255,204,0,0.16) 0, transparent 60%), radial-gradient(circle at 0% 80%, rgba(255,204,0,0.08) 0, transparent 65%), radial-gradient(circle at 100% 80%, rgba(255,204,0,0.08) 0, transparent 65%)",
-                mixBlendMode: "soft-light",
-              }}
-            />
-            <div
-              className="pointer-events-none absolute inset-0"
-              style={{
-                backgroundImage:
-                  "linear-gradient(135deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
-                backgroundSize: "40px 40px",
-                opacity: 0.25,
-                mixBlendMode: "soft-light",
-              }}
-            />
-
-            {/* FOREGROUND COLUMN */}
-            <div className="relative z-10 flex h-full w-full flex-col items-center justify-between px-[10%] py-[8%]">
-              {/* top: owl standing on stacked caption card */}
-              <div className="w-full flex justify-center">
-                <div className="flex w-[80%] max-w-[340px] flex-col items-center gap-3">
-                  {/* Owl, slightly overlapping the card so it feels like it's standing on it */}
-                  <div className="mb-[-8px] flex justify-center w-full">
-                    <img
-                      src={getOwlLogoPath()}
-                      alt="Owl"
-                      className="block"
-                      style={{
-                        width: 72,
-                        height: "auto",
-                        display: "block",
-                      }}
-                    />
-                  </div>
-
-                  {/* stacked caption card */}
-                  <div className="relative w-full">
-                    {/* back card 1 */}
+                >
+                  {hasAvatar ? (
                     <div
-                      className="absolute inset-0 translate-y-[26px] scale-[0.92] rounded-[20px]"
                       style={{
-                        backgroundColor: "#d8b200",
-                        border: "1px solid rgba(255,255,255,0.25)",
-                        opacity: 0.85,
+                        width: 56,
+                        height: 56,
+                        borderRadius: 9999,
+                        overflow: "hidden",
+                        border: `2px solid ${S.borderLight}`,
+                        marginBottom: 8,
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
                       }}
-                    />
-                    {/* back card 2 */}
-                    <div
-                      className="absolute inset-0 translate-y-[13px] scale-[0.96] rounded-[20px]"
-                      style={{
-                        backgroundColor: "#f5c800",
-                        border: "1px solid rgba(255,255,255,0.35)",
-                        opacity: 0.95,
-                      }}
-                    />
-                    {/* main card */}
-                    <div
-                      className="relative rounded-[20px] bg-[#FFCC00] text-[#14120A] shadow-[0_18px_40px_rgba(0,0,0,0.65)] px-5 py-4 text-center"
-                      style={{ fontSize: 14, lineHeight: 1.4 }}
                     >
-                      {/* profile row centered */}
-                      <div className="mb-3 flex flex-col items-center gap-2">
-                        {hasAvatar ? (
-                          <div
-                            style={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: "999px",
-                              overflow: "hidden",
-                              border: "2px solid #000000",
-                            }}
-                          >
-                            <img
-                              src={processedAvatarUrl as string}
-                              alt={safeCreatorHandle || "Creator"}
-                              style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "cover",
-                              }}
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display =
-                                  "none";
-                                (
-                                  e.target as HTMLImageElement
-                                ).parentElement!.style.display = "none";
-                              }}
-                            />
-                          </div>
-                        ) : (
-                          <div
-                            style={{
-                              width: 40,
-                              height: 40,
-                              borderRadius: "999px",
-                              backgroundColor: "rgba(20,18,10,0.16)",
-                              border: "2px solid #000000",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontSize: 16,
-                              fontWeight: 700,
-                            }}
-                          >
-                            {safeCreatorHandle?.[0] ||
-                              safeCreatorName?.[0] ||
-                              "E"}
-                          </div>
-                        )}
-
-                        {safeCreatorHandle ? (
-                          <span className="text-[12px] font-bold leading-tight text-[#14120A]">
-                            {safeCreatorHandle}
-                          </span>
-                        ) : safeCreatorName ? (
-                          <span className="text-[12px] font-bold leading-tight text-[#14120A]">
-                            {safeCreatorName}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {/* caption */}
-                      <p className="text-[14px] font-semibold">{truncated}</p>
-
-                      {/* optional activities pills */}
-                      {activities && activities.length > 0 && (
-                        <div className="mt-2 flex flex-wrap justify-center gap-1">
-                          {activities.map((act) => (
-                            <span
-                              key={act}
-                              className="rounded-full bg-[#F2B800] px-2 py-1 text-[10px] font-medium"
-                            >
-                              {act}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      <img
+                        src={processedAvatarUrl as string}
+                        alt=""
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        crossOrigin="anonymous"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
+                      />
                     </div>
+                  ) : (
+                    <div
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 9999,
+                        border: `2px solid ${S.borderLight}`,
+                        marginBottom: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: S.initialsBg,
+                        color: S.text,
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+                        lineHeight: 1,
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          lineHeight: "20px",
+                          height: "20px",
+                          margin: 0,
+                          padding: 0,
+                          fontSize: 20,
+                          fontWeight: 700,
+                          textAlign: "center",
+                        }}
+                      >
+                        {storyFallbackInitial}
+                      </span>
+                    </div>
+                  )}
+
+                  {(safeCreatorHandle || safeCreatorName) && (
+                    <p
+                      style={{
+                        margin: 0,
+                        paddingBottom: 6,
+                        borderBottom: `1px solid ${S.borderRule}`,
+                        fontSize: 14,
+                        fontWeight: 600,
+                        letterSpacing: "-0.01em",
+                        color: S.text,
+                        textShadow: "0 1px 2px rgba(0,0,0,0.45)",
+                        textAlign: "left",
+                      }}
+                    >
+                      {safeCreatorHandle || safeCreatorName}
+                    </p>
+                  )}
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      width: "100%",
+                      borderRadius: 6,
+                      padding: "6px 4px 8px",
+                      backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent calc(1.38em - 1px), ${S.captionLine} 1.38em, ${S.captionLine} calc(1.38em + 1px))`,
+                    }}
+                  >
+                    <p
+                      ref={captionRef}
+                      style={{
+                        margin: 0,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: S.textMuted,
+                        textShadow: "0 1px 2px rgba(0,0,0,0.4)",
+                        textAlign: "left",
+                        ...captionClampStyle,
+                      }}
+                    >
+                      {rawCaption}
+                    </p>
+                    {captionTruncated ? (
+                      <p
+                        style={{
+                          margin: "8px 0 0 0",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: 1.35,
+                          color: S.text,
+                          textShadow: "0 1px 2px rgba(0,0,0,0.45)",
+                        }}
+                      >
+                        {SEE_MORE_LABEL}
+                      </p>
+                    ) : null}
                   </div>
+
+                  {eventLine ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-start",
+                        gap: 8,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        color: S.textSoft,
+                      }}
+                    >
+                      <PiCalendarBlank
+                        size={18}
+                        style={{ color: S.textSoft, flexShrink: 0 }}
+                        aria-hidden
+                      />
+                      <span>{eventLine}</span>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
-              {/* bottom: Download + buttons + URL */}
-              <div className="mt-4 flex flex-col items-center gap-2">
-                <p className="text-[14px] font-semibold text-[#FFE9A8]">
-                  Download Echotoo
+              <div
+                style={{
+                  position: "absolute",
+                  left: "8%",
+                  bottom: "max(10px, 2.5%)",
+                  maxWidth: "min(200px, 48%)",
+                  zIndex: 12,
+                  textAlign: "left",
+                  pointerEvents: "none",
+                }}
+              >
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 15,
+                    fontWeight: 700,
+                    letterSpacing: "-0.02em",
+                    color: S.text,
+                    textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+                  }}
+                >
+                  Echotoo.com
                 </p>
-
-                <div className="flex gap-2">
-                  <div className="rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-black shadow-[0_6px_16px_rgba(0,0,0,0.6)]">
+                <p
+                  style={{
+                    margin: "5px 0 0 0",
+                    padding: 0,
+                    fontSize: 10,
+                    fontWeight: 500,
+                    lineHeight: 1.25,
+                    color: S.textSoft,
+                    textShadow: "0 1px 2px rgba(0,0,0,0.45)",
+                  }}
+                >
+                  Download on
+                </p>
+                <div
+                  style={{
+                    marginTop: 6,
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      borderRadius: 9999,
+                      background: S.pillBg,
+                      color: S.pillFg,
+                      padding: "5px 11px",
+                      fontWeight: 600,
+                      fontSize: 10,
+                      lineHeight: "12px",
+                      verticalAlign: "middle",
+                      boxSizing: "border-box",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+                    }}
+                  >
                     App Store
-                  </div>
-                  <div className="rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-black shadow-[0_6px_16px_rgba(0,0,0,0.6)]">
+                  </span>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      borderRadius: 9999,
+                      background: S.pillBg,
+                      color: S.pillFg,
+                      padding: "5px 11px",
+                      fontWeight: 600,
+                      fontSize: 10,
+                      lineHeight: "12px",
+                      verticalAlign: "middle",
+                      boxSizing: "border-box",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+                    }}
+                  >
                     Play Store
-                  </div>
+                  </span>
                 </div>
-
-                <p className="mt-1 text-center text-[11px] text-[rgba(255,233,168,0.9)]">
-                  {storyUrl}
-                </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex gap-3 justify-center">
+        <div className="flex justify-center gap-3">
           <button
-            onClick={onClose}
-            className="px-6 py-2 rounded-xl border-2 border-[var(--border)] bg-transparent text-[var(--text)] font-semibold hover:bg-[var(--surface-2)] transition text-sm"
+            type="button"
+            onClick={() => onClose?.()}
+            className="rounded-xl border-2 border-[var(--border)] bg-transparent px-6 py-2 text-sm font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={generateImage}
-            disabled={isGenerating || !logoLoaded}
-            className="px-6 py-2 rounded-xl bg-yellow-400 text-black font-bold hover:bg-yellow-500 transition disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            disabled={isGenerating || !bgReady}
+            className="rounded-xl bg-yellow-400 px-6 py-2 text-sm font-bold text-black transition hover:bg-yellow-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isGenerating ? "Creating..." : "Create Story"}
           </button>
         </div>
       </div>
-    </div>
+
+      {/* Off-screen DOM for html2canvas fallback (FO-safe). Primary export uses manual canvas; preview above is unchanged. */}
+      <div
+        aria-hidden
+        style={{
+          position: "fixed",
+          left: "-10000px",
+          top: 0,
+          width: 400,
+          overflow: "hidden",
+          pointerEvents: "none",
+        }}
+      >
+        <div
+          ref={exportCaptureRef}
+          style={{
+            position: "relative",
+            boxSizing: "border-box",
+            width: 400,
+            aspectRatio: STORY_CARD_ASPECT_RATIO,
+            overflow: "hidden",
+            WebkitFontSmoothing: "antialiased",
+            fontFamily:
+              'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+          }}
+        >
+          <StoryExportCard
+            storyBgSrc={storyBgSrc}
+            useBgImage={useBgImage}
+            hasAvatar={hasAvatar}
+            processedAvatarUrl={processedAvatarUrl}
+            storyFallbackInitial={storyFallbackInitial}
+            safeCreatorHandle={safeCreatorHandle}
+            safeCreatorName={safeCreatorName}
+            rawCaption={rawCaption}
+            captionShowSeeMore={captionTruncated}
+            eventLine={eventLine}
+          />
+        </div>
+      </div>
+    </FrostedCenterModal>
   );
 }

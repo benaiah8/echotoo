@@ -1,6 +1,8 @@
 // PWA: platform-aware “Save to Home” (mobile only) with Android prompt + iOS instructions
 import { useEffect, useMemo, useState } from "react";
-import { MdClose } from "react-icons/md";
+import { createPortal } from "react-dom";
+import { PiX } from "react-icons/pi";
+import { isCapacitor } from "../lib/storage/utils/capacitorDetection";
 
 interface BeforeInstallPromptEvent extends Event {
   platforms: string[];
@@ -36,19 +38,43 @@ function BottomSheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  return (
-    <div className="fixed inset-0 z-[1100]">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="absolute left-0 right-0 bottom-0 max-w-[640px] mx-auto rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)] p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundColor: "var(--drawer-backdrop, rgba(0, 0, 0, 0.5))",
+          backdropFilter: "blur(var(--glass-blur))",
+          WebkitBackdropFilter: "blur(var(--glass-blur))",
+        }}
+        onClick={onClose}
+      />
+      <div
+        className="relative rounded-2xl border p-4 w-full max-h-[85vh] overflow-y-auto"
+        style={{
+          maxWidth: "var(--floating-confirm-max-width, min(380px, 90vw))",
+          backgroundColor: "var(--glass-bg)",
+          backdropFilter: "blur(var(--glass-blur))",
+          WebkitBackdropFilter: "blur(var(--glass-blur))",
+          borderColor: "var(--border)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-2">
-          <div className="text-sm font-semibold">{title}</div>
-          <button className="text-xs text-[var(--text)]/70" onClick={onClose}>
-            <MdClose size={16} />
+          <div className="text-sm font-semibold text-[var(--text)]">
+            {title}
+          </div>
+          <button
+            className="text-xs text-[var(--text)]/70 hover:text-[var(--text)]"
+            onClick={onClose}
+          >
+            <PiX size={16} />
           </button>
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -80,6 +106,7 @@ export default function InstallAppButton() {
     };
   }, []);
 
+  if (isCapacitor()) return null;
   if (!shouldShowFab) return null;
 
   const openFlow = () => {
@@ -99,7 +126,7 @@ export default function InstallAppButton() {
   return (
     <>
       {/* FAB — glowy, high-contrast border */}
-      <div className="fixed opacity-0 bottom-20 left-3 z-[1000] hover:opacity-90">
+      <div className="fixed opacity-100 bottom-20 left-3 z-[1000] hover:opacity-90 hidden">
         <button
           onClick={openFlow}
           className="px-3 py-2 rounded-lg text-xs font-semibold

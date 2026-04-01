@@ -39,8 +39,9 @@ export interface Profile {
 
 // RSVP Data structure
 export interface RSVPData {
-  users: RSVPUser[];
+  users?: RSVPUser[];
   currentUserStatus: string | null;
+  going_count?: number; // [SHRINK] Minimal feed: count only, no user list
 }
 
 // Batch load result (now obsolete - PostgreSQL functions return structured data)
@@ -51,4 +52,3 @@ export interface BatchLoadResult {
   rsvpData: Map<string, RSVPData>;
   profiles: Map<string, Profile>;
 }
-

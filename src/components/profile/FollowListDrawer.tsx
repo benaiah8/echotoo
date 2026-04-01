@@ -1,13 +1,21 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
-import { getViewerId, getBatchFollowStatuses, removeFollower } from "../../api/services/follows";
-import { setCachedFollowStatus, clearCachedFollowStatus } from "../../lib/followStatusCache";
+import {
+  getViewerId,
+  getViewerAuthUserId,
+  removeFollower,
+} from "../../api/services/follows";
+import {
+  setCachedFollowStatus,
+  clearCachedFollowStatus,
+} from "../../lib/followStatusCache";
 import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
-import { MdMoreVert } from "react-icons/md";
+import { PiDotsThreeVertical } from "react-icons/pi";
 import { toast } from "react-hot-toast";
-import { createPortal } from "react-dom";
 import DrawerProfileCard from "../ui/DrawerProfileCard";
+import BottomDrawer from "../ui/BottomDrawer";
+import ConfirmBottomDrawer from "../ui/ConfirmBottomDrawer";
 
 type Props = {
   open: boolean;
@@ -21,6 +29,8 @@ type Row = {
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  /** viewer_follow_status from get_follow_list_with_profiles; passed to FollowButton to avoid per-row getFollowStatus */
+  followStatus?: "none" | "pending" | "following" | "friends" | "self";
 };
 
 export default function FollowListDrawer({
@@ -35,117 +45,148 @@ export default function FollowListDrawer({
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 30;
+  const [hasMore, setHasMore] = useState(true);
   const [loadedItems, setLoadedItems] = useState<Row[]>([]); // Progressive rendering
   const [viewerProfileId, setViewerProfileId] = useState<string | null>(null);
   const [isAccountPrivate, setIsAccountPrivate] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [showRemoveConfirm, setShowRemoveConfirm] = useState<string | null>(null);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState<string | null>(
+    null
+  );
   const [removingId, setRemovingId] = useState<string | null>(null);
   const menuRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  // [OPTIMIZATION: Pass B - StrictMode Guard] Prevent duplicate RPC calls in dev StrictMode
+  const inFlightKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setItems([]);
     setLoadedItems([]); // Reset progressive items
     setPage(0);
+    setHasMore(true);
   }, [open, profileId, mode]);
 
   useEffect(() => {
     if (!open) return;
+
+    // [OPTIMIZATION: Pass B - StrictMode Guard] Prevent duplicate RPC calls
+    // Compute unique request key for this fetch
+    const requestKey = `${profileId}-${mode}-${page}`;
+
+    // Guard: Skip if same request is already in progress (prevents StrictMode double-calls)
+    if (inFlightKeyRef.current === requestKey) {
+      return;
+    }
+
+    // Mark this request as in-flight
+    inFlightKeyRef.current = requestKey;
+
     (async () => {
-      setLoading(true);
-      
-      // [OPTIMIZATION: Phase 4 - Cache] Show cached counts instantly when drawer opens
-      // Why: Instant display of counts, better perceived performance
-      const { getCachedFollowCounts } = await import("../../lib/followCountsCache");
-      const cachedCounts = getCachedFollowCounts(profileId);
-      if (cachedCounts) {
-        // Counts are already cached, drawer will show them instantly
-        // No need to wait for fresh fetch
-      }
-      
-      const from = page * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
+      try {
+        setLoading(true);
 
-      // followers: rows where following_id = profileId (who follows me)
-      // following: rows where follower_id  = profileId (who I follow)
-      const isFollowers = mode === "followers";
-
-      // Parallel: Load follows, viewer ID, and profile privacy status simultaneously
-      const [followResult, viewerId, profileData] = await Promise.all([
-        supabase
-          .from("follows")
-          .select(isFollowers ? "follower_id" : "following_id")
-          .eq(isFollowers ? "following_id" : "follower_id", profileId)
-          .eq("status", "approved") // Only show approved follows
-          .order("created_at", { ascending: false })
-          .range(from, to),
-        getViewerId(), // Get viewer ID in parallel
-        supabase
-          .from("profiles")
-          .select("id, is_private")
-          .eq("id", profileId)
-          .maybeSingle(), // Get profile privacy status
-      ]);
-
-      setViewerProfileId(viewerId);
-      setIsAccountPrivate(profileData?.data?.is_private === true);
-
-      const { data: followRows, error } = followResult;
-      if (error) {
-        setLoading(false);
-        return;
-      }
-
-      const ids = Array.from(
-        new Set(
-          (followRows ?? []).map((r) =>
-            isFollowers ? (r as any).follower_id : (r as any).following_id
-          )
-        )
-      );
-
-      if (ids.length === 0) {
-        setLoading(false);
-        return;
-      }
-
-      // Check cache first for profiles we already have
-      const cachedProfiles: Row[] = [];
-      const uncachedIds: string[] = [];
-      
-      ids.forEach((id) => {
-        const cached = getCachedProfile(id);
-        if (cached) {
-          cachedProfiles.push({
-            id: cached.id,
-            username: cached.username,
-            display_name: cached.display_name,
-            avatar_url: cached.avatar_url,
-          });
-        } else {
-          uncachedIds.push(id);
+        // [OPTIMIZATION: Phase 4 - Cache] Show cached counts instantly when drawer opens
+        // Why: Instant display of counts, better perceived performance
+        const { getCachedFollowCounts } = await import(
+          "../../lib/followCountsCache"
+        );
+        const cachedCounts = getCachedFollowCounts(profileId);
+        if (cachedCounts) {
+          // Counts are already cached, drawer will show them instantly
+          // No need to wait for fresh fetch
         }
-      });
 
-      // Only fetch uncached profiles
-      let fetchedProfiles: Row[] = [];
-      if (uncachedIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("id, user_id, username, display_name, avatar_url")
-          .in("id", uncachedIds);
+        // Compute pagination parameters
+        const limit = PAGE_SIZE;
+        const offset = page * PAGE_SIZE;
 
-        const profilesWithUserId = (profiles as any[]) ?? [];
-        
-        // Cache the fetched profiles and convert to Row type
-        fetchedProfiles = profilesWithUserId.map((profile) => {
+        // Get viewer IDs (both profile ID and auth user ID)
+        // Profile ID is needed for UI logic (e.g., checking if viewer is owner)
+        // Auth user ID is needed for the RPC call
+        const [viewerProfileId, viewerAuthUserId] = await Promise.all([
+          getViewerId(),
+          getViewerAuthUserId(),
+        ]);
+
+        setViewerProfileId(viewerProfileId);
+
+        // [PHASE 2.3 - OPTIMIZATION] Check cache first for profile privacy status
+        // Why: Avoids unnecessary query if profile is already cached
+        const cachedProfile = getCachedProfile(profileId);
+        const isPrivateFromCache = cachedProfile?.is_private === true;
+
+        // Only query profile privacy if not cached
+        let profileData;
+        if (!cachedProfile) {
+          const result = await supabase
+            .from("profiles")
+            .select("id, is_private")
+            .eq("id", profileId)
+            .maybeSingle();
+          profileData = result;
+        }
+
+        // Use cache value if available, otherwise use query result
+        setIsAccountPrivate(
+          isPrivateFromCache || profileData?.data?.is_private === true
+        );
+
+        // [OPTIMIZATION: Pass B] Single RPC call replaces multiple queries
+        // Replaces: follows.select() + profiles.in() + getBatchFollowStatuses()
+        const { data, error } = await supabase.rpc(
+          "get_follow_list_with_profiles",
+          {
+            p_profile_id: profileId,
+            p_mode: mode, // "followers" | "following"
+            p_viewer_user_id: viewerAuthUserId ?? null,
+            p_limit: limit,
+            p_offset: offset,
+          }
+        );
+
+        if (error) {
+          console.error("Error fetching follow list:", error);
+          setLoading(false);
+          // Don't return early - let finally block clear the in-flight flag
+          return;
+        }
+
+        // Parse RPC response (handles both array and object formats)
+        const payload = Array.isArray(data) ? data[0] : data;
+        const users = payload?.users ?? [];
+        const count = payload?.count ?? users.length;
+
+        // Update pagination state
+        setHasMore(users.length >= limit);
+
+        // Map RPC response to existing Row[] type (include viewer_follow_status for FollowButton)
+        const mappedProfiles: Row[] = users.map((user: any) => {
+          const raw = user.viewer_follow_status;
+          const followStatus: Row["followStatus"] =
+            raw === "self" ||
+            raw === "none" ||
+            raw === "pending" ||
+            raw === "following" ||
+            raw === "friends"
+              ? raw
+              : "none";
+          return {
+            id: user.id,
+            username: user.username,
+            display_name: user.display_name,
+            avatar_url: user.avatar_url,
+            followStatus,
+          };
+        });
+
+        // Cache profiles for future use
+        users.forEach((user: any) => {
           setCachedProfile({
-            id: profile.id,
-            user_id: profile.user_id || "",
-            username: profile.username,
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
+            id: user.id,
+            user_id: user.user_id || "",
+            username: user.username,
+            display_name: user.display_name,
+            avatar_url: user.avatar_url,
             bio: null,
             xp: null,
             member_no: null,
@@ -153,82 +194,90 @@ export default function FollowListDrawer({
             tiktok_url: null,
             telegram_url: null,
           });
-          return {
-            id: profile.id,
-            username: profile.username,
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
-          };
         });
-      }
 
-      const allProfiles = [...cachedProfiles, ...fetchedProfiles];
-      
-      // Store all items
-      setItems((prev) => {
-        const map = new Map<string, Row>(prev.map((x) => [x.id, x]));
-        for (const p of allProfiles) {
-          map.set(p.id, p);
-        }
-        return Array.from(map.values());
-      });
+        // Update follow status cache from RPC response
+        // RPC returns viewer_follow_status for each user, which we cache for FollowButton
+        if (viewerProfileId && users.length > 0) {
+          users.forEach((user: any) => {
+            // Skip self
+            if (user.id === viewerProfileId) return;
 
-      // [OPTIMIZATION: Phase 4 - Batch] Batch follow status prefetching for all visible items
-      // Why: Single API call for all items, instant follow button updates, better performance
-      if (viewerId && allProfiles.length > 0) {
-        // Filter out self from the list
-        const otherProfiles = allProfiles.filter(
-          (p) => p.id !== viewerId
-        );
+            // Map RPC follow status to cache format
+            // RPC returns: "none" | "pending" | "following" | "friends" | "self"
+            // Cache expects: "none" | "pending" | "following" | "friends"
+            const status =
+              user.viewer_follow_status === "self"
+                ? "none"
+                : user.viewer_follow_status;
 
-        if (otherProfiles.length > 0) {
-          // Batch check follow statuses for all users in the list
-          // This is much more efficient than checking one by one
-          const targetIds = otherProfiles.map((p) => p.id);
-          getBatchFollowStatuses(viewerId, targetIds)
-            .then((statuses) => {
-              // Cache all the statuses for instant button updates
-              Object.entries(statuses).forEach(([targetId, status]) => {
-                setCachedFollowStatus(viewerId, targetId, status);
-              });
-            })
-            .catch((error) => {
-              console.error("Error batch checking follow statuses:", error);
-            });
-        }
-      }
-
-      // [OPTIMIZATION: Phase 4 - Performance] Progressive rendering: show first 10 items immediately, then rest progressively
-      // Why: Faster perceived performance, users see more content immediately
-      setLoadedItems([]); // Reset
-      allProfiles.forEach((profile, index) => {
-        // [OPTIMIZATION: Phase 5 - Rendering] Use requestAnimationFrame for smoother progressive rendering
-        // Why: Smoother animations, better performance, prevents layout thrashing
-        if (index < 10) {
-          // First 10 items immediately
-          requestAnimationFrame(() => {
-            setLoadedItems((prev) => {
-              if (prev.find((p) => p.id === profile.id)) return prev;
-              return [...prev, profile];
-            });
+            setCachedFollowStatus(viewerProfileId, user.id, status);
           });
-        } else {
-          // Stagger remaining items with requestAnimationFrame for smoother rendering
-          const frameDelay = Math.floor((index - 10) / 2); // Every 2 items per frame
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              requestAnimationFrame(() => {
-                setLoadedItems((prev) => {
-                  if (prev.find((p) => p.id === profile.id)) return prev;
-                  return [...prev, profile];
+        }
+
+        // [OPTIMIZATION: Phase 4 - Performance] Progressive rendering: show first 10 items immediately, then rest progressively
+        // Why: Faster perceived performance, users see more content immediately
+        if (page === 0) {
+          setLoadedItems([]); // Reset on first page
+        }
+
+        // Get current total count for progressive rendering index calculation (before updating items)
+        const currentTotalCount = page === 0 ? 0 : items.length;
+
+        mappedProfiles.forEach((profile, index) => {
+          // [OPTIMIZATION: Phase 5 - Rendering] Use requestAnimationFrame for smoother progressive rendering
+          // Why: Smoother animations, better performance, prevents layout thrashing
+          const globalIndex = currentTotalCount + index;
+          if (globalIndex < 10) {
+            // First 10 items immediately
+            requestAnimationFrame(() => {
+              setLoadedItems((prev) => {
+                if (prev.find((p) => p.id === profile.id)) return prev;
+                return [...prev, profile];
+              });
+            });
+          } else {
+            // Stagger remaining items with requestAnimationFrame for smoother rendering
+            const frameDelay = Math.floor((globalIndex - 10) / 2); // Every 2 items per frame
+            requestAnimationFrame(() => {
+              setTimeout(() => {
+                requestAnimationFrame(() => {
+                  setLoadedItems((prev) => {
+                    if (prev.find((p) => p.id === profile.id)) return prev;
+                    return [...prev, profile];
+                  });
                 });
-              });
-            }, frameDelay * 8); // 8ms per frame delay (reduced from 15ms)
-          });
-        }
-      });
+              }, frameDelay * 8); // 8ms per frame delay (reduced from 15ms)
+            });
+          }
+        });
 
-      setLoading(false);
+        // Store all items (append for pagination)
+        setItems((prev) => {
+          if (page === 0) {
+            // First page: replace all items
+            return mappedProfiles;
+          } else {
+            // Subsequent pages: append new items (avoid duplicates)
+            const map = new Map<string, Row>(prev.map((x) => [x.id, x]));
+            for (const p of mappedProfiles) {
+              map.set(p.id, p);
+            }
+            return Array.from(map.values());
+          }
+        });
+
+        setLoading(false);
+      } catch (error) {
+        console.error("Error in FollowListDrawer fetch:", error);
+        setLoading(false);
+      } finally {
+        // [OPTIMIZATION: Pass B - StrictMode Guard] Clear in-flight flag when done
+        // Only clear if this is still the current request (prevents race conditions)
+        if (inFlightKeyRef.current === requestKey) {
+          inFlightKeyRef.current = null;
+        }
+      }
     })();
   }, [open, page, profileId, mode]);
 
@@ -255,9 +304,7 @@ export default function FollowListDrawer({
   // Check if we should show the three-dot menu for a user
   const shouldShowMenu = (userId: string): boolean => {
     return (
-      mode === "followers" &&
-      isAccountPrivate &&
-      viewerProfileId === profileId // Viewer is the owner
+      mode === "followers" && isAccountPrivate && viewerProfileId === profileId // Viewer is the owner
     );
   };
 
@@ -332,28 +379,16 @@ export default function FollowListDrawer({
     };
   }, [open, profileId, mode]);
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50">
-      {/* backdrop */}
-      <div
-        className="absolute inset-0 bg-[var(--surface)]/60"
-        onClick={onClose}
-      />
-      {/* sheet */}
-      <div className="absolute left-0 right-0 bottom-0 rounded-t-2xl bg-[var(--surface)] border-t border-[var(--border)] p-3 max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between pb-2">
-          <div className="text-sm font-semibold">
-            {mode === "followers" ? "Followers" : "Following"}
-          </div>
-          <button className="text-xs text-[var(--text)]/70" onClick={onClose}>
-            Close
-          </button>
-        </div>
-
+    <>
+      <BottomDrawer
+        open={open}
+        onClose={onClose}
+        title={mode === "followers" ? "Followers" : "Following"}
+        maxHeight="80vh"
+      >
         {items.length === 0 && !loading && (
-          <div className="text-sm text-[var(--text)]/60 py-6">
+          <div className="text-sm text-[var(--text)]/60 py-6 text-center">
             {mode === "followers"
               ? "No followers yet."
               : "Not following anyone yet."}
@@ -373,6 +408,7 @@ export default function FollowListDrawer({
                   username={u.username}
                   display_name={u.display_name}
                   avatar_url={u.avatar_url}
+                  followStatus={u.followStatus}
                   onClick={() => {
                     navigate(`/u/${u.username || u.id}`);
                     onClose(); // Close the drawer when navigating
@@ -383,7 +419,9 @@ export default function FollowListDrawer({
                     // remove that row from the list so it reflects reality immediately.
                     if (mode === "following" && !nowFollowing) {
                       setItems((prev) => prev.filter((x) => x.id !== u.id));
-                      setLoadedItems((prev) => prev.filter((x) => x.id !== u.id));
+                      setLoadedItems((prev) =>
+                        prev.filter((x) => x.id !== u.id)
+                      );
                     }
                     // If this is the "followers" list, we don't remove on follow/unfollow,
                     // because it's about who follows *me*, not who I follow.
@@ -404,7 +442,7 @@ export default function FollowListDrawer({
                           className="p-1 rounded-full hover:bg-[var(--surface)]/50 transition-colors"
                           aria-label="More options"
                         >
-                          <MdMoreVert
+                          <PiDotsThreeVertical
                             size={18}
                             className="text-[var(--text)]/70"
                           />
@@ -435,50 +473,33 @@ export default function FollowListDrawer({
           })}
         </ul>
 
-        <div className="mt-3">
-          <button
-            disabled={loading}
-            onClick={() => setPage((p) => p + 1)}
-            className="w-full ui-btn text-xs rounded-xl"
-          >
-            {loading ? "Loading…" : "Load more"}
-          </button>
-        </div>
-      </div>
-
-      {/* Remove confirmation modal */}
-      {showRemoveConfirm && createPortal(
-        <div className="fixed inset-0 z-[70] flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-[var(--surface)]/80"
-            onClick={() => setShowRemoveConfirm(null)}
-          />
-          <div className="relative bg-[var(--surface-2)] border border-[var(--border)] rounded-lg p-4 max-w-sm w-full mx-4 z-[71]">
-            <h3 className="text-lg font-semibold text-[var(--text)] mb-2">
-              Remove Follower
-            </h3>
-            <p className="text-sm text-[var(--text)]/70 mb-4">
-              Are you sure you want to remove this person? They will lose access to your private account.
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowRemoveConfirm(null)}
-                className="px-4 py-2 text-sm rounded-lg border border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleRemoveFollower(showRemoveConfirm)}
-                disabled={removingId === showRemoveConfirm}
-                className="px-4 py-2 text-sm rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
-              >
-                {removingId === showRemoveConfirm ? "Removing..." : "Remove"}
-              </button>
-            </div>
+        {hasMore && (
+          <div className="mt-3">
+            <button
+              disabled={loading}
+              onClick={() => setPage((p) => p + 1)}
+              className="w-full ui-btn text-xs rounded-xl"
+            >
+              {loading ? "Loading…" : "Load more"}
+            </button>
           </div>
-        </div>,
-        document.body
-      )}
-    </div>
+        )}
+      </BottomDrawer>
+
+      {/* Remove confirmation drawer - Higher z-index to appear above FollowListDrawer */}
+      <ConfirmBottomDrawer
+        open={!!showRemoveConfirm}
+        onClose={() => setShowRemoveConfirm(null)}
+        onConfirm={() => {
+          if (showRemoveConfirm) handleRemoveFollower(showRemoveConfirm);
+        }}
+        title="Remove Follower"
+        message="Are you sure you want to remove this person? They will lose access to your private account."
+        confirmLabel="Remove"
+        confirmVariant="danger"
+        isLoading={!!removingId}
+        higherZIndex={true}
+      />
+    </>
   );
 }

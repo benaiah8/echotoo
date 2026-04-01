@@ -13,7 +13,7 @@ export default function Logo({
   size = 42, // Increased default size
   rounded = 8,
   className = "",
-  alt = "Echotoo",
+  alt = "EchoToo",
   onClick,
 }: LogoProps) {
   return (

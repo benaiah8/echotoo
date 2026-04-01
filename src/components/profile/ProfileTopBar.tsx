@@ -1,20 +1,25 @@
 import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { FiSearch } from "react-icons/fi";
-import { MdShare } from "react-icons/md";
+import { PiFlag, PiMagnifyingGlass, PiShareFat } from "react-icons/pi";
 import { useNavigate, useLocation } from "react-router-dom";
 import Logo from "../ui/Logo";
 import ShareProfileModal from "./ShareProfileModal";
+import { getReportUserMailto } from "../../lib/supportConfig";
 import type { Profile } from "../../contexts/ProfileContext";
 
 export default function ProfileTopBar({
   onLogoClick,
   onSearch,
   profile,
+  /** When provided, shows Report user button (Play Store compliance) */
+  reportUserId,
+  reportUsername,
 }: {
   onLogoClick?: () => void;
   onSearch?: (q: string) => void;
   profile?: Profile | null;
+  reportUserId?: string;
+  reportUsername?: string;
 }) {
   const [q, setQ] = useState("");
   const nav = useNavigate();
@@ -37,33 +42,58 @@ export default function ProfileTopBar({
     return `${baseUrl}/u/${profile.id}`;
   }, [profile]);
 
+  const pillWidth = "80%";
+  const pillMaxWidth = 640;
+
   return (
     <>
-    <div className="w-full flex items-center gap-2 px-3 pt-2 pb-3 border-b border-[var(--border)]">
-      {/* left: logo */}
-      <Logo size={28} onClick={onLogoClick} className="shrink-0" />
-
-      {/* middle: search users */}
-      <div className="relative flex items-center h-9 flex-1 rounded-xl px-3 bg-transparent border border-[var(--border)] focus-within:border-white/50">
-        <FiSearch size={18} />
-        <input
-          type="text"
-          placeholder="Search users"
-          className="w-full pl-2 pr-2 border-none text-[var(--text)] text-[12px] bg-transparent outline-none"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-      </div>
-
-        {/* right: share icon (always visible) */}
-      <button
-          onClick={() => setShowShareModal(true)}
-        className="shrink-0 w-9 h-9 rounded-xl border border-[var(--border)] flex items-center justify-center hover:hover:bg-[rgba(255,255,255,0.08)]"
-          aria-label="Share profile"
+      <div
+        className={[
+          "flex items-center gap-2 mx-auto",
+          "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+          "border border-[var(--bottom-tab-border)] rounded-full",
+          "py-[7px] px-[9px]",
+        ].join(" ")}
+        style={{
+          width: pillWidth,
+          maxWidth: pillMaxWidth,
+        }}
       >
-          <MdShare size={16} />
-      </button>
-    </div>
+        {/* left: logo */}
+        <Logo size={28} onClick={onLogoClick} className="shrink-0" />
+
+        {/* middle: search users */}
+        <div className="relative flex items-center h-9 flex-1 rounded-full px-3 bg-transparent border border-[var(--border)] focus-within:border-[color-mix(in_oklab,var(--text)_40%,transparent)] min-w-0">
+          <PiMagnifyingGlass size={18} className="shrink-0" />
+          <input
+            type="text"
+            placeholder="Search users"
+            className="w-full pl-2 pr-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+
+        {/* right: Report (when viewing other user) + Share */}
+        {reportUserId && (
+          <a
+            href={getReportUserMailto(reportUserId, reportUsername)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 w-9 h-9 rounded-full border border-[var(--border)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
+            aria-label="Report user"
+          >
+            <PiFlag size={16} />
+          </a>
+        )}
+        <button
+          onClick={() => setShowShareModal(true)}
+          className="shrink-0 w-9 h-9 rounded-full border border-[var(--border)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
+          aria-label="Share profile"
+        >
+          <PiShareFat size={16} />
+        </button>
+      </div>
 
       {/* Share Profile Modal - rendered via portal to escape fixed header */}
       {profile &&

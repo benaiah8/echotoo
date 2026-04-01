@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { createComment } from "../../api/services/comments";
 import Avatar from "./Avatar";
 import { supabase } from "../../lib/supabaseClient";
+import { getViewerAuthUserId } from "../../api/services/follows";
 
 interface Props {
   postId: string;
@@ -29,18 +30,19 @@ export default function CommentInput({
   // Get current user profile
   useEffect(() => {
     const getUserProfile = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("username, display_name, avatar_url")
-          .eq("id", user.id)
-          .single();
+      const userId = await getViewerAuthUserId();
+      if (userId) {
+        // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
+        // Why: Fixes bug (was querying by id instead of user_id) + centralizes profile fetching
+        const { getProfileByUserId } = await import("../../api/services/follows");
+        const profile = await getProfileByUserId(userId);
 
         if (profile) {
-          setUserProfile(profile);
+          setUserProfile({
+            username: profile.username || "",
+            display_name: profile.display_name || "",
+            avatar_url: profile.avatar_url || undefined,
+          });
         }
       }
     };

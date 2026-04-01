@@ -33,7 +33,7 @@ export default function CreateMapPage() {
   };
 
   return (
-    <PrimaryPageContainer back>
+    <PrimaryPageContainer back capacitorNotchScrim>
       <LocationPickerGoogle
         onSelect={handleSelect}
         onClose={() => navigate(-1)}

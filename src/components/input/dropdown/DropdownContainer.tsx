@@ -10,6 +10,7 @@ type DropdownContainerProps = {
   parentToggle?: (dropdown: boolean) => void;
   forceOpen?: boolean;
   left?: boolean;
+  disabled?: boolean;
 };
 
 const DropdownContainer: React.FC<DropdownContainerProps> = ({
@@ -21,6 +22,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
   parentToggle,
   forceOpen,
   left,
+  disabled = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -86,16 +88,26 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
     <>
       <div
         ref={containerRef}
-        className={`inline-block text-left ${className}`}
-        onClick={toggleDropdown}
+        className={`inline-block text-left ${className} ${
+          disabled ? "cursor-not-allowed opacity-50" : ""
+        }`}
+        onClick={disabled ? undefined : toggleDropdown}
+        aria-disabled={disabled || undefined}
       >
-        <div className="cursor-pointer w-full">{children}</div>
+        <div
+          className={`w-full ${
+            disabled ? "pointer-events-none" : "cursor-pointer"
+          }`}
+        >
+          {children}
+        </div>
       </div>
 
       {isOpen &&
         ReactDOM.createPortal(
           <div
             ref={dropdownRef}
+            data-dropdown-portal=""
             className={`absolute bg-[var(--surface-2)] border text-black border-gray-700 shadow-md rounded-md overflow-auto scroll-hide z-[9999] ${maxHeight} ${dropdownClassName}`}
             style={{
               top: dropdownPosition.top + 6,

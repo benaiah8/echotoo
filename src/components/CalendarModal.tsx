@@ -1,22 +1,24 @@
 // src/components/CalendarModal.tsx
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DayPicker } from "react-day-picker";
-import { RRule } from "rrule";
+import {
+  PiArrowsOutLineHorizontal,
+  PiCalendarBlank,
+  PiTrashSimple,
+} from "react-icons/pi";
 import "react-day-picker/dist/style.css";
+import FrostedCenterModal, {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "./ui/FrostedCenterModal";
 
-const weekdays = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
-const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+type PickMode = "multi" | "range";
 
 interface Props {
   show: boolean;
   selectedDates: Date[];
   onSelectDates: (dates: Date[]) => void;
+  /** Kept for parent compatibility; recurrence is edited outside this modal. */
   isRecurring: boolean;
   recurrenceDays: string[];
   onToggleRecurrenceDay: (day: string) => void;
@@ -27,19 +29,16 @@ export default function CalendarModal({
   show,
   selectedDates,
   onSelectDates,
-  isRecurring,
-  recurrenceDays,
-  onToggleRecurrenceDay,
+  isRecurring: _isRecurring,
+  recurrenceDays: _recurrenceDays,
+  onToggleRecurrenceDay: _onToggleRecurrenceDay,
   onClose,
 }: Props) {
   const [currentMonth, setCurrentMonth] = useState<Date>(() => new Date());
-  const [firstSelectedDate, setFirstSelectedDate] = useState<Date | null>(null);
+  const [mode, setMode] = useState<PickMode>("multi");
+  /** Range mode only: waiting for end tap after start is chosen. */
+  const [rangePendingStart, setRangePendingStart] = useState<Date | null>(null);
 
-  // --- Gesture tunables
-  const DOUBLE_TAP_MS = 350; // within this window, treat as double tap
-  const lastTapRef = useRef<number>(0);
-
-  // ——— utils
   const normalize = (d: Date) =>
     new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const sameDay = (a?: Date | null, b?: Date | null) =>
@@ -61,102 +60,54 @@ export default function CalendarModal({
     return out;
   };
 
-  // Ensure we always show "now" when the modal opens
   useEffect(() => {
     if (show) {
       const now = new Date();
       setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
-      setFirstSelectedDate(null); // Reset anchor date when modal opens
+      setRangePendingStart(null);
+      setMode("multi");
     }
   }, [show]);
 
-  // ——— Selection logic
-  const setIndividual = (day: Date) => {
-    // toggle behavior for individual days
-    const key = normalize(day).getTime();
-    const map = new Map(selectedDates.map((d) => [normalize(d).getTime(), d]));
-    const wasRemoving = map.has(key);
+  const handleModeChange = (next: PickMode) => {
+    setRangePendingStart(null);
+    setMode(next);
+  };
 
-    if (wasRemoving) {
-      map.delete(key);
-    } else {
-      map.set(key, normalize(day));
+  const handleRangeDayClick = (day: Date) => {
+    const normalizedDay = normalize(day);
+    if (!rangePendingStart) {
+      setRangePendingStart(normalizedDay);
+      onSelectDates([normalizedDay]);
+      return;
     }
-
-    const newDates = sortDays(Array.from(map.values()));
-    onSelectDates(newDates);
-
-    // Set first selected date for range creation (only when adding the very first date)
-    if (!wasRemoving && selectedDates.length === 0 && newDates.length === 1) {
-      setFirstSelectedDate(newDates[0]);
+    if (sameDay(rangePendingStart, normalizedDay)) {
+      onSelectDates([normalizedDay]);
+      setRangePendingStart(null);
+      return;
     }
+    onSelectDates(sortDays(daysBetween(rangePendingStart, normalizedDay)));
+    setRangePendingStart(null);
+  };
 
-    // Reset first selected date if all dates are cleared
-    if (newDates.length === 0) {
-      setFirstSelectedDate(null);
+  /** Range mode uses custom logic; multi uses library toggle + controlled `onSelect`. */
+  const handleDayClick = (day: Date) => {
+    if (mode === "range") {
+      handleRangeDayClick(day);
     }
   };
 
-  const setRangeFrom = (a: Date, b: Date) => {
-    onSelectDates(sortDays(daysBetween(a, b)));
+  /** Library `select()` runs before `onDayClick`; in range mode we only apply range logic here. */
+  const handleSelectMultiple = (dates: Date[] | undefined) => {
+    if (mode === "range") return;
+    onSelectDates(sortDays(dates ?? []));
   };
 
-  // Clear all selected dates - memoized to ensure stability
   const clearAllDates = useCallback(() => {
-    // Force a fresh empty array to ensure proper clearing
-    const emptyArray: Date[] = [];
-    onSelectDates(emptyArray);
-    setFirstSelectedDate(null);
+    onSelectDates([]);
+    setRangePendingStart(null);
   }, [onSelectDates]);
 
-  // Handle day selection with improved logic
-  const handleDayClick = (day: Date) => {
-    const now = Date.now();
-    const isDouble = now - lastTapRef.current < DOUBLE_TAP_MS;
-    lastTapRef.current = now;
-
-    const normalizedDay = normalize(day);
-    const isCurrentlySelected = selectedDates.some((d) =>
-      sameDay(d, normalizedDay)
-    );
-
-    if (isDouble) {
-      // Double tap: create range from firstSelectedDate to current day
-      if (firstSelectedDate && !sameDay(firstSelectedDate, normalizedDay)) {
-        setRangeFrom(firstSelectedDate, normalizedDay);
-        setFirstSelectedDate(normalizedDay); // Set new anchor for potential further ranges
-      } else {
-        setIndividual(normalizedDay);
-        setFirstSelectedDate(normalizedDay);
-      }
-    } else {
-      // Single tap logic
-      if (isCurrentlySelected && selectedDates.length > 1) {
-        // If clicking on a selected date in a range, remove the range and keep only that date
-        onSelectDates([normalizedDay]);
-        setFirstSelectedDate(normalizedDay);
-      } else if (isCurrentlySelected) {
-        // If clicking on the only selected date, clear it
-        onSelectDates([]);
-        setFirstSelectedDate(null);
-      } else {
-        // Adding new date
-        if (firstSelectedDate && !sameDay(firstSelectedDate, normalizedDay)) {
-          // Create range if we have a first date
-          setRangeFrom(firstSelectedDate, normalizedDay);
-          setFirstSelectedDate(normalizedDay);
-        } else {
-          // Just add individual date
-          setIndividual(normalizedDay);
-          if (!firstSelectedDate) {
-            setFirstSelectedDate(normalizedDay);
-          }
-        }
-      }
-    }
-  };
-
-  // ——— Modifiers for range styling (rect bar + strong end caps)
   const dayKey = (d: Date) => normalize(d).getTime();
   const selSet = useMemo(
     () => new Set(selectedDates.map(dayKey)),
@@ -185,111 +136,131 @@ export default function CalendarModal({
       isSelected(d) && !prevSelected(d) && !nextSelected(d),
   };
 
-  if (!show) return null;
+  const hasDates = selectedDates.length > 0;
+
+  /** Compact row: must stay on one line on narrow modals; short visible labels + aria-label for full wording. */
+  const modePillClass = (active: boolean) =>
+    [
+      "flex min-h-0 min-w-0 w-full max-w-full items-center justify-center gap-0.5 rounded-full px-1 py-1 text-[10px] font-semibold leading-none transition-colors sm:gap-1 sm:px-1.5 sm:text-[11px]",
+      active
+        ? "bg-[var(--brand)] text-[var(--brand-ink)] shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]"
+        : "border border-[var(--border)]/50 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] text-[var(--text)]/82 hover:bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] dark:border-[var(--border)]/38",
+    ].join(" ");
+
+  const clearPillClass = (enabled: boolean) =>
+    [
+      "flex min-h-0 min-w-0 w-full max-w-full items-center justify-center gap-0.5 rounded-full px-1 py-1 text-[10px] font-semibold leading-none transition-colors sm:gap-1 sm:px-1.5 sm:text-[11px]",
+      enabled
+        ? "border border-[var(--border)]/50 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] text-[var(--text)]/82 hover:bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] dark:border-[var(--border)]/38"
+        : "cursor-not-allowed border border-[var(--border)]/35 bg-[color-mix(in_oklab,var(--surface)_10%,transparent)] text-[var(--text)]/35 opacity-60",
+    ].join(" ");
+
+  const panelStyle: React.CSSProperties = {
+    ...frostedModalPanelStyle,
+    maxWidth: "min(360px, calc(100vw - 3rem))",
+  };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface)]/70"
-      onClick={onClose}
+    <FrostedCenterModal
+      open={show}
+      onBackdropClick={onClose}
+      zTier="dialog"
+      aria-label="Choose dates"
+      containerClassName="px-6 sm:px-8"
     >
       <div
-        className="bg-[var(--bg)] border border-[var(--border)] rounded-lg w-full max-w-sm"
-        onClick={(e) => e.stopPropagation()}
+        className="pointer-events-auto flex w-full flex-col gap-2.5"
+        style={{ maxWidth: "min(360px, calc(100vw - 3rem))" }}
       >
-        <div className="px-2 pt-2">
-          <DayPicker
-            mode="multiple"
-            selected={selectedDates}
-            onDayClick={handleDayClick}
-            month={currentMonth}
-            onMonthChange={setCurrentMonth}
-            className="rdp-theme w-full"
-            modifiers={modifiers}
-            modifiersClassNames={{
-              rangeStart: "range-start",
-              rangeEnd: "range-end",
-              rangeMiddle: "range-middle",
-              singleOnly: "single-only",
-            }}
-            styles={{
-              head_cell: {
-                color: "var(--text)",
-                fontWeight: 600,
-                backgroundColor: "transparent",
-              },
-              cell: { color: "var(--text)", backgroundColor: "transparent" },
-              day: { color: "var(--text)", backgroundColor: "transparent" },
-              day_selected: {
-                backgroundColor: "var(--brand)",
-                color: "var(--brand-ink)",
-                borderRadius: "4px",
-                border: "none",
-                boxShadow: "none",
-                outline: "none",
-              },
-              caption: {
-                color: "var(--text)",
-                fontWeight: 600,
-                backgroundColor: "transparent",
-              },
-              nav_button: {
-                color: "var(--text)",
-                backgroundColor: "transparent",
-              },
-              table: { backgroundColor: "transparent" },
-              months: { backgroundColor: "transparent" },
-              month: { backgroundColor: "transparent" },
-            }}
-          />
+        <div
+          className={`${frostedModalPanelClassName} flex max-h-[min(76vh,580px)] flex-col gap-3 border-2 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_8px_32px_rgba(0,0,0,0.14)] sm:p-5 dark:border-[color-mix(in_oklab,var(--border)_52%,transparent)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_40px_rgba(0,0,0,0.35)]`}
+          style={panelStyle}
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto [-webkit-overflow-scrolling:touch]">
+            <DayPicker
+              mode="multiple"
+              selected={selectedDates}
+              onSelect={handleSelectMultiple}
+              onDayClick={handleDayClick}
+              month={currentMonth}
+              onMonthChange={setCurrentMonth}
+              className="rdp-theme rdp-theme--modal w-full"
+              modifiers={modifiers}
+              modifiersClassNames={{
+                rangeStart: "range-start",
+                rangeEnd: "range-end",
+                rangeMiddle: "range-middle",
+                singleOnly: "single-only",
+              }}
+            />
+          </div>
+
+          {mode === "range" && rangePendingStart ? (
+            <p className="text-center text-[10px] leading-tight text-[var(--text)]/50">
+              Tap a second day to complete the range
+            </p>
+          ) : null}
+
+          <div
+            className="grid w-full min-w-0 grid-cols-3 gap-1 rounded-full border border-[color-mix(in_oklab,var(--border)_42%,transparent)] bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] px-1.5 py-1.5 sm:gap-1.5 sm:px-2 sm:py-2 dark:border-[color-mix(in_oklab,var(--border)_48%,transparent)] dark:bg-[color-mix(in_oklab,var(--surface)_14%,transparent)]"
+            role="group"
+            aria-label="Date selection and clear"
+          >
+            <button
+              type="button"
+              className={modePillClass(mode === "multi")}
+              aria-label="Multi dates"
+              aria-pressed={mode === "multi"}
+              onClick={() => handleModeChange("multi")}
+            >
+              <PiCalendarBlank
+                className="h-3 w-3 shrink-0 opacity-80"
+                aria-hidden
+              />
+              <span className="truncate">Multi</span>
+            </button>
+            <button
+              type="button"
+              className={modePillClass(mode === "range")}
+              aria-label="Date range"
+              aria-pressed={mode === "range"}
+              onClick={() => handleModeChange("range")}
+            >
+              <PiArrowsOutLineHorizontal
+                className="h-3 w-3 shrink-0 opacity-80"
+                aria-hidden
+              />
+              <span className="truncate">Range</span>
+            </button>
+            <button
+              type="button"
+              disabled={!hasDates}
+              className={clearPillClass(hasDates)}
+              aria-label="Clear all dates"
+              onClick={(e) => {
+                e.preventDefault();
+                clearAllDates();
+              }}
+            >
+              <PiTrashSimple
+                className="h-3 w-3 shrink-0 opacity-80"
+                aria-hidden
+              />
+              <span className="truncate">Clear</span>
+            </button>
+          </div>
         </div>
 
-        {isRecurring && (
-          <div className="flex flex-wrap gap-2 mt-4">
-            {weekdays.map((d, i) => {
-              const sel = recurrenceDays.includes(d);
-              return (
-                <button
-                  key={d}
-                  onClick={() => onToggleRecurrenceDay(d)}
-                  className={`text-xs font-medium px-2 py-1 rounded ${
-                    sel
-                      ? "bg-primary text-black"
-                      : "bg-[var(--surface-2)] text-[var(--text)]"
-                  }`}
-                >
-                  {weekdayNames[i]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Clear and Done buttons */}
-        <div className="px-2 pb-2 mt-2 flex items-center gap-2">
+        <div className="flex w-full justify-center px-1 pt-0.5">
           <button
             type="button"
-            className={`w-10 h-10 rounded font-semibold transition-opacity ${
-              selectedDates.length > 0
-                ? "bg-[var(--surface-2)] text-[var(--text)] hover:opacity-90 cursor-pointer"
-                : "bg-[var(--surface)] text-[var(--muted)] cursor-not-allowed opacity-50"
-            } border border-[var(--border)] flex items-center justify-center`}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              clearAllDates();
-            }}
-          >
-            ✕
-          </button>
-
-          <button
-            className="flex-1 bg-[var(--text)] text-[var(--bg)] border border-[var(--border)] py-2 rounded font-semibold hover:opacity-90 transition-opacity"
+            className="h-8 min-w-[7rem] rounded-full bg-[var(--brand)] px-6 text-[12px] font-semibold leading-none text-[var(--brand-ink)] shadow-[0_1px_0_rgba(0,0,0,0.06)] transition hover:opacity-95 active:scale-[0.99] dark:shadow-[0_1px_0_rgba(255,255,255,0.08)]"
             onClick={onClose}
           >
             Done
           </button>
         </div>
       </div>
-    </div>
+    </FrostedCenterModal>
   );
 }
