@@ -61,5 +61,11 @@ jobs:
         run: npx cap sync ios
 
       - name: CocoaPods install
-        working-directory: ios/App
-        run: pod install
+        run: |
+          set -eo pipefail
+          POD_DIR="ios/App"
+          if [ -f "$POD_DIR/Podfile" ]; then
+            (cd "$POD_DIR" && pod install)
+          else
+            echo "No Podfile at $POD_DIR/Podfile; skipping pod install."
+          fi
