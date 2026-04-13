@@ -69,3 +69,21 @@ jobs:
           else
             echo "No Podfile at $POD_DIR/Podfile; skipping pod install."
           fi
+
+      - name: Simulator compile (xcodebuild)
+        run: |
+          set -eo pipefail
+          WS="ios/App/App.xcworkspace"
+          if [ ! -f "$WS" ]; then
+            echo "No workspace at $WS; skipping simulator compile."
+            exit 0
+          fi
+          xcodebuild \
+            -workspace "$WS" \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            build
