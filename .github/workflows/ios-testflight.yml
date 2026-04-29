@@ -68,13 +68,77 @@ jobs:
           BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           PROVISION_PROFILE_UUID: ${{ secrets.PROVISION_PROFILE_UUID }}
+          PROVISION_PROFILE_NAME: ${{ secrets.PROVISION_PROFILE_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -eo pipefail
-          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "${RUNNER_TEMP}/echotoo_distribution.p12"
+          PROVISION_PROFILE_UUID="$(printf '%s' "$PROVISION_PROFILE_UUID" | tr -d '\r\n')"
+          PROVISION_PROFILE_NAME="$(printf '%s' "$PROVISION_PROFILE_NAME" | tr -d '\r\n')"
+          APPLE_TEAM_ID="$(printf '%s' "$APPLE_TEAM_ID" | tr -d '\r\n')"
+
+          decode_base64_to_file() {
+            local value="$1"
+            local out="$2"
+            rm -f "$out"
+            if printf '%s' "$value" | tr -d '\r\n' | base64 --decode > "$out" 2>/dev/null; then
+              :
+            elif printf '%s' "$value" | tr -d '\r\n' | base64 -D > "$out"; then
+              :
+            else
+              echo "decode_base64_to_file: base64 decode failed for $out" >&2
+              return 1
+            fi
+            if [ ! -s "$out" ]; then
+              echo "decode_base64_to_file: decoded output is empty: $out" >&2
+              return 1
+            fi
+          }
+
+          MP_TMP="${RUNNER_TEMP}/EchoToo_App_Store.mobileprovision"
+          decode_base64_to_file "$BUILD_PROVISION_PROFILE_BASE64" "$MP_TMP"
+
+          PROFILE_PLIST="${RUNNER_TEMP}/profile.plist"
+          security cms -D -i "$MP_TMP" > "$PROFILE_PLIST"
+
+          PB="/usr/libexec/PlistBuddy"
+          PROFILE_UUID_FROM_PLIST="$("$PB" -c "Print :UUID" "$PROFILE_PLIST")"
+          PROFILE_NAME_FROM_PLIST="$("$PB" -c "Print :Name" "$PROFILE_PLIST")"
+          APP_ID_FROM_PLIST="$("$PB" -c "Print :Entitlements:application-identifier" "$PROFILE_PLIST")"
+          TEAM_ID_FROM_PLIST="$("$PB" -c "Print :Entitlements:com.apple.developer.team-identifier" "$PROFILE_PLIST")"
+          GET_TASK_ALLOW="$("$PB" -c "Print :Entitlements:get-task-allow" "$PROFILE_PLIST")"
+
+          echo "Provisioning profile validation (non-secret fields):"
+          echo "  UUID: ${PROFILE_UUID_FROM_PLIST}"
+          echo "  Name: ${PROFILE_NAME_FROM_PLIST}"
+          echo "  application-identifier: ${APP_ID_FROM_PLIST}"
+          echo "  team-identifier: ${TEAM_ID_FROM_PLIST}"
+          echo "  get-task-allow: ${GET_TASK_ALLOW}"
+
+          EXPECTED_APP_ID="${APPLE_TEAM_ID}.com.echotoo.app"
+          if [ "$PROFILE_UUID_FROM_PLIST" != "$PROVISION_PROFILE_UUID" ]; then
+            echo "Profile UUID mismatch (plist vs secret PROVISION_PROFILE_UUID)." >&2
+            exit 1
+          fi
+          if [ "$PROFILE_NAME_FROM_PLIST" != "$PROVISION_PROFILE_NAME" ]; then
+            echo "Profile name mismatch (plist vs secret PROVISION_PROFILE_NAME)." >&2
+            exit 1
+          fi
+          if [ "$APP_ID_FROM_PLIST" != "$EXPECTED_APP_ID" ]; then
+            echo "application-identifier mismatch (expected ${APPLE_TEAM_ID}.com.echotoo.app)." >&2
+            exit 1
+          fi
+          if [ "$TEAM_ID_FROM_PLIST" != "$APPLE_TEAM_ID" ]; then
+            echo "team-identifier mismatch (plist vs APPLE_TEAM_ID)." >&2
+            exit 1
+          fi
+          if [ "$GET_TASK_ALLOW" != "false" ]; then
+            echo "get-task-allow must be false for App Store distribution (got: ${GET_TASK_ALLOW})." >&2
+            exit 1
+          fi
 
           PROFILE_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$PROFILE_DIR"
-          echo "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > "${PROFILE_DIR}/${PROVISION_PROFILE_UUID}.mobileprovision"
+          cp "$MP_TMP" "${PROFILE_DIR}/${PROFILE_UUID_FROM_PLIST}.mobileprovision"
 
           KEYCHAIN_PATH="${RUNNER_TEMP}/echotoo-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
@@ -82,18 +146,24 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          security import "${RUNNER_TEMP}/echotoo_distribution.p12" \
+          P12_PATH="${RUNNER_TEMP}/echotoo_distribution.p12"
+          decode_base64_to_file "$BUILD_CERTIFICATE_BASE64" "$P12_PATH"
+
+          security import "$P12_PATH" \
             -k "$KEYCHAIN_PATH" \
             -P "$P12_PASSWORD" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
+
+          echo "Codesigning identities in CI keychain (diagnostic):"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          rm -f "${RUNNER_TEMP}/echotoo_distribution.p12"
+          rm -f "$P12_PATH"
 
       - name: Archive (Release)
         env:
