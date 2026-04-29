@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Echotoo</string>
+	<string>EchoToo</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -47,6 +47,14 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>EchoToo may use your camera so you can take photos for your profile or posts.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>EchoToo may access your photo library so you can choose photos for your profile or posts.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>EchoToo may save images to your photo library when you choose to save shared content.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>EchoToo may use your location to help you discover and create nearby hangouts and experiences.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
