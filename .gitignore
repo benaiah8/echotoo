@@ -31,9 +31,11 @@ echotoo-release.keystore
 keystore.properties
 
 # Capacitor
-ios/
 android/
 .capacitor/
+
+# Local iOS artifact downloads / extracts (do not commit)
+_incoming_ios_artifact/
 
 # Generated icons (if created at project root when running without --android --ios)
 /icons
