@@ -7,20 +7,32 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
+import { Paths } from "../router/Paths";
 
 import { PiPencilSimple, PiTrash, PiUserPlus } from "react-icons/pi";
 import Avatar from "./ui/Avatar";
+import { PostTypeMetaChip } from "./ui/PostFeedSurfaceMeta";
 import FollowButton from "./ui/FollowButton";
+import RSVPComponent from "./ui/RSVPComponent";
+import PostRatingChip from "./ui/PostRatingChip";
+import PostRatingModal from "./ui/PostRatingModal";
 import InviteDrawer from "./ui/InviteDrawer";
 import SaveButton from "./ui/SaveButton";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { getPostForEdit, deletePost } from "../api/services/posts";
-import { Paths } from "../router/Paths";
+import {
+  buildCanonicalEditPostData,
+  createEditActivitiesHref,
+  persistCanonicalEditPostData,
+} from "../lib/editPostBootstrap";
 import toast from "react-hot-toast";
+import { emitPostDeleted } from "../lib/postEvents";
 import { getDatePriorityLabel } from "../lib/feedSorting";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
+import { discardAllDrafts } from "../lib/drafts";
 import RailCardImageBackdrop from "./RailCardImageBackdrop";
+import useAuthActionGate from "../hooks/useAuthActionGate";
 
 function getPriorityColorClass(label: string) {
   switch (label) {
@@ -65,7 +77,8 @@ type Props = {
   selectedDates?: string[] | null; // NEW: event dates for priority sorting
   type?: "hangout" | "experience"; // NEW: post type for avatar indicator
 
-  capacity?: number; // max RSVPs
+  /** Legacy max RSVPs when `post` is not passed; rail paths should rely on `post.rsvp_capacity`. */
+  capacity?: number;
   attendees?: Array<{ avatarUrl?: string | null }>;
   authorHandle?: string | null;
   avatarUrl?: string | null; // author avatar
@@ -84,7 +97,7 @@ export default function Hangout({
   id,
   caption,
   createdAt,
-  capacity = 20,
+  capacity,
   attendees = [],
   authorHandle = "Unknown",
   avatarUrl = null,
@@ -106,9 +119,11 @@ export default function Hangout({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
+  const [showRatingModal, setShowRatingModal] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const [railImageFailed, setRailImageFailed] = useState(false);
+  const { ensureAuthed } = useAuthActionGate();
   const triggerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +131,21 @@ export default function Hangout({
   // Prefer post object when provided (patched by post:changed); fallback to primitive props
   const effectiveIsSaved = post?.is_saved ?? isSaved;
   const effectiveFollowStatus = post?.follow_status ?? followStatus;
+  /** Author row only: Hangout vs Experience chip. Does not affect follow, RSVP, or rating. */
+  const authorRowPostType: "hangout" | "experience" =
+    (post?.type ?? type) === "experience" ? "experience" : "hangout";
+  const ratingEnabled = post?.rating_enabled === true;
+  // Match PostActions / PostDetailBody: RSVP only when hangout has numeric `rsvp_capacity` on the post row.
+  const rsvpCap =
+    post != null
+      ? typeof post.rsvp_capacity === "number"
+        ? post.rsvp_capacity
+        : undefined
+      : typeof capacity === "number"
+        ? capacity
+        : undefined;
+  const railRsvpConfigured =
+    type === "hangout" && typeof rsvpCap === "number";
 
   const priorityLabel = getDatePriorityLabel({
     selected_dates: selectedDates,
@@ -166,44 +196,16 @@ export default function Hangout({
 
   const handleEdit = async () => {
     if (isDraft || id.startsWith("draft-")) {
-      navigate("/create/activities?type=hangout");
+      navigate(`${Paths.createFinalize}?type=hangout`);
       return;
     }
     try {
       const { post, activities } = await getPostForEdit(id);
 
-      // Store the post data in localStorage for the edit flow
-      const editData = {
-        postId: post.id,
-        type: post.type,
-        caption: post.caption,
-        visibility: post.visibility,
-        is_anonymous: post.is_anonymous,
-        rsvp_capacity: post.rsvp_capacity,
-        selected_dates: post.selected_dates,
-        is_recurring: post.is_recurring,
-        recurrence_days: post.recurrence_days,
-        tags: post.tags,
-        activities: activities.map((activity) => ({
-          id: activity.id,
-          title: activity.title,
-          activityType: activity.activity_type || "",
-          customActivity: activity.custom_activity || "",
-          locationDesc: activity.location_desc || "",
-          location: activity.location_name || "",
-          locationNotes: activity.location_notes || "",
-          locationUrl: activity.location_url || "",
-          additionalInfo: activity.additional_info || [],
-          tags: activity.tags || [],
-          images: activity.images || [],
-          order_idx: activity.order_idx,
-        })),
-      };
+      const editData = buildCanonicalEditPostData(post, activities);
+      persistCanonicalEditPostData(editData);
 
-      localStorage.setItem("editPostData", JSON.stringify(editData));
-
-      // Navigate to the activities page (first step of edit flow)
-      navigate(Paths.createActivities);
+      navigate(createEditActivitiesHref(post.type));
     } catch (error) {
       console.error("Error loading hangout for edit:", error);
       toast.error("Failed to load hangout for editing");
@@ -212,10 +214,11 @@ export default function Hangout({
 
   const handleDelete = async () => {
     if (isDraft || id.startsWith("draft-")) {
-      // Skip DB delete; drafts live in localStorage. TODO: Parent should clear cache/refresh to remove card.
-      localStorage.removeItem("draftMeta");
-      localStorage.removeItem("draftActivities");
+      // Skip DB delete; drafts live in localStorage; discardAllDrafts emits local-draft:discarded for profile UI.
+      discardAllDrafts();
       toast.success("Draft discarded");
+      emitPostDeleted(id);
+      onDelete?.();
       setShowDeleteModal(false);
       return;
     }
@@ -223,6 +226,7 @@ export default function Hangout({
     try {
       await deletePost(id);
       toast.success("Hangout deleted successfully");
+      emitPostDeleted(id);
       onDelete?.();
       setShowDeleteModal(false);
     } catch (error) {
@@ -253,7 +257,7 @@ export default function Hangout({
           return;
         }
         if (isDraft || id.startsWith("draft-")) {
-          navigate("/create/activities?type=hangout");
+          navigate(`${Paths.createFinalize}?type=hangout`);
           return;
         }
         console.log("Hangout navigating to:", id);
@@ -275,7 +279,7 @@ export default function Hangout({
           return;
         if (e.key === "Enter" || e.key === " ") {
           if (isDraft || id.startsWith("draft-")) {
-            navigate("/create/activities?type=hangout");
+            navigate(`${Paths.createFinalize}?type=hangout`);
           } else {
             navigate(`/hangout/${id}`, {
               state: {
@@ -288,7 +292,6 @@ export default function Hangout({
       }}
       className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0 cursor-pointer"
     >
-      {/* allow corner badge to hang outside; overflow-visible so save pill is not clipped */}
       <div
         className={`relative overflow-visible mb-3 rounded-[14px] border border-[var(--border)] pt-2 px-3 pb-3 ${
           showRailCover ? "bg-transparent" : "ui-card"
@@ -301,9 +304,11 @@ export default function Hangout({
           />
         )}
 
-        {/* save button: bottom-left, slightly outside, no content overlap */}
+        {/* save: straddles bottom card edge (~half in / half out). Rail shells stay overflow-visible. */}
         <div
-          className="absolute -bottom-3 -left-3 z-20"
+          className={`absolute bottom-0 z-20 translate-y-1/2 ${
+            isOwner ? "left-11" : "left-3"
+          }`}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -311,7 +316,7 @@ export default function Hangout({
         >
           <SaveButton
             postId={id}
-            className="grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
+            className="flex items-center justify-center p-[3px] rounded-lg bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
             size={18}
             isSaved={effectiveIsSaved}
             post={post}
@@ -350,7 +355,6 @@ export default function Hangout({
               url={isAnonymous ? null : avatarUrl}
               name={authorHandle ?? ""}
               size={24}
-              postType={type}
               variant={isAnonymous ? "anon" : "default"}
               anonymousAvatar={
                 isAnonymous ? authorHandle?.charAt(0) : undefined
@@ -359,6 +363,7 @@ export default function Hangout({
             <span className="text-xs text-[var(--text)]/80 truncate min-w-0 flex-1">
               {authorHandle}
             </span>
+            <PostTypeMetaChip type={authorRowPostType} className="shrink-0" />
             {isDraft && (
               <span className="shrink-0 px-1.5 py-0.5 text-[10px] bg-yellow-500/20 text-yellow-600 rounded-full border border-yellow-500/30">
                 Draft
@@ -469,24 +474,50 @@ export default function Hangout({
               )}
             </div>
 
-            {/* Action Button */}
+            {/* Action Button (priority: rating > RSVP > follow) */}
             <div className="flex items-center h-full">
-              {authorId ? (
-                type === "experience" ? (
-                  // Show Follow button for experiences (horizontal rail)
-                  <FollowButton
-                    targetId={authorId}
-                    className="text-xs h-5 min-w-[60px] px-2"
-                    followStatus={effectiveFollowStatus}
-                  />
-                ) : (
-                  // Show Follow button for hangouts too in horizontal rail
-                  <FollowButton
-                    targetId={authorId}
-                    className="text-xs h-5 min-w-[60px] px-2"
-                    followStatus={effectiveFollowStatus}
-                  />
-                )
+              {ratingEnabled ? (
+                <PostRatingChip
+                  ratingEnabled={post?.rating_enabled}
+                  ratingAverage={
+                    post?.effective_rating_average ?? post?.rating_average ?? null
+                  }
+                  ratingCount={
+                    post?.effective_rating_count ?? post?.rating_count ?? null
+                  }
+                  viewerRating={post?.viewer_rating ?? null}
+                  onClick={() => {
+                    if (!ensureAuthed()) return;
+                    setShowRatingModal(true);
+                  }}
+                  className="text-xs h-6 px-2.5"
+                />
+              ) : railRsvpConfigured ? (
+                <RSVPComponent
+                  postId={id}
+                  capacity={rsvpCap as number}
+                  className=""
+                  postAuthor={
+                    authorId
+                      ? {
+                          id: authorId,
+                          username: null,
+                          display_name: authorHandle ?? null,
+                          avatar_url: avatarUrl ?? null,
+                          is_anonymous: isAnonymous,
+                        }
+                      : undefined
+                  }
+                  rsvpData={post?.rsvp_data ?? undefined}
+                  post={post}
+                />
+              ) : authorId ? (
+                // Follow fallback
+                <FollowButton
+                  targetId={authorId}
+                  className="text-xs h-5 min-w-[60px] px-2"
+                  followStatus={effectiveFollowStatus}
+                />
               ) : (
                 <div className="text-xs text-[var(--text)]/50">
                   Follow unavailable
@@ -517,6 +548,15 @@ export default function Hangout({
         postType="hangout"
         postCaption={caption || "Untitled"}
         onClosingChange={setIsInviteDrawerClosing}
+      />
+
+      <PostRatingModal
+        open={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        postId={id}
+        ratingAverage={post?.effective_rating_average ?? post?.rating_average ?? null}
+        ratingCount={post?.effective_rating_count ?? post?.rating_count ?? null}
+        viewerRating={post?.viewer_rating ?? null}
       />
     </div>
   );

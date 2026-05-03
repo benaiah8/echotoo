@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { optimizeImageUrl } from "../../lib/imageOptimization";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
+import { isAvatarPresetValue } from "../../lib/avatarPresets";
 import {
   getCachedAvatar,
   setCachedAvatar,
@@ -19,7 +20,9 @@ type Props = {
  */
 export default function ChooserPillAvatar({ url, name, userId }: Props) {
   const letter = (name || "").trim().charAt(0).toUpperCase() || " ";
-  const [cachedUrl, setCachedUrl] = useState<string | null>(null);
+  const [cachedUrl, setCachedUrl] = useState<string | null>(() =>
+    userId ? getCachedAvatar(userId) : null
+  );
 
   useEffect(() => {
     if (!userId) {
@@ -40,13 +43,16 @@ export default function ChooserPillAvatar({ url, name, userId }: Props) {
   }, [userId, url]);
 
   const displayUrl = cachedUrl || url;
-  const resolved = imgUrlPublic(displayUrl)
-    ? optimizeImageUrl(imgUrlPublic(displayUrl)!, "small")
-    : null;
+  const raw = avatarDisplayUrl(displayUrl);
+  const resolved =
+    raw &&
+    (isAvatarPresetValue(displayUrl)
+      ? raw
+      : optimizeImageUrl(raw, "small"));
 
   return (
     <div
-      className="relative h-7 w-11 shrink-0 overflow-hidden rounded-full border border-[var(--glass-active-border)] shadow-[var(--glass-active-shadow)]"
+      className="relative h-9 w-14 shrink-0 overflow-hidden rounded-full border border-[var(--glass-active-border)] shadow-[var(--glass-active-shadow)]"
       aria-hidden
     >
       {resolved ? (
@@ -65,7 +71,8 @@ export default function ChooserPillAvatar({ url, name, userId }: Props) {
             src={resolved}
             alt=""
             className="relative z-10 h-full w-full object-cover"
-            loading="lazy"
+            loading="eager"
+            decoding="async"
             onLoad={() => {
               if (userId && displayUrl) setCachedAvatar(userId, displayUrl);
             }}
@@ -73,7 +80,7 @@ export default function ChooserPillAvatar({ url, name, userId }: Props) {
         </>
       ) : (
         <div
-          className="flex h-full w-full items-center justify-center text-xs font-semibold"
+          className="flex h-full w-full items-center justify-center text-sm font-semibold"
           style={{
             background: "var(--brand)",
             color: "var(--brand-ink)",

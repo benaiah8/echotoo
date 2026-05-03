@@ -1,6 +1,7 @@
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
-import { onPostChanged } from "../../lib/postEvents";
+import { onPostChanged, onPostDeleted } from "../../lib/postEvents";
+import { getPostDeleteExitDurationMs } from "../../lib/postDeleteExitAnimation";
 import { applyPostPatch } from "../../lib/applyPostPatch";
 import Hangout from "../../components/Hangout";
 import { type BatchLoadResult } from "../../types/legacy";
@@ -154,7 +155,6 @@ export default function HomeHangoutSection({
           avatarUrl={avatarUrl}
           authorId={p.author_id}
           isAnonymous={p.is_anonymous || false}
-          capacity={20}
           isOwner={p.isOwner || false}
           onDelete={() => onDelete?.(p.id)}
           status={p.status || "published"}
@@ -230,9 +230,15 @@ export default function HomeHangoutSection({
   // Legacy mode: render all items at once (state so we can patch on post:changed)
   const data = (items as FeedItemExtended[]) || [];
   const [railItems, setRailItems] = useState<FeedItemExtended[]>(data);
+  const [exitingPostIds, setExitingPostIds] = useState(() => new Set<string>());
+  const deleteExitTimersRef = useRef<Map<string, number>>(new Map());
+  const railItemsRef = useRef<FeedItemExtended[]>(data);
   useEffect(() => {
     setRailItems(data);
   }, [items]);
+  useEffect(() => {
+    railItemsRef.current = railItems;
+  }, [railItems]);
   useEffect(() => {
     const cleanup = onPostChanged((e) => {
       const { postId, patch } = e.detail;
@@ -250,8 +256,57 @@ export default function HomeHangoutSection({
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    const commitRemove = (postId: string) => {
+      deleteExitTimersRef.current.delete(postId);
+      setExitingPostIds((prev) => {
+        if (!prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+      setRailItems((prev) => prev.filter((item) => item.id !== postId));
+    };
+
+    const cleanup = onPostDeleted((postId) => {
+      if (!railItemsRef.current.some((i) => i.id === postId)) return;
+      if (deleteExitTimersRef.current.has(postId)) return;
+
+      const durationMs = getPostDeleteExitDurationMs();
+      if (durationMs === 0) {
+        commitRemove(postId);
+        return;
+      }
+
+      setExitingPostIds((prev) => {
+        if (prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.add(postId);
+        return next;
+      });
+
+      const t = window.setTimeout(() => {
+        commitRemove(postId);
+      }, durationMs);
+      deleteExitTimersRef.current.set(postId, t);
+    });
+    return cleanup;
+  }, []);
+
+  const railItemShellClass = useCallback(
+    (id: string) =>
+      [
+        "shrink-0 overflow-visible transition-[opacity,transform] ease-out will-change-[opacity,transform]",
+        "duration-[280ms]",
+        exitingPostIds.has(id)
+          ? "opacity-0 -translate-y-1 pointer-events-none"
+          : "opacity-100 translate-y-0",
+      ].join(" "),
+    [exitingPostIds]
+  );
+
   return (
-    <div className="overflow-x-auto scroll-hide py-2">
+    <div className="overflow-x-auto scroll-hide pt-2 pb-4">
       <div className="flex gap-3 w-max rail-pad">
         {railItems.map((p) => {
           const locationsCount = p.activities_count?.[0]?.count ?? 0;
@@ -263,26 +318,26 @@ export default function HomeHangoutSection({
           const avatarUrl = p.author?.avatar_url ?? null;
 
           return (
-            <Hangout
-              key={p.id}
-              id={p.id}
-              caption={p.caption || "Untitled hangout"}
-              createdAt={p.created_at}
-              authorHandle={authorHandle}
-              avatarUrl={avatarUrl}
-              authorId={p.author_id}
-              isAnonymous={p.is_anonymous || false}
-              capacity={20}
-              isOwner={p.isOwner || false}
-              onDelete={() => onDelete?.(p.id)}
-              status={p.status || "published"}
-              selectedDates={p.selected_dates}
-              type={p.type}
-              // [FIX] Use PostgreSQL data from FeedItem instead of old batchedData
-              isSaved={p.is_saved}
-              followStatus={p.follow_status}
-              post={p}
-            />
+            <div key={p.id} className={railItemShellClass(p.id)}>
+              <Hangout
+                id={p.id}
+                caption={p.caption || "Untitled hangout"}
+                createdAt={p.created_at}
+                authorHandle={authorHandle}
+                avatarUrl={avatarUrl}
+                authorId={p.author_id}
+                isAnonymous={p.is_anonymous || false}
+                isOwner={p.isOwner || false}
+                onDelete={() => onDelete?.(p.id)}
+                status={p.status || "published"}
+                selectedDates={p.selected_dates}
+                type={p.type}
+                // [FIX] Use PostgreSQL data from FeedItem instead of old batchedData
+                isSaved={p.is_saved}
+                followStatus={p.follow_status}
+                post={p}
+              />
+            </div>
           );
         })}
       </div>

@@ -14,12 +14,17 @@ interface Props {
   postId: string;
   onCommentCountChange?: (count: number) => void;
   isModal?: boolean;
+  autoFocusCommentComposer?: boolean;
+  /** Parent stores the latest focus() for the modal sticky bar. */
+  setFocusComposer?: (focus: () => void) => void;
 }
 
 export default function CommentList({
   postId,
   onCommentCountChange,
   isModal = false,
+  autoFocusCommentComposer = false,
+  setFocusComposer,
 }: Props) {
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
@@ -162,10 +167,7 @@ export default function CommentList({
 
   if (error) {
     return (
-      <div
-        className="mt-6 border-t border-[var(--border)]"
-        data-comments-section
-      >
+      <div className="mt-6 border-t border-[var(--border)]">
         <div className="p-4 pb-24 text-center">
           {" "}
           {/* Add bottom padding for floating input */}
@@ -184,13 +186,15 @@ export default function CommentList({
           onComment={handleNewComment}
           placeholder="Write a comment..."
           isModal={isModal}
+          autoFocusComposer={autoFocusCommentComposer}
+          onFocusComposerReady={setFocusComposer}
         />
       </div>
     );
   }
 
   return (
-    <div className="mt-6 border-t border-[var(--border)]" data-comments-section>
+    <div className="mt-6 border-t border-[var(--border)]">
       {/* Comments */}
       <div className="p-4 pb-24">
         {" "}
@@ -226,6 +230,8 @@ export default function CommentList({
         onCancel={replyingTo ? () => setReplyingTo(null) : undefined}
         placeholder={replyingTo ? "Write a reply..." : "Write a comment..."}
         isModal={isModal}
+        autoFocusComposer={autoFocusCommentComposer}
+        onFocusComposerReady={setFocusComposer}
       />
     </div>
   );

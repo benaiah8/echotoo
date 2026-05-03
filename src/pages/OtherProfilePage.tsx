@@ -14,7 +14,14 @@ import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 import { RootState } from "../app/store";
 import { Paths } from "../router/Paths";
-import { PiLock } from "react-icons/pi";
+import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
+import {
+  PiClock,
+  PiLock,
+  PiShareFat,
+  PiUserCheck,
+  PiUserPlus,
+} from "react-icons/pi";
 import WelcomeModal from "../components/ui/WelcomeModal";
 import ProfileTopBar from "../components/profile/ProfileTopBar";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
@@ -43,18 +50,39 @@ import {
   clearCachedFollowCounts,
 } from "../lib/followCountsCache";
 import { clearCachedNotificationSettings } from "../lib/notificationSettingsCache";
-import { imgUrlPublic } from "../lib/img";
+import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
-import ImageLightbox from "../components/ImageLightbox";
+import AvatarPreviewLightbox, {
+  AvatarPreviewLightboxAction,
+} from "../components/profile/AvatarPreviewLightbox";
 import Avatar from "../components/ui/Avatar";
 import SocialMediaLinks from "../components/profile/SocialMediaLinks";
 import ShareProfileModal from "../components/profile/ShareProfileModal";
+import ProfileHeroAvatarAtmosphere from "../components/profile/ProfileHeroAvatarAtmosphere";
 import ProfileStats from "../components/profile/ProfileStats";
 import MemberNumberPill from "../components/profile/MemberNumberPill";
 import NotificationBell from "../components/ui/NotificationBell";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
+import toast from "react-hot-toast";
+import ReportModal from "../components/ui/ReportModal";
+import { invalidatePostDetailCacheForViewer } from "../api/queries/getPostById";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
+import {
+  blockUser,
+  isBlockingUser,
+  unblockUser,
+} from "../api/services/blocks";
+import {
+  buildProfileReportDraftFromProfile,
+  type ReportDraft,
+} from "../types/report";
+import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
+import { shareUrl } from "../lib/shareUrl";
 import { useTabActive } from "../router/PersistentTabContainer.new";
-import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
+import {
+  HOME_TAB_REFRESH_EVENT,
+  PROFILE_TAB_REFRESH_EVENT,
+} from "../lib/homeRefreshEvents";
 import { dataCache } from "../lib/dataCache";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 
@@ -152,10 +180,28 @@ export default function OtherProfilePage({
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
   const [headerHidden, setHeaderHidden] = useState(false);
+  const [profileSearchFocused, setProfileSearchFocused] = useState(false);
+  const profileSearchPinnedRef = useRef(false);
   const lastY = useRef<number>(
     typeof window !== "undefined" ? window.scrollY : 0
   );
   const ticking = useRef(false);
+
+  useEffect(() => {
+    profileSearchPinnedRef.current =
+      profileSearchFocused || userQuery.trim().length > 0;
+  }, [profileSearchFocused, userQuery]);
+
+  useEffect(() => {
+    if (profileSearchFocused || userQuery.trim().length > 0) {
+      setHeaderHidden(false);
+    }
+  }, [profileSearchFocused, userQuery]);
+
+  useEffect(() => {
+    if (!isOtherProfileVisible) return;
+    dispatchBottomTabPeek("other-profile", headerHidden);
+  }, [headerHidden, isOtherProfileVisible]);
 
   // Hero section state
   const [counts, setCounts] = useState({ followers: 0, following: 0 });
@@ -175,6 +221,66 @@ export default function OtherProfilePage({
   // auth state and modal state for logo functionality
   const authState = useSelector((state: RootState) => state.auth);
   const isAuthenticated = !!authState?.user;
+  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false);
+  const [blockActionLoading, setBlockActionLoading] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+
+  const handleRequestProfileReport = useCallback(() => {
+    const authLoading = authState?.loading ?? true;
+    if (!authLoading && !isAuthenticated) {
+      dispatch(setAuthModal(true));
+      return;
+    }
+    if (!profile?.id || !profile.user_id) {
+      toast.error("Unable to report this profile right now.");
+      return;
+    }
+    setReportDraft(buildProfileReportDraftFromProfile(profile));
+  }, [authState?.loading, dispatch, isAuthenticated, profile]);
+
+  const flushCachesAfterBlockChange = useCallback(async () => {
+    await dataCache.clearFeedCache();
+    if (profile?.id) invalidateProfile(profile.id);
+    invalidatePostDetailCacheForViewer(viewerId);
+    window.dispatchEvent(new CustomEvent(PROFILE_TAB_REFRESH_EVENT));
+    window.dispatchEvent(new CustomEvent(HOME_TAB_REFRESH_EVENT));
+  }, [profile?.id, viewerId]);
+
+  const handleUnblockUser = useCallback(async () => {
+    if (!profile?.user_id) return;
+    setBlockActionLoading(true);
+    try {
+      await unblockUser(profile.user_id);
+      await flushCachesAfterBlockChange();
+      setIsBlocked(false);
+      setProfileReloadNonce((n) => n + 1);
+      toast.success("Unblocked");
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  }, [profile?.user_id, flushCachesAfterBlockChange]);
+
+  const handleConfirmBlockUser = useCallback(async () => {
+    if (!profile?.user_id) return;
+    setBlockActionLoading(true);
+    try {
+      await blockUser(profile.user_id);
+      await flushCachesAfterBlockChange();
+      setShowBlockConfirm(false);
+      setIsBlocked(true);
+      setProfile(null);
+      navigate(Paths.home, { replace: true });
+      toast.success("Blocked");
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  }, [profile?.user_id, flushCachesAfterBlockChange, navigate]);
+
   const [showInfoModal, setShowInfoModal] = useState(false);
 
   // Get viewer ID
@@ -188,6 +294,37 @@ export default function OtherProfilePage({
       cancelled = true;
     };
   }, [isOtherProfileVisible]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!profile?.user_id || !viewerId || profile.user_id === viewerId) {
+        if (!cancelled) setIsBlocked(false);
+        return;
+      }
+      try {
+        const b = await isBlockingUser(profile.user_id);
+        if (!cancelled) setIsBlocked(b);
+      } catch {
+        if (!cancelled) setIsBlocked(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.user_id, viewerId]);
+
+  /** Viewer has an active block row against this profile owner (auth ids). */
+  const shellMode = useMemo(
+    () =>
+      Boolean(
+        profile &&
+          viewerId &&
+          profile.user_id !== viewerId &&
+          isBlocked
+      ),
+    [profile, viewerId, isBlocked]
+  );
 
   useEffect(() => {
     const onTabRefresh = () => {
@@ -391,7 +528,9 @@ export default function OtherProfilePage({
 
           if (Math.abs(delta) > 6) {
             if (delta > 0 && current > 100) {
-              setHeaderHidden(true);
+              if (!profileSearchPinnedRef.current) {
+                setHeaderHidden(true);
+              }
             } else {
               setHeaderHidden(false);
             }
@@ -419,7 +558,7 @@ export default function OtherProfilePage({
 
   // Hero section: Follow counts - Load cached immediately, then fetch fresh
   useEffect(() => {
-    if (!profile?.id) {
+    if (!profile?.id || shellMode) {
       setCountsLoading(false);
       return;
     }
@@ -452,12 +591,12 @@ export default function OtherProfilePage({
         }
         setCountsLoading(false);
       });
-  }, [profile?.id]);
+  }, [profile?.id, shellMode]);
 
   // Hero section: Load cached follow status immediately, then fetch fresh
   useEffect(() => {
     (async () => {
-      if (!profile?.id) {
+      if (!profile?.id || shellMode) {
         setFollowStatus(null);
         return;
       }
@@ -534,12 +673,16 @@ export default function OtherProfilePage({
         setFollowStatusLoading(false);
       }
     })();
-  }, [profile?.id]);
+  }, [profile?.id, shellMode]);
 
   // Check if viewer has access to private account content
   useEffect(() => {
     if (!profile) {
       setHasAccess(null);
+      return;
+    }
+    if (shellMode) {
+      setHasAccess(false);
       return;
     }
 
@@ -555,7 +698,7 @@ export default function OtherProfilePage({
     } else {
       setHasAccess(false);
     }
-  }, [profile?.is_private, followStatus]);
+  }, [profile?.is_private, followStatus, shellMode]);
 
   // Cleanup tooltip timer on unmount
   useEffect(() => {
@@ -568,7 +711,7 @@ export default function OtherProfilePage({
 
   // Hero section: Real-time follow updates
   useEffect(() => {
-    if (!profile?.id) return;
+    if (!profile?.id || shellMode) return;
     const pid = profile.id;
 
     const channel = supabase
@@ -620,12 +763,12 @@ export default function OtherProfilePage({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile?.id]);
+  }, [profile?.id, shellMode]);
 
   // Generate profile URL
   const profileUrl = useMemo(() => {
     if (!profile) return "";
-    const baseUrl = window.location.origin;
+    const baseUrl = getPublicShareBaseUrl();
     if (profile.username) {
       return `${baseUrl}/u/${profile.username}`;
     }
@@ -773,6 +916,40 @@ export default function OtherProfilePage({
     }
   };
 
+  const handleOtherAvatarPreviewShare = useCallback(async () => {
+    if (!profileUrl) return;
+    const nameBit = profile?.display_name || profile?.username;
+    const title = nameBit
+      ? `Check out ${nameBit}'s profile`
+      : "Check out this profile";
+    try {
+      const outcome = await shareUrl({ title, url: profileUrl });
+      if (outcome === "clipboard") {
+        toast.success("Profile link copied to clipboard!");
+      }
+    } catch {
+      toast.error("Could not share");
+    }
+  }, [profileUrl, profile?.display_name, profile?.username]);
+
+  const avatarPreviewFollowLabel = useMemo(() => {
+    if (followStatus === "pending") return "Pending";
+    if (followStatus === "following" || followStatus === "friends") {
+      return "Following";
+    }
+    return "Follow";
+  }, [followStatus]);
+
+  const avatarPreviewFollowIcon = useMemo(() => {
+    if (followStatus === "pending") {
+      return <PiClock className="h-5 w-5" aria-hidden />;
+    }
+    if (followStatus === "following" || followStatus === "friends") {
+      return <PiUserCheck className="h-5 w-5" aria-hidden />;
+    }
+    return <PiUserPlus className="h-5 w-5" aria-hidden />;
+  }, [followStatus]);
+
   return (
     <>
       {isOtherProfileVisible && (pullPx > 2 || ptrRefreshing) ? (
@@ -815,12 +992,24 @@ export default function OtherProfilePage({
               onLogoClick={handleLogoClick}
               onSearch={setUserQuery}
               profile={profile}
-              reportUserId={profile?.id}
-              reportUsername={profile?.username ?? undefined}
+              reportUserId={shellMode ? undefined : profile?.id}
+              reportUsername={shellMode ? undefined : profile?.username ?? undefined}
+              onRequestReport={handleRequestProfileReport}
+              onSearchFocusChange={setProfileSearchFocused}
+              showBlockControls={
+                !!profile?.user_id &&
+                !!viewerId &&
+                profile.user_id !== viewerId
+              }
+              isBlocked={isBlocked}
+              onRequestBlock={() => setShowBlockConfirm(true)}
+              onRequestUnblock={handleUnblockUser}
+              blockBusy={blockActionLoading}
+              blockedShellTopBar={shellMode}
             />
           </div>
 
-          {userQuery && (
+          {userQuery && !shellMode && (
             <div
               className="fixed inset-0 z-[60]"
               onClick={() => setUserQuery("")}
@@ -841,7 +1030,7 @@ export default function OtherProfilePage({
 
           {!loading && username && !profile && (
             <div className="px-1.5 py-6 text-sm text-[var(--text)]/70 border-b border-white/14">
-              User not found.
+              Profile unavailable.
             </div>
           )}
 
@@ -851,13 +1040,31 @@ export default function OtherProfilePage({
               [stableProfile, loading]
             )}
           >
-            <div
-              style={{
-                paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
-              }}
-            >
+            <div className="relative w-full">
+              <ProfileHeroAvatarAtmosphere
+                avatarPath={profile?.avatar_url}
+                active={!shellMode}
+              />
+              <div
+                className="relative z-[1]"
+                style={{
+                  paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
+                }}
+              >
               {/* INLINE HERO SECTION - Hardcoded for other profile */}
               <section className="w-full px-1.5 pt-4 pb-6 border-b border-[var(--border)]">
+                {shellMode ? (
+                  <div className="px-4 py-12 text-center max-w-sm mx-auto">
+                    <p className="text-sm font-medium text-[var(--text)]/90">
+                      You blocked this account.
+                    </p>
+                    <p className="text-xs text-[var(--text)]/55 mt-3 leading-relaxed">
+                      Posts and profile details are hidden. Use Unblock in the
+                      bar above to restore access.
+                    </p>
+                  </div>
+                ) : (
+                  <>
                 {/* Lock icon on left - Private account indicator (only if viewer has access) */}
                 {!loading && profile?.is_private && hasAccess === true && (
                   <div className="flex w-full justify-start mb-1">
@@ -1065,11 +1272,14 @@ export default function OtherProfilePage({
                     </div>
                   </div>
                 )}
+                  </>
+                )}
               </section>
+              </div>
             </div>
 
             {/* Posts Section - Pass hasAccess + visible (parent tab active) */}
-            {profile && (
+            {profile && !shellMode && (
               <OtherProfilePostsSection
                 hasAccess={hasAccess}
                 visible={isOtherProfileVisible}
@@ -1078,7 +1288,7 @@ export default function OtherProfilePage({
             )}
 
             {/* Modals and drawers */}
-            {profile && (
+            {profile && !shellMode && (
               <>
                 {drawerOpen && (
                   <FollowListDrawer
@@ -1088,12 +1298,30 @@ export default function OtherProfilePage({
                     mode={drawerOpen}
                   />
                 )}
-                {profile.avatar_url && imgUrlPublic(profile.avatar_url) && (
-                  <ImageLightbox
-                    src={imgUrlPublic(profile.avatar_url)!}
+                {profile.avatar_url && avatarDisplayUrl(profile.avatar_url) && (
+                  <AvatarPreviewLightbox
+                    src={avatarDisplayUrl(profile.avatar_url)!}
                     alt={profile.display_name || ""}
                     open={lightbox}
                     onClose={() => setLightbox(false)}
+                    actions={
+                      <>
+                        <AvatarPreviewLightboxAction
+                          label={avatarPreviewFollowLabel}
+                          icon={avatarPreviewFollowIcon}
+                          onClick={() => void onToggleFollow()}
+                          disabled={busy}
+                          busy={!!(followStatusLoading && followStatus === null)}
+                        />
+                        <AvatarPreviewLightboxAction
+                          label="Share"
+                          icon={
+                            <PiShareFat className="h-5 w-5" aria-hidden />
+                          }
+                          onClick={() => void handleOtherAvatarPreviewShare()}
+                        />
+                      </>
+                    }
                   />
                 )}
                 <ShareProfileModal
@@ -1111,6 +1339,24 @@ export default function OtherProfilePage({
       <WelcomeModal
         isOpen={showInfoModal}
         onClose={() => setShowInfoModal(false)}
+      />
+
+      <ReportModal
+        open={reportDraft !== null}
+        draft={reportDraft}
+        onClose={() => setReportDraft(null)}
+      />
+
+      <ConfirmDialog
+        open={showBlockConfirm}
+        onClose={() => !blockActionLoading && setShowBlockConfirm(false)}
+        onConfirm={handleConfirmBlockUser}
+        title="Block this user?"
+        message="You won't see their posts in your feed. After blocking, you can open their profile URL again to see a minimal screen and unblock if you change your mind."
+        confirmLabel="Block"
+        cancelLabel="Cancel"
+        confirmVariant="dangerSoft"
+        isLoading={blockActionLoading}
       />
     </>
   );

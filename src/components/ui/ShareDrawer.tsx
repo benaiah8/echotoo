@@ -4,6 +4,14 @@ import InstagramStoryGenerator from "./InstagramStoryGenerator";
 import BottomDrawer from "./BottomDrawer";
 import toast from "react-hot-toast";
 import { sharePost } from "../../api/services/shares";
+import { getPublicShareBaseUrl } from "../../lib/publicSiteUrl";
+import { postDetailPath } from "../../router/Paths";
+import { shareUrl } from "../../lib/shareUrl";
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "./FrostedCenterModal";
 
 interface ShareDrawerProps {
   isOpen: boolean;
@@ -23,9 +31,9 @@ interface ShareDrawerProps {
 }
 
 /**
- * [PHASE 3.1] Migrated to BottomDrawer for consistency and proper z-index
- * Why: Fixes z-index issue (was z-[90], now z-[100]), matches RSVPListDrawer pattern
- * Features: Frosted glass styling, proper backdrop, safe area handling
+ * Bottom sheet on `BottomDrawer`; actions sit in an inner panel matching
+ * `FrostedCenterModal` / ConfirmDialog (`frostedModalPanelStyle` — --glass-bg, blur, border).
+ * Buttons: compact pill height (h-9), rounded-full.
  */
 export default function ShareDrawer({
   isOpen,
@@ -44,6 +52,11 @@ export default function ShareDrawer({
 }: ShareDrawerProps) {
   const [showStoryGenerator, setShowStoryGenerator] = useState(false);
 
+  const publicPostUrl = `${getPublicShareBaseUrl()}${postDetailPath(
+    postType,
+    postId
+  )}`;
+
   const handleInvite = () => {
     if (onInvite) {
       onInvite();
@@ -53,8 +66,7 @@ export default function ShareDrawer({
 
   const handleCopyLink = async () => {
     try {
-      const postUrl = window.location.href;
-      await navigator.clipboard.writeText(postUrl);
+      await navigator.clipboard.writeText(publicPostUrl);
 
       // Track share when link is copied successfully
       try {
@@ -74,41 +86,24 @@ export default function ShareDrawer({
 
   const handleWebShare = async () => {
     try {
-      const postUrl = window.location.href;
-      const shareData = {
-        title: `Check out this ${
-          postType === "hangout" ? "hangout" : "experience"
-        }`,
-        url: postUrl,
-      };
+      const title = `Check out this ${
+        postType === "hangout" ? "hangout" : "experience"
+      }`;
+      const outcome = await shareUrl({ title, url: publicPostUrl });
+      if (outcome === "dismissed") return;
 
-      if (
-        navigator.share &&
-        navigator.canShare &&
-        navigator.canShare(shareData)
-      ) {
-        await navigator.share(shareData);
-
-        // Track share when Web Share API succeeds
-        try {
-          await sharePost(postId);
-        } catch (shareError) {
-          // Fail silently - don't break share action if share tracking fails
-          console.error("Error tracking share:", shareError);
-        }
-
-        onClose();
-      } else {
-        // Fallback to copy
-        handleCopyLink();
+      try {
+        await sharePost(postId);
+      } catch (shareError) {
+        console.error("Error tracking share:", shareError);
       }
+
+      if (outcome === "clipboard") {
+        toast.success("Link copied to clipboard!");
+      }
+      onClose();
     } catch (error) {
-      // User cancelled share - don't track
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
       console.error("Error sharing:", error);
-      // Fallback to copy
       handleCopyLink();
     }
   };
@@ -121,45 +116,52 @@ export default function ShareDrawer({
         title="Share"
         maxHeight="auto"
       >
-        {/* Compact rows; pt/pb so actions breathe below header and above drawer bottom (drawer adds safe area + 1rem) */}
-        <div className="flex flex-col gap-2 px-5 pt-3 pb-6 sm:px-6">
+        {/* Inner panel: same frosted shell as ConfirmDialog (see frostedModalPanelStyle) */}
+        <div className="px-3 pt-0 pb-1 sm:px-4">
           <div
-            className={`grid gap-2 ${onInvite ? "grid-cols-2" : "grid-cols-1"}`}
+            className={`${frostedModalPanelClassName} flex flex-col gap-2`}
+            style={frostedModalPanelStyle}
           >
-            <button
-              type="button"
-              onClick={handleWebShare}
-              className="flex min-h-11 flex-row items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80"
+            <div
+              className={`grid gap-2 ${onInvite ? "grid-cols-2" : "grid-cols-1"}`}
             >
-              <PiShareFat size={20} className="shrink-0 text-[var(--text)]" />
-              <span>
-                {typeof navigator.share === "function" ? "Share" : "Copy Link"}
-              </span>
-            </button>
-
-            {onInvite && (
               <button
                 type="button"
-                onClick={handleInvite}
-                className="flex min-h-11 flex-row items-center justify-center gap-2 rounded-xl bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition hover:bg-yellow-600"
+                onClick={handleWebShare}
+                className="flex h-9 min-h-9 flex-row items-center justify-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80"
               >
-                <PiUserPlus size={20} className="shrink-0" />
-                <span>Invite</span>
+                <PiShareFat size={18} className="shrink-0 text-[var(--text)]" />
+                <span>
+                  {typeof navigator.share === "function" || isNativeApp()
+                    ? "Share"
+                    : "Copy Link"}
+                </span>
               </button>
-            )}
-          </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setShowStoryGenerator(true);
-              onClose();
-            }}
-            className="flex min-h-11 w-full flex-row items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 px-3 py-2 text-sm font-semibold text-white transition hover:from-purple-600 hover:to-pink-600"
-          >
-            <PiInstagramLogo size={20} className="shrink-0" />
-            <span>Instagram Stories</span>
-          </button>
+              {onInvite && (
+                <button
+                  type="button"
+                  onClick={handleInvite}
+                  className="flex h-9 min-h-9 flex-row items-center justify-center gap-1.5 rounded-full bg-yellow-500 px-3 text-xs font-semibold text-black transition hover:bg-yellow-600"
+                >
+                  <PiUserPlus size={18} className="shrink-0" />
+                  <span>Invite</span>
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowStoryGenerator(true);
+                onClose();
+              }}
+              className="flex h-9 min-h-9 w-full flex-row items-center justify-center gap-1.5 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 px-3 text-xs font-semibold text-white transition hover:from-purple-600 hover:to-pink-600"
+            >
+              <PiInstagramLogo size={18} className="shrink-0" />
+              <span>Instagram Stories</span>
+            </button>
+          </div>
         </div>
       </BottomDrawer>
 

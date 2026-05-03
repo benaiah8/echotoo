@@ -22,7 +22,13 @@ interface ConfirmDialogProps {
   message: string | React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
-  confirmVariant?: "danger" | "primary" | "warning" | "default";
+  confirmVariant?:
+    | "danger"
+    | "dangerBlack"
+    | "dangerSoft"
+    | "primary"
+    | "warning"
+    | "default";
   isLoading?: boolean;
   /** Use z-[210] when opened from within another drawer */
   higherZIndex?: boolean;
@@ -39,7 +45,13 @@ interface ConfirmDialogProps {
  * intrinsic = content-sized (rare / legacy)
  */
 export const getConfirmDialogButtonClass = (
-  variant: "danger" | "primary" | "warning" | "default" | "dangerSoft",
+  variant:
+    | "danger"
+    | "dangerBlack"
+    | "primary"
+    | "warning"
+    | "default"
+    | "dangerSoft",
   layout: "equal" | "equalThree" | "intrinsic" = "equal"
 ) => {
   const widthPad =
@@ -56,6 +68,9 @@ export const getConfirmDialogButtonClass = (
   switch (variant) {
     case "danger":
       return `${base} bg-red-500 text-white hover:bg-red-600`;
+    /** Red fill + black label (strong contrast on bright red). */
+    case "dangerBlack":
+      return `${base} bg-red-500 text-black hover:bg-red-600 hover:text-black`;
     case "dangerSoft":
       return `${base} border border-[color-mix(in_oklab,var(--danger)_55%,transparent)] bg-[var(--surface-2)] text-[var(--text)] hover:bg-[color-mix(in_oklab,var(--danger)_12%,var(--surface-2))]`;
     case "primary":

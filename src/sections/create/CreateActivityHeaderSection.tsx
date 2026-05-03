@@ -19,6 +19,7 @@ import { PiDotsSixVertical, PiPlus } from "react-icons/pi";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { ActivityType } from "../../types/post";
 import { CREATE_FLOW_LIMITS } from "../../lib/createFlowLimits";
+import { getActivityChipDisplayLabel } from "../../lib/createFlowMeaningfulActivity";
 
 interface Props {
   activities: ActivityType[];
@@ -39,22 +40,6 @@ interface SortableItemProps {
   activityObj: ActivityType;
 }
 
-function getActivityLabel(a: ActivityType, index: number) {
-  let raw =
-    (a.customActivity?.trim() ||
-      a.activityType?.trim() ||
-      a.title?.trim() ||
-      `Stop ${index + 1}`) ??
-    `Stop ${index + 1}`;
-
-  // Display-only: legacy “Activity n” reads as “Stop n” in the row (no data write).
-  const legacy = /^Activity\s+(\d+)$/i.exec(raw.trim());
-  if (legacy) raw = `Stop ${legacy[1]}`;
-
-  const max = 14;
-  return raw.length > max ? raw.slice(0, max - 1) + "…" : raw;
-}
-
 function SortableItem({
   id,
   index,
@@ -70,7 +55,7 @@ function SortableItem({
     transition,
   };
 
-  const label = getActivityLabel(activityObj, index);
+  const label = getActivityChipDisplayLabel(activityObj, index);
 
   return (
     <div ref={setNodeRef} style={style} className="flex shrink-0">
@@ -83,7 +68,7 @@ function SortableItem({
           "active:scale-[0.99]",
           isActive
             ? "border-[var(--brand)] bg-[var(--surface-2)] text-[var(--text)] shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_35%,transparent)]"
-            : "border-[var(--border)]/85 bg-[var(--surface)]/45 text-[var(--text)]/92 hover:bg-[var(--surface)]/62 dark:border-[var(--border)]/70",
+            : "border-[var(--border)]/85 bg-[var(--surface)]/45 text-[var(--text)]/92 hover:bg-[var(--surface)]/62 app-dark:border-[var(--border)]/70",
         ].join(" ")}
         title={label}
       >
@@ -287,10 +272,8 @@ export default function CreateActivityHeaderSection({
             }
             className={[
               "inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] font-semibold leading-none",
-              "border-neutral-950 bg-neutral-950 text-white shadow-sm",
-              "hover:bg-neutral-800 hover:border-neutral-800 active:scale-[0.99]",
-              "dark:border-white dark:bg-white dark:text-neutral-950 dark:shadow-[0_1px_8px_rgba(0,0,0,0.35)]",
-              "dark:hover:bg-neutral-100 dark:hover:border-neutral-100",
+              "border-[var(--create-meta-pill-bg)] bg-[var(--create-meta-pill-bg)] text-[var(--create-meta-pill-fg)] shadow-sm",
+              "hover:bg-[var(--create-meta-pill-hover-bg)] hover:border-[var(--create-meta-pill-hover-bg)] active:scale-[0.99]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",
               !canAddStop ? "cursor-not-allowed opacity-45" : "",
             ].join(" ")}

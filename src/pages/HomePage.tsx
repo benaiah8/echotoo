@@ -42,8 +42,12 @@ import Modal from "../components/modal/Modal";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
 import toast from "react-hot-toast";
 import EmptyRailCard from "../components/EmptyRailCard";
-import { HOME_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
+import {
+  HOME_TAB_REFRESH_EVENT,
+  type HomeTabRefreshDetail,
+} from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
+import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 
 const PAGE_SIZE = 6;
 
@@ -101,9 +105,23 @@ export default function HomePage() {
   const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
+  /** While search is focused (keyboard), keep top chrome pinned — scroll/IME must not slide it away. */
+  const [homeSearchFocused, setHomeSearchFocused] = useState(false);
+
+  const pinHomeTopBar =
+    homeSearchFocused || (filtersOpen && forceRevealHeader);
+  const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
+  /** Bar width/pill shape follows scroll only. Do not OR `homeSearchFocused` — that forced full-width on focus and broke pill + safe-area on native keyboards. Visibility while typing uses `pinHomeTopBar` above. */
+  const effectiveHomeAtTop = isAtTop;
+
   useEffect(() => {
-    if (isHidden && !forceRevealHeader) setFiltersOpen(false);
-  }, [isHidden, forceRevealHeader]);
+    if (effectiveHomeTopHidden && !forceRevealHeader) setFiltersOpen(false);
+  }, [effectiveHomeTopHidden, forceRevealHeader]);
+
+  useEffect(() => {
+    if (!isHomeTabActive) return;
+    dispatchBottomTabPeek("home", effectiveHomeTopHidden);
+  }, [effectiveHomeTopHidden, isHomeTabActive]);
 
   // [REFACTOR] Removed items/loading state - ProgressiveFeed is now the single source of truth
   // This eliminates race conditions between HomePage's SWR and ProgressiveFeed's loading
@@ -215,7 +233,7 @@ export default function HomePage() {
   }, [feedCacheKey, search, selectedTags, selectedFilters, viewerProfileId]);
 
   useEffect(() => {
-    const onRefreshRequest = () => {
+    const onRefreshRequest = (e: Event) => {
       if (!isHomeTabActive) {
         if (import.meta.env.DEV) {
           console.debug(
@@ -223,6 +241,10 @@ export default function HomePage() {
           );
         }
         return;
+      }
+      const detail = (e as CustomEvent<HomeTabRefreshDetail>).detail;
+      if (detail?.source === "home-tab") {
+        setSearch("");
       }
       if (import.meta.env.DEV) {
         console.debug(`[${HOME_TAB_REFRESH_EVENT}] remount + cache purge`);
@@ -243,7 +265,11 @@ export default function HomePage() {
   } = useHomePullToRefresh({
     enabled: isHomeTabActive,
     onCommit: () => {
-      window.dispatchEvent(new CustomEvent(HOME_TAB_REFRESH_EVENT));
+      window.dispatchEvent(
+        new CustomEvent(HOME_TAB_REFRESH_EVENT, {
+          detail: { source: "pull" as const },
+        })
+      );
     },
     refreshEpoch: homeRefreshEpoch,
   });
@@ -320,7 +346,7 @@ export default function HomePage() {
   // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
   // Why: These callbacks are passed as props, memoization prevents child re-renders
   const handleFilterClick = useCallback(() => {
-    if (isHidden) {
+    if (effectiveHomeTopHidden) {
       setForceRevealHeader(true);
       setFiltersOpen(true);
       // nudge the page up a bit so the fixed header is visible
@@ -331,7 +357,7 @@ export default function HomePage() {
     } else {
       setFiltersOpen((v) => !v);
     }
-  }, [isHidden]);
+  }, [effectiveHomeTopHidden]);
 
   const handleClearFilters = useCallback(() => {
     setSelectedTags([]);
@@ -449,7 +475,7 @@ export default function HomePage() {
           aria-label={ptrRefreshing ? "Refreshing feed" : "Pull to refresh"}
           className="pointer-events-none fixed left-0 right-0 z-[35] flex justify-center"
           style={{
-            top: "calc(80px + env(safe-area-inset-top, 0px))",
+            top: "calc(80px + var(--safe-area-top-layout))",
             opacity: ptrRefreshing
               ? 1
               : Math.min(1, 0.12 + pullProgress * 0.88),
@@ -464,15 +490,16 @@ export default function HomePage() {
           />
         </div>
       ) : null}
-      <PrimaryPageContainer hideUI={isHidden} capacitorNotchScrim>
+      <PrimaryPageContainer hideUI={effectiveHomeTopHidden} capacitorNotchScrim>
         {/* Top bar: floating pill + gradient + three-dot menu */}
         <HomeTopBar
-          isHidden={isHidden}
-          atTop={isAtTop}
+          isHidden={effectiveHomeTopHidden}
+          atTop={effectiveHomeAtTop}
           onToggleFilters={handleFilterClick}
           onLogoClick={handleLogoClick}
           onSearch={setSearch}
           search={search}
+          onSearchFocusChange={setHomeSearchFocused}
           hasActiveFilters={hasActiveFilters}
           filtersOpen={filtersOpen}
           selectedTags={selectedTags}
@@ -487,7 +514,7 @@ export default function HomePage() {
         {/* MAIN CONTENT */}
         <div
           style={{
-            paddingTop: "calc(72px + env(safe-area-inset-top, 0px))",
+            paddingTop: "calc(72px + var(--safe-area-top-layout))",
             paddingBottom: FOOTER_HEIGHT,
           }}
         >

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { PiArrowRight } from "react-icons/pi";
 import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
+  BOTTOM_TAB_PILL_OFFSET_PX,
   resolveSafeAreaBottomLayoutPx,
 } from "../../lib/appSafeAreaBottom";
 
@@ -130,10 +131,11 @@ export default function CreateTabsSection({
   // let pages reserve enough space so content never hides behind bars
   useEffect(() => {
     const total =
+      BOTTOM_TAB_PILL_OFFSET_PX +
+      safeBottom +
       btHeight +
       GAP_ABOVE_TAB +
       stripHeightPx +
-      safeBottom +
       footerNoteReservePx;
     document.documentElement.style.setProperty(
       "--create-actions-total-bottom",
@@ -150,7 +152,12 @@ export default function CreateTabsSection({
     [paths, step]
   );
 
-  const bottomOffset = btHeight > 0 ? btHeight + GAP_ABOVE_TAB : GAP_ABOVE_TAB;
+  /** Same geometry as ActionSheet: above `#bottom-tab` (offset + safe area + tab height + gap). */
+  const bottomOffset =
+    BOTTOM_TAB_PILL_OFFSET_PX +
+    safeBottom +
+    (btHeight > 0 ? btHeight : 0) +
+    GAP_ABOVE_TAB;
 
   const stepCount = isEditMode ? 2 : 4;
   const rowH = stripHeightPx;

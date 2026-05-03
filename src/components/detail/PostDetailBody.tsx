@@ -10,22 +10,41 @@ import StickyPostActions from "../ui/StickyPostActions";
 import InviteDrawer from "../ui/InviteDrawer";
 import CommentList from "../ui/CommentList";
 import { buildCarouselImages } from "../../lib/carouselImages";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import { supabase } from "../../lib/supabaseClient";
 import { emitPostChanged } from "../../lib/postEvents";
-import { getPostForEdit, deletePost } from "../../api/services/posts";
+import { getPostForEdit } from "../../api/services/posts";
+import type { PostDetailNavigateState } from "../../lib/postDetailNavigationState";
+import {
+  buildCanonicalEditPostData,
+  createEditActivitiesHref,
+  persistCanonicalEditPostData,
+} from "../../lib/editPostBootstrap";
 import toast from "react-hot-toast";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
+import { RootState } from "../../app/store";
+import { setAuthModal } from "../../reducers/modalReducer";
+import ReportModal from "../ui/ReportModal";
+import { PostTypeMetaChip } from "../ui/PostFeedSurfaceMeta";
+import PostRatingSummary from "../ui/PostRatingSummary";
+import {
+  buildPostReportDraftFromFeedItem,
+  type ReportDraft,
+} from "../../types/report";
 import {
   formatDateSummary,
   formatFinalizeRecurrenceSummaryLine,
   formatFinalizeSelectedDatesSummaryLine,
 } from "../../lib/createFlowDateSummary";
 import { visibleActivityTagLines } from "../../lib/createFlowLimitUtils";
+import { formatHashtagForDisplay } from "../../lib/createFlowLimits";
+import { getTimelineStopHeadingText } from "../../lib/createFlowMeaningfulActivity";
 import { ReadOnlyActivityTagLine } from "./ReadOnlyActivityTagLine";
-import { PiListBullets, PiMapPin } from "react-icons/pi";
+import { AdditionalInfoSemanticRows } from "./AdditionalInfoSemanticRows";
+import { PiCalendarBlank, PiListBullets, PiMapPin } from "react-icons/pi";
 // [OPTIMIZATION: Phase 3.4] Removed BatchLoadResult - PostgreSQL function provides all data
 
 // ---- Types the component will accept (all extras are optional) ----
@@ -53,14 +72,6 @@ export type Post = FeedItem & {
   }[];
 };
 
-function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="px-2.5 py-1 rounded-full text-xs border border-[var(--border)] text-[var(--text)]/90">
-      {children}
-    </span>
-  );
-}
-
 export default function PostDetailBody({
   post,
   isPreview = false,
@@ -78,6 +89,21 @@ export default function PostDetailBody({
   /** Create finalize: metadata row + shared panel (rendered below caption, above inline preview chips). */
   composeFinalizeBelowCaption,
   composeFinalizeStripPreviewMeta = false,
+  /** Create finalize: full-width image CTA when there is no hero yet (safe-area handled here). */
+  composeFinalizeEmptyHeroCta,
+  /** Create finalize: secondary image CTA below hero when images exist (not overlaid on carousel). */
+  composeFinalizeBelowHeroImageCta,
+  /** Create finalize: overlay image CTA dock pinned to hero bottom. */
+  composeFinalizeHeroBottomOverlayCta,
+  /** Create finalize: full-width Activities entry (above the activity timeline when shown). */
+  composeFinalizeActivitiesCta,
+  /**
+   * Create finalize: when false, hide the read-only activity timeline (e.g. untouched seeded stop).
+   * Omit or true everywhere else.
+   */
+  composeFinalizeShowActivityTimeline,
+  /** Opened from feed comment control (router state): focus composer when comments are ready. */
+  autoFocusCommentComposer = false,
 }: {
   post: Post;
   isPreview?: boolean;
@@ -103,12 +129,32 @@ export default function PostDetailBody({
   composeFinalizeBelowCaption?: ReactNode;
   /** Hide inline tags / schedule / RSVP preview rows (finalize uses caption + metadata row instead). */
   composeFinalizeStripPreviewMeta?: boolean;
+  composeFinalizeEmptyHeroCta?: ReactNode;
+  composeFinalizeBelowHeroImageCta?: ReactNode;
+  composeFinalizeHeroBottomOverlayCta?: ReactNode;
+  composeFinalizeActivitiesCta?: ReactNode;
+  composeFinalizeShowActivityTimeline?: boolean;
+  autoFocusCommentComposer?: boolean;
   // [OPTIMIZATION: Phase 3.4] Removed batchedData - PostgreSQL function provides all data in post object
 }) {
   const navigate = useNavigate();
+  const routerLocation = useLocation();
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
+  const dispatch = useDispatch();
+  const authState = useSelector((state: RootState) => state.auth);
+  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
+
+  const handleRequestPostReport = useCallback(() => {
+    const authLoading = authState?.loading ?? true;
+    const isAuthenticated = !!authState?.user;
+    if (!authLoading && !isAuthenticated) {
+      dispatch(setAuthModal(true));
+      return;
+    }
+    setReportDraft(buildPostReportDraftFromFeedItem(post));
+  }, [authState?.loading, authState?.user, dispatch, post]);
 
   // Emit post:changed when follow:changed fires for this post's author (sync feed + modal)
   useEffect(() => {
@@ -149,10 +195,25 @@ export default function PostDetailBody({
     try {
       const postData = await getPostForEdit(post.id);
       if (postData) {
-        // Store the post data in localStorage for edit mode
-        localStorage.setItem("editPostData", JSON.stringify(postData));
-        // Navigate to the creation flow
-        navigate(Paths.createActivities);
+        const navState = routerLocation.state as PostDetailNavigateState | null;
+        const overlayBg = navState?.backgroundLocation;
+        const editData = buildCanonicalEditPostData(
+          postData.post,
+          postData.activities,
+          {
+            returnPath: window.location.pathname,
+            ...(overlayBg != null
+              ? {
+                  returnState: {
+                    backgroundLocation: overlayBg as unknown,
+                    initialPost: post as unknown,
+                  },
+                }
+              : {}),
+          }
+        );
+        persistCanonicalEditPostData(editData);
+        navigate(createEditActivitiesHref(postData.post.type));
       }
     } catch (error) {
       console.error("Error loading post for edit:", error);
@@ -160,17 +221,12 @@ export default function PostDetailBody({
     }
   };
 
-  const handleDelete = async () => {
-    if (window.confirm("Are you sure you want to delete this post?")) {
-      try {
-        await deletePost(post.id);
-        toast.success("Post deleted successfully");
-        // Navigate back to home or profile
-        navigate(Paths.home);
-      } catch (error) {
-        console.error("Error deleting post:", error);
-        toast.error("Failed to delete post");
-      }
+  /** PostMenu performs delete + toast; this runs only after success (dismiss modal or leave full-page detail). */
+  const handleAfterDelete = () => {
+    if (onClose) {
+      onClose();
+    } else {
+      navigate(Paths.home);
     }
   };
 
@@ -179,6 +235,42 @@ export default function PostDetailBody({
       setShowInviteDrawer(true);
     }
   };
+
+  const commentComposerFocusRef = useRef<(() => void) | null>(null);
+  /** Full-page detail only: one scroll when opening with `focusCommentComposer` (modal scrolls in PostDetailModal). */
+  const fullPageCommentScrollDoneRef = useRef(false);
+
+  const setFocusComposer = useCallback((fn: () => void) => {
+    commentComposerFocusRef.current = fn;
+  }, []);
+
+  const handleStickyCommentClick = useCallback(() => {
+    document
+      .querySelector("[data-comments-section]")
+      ?.scrollIntoView({ behavior: "smooth" });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        commentComposerFocusRef.current?.();
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    fullPageCommentScrollDoneRef.current = false;
+  }, [post.id]);
+
+  useEffect(() => {
+    if (!autoFocusCommentComposer || onClose) return;
+    if (fullPageCommentScrollDoneRef.current) return;
+    fullPageCommentScrollDoneRef.current = true;
+    const t = window.setTimeout(() => {
+      document.querySelector("[data-comments-section]")?.scrollIntoView({
+        behavior: "smooth",
+        block: "end",
+      });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [autoFocusCommentComposer, onClose, post.id]);
 
   const vis = post.visibility || "public";
   const anon = Boolean(post.is_anonymous);
@@ -207,9 +299,20 @@ export default function PostDetailBody({
   /** Modal only: small gap so the hero is not flush against the floating pill */
   const heroBelowBarGap = onClose ? "12px" : "0px";
 
+  /** Extra air below CreateFlowTopBar for finalize hero/CTA (not a second safe-area — additive px only). */
+  const finalizeHeroBreathing = composeFinalizeShell ? "20px" : "0px";
+
   const finalizeSurroundingsDim =
     composeFinalizeCaption != null &&
     composeFinalizeCaption.surroundingDeemphasize !== false;
+
+  const finalizeEmptyHeroActive = Boolean(
+    composeFinalizeShell && gallery.length === 0 && composeFinalizeEmptyHeroCta
+  );
+
+  const hideFinalizeActivityTimeline =
+    composeFinalizeShell && composeFinalizeShowActivityTimeline === false;
+  const hasActivities = (post.activities ?? []).length > 0;
 
   const scheduleDates = (post.selected_dates || []).map((s) => new Date(s));
   const recurrenceCodes = (post.recurrence_days || [])
@@ -229,6 +332,49 @@ export default function PostDetailBody({
   const showScheduleBlock =
     (scheduleSummaryLine != null && scheduleSummaryLine.length > 0) ||
     (recurrenceSummaryLine != null && recurrenceSummaryLine.length > 0);
+
+  const computeBlendedEffectiveFromReal = useCallback(
+    (nextRealAverage: number | null | undefined, nextRealCount: number | null | undefined) => {
+      const currentRealCount =
+        typeof post.rating_count === "number" && Number.isFinite(post.rating_count)
+          ? post.rating_count
+          : 0;
+      const currentRealAverage =
+        typeof post.rating_average === "number" && Number.isFinite(post.rating_average)
+          ? post.rating_average
+          : 0;
+      const currentEffectiveCount =
+        typeof post.effective_rating_count === "number" &&
+        Number.isFinite(post.effective_rating_count)
+          ? post.effective_rating_count
+          : currentRealCount;
+      const currentEffectiveAverage =
+        typeof post.effective_rating_average === "number" &&
+        Number.isFinite(post.effective_rating_average)
+          ? post.effective_rating_average
+          : currentRealAverage;
+      const demoCount = Math.max(0, currentEffectiveCount - currentRealCount);
+      const demoWeightedTotal =
+        currentEffectiveAverage * currentEffectiveCount -
+        currentRealAverage * currentRealCount;
+      const demoAverage = demoCount > 0 ? demoWeightedTotal / demoCount : 0;
+      const realCount =
+        typeof nextRealCount === "number" && Number.isFinite(nextRealCount)
+          ? nextRealCount
+          : 0;
+      const realAverage =
+        typeof nextRealAverage === "number" && Number.isFinite(nextRealAverage)
+          ? nextRealAverage
+          : 0;
+      const effectiveCount = demoCount + realCount;
+      const effectiveAverage =
+        effectiveCount > 0
+          ? Number(((demoAverage * demoCount + realAverage * realCount) / effectiveCount).toFixed(1))
+          : 0;
+      return { effectiveAverage, effectiveCount };
+    },
+    [post]
+  );
 
   // --- UI ---
   return (
@@ -256,11 +402,37 @@ export default function PostDetailBody({
               : undefined
           }
           onInvite={handleInvite}
+          onCommentClick={onClose ? handleStickyCommentClick : undefined}
         />
       ) : null}
 
-      {/* Preview: upload pill when hero is empty but images are still uploading */}
-      {isPreview && gallery.length === 0 && previewHeroOverlay ? (
+      {/* Create finalize: full-width image CTA when no hero; optional upload pill overlays it. */}
+      {finalizeEmptyHeroActive ? (
+        <div
+          className={[
+            "relative w-full page-content-wide mb-2",
+            finalizeSurroundingsDim
+              ? "opacity-[0.80] transition-opacity duration-300"
+              : "",
+          ].join(" ")}
+          style={{
+            paddingTop: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing})`,
+            minHeight: "44px",
+          }}
+        >
+          <div className="w-full px-1">{composeFinalizeEmptyHeroCta}</div>
+          {isPreview && previewHeroOverlay ? (
+            <div
+              className="pointer-events-none absolute left-1/2 z-[25] flex w-full max-w-[calc(100%-1rem)] -translate-x-1/2 justify-center px-2"
+              style={{
+                top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing} + 10px)`,
+              }}
+            >
+              {previewHeroOverlay}
+            </div>
+          ) : null}
+        </div>
+      ) : isPreview && gallery.length === 0 && previewHeroOverlay ? (
         <div
           className={[
             composeFinalizeShell
@@ -286,7 +458,7 @@ export default function PostDetailBody({
         <div
           className={[
             composeFinalizeShell
-              ? "relative w-full page-content-wide mb-[0.45rem] min-h-0"
+              ? "relative w-full page-content-wide mb-2 min-h-0"
               : "relative w-full page-content-wide mb-2 min-h-0",
             finalizeSurroundingsDim
               ? "opacity-[0.80] transition-opacity duration-300"
@@ -295,13 +467,13 @@ export default function PostDetailBody({
           style={{
             aspectRatio: "4/5",
             maxHeight: "50vh",
-            paddingTop: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap})`,
+            paddingTop: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing})`,
           }}
         >
           <div
             className="absolute left-0 right-0 bottom-0 z-0"
             style={{
-              top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap})`,
+              top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing})`,
             }}
           >
             <MediaCarousel
@@ -318,25 +490,42 @@ export default function PostDetailBody({
             <div
               className="pointer-events-none absolute left-1/2 z-[25] flex w-full max-w-[calc(100%-1rem)] -translate-x-1/2 justify-center px-2"
               style={{
-                top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + 10px)`,
+                top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing} + 10px)`,
               }}
             >
               {previewHeroOverlay}
             </div>
           ) : null}
+          {composeFinalizeShell &&
+          isPreview &&
+          composeFinalizeHeroBottomOverlayCta ? (
+            <div className="absolute inset-x-0 bottom-0 z-[26] px-2 pb-2">
+              {composeFinalizeHeroBottomOverlayCta}
+            </div>
+          ) : null}
         </div>
       )}
+
+      {/* Create finalize: Add more photos — document flow below hero (never over the carousel). */}
+      {composeFinalizeShell &&
+      gallery.length > 0 &&
+      composeFinalizeBelowHeroImageCta ? (
+        <div className="relative w-full page-content-wide mb-2 px-1">
+          {composeFinalizeBelowHeroImageCta}
+        </div>
+      ) : null}
 
       {/* MAIN COLUMN */}
       <div
         className="w-full page-content-wide"
         style={{
-          paddingTop:
-            gallery.length === 0
-              ? `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap})`
-              : composeFinalizeShell
-              ? "0.9rem"
-              : "1rem",
+          paddingTop: finalizeEmptyHeroActive
+            ? "0.75rem"
+            : gallery.length === 0
+            ? `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap})`
+            : composeFinalizeShell
+            ? "0.9rem"
+            : "1rem",
         }}
       >
         {/* Author row */}
@@ -351,23 +540,26 @@ export default function PostDetailBody({
           ].join(" ")}
         >
           <Avatar
+            className="shrink-0"
             url={anon ? undefined : post.author?.avatar_url || undefined}
             name={anon ? post.anonymous_name || "Anonymous" : displayName}
             size={40}
             onClick={anon ? undefined : goToProfile}
             variant={anon ? "anon" : vis === "friends" ? "friends" : "default"}
-            postType={post.type}
             anonymousAvatar={anon ? post.anonymous_avatar : undefined}
             userId={anon ? null : post.author_id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
           />
 
           <div className="min-w-0">
-            <button
-              className="text-sm font-medium hover:underline"
-              onClick={anon ? undefined : goToProfile}
-            >
-              {anon ? post.anonymous_name || "Anonymous" : displayName}
-            </button>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <button
+                className="text-sm font-medium hover:underline"
+                onClick={anon ? undefined : goToProfile}
+              >
+                {anon ? post.anonymous_name || "Anonymous" : displayName}
+              </button>
+              <PostTypeMetaChip type={post.type} />
+            </div>
             <div className="text-xs text-[var(--text)]/60">
               {anon ? "" : `@${post.author?.username || "user"} · `}
               {new Date(post.created_at).toLocaleDateString()}
@@ -380,8 +572,9 @@ export default function PostDetailBody({
                 postId={post.id}
                 isOwner={isOwner}
                 onEdit={handleEdit}
-                onDelete={handleDelete}
+                onDelete={handleAfterDelete}
                 isDraft={isDraft}
+                onRequestReport={handleRequestPostReport}
               />
             </div>
           ) : null}
@@ -398,9 +591,9 @@ export default function PostDetailBody({
                 : composeFinalizeCaption.entryPulse
                 ? "border border-[var(--brand)]/40 shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_28%,transparent),0_0_48px_-4px_rgba(247,208,71,0.22),0_16px_44px_-8px_rgba(0,0,0,0.55)] ring-2 ring-[var(--brand)]/20"
                 : [
-                    "border border-[var(--border)]/55 bg-[var(--surface)]/24",
-                    "shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_18%,transparent),0_2px_14px_rgba(0,0,0,0.05)]",
-                    "dark:border-white/32 dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]",
+                    "border border-[var(--create-border-composer-shell)] bg-white/95",
+                    "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.06)]",
+                    "app-dark:bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] app-dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]",
                   ].join(" "),
             ].join(" ")}
             style={{
@@ -410,10 +603,13 @@ export default function PostDetailBody({
           >
             <label
               htmlFor="create-finalize-caption"
-              className="mb-3 block text-[12px] font-semibold tracking-wide text-[var(--text)]/88 dark:text-white/92"
+              className="mb-3 block text-[12px] font-semibold tracking-wide app-light:!text-neutral-900 app-dark:!text-white/92"
             >
               Write your caption{" "}
-              <span className="text-[var(--brand)]" aria-hidden>
+              <span
+                className="text-[var(--create-caption-required-accent)]"
+                aria-hidden
+              >
                 *
               </span>
             </label>
@@ -438,7 +634,7 @@ export default function PostDetailBody({
                 }
                 rows={4}
                 placeholder="Say what this is about…"
-                className="w-full min-h-[5.75rem] resize-y rounded-lg border border-[var(--border)]/70 bg-[var(--surface)]/10 px-3 pb-7 pt-3 pr-3 text-[15px] leading-snug text-[var(--text)] outline-none transition-[border-color,box-shadow] placeholder:text-[var(--text)]/42 dark:border-white dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] focus:border-[var(--brand)]/60 focus:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_22%,transparent),0_0_0_1px_rgba(255,255,255,0.08)] dark:focus:border-[var(--brand)]/65 dark:focus:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_24%,transparent),inset_0_1px_0_rgba(255,255,255,0.08)] whitespace-pre-wrap"
+                className="w-full min-h-[5.75rem] resize-y rounded-lg border-2 border-[var(--create-border-primary-field)] bg-white px-3 pb-7 pt-3 pr-3 text-[15px] leading-snug app-light:!text-neutral-900 outline-none transition-[border-color,box-shadow] app-light:placeholder:text-neutral-500 app-dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] app-dark:!text-neutral-100 app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-dark:placeholder:text-white/45 focus:border-[var(--brand)]/60 focus:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_22%,transparent),0_0_0_1px_rgba(0,0,0,0.06)] app-dark:focus:border-[var(--brand)]/65 app-dark:focus:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_24%,transparent),inset_0_1px_0_rgba(255,255,255,0.08)] whitespace-pre-wrap"
                 aria-describedby={
                   typeof composeFinalizeCaption.maxLength === "number"
                     ? "create-finalize-caption-count"
@@ -448,7 +644,7 @@ export default function PostDetailBody({
               {typeof composeFinalizeCaption.maxLength === "number" ? (
                 <div
                   id="create-finalize-caption-count"
-                  className="pointer-events-none absolute bottom-2 right-2.5 text-[10px] tabular-nums text-[var(--text)]/45 dark:text-white/50"
+                  className="pointer-events-none absolute bottom-2 right-2.5 text-[10px] tabular-nums app-light:text-neutral-500 app-dark:text-white/50"
                   aria-live="polite"
                 >
                   {composeFinalizeCaption.value.length}/
@@ -469,6 +665,10 @@ export default function PostDetailBody({
           <div className="mt-3 w-full">{composeFinalizeBelowCaption}</div>
         ) : null}
 
+        {composeFinalizeShell && composeFinalizeActivitiesCta ? (
+          <div className="mt-7 w-full">{composeFinalizeActivitiesCta}</div>
+        ) : null}
+
         <div
           className={
             finalizeSurroundingsDim
@@ -478,21 +678,40 @@ export default function PostDetailBody({
         >
           {!composeFinalizeStripPreviewMeta ? (
             <>
-              {/* Tags section */}
-              <div className="mt-3 flex flex-wrap gap-2">
-                {tags.map((t, i) => (
-                  <Chip key={`tag-${i}`}>{t}</Chip>
-                ))}
+              {/* Post-detail hashtags: single horizontal scroll row, width capped (not create-flow) */}
+              <div
+                className="mt-4 w-full max-w-[80%] min-w-0 overflow-x-auto pb-2 pt-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                role="region"
+                aria-label="Hashtags"
+              >
+                <div className="flex w-max min-w-0 flex-nowrap gap-1.5">
+                  {tags.map((t, i) => (
+                    <span
+                      key={`tag-${i}`}
+                      className="shrink-0 rounded-full border border-[var(--border)]/55 bg-[var(--surface)]/16 px-2 py-0.5 text-[10px] font-medium leading-tight text-[var(--text)]/62 app-dark:border-white/20 app-dark:bg-white/[0.06] app-dark:text-white/58"
+                    >
+                      {post.tags && post.tags.length > 0
+                        ? formatHashtagForDisplay(t)
+                        : t}
+                    </span>
+                  ))}
+                </div>
               </div>
 
-              {/* Dates & Recurring — same human-readable rules as Finalize (createFlowDateSummary) */}
+              {/* Dates & Recurring — helpers unchanged; boxed for readability */}
               {showScheduleBlock && (
-                <div className="mt-3">
-                  <div className="text-xs text-[var(--text)]/60 mb-2">
-                    Schedule
+                <div className="mt-3 rounded-xl border border-[var(--border)]/50 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] app-dark:border-white/14 app-dark:bg-white/[0.05]">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <PiCalendarBlank
+                      className="h-4 w-4 shrink-0 text-[var(--create-accent-icon-fg)] drop-shadow-[0_0_8px_var(--create-accent-icon-glow)]"
+                      aria-hidden
+                    />
+                    <span className="text-[12px] font-semibold tracking-wide text-[var(--text)]/88 app-dark:text-white/92">
+                      Schedule / Date
+                    </span>
                   </div>
                   {scheduleSummaryLine ? (
-                    <p className="text-[11px] leading-snug text-[var(--text)]/75">
+                    <p className="text-[12px] leading-snug text-[var(--text)]/90 app-dark:text-white/85">
                       {scheduleSummaryLine}
                     </p>
                   ) : null}
@@ -500,8 +719,8 @@ export default function PostDetailBody({
                     <p
                       className={
                         scheduleSummaryLine
-                          ? "mt-1 text-[11px] leading-snug text-[var(--text)]/52"
-                          : "text-[11px] leading-snug text-[var(--text)]/52"
+                          ? "mt-1.5 text-[11px] leading-snug text-[var(--text)]/58 app-dark:text-white/55"
+                          : "text-[11px] leading-snug text-[var(--text)]/58 app-dark:text-white/55"
                       }
                     >
                       {recurrenceSummaryLine}
@@ -509,6 +728,31 @@ export default function PostDetailBody({
                   ) : null}
                 </div>
               )}
+
+              <PostRatingSummary
+                ratingEnabled={post.rating_enabled}
+                ratingAverage={
+                  post.effective_rating_average ?? post.rating_average ?? null
+                }
+                ratingCount={post.effective_rating_count ?? post.rating_count ?? null}
+                viewerRating={post.viewer_rating ?? null}
+                inlineInteractive
+                postId={post.id}
+                onRatingApplied={(next) => {
+                  const blended = computeBlendedEffectiveFromReal(
+                    next.ratingAverage,
+                    next.ratingCount
+                  );
+                  emitPostChanged(post.id, {
+                    ratingAverage: next.ratingAverage ?? undefined,
+                    ratingCount: next.ratingCount ?? undefined,
+                    effectiveRatingAverage: blended.effectiveAverage,
+                    effectiveRatingCount: blended.effectiveCount,
+                    // Preserve null when viewer clears rating (do not use ?? which drops null)
+                    viewerRating: next.viewerRating,
+                  });
+                }}
+              />
 
               {/* RSVP section */}
               {typeof post.rsvp_capacity === "number" &&
@@ -547,144 +791,158 @@ export default function PostDetailBody({
             </>
           ) : null}
 
-          {/* Divider */}
-          <div className="mt-4 border-t border-[var(--border)]" />
+          {!hideFinalizeActivityTimeline && hasActivities ? (
+            <>
+              {/* Divider */}
+              <div className="mt-4 border-t border-[var(--border)] app-dark:border-white/12" />
 
-          {/* Activities */}
-          <div className="mt-3 text-sm font-semibold">Activities</div>
-          <section className="mt-2">
-            <div className="relative">
-              {/* vertical rail (light) */}
-              <div
-                className="absolute left-2 top-0 bottom-0 w-px bg-white/12"
-                aria-hidden
-              />
-              <ol className="space-y-6">
-                {(post.activities ?? []).map((a, i) => {
-                  const extras = (a.additional_info || []) as {
-                    title: string;
-                    value: string;
-                  }[];
+              {/* Activities — finalize uses composeFinalizeActivitiesCta as the section entry */}
+              {!composeFinalizeShell ? (
+                <div className="mt-3 text-sm font-semibold text-[var(--text)]/95 app-dark:text-white/92">
+                  Activities
+                </div>
+              ) : null}
+              <section className={composeFinalizeShell ? "mt-3" : "mt-2"}>
+                <div className="relative">
+                  {/* vertical rail — theme + caption-focus dimming */}
+                  <div
+                    className={[
+                      "absolute left-2 top-0 bottom-0 rounded-full",
+                      finalizeSurroundingsDim
+                        ? "w-px bg-[var(--create-timeline-rail-muted)]"
+                        : "w-[2px] bg-[var(--create-timeline-rail)]",
+                    ].join(" ")}
+                    aria-hidden
+                  />
+                  <ol className="space-y-6">
+                    {(post.activities ?? []).map((a, i) => {
+                      const extras = (a.additional_info || []) as {
+                        title: string;
+                        value: string;
+                      }[];
 
-                  const address = a.location_name || "";
-                  const details = a.location_desc || "";
-                  const locationNotes = a.location_notes || "";
-                  const googleMapsUrl = a.location_url || "";
+                      const address = a.location_name || "";
+                      const details = a.location_desc || "";
+                      const locationNotes = a.location_notes || "";
+                      const googleMapsUrl = a.location_url || "";
 
-                  // Per-stop lines (exclude "custom" sentinel; matches ActivitiesTagsInput)
-                  const activityTagLines = visibleActivityTagLines(
-                    Array.isArray(a.tags) ? a.tags : []
-                  );
+                      // Per-stop lines (exclude "custom" sentinel; matches ActivitiesTagsInput)
+                      const activityTagLines = visibleActivityTagLines(
+                        Array.isArray(a.tags) ? a.tags : []
+                      );
 
-                  const extrasFiltered = Array.isArray(extras)
-                    ? extras.filter((x) => x?.title && x?.value)
-                    : [];
-                  const hasExtras = extrasFiltered.length > 0;
-                  const hasLocation = !!(
-                    address ||
-                    locationNotes ||
-                    googleMapsUrl
-                  );
+                      const extrasFiltered = Array.isArray(extras)
+                        ? extras.filter((x) => x?.title && x?.value)
+                        : [];
+                      const hasExtras = extrasFiltered.length > 0;
+                      const hasLocation = !!(
+                        address ||
+                        locationNotes ||
+                        googleMapsUrl
+                      );
 
-                  return (
-                    <li key={i} className="relative min-w-0 pl-6">
-                      <span
-                        className="absolute left-2 top-3 -translate-x-1/2 w-2 h-2 rounded-full bg-white/70"
-                        aria-hidden
-                      />
-
-                      {/* Stacked lines: pills when short; full-width blocks when long (matches composer) */}
-                      <div className="flex w-full min-w-0 flex-col items-start gap-2">
-                        {activityTagLines.length > 0 ? (
-                          activityTagLines.map(
-                            (tag: string, tagIndex: number) => (
-                              <ReadOnlyActivityTagLine
-                                key={tagIndex}
-                                text={tag}
-                                isFirst={tagIndex === 0}
-                              />
-                            )
-                          )
-                        ) : (
-                          <ReadOnlyActivityTagLine
-                            text={a.title || `Stop ${i + 1}`}
-                            isFirst
+                      return (
+                        <li key={i} className="relative min-w-0 pl-6">
+                          <span
+                            className={[
+                              "absolute left-2 top-3 -translate-x-1/2 h-2 w-2 rounded-full",
+                              finalizeSurroundingsDim
+                                ? "bg-[var(--create-timeline-dot-muted)]"
+                                : "bg-[var(--create-timeline-dot)]",
+                            ].join(" ")}
+                            aria-hidden
                           />
-                        )}
-                      </div>
 
-                      {/* Location — larger gap from activities */}
-                      {hasLocation && (
-                        <div className="mt-8 rounded-md border border-[var(--border)] px-3 py-2">
-                          <div className="space-y-3">
-                            <div>
-                              <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--text)]/60">
-                                <PiMapPin
-                                  className="h-3.5 w-3.5 shrink-0 text-[var(--brand)] drop-shadow-[0_0_8px_color-mix(in_oklab,var(--brand)_45%,transparent)]"
-                                  aria-hidden
-                                />
-                                <span>Location (Address & Details)</span>
-                              </div>
-                              {address && (
-                                <div className="text-xs text-[var(--text)]/85 mb-2">
-                                  {address}
-                                </div>
-                              )}
-                              {locationNotes && (
-                                <div className="text-xs text-[var(--text)]/85 mb-2">
-                                  {locationNotes}
-                                </div>
-                              )}
-                            </div>
-                            {googleMapsUrl && (
-                              <GoogleMapsEmbed url={googleMapsUrl} />
+                          {/* Stacked lines: pills when short; full-width blocks when long (matches composer) */}
+                          <div className="flex w-full min-w-0 flex-col items-start gap-2">
+                            {activityTagLines.length > 0 ? (
+                              activityTagLines.map(
+                                (tag: string, tagIndex: number) => (
+                                  <ReadOnlyActivityTagLine
+                                    key={tagIndex}
+                                    text={tag}
+                                    isFirst={tagIndex === 0}
+                                  />
+                                )
+                              )
+                            ) : (
+                              <ReadOnlyActivityTagLine
+                                text={getTimelineStopHeadingText(
+                                  a.title || `Stop ${i + 1}`,
+                                  i
+                                )}
+                                isFirst
+                              />
                             )}
                           </div>
-                        </div>
-                      )}
 
-                      {/* Additional info — tighter gap from location than activities→location */}
-                      {hasExtras && (
-                        <div
-                          className={[
-                            "rounded-md border border-[var(--border)] px-3 py-2",
-                            hasLocation ? "mt-4" : "mt-8",
-                          ].join(" ")}
-                        >
-                          <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--text)]/60">
-                            <PiListBullets
-                              className="h-3.5 w-3.5 shrink-0 text-[var(--brand)] drop-shadow-[0_0_8px_color-mix(in_oklab,var(--brand)_45%,transparent)]"
-                              aria-hidden
-                            />
-                            <span>Additional Info</span>
-                          </div>
-                          <div className="space-y-3">
-                            {extrasFiltered.map((x, k) => (
-                              <div key={k} className="flex flex-col">
-                                <div className="text-xs text-[var(--text)]/85 font-medium mb-1">
-                                  {x.title}:
+                          {/* Location — larger gap from activities */}
+                          {hasLocation && (
+                            <div className="mt-8 rounded-md border border-[var(--border)] px-3 py-2">
+                              <div className="space-y-3">
+                                <div>
+                                  <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--text)]/60">
+                                    <PiMapPin
+                                      className="h-3.5 w-3.5 shrink-0 text-[var(--create-accent-icon-fg)] drop-shadow-[0_0_8px_var(--create-accent-icon-glow)]"
+                                      aria-hidden
+                                    />
+                                    <span>Location (Address & Details)</span>
+                                  </div>
+                                  {address && (
+                                    <div className="text-xs text-[var(--text)]/85 mb-2">
+                                      {address}
+                                    </div>
+                                  )}
+                                  {locationNotes && (
+                                    <div className="text-xs text-[var(--text)]/85 mb-2">
+                                      {locationNotes}
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="text-xs text-[var(--text)]/85 leading-relaxed">
-                                  {x.value}
-                                </div>
+                                {googleMapsUrl && (
+                                  <GoogleMapsEmbed url={googleMapsUrl} />
+                                )}
                               </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          </section>
+                            </div>
+                          )}
+
+                          {/* Additional info — semantic rows (preview + published detail) */}
+                          {hasExtras && (
+                            <div
+                              className={hasLocation ? "mt-4" : "mt-8"}
+                            >
+                              <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--text)]/60">
+                                <PiListBullets
+                                  className="h-3.5 w-3.5 shrink-0 text-[var(--create-accent-icon-fg)] drop-shadow-[0_0_8px_var(--create-accent-icon-glow)]"
+                                  aria-hidden
+                                />
+                                <span>Additional Info</span>
+                              </div>
+                              <AdditionalInfoSemanticRows
+                                items={extrasFiltered}
+                              />
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              </section>
+            </>
+          ) : null}
         </div>
       </div>
 
       {/* Comments Section - Only show if not preview */}
       {!isPreview && (
         <div data-comments-section>
-          <CommentList postId={post.id} isModal={!!onClose} />
+          <CommentList
+            postId={post.id}
+            isModal={!!onClose}
+            autoFocusCommentComposer={autoFocusCommentComposer}
+            setFocusComposer={setFocusComposer}
+          />
         </div>
       )}
 
@@ -696,6 +954,12 @@ export default function PostDetailBody({
         postType={post.type}
         postCaption={post.caption || ""}
         onClosingChange={setIsInviteDrawerClosing}
+      />
+
+      <ReportModal
+        open={reportDraft !== null}
+        draft={reportDraft}
+        onClose={() => setReportDraft(null)}
       />
     </>
   );

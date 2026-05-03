@@ -1,6 +1,6 @@
-import React, { useEffect, useLayoutEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useAppSelector } from "../../app/hooks";
-import { getViewerAuthUserId } from "../../api/services/follows";
+import { getCachedAvatar } from "../../lib/avatarCache";
 import ChooserPillAvatar from "./ChooserPillAvatar";
 
 type PostType = "hangout" | "experience";
@@ -24,6 +24,23 @@ type ProfileLite = {
   avatar_url?: string | null;
 };
 
+/** Same sources as BottomTab: in-memory avatar cache, then localStorage — no network. */
+function readStoredProfileLite(uid: string | null): ProfileLite | null {
+  try {
+    const display_name = localStorage.getItem("my_display_name");
+    const username = localStorage.getItem("my_username");
+    let avatar_url: string | null = localStorage.getItem("my_avatar_url");
+    if (uid) {
+      const cached = getCachedAvatar(uid);
+      if (cached) avatar_url = cached;
+    }
+    if (!display_name && !username && !avatar_url) return null;
+    return { display_name, username, avatar_url };
+  } catch {
+    return null;
+  }
+}
+
 type Props = {
   variant: "overlay" | "page";
   onContinue: (type: PostType) => void;
@@ -35,34 +52,32 @@ type Props = {
  */
 export default function CreateChooserPanel({ variant, onContinue }: Props) {
   const [selected, setSelected] = useState<PostType | null>(null);
-  const [me, setMe] = useState<ProfileLite | null>(null);
   const authUserId = useAppSelector((s) => s.auth?.user?.id ?? null);
+  const [me, setMe] = useState<ProfileLite | null>(() =>
+    typeof window === "undefined" ? null : readStoredProfileLite(null)
+  );
 
   useEffect(() => {
-    const quick = {
-      display_name: localStorage.getItem("my_display_name"),
-      username: localStorage.getItem("my_username"),
-      avatar_url: localStorage.getItem("my_avatar_url"),
-    };
-    if (quick.display_name || quick.username || quick.avatar_url) {
-      setMe(quick);
-    }
-    (async () => {
-      const uid = await getViewerAuthUserId();
-      if (!uid) return;
-      const { getProfileByUserId } = await import("../../api/services/follows");
-      const profile = await getProfileByUserId(uid);
-      if (profile) {
-        setMe({
-          display_name: profile.display_name,
-          username: profile.username,
-          avatar_url: profile.avatar_url,
-        });
-      }
-    })();
-  }, []);
+    setMe(readStoredProfileLite(authUserId));
+  }, [authUserId]);
+
+  useEffect(() => {
+    const onProfileUpdated = () => setMe(readStoredProfileLite(authUserId));
+    window.addEventListener("profile:updated", onProfileUpdated);
+    return () =>
+      window.removeEventListener("profile:updated", onProfileUpdated);
+  }, [authUserId]);
 
   const name = me?.display_name || me?.username || " ";
+
+  /** Prefer cache synchronously so ChooserPillAvatar matches BottomTab without waiting a frame. */
+  const avatarUrlForCta = useMemo(() => {
+    if (authUserId) {
+      const cached = getCachedAvatar(authUserId);
+      if (cached) return cached;
+    }
+    return me?.avatar_url ?? undefined;
+  }, [authUserId, me?.avatar_url]);
 
   /** Match floating tab bar width so the CTA never reads wider than the pill nav. */
   const [ctaMaxW, setCtaMaxW] = useState<number | undefined>(undefined);
@@ -91,6 +106,42 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
     : selected === "hangout"
     ? "Create hangout"
     : "Create experience";
+
+  const ctaButtonClass = (() => {
+    const base = [
+      "inline-flex w-fit max-w-full shrink-0 items-center rounded-full border transition",
+      "disabled:cursor-not-allowed",
+      // Default: original spacing. Selected: tighter insets so the larger pill avatar fills the chip.
+      !selected
+        ? "min-h-11 h-11 pl-2 pt-2 pb-2 gap-4 pr-5"
+        : "min-h-11 h-11 pl-1 py-1 gap-3 pr-4",
+    ];
+    if (!selected) {
+      return [
+        ...base,
+        "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--brand-glass-bg)_12%)] backdrop-blur-xl",
+        "border-[var(--border)] shadow-[0_4px_18px_rgba(247,208,71,0.12)]",
+      ].join(" ");
+    }
+    if (selected === "hangout") {
+      return [
+        ...base,
+        "bg-[var(--create-chooser-cta-selected-surface)]",
+        "border-green-500/55",
+        "shadow-[0_8px_30px_rgba(34,197,94,0.42),0_0_0_1px_rgba(34,197,94,0.28)]",
+      ].join(" ");
+    }
+    return [
+      ...base,
+      "bg-[var(--create-chooser-cta-selected-surface)]",
+      "border-orange-500/50",
+      "shadow-[0_8px_30px_rgba(249,115,22,0.42),0_0_0_1px_rgba(249,115,22,0.28)]",
+    ].join(" ");
+  })();
+
+  const ctaLabelClass = !selected
+    ? "min-w-0 text-left text-sm font-medium leading-tight whitespace-nowrap text-[var(--text)]/92"
+    : "min-w-0 text-left text-sm font-bold leading-tight whitespace-nowrap text-[var(--create-chooser-cta-selected-label)]";
 
   const rootClass = variant === "page" ? "w-full max-w-md mx-auto" : "w-full";
 
@@ -132,36 +183,23 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
           type="button"
           disabled={!selected}
           onClick={() => selected && onContinue(selected)}
-          className={[
-            "inline-flex w-fit max-w-full shrink-0 items-center rounded-full border transition",
-            /* h-11 so pl/pt/pb = 8px around 28px-tall pill; pr/gap larger for label */
-            "min-h-11 h-11",
-            "pl-2 pt-2 pb-2 gap-4 pr-5",
-            "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--brand-glass-bg)_12%)] backdrop-blur-xl",
-            "disabled:cursor-not-allowed",
-            selected
-              ? "border-[var(--brand-glass-border)] shadow-[0_6px_22px_rgba(247,208,71,0.28),var(--glass-active-shadow)]"
-              : "border-[var(--border)] shadow-[0_4px_18px_rgba(247,208,71,0.12)]",
-          ].join(" ")}
+          className={ctaButtonClass}
           style={{
             maxWidth: ctaMaxW,
-            WebkitBackdropFilter: "blur(20px)",
-            backdropFilter: "blur(20px)",
+            ...(selected
+              ? {}
+              : {
+                  WebkitBackdropFilter: "blur(20px)",
+                  backdropFilter: "blur(20px)",
+                }),
           }}
         >
           <ChooserPillAvatar
-            url={me?.avatar_url || undefined}
+            url={avatarUrlForCta}
             name={name}
             userId={authUserId}
           />
-          <span
-            className={[
-              "min-w-0 text-left text-sm font-medium leading-tight whitespace-nowrap",
-              selected ? "text-[var(--text)]" : "text-[var(--text)]/92",
-            ].join(" ")}
-          >
-            {ctaLabel}
-          </span>
+          <span className={ctaLabelClass}>{ctaLabel}</span>
         </button>
       </div>
     </div>

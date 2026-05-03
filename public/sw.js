@@ -1,12 +1,19 @@
 // public/sw.js
 // Echotoo PWA: Service worker for caching static assets and reducing bandwidth
-const APP_VERSION = "v15"; // Update this version number when deploying new features
+const APP_VERSION = "v16"; // Update this version number when deploying new features
 const STATIC_CACHE = `static-${APP_VERSION}`;
 const IMAGE_CACHE = `images-${APP_VERSION}`;
 const API_CACHE = `api-${APP_VERSION}`;
 
 // Static assets to cache immediately (adjust to your files)
-const STATIC_ASSETS = ["/", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+const STATIC_ASSETS = [
+  "/",
+  "/manifest.json",
+  "/favicon.ico",
+  "/apple-touch-icon.png",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+];
 
 // Cache configuration
 const CACHE_CONFIG = {

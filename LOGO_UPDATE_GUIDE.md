@@ -1,67 +1,57 @@
-# 🦉 Logo Update Guide
+# Logo update guide
 
-## Where to Update the Owl Logo
+## In-app owl (React)
 
-**Single Source of Truth:**
+**Single source of truth for the SVG used in the UI:**
 
-```
-/public/owlicon.svg
-```
+`public/owlicon.svg`
 
-## How to Update
+### How to update
 
-1. **Replace the file** at `/public/owlicon.svg` with your new logo
-2. **If the logo doesn't update immediately:**
-   - Do a **hard refresh** in your browser:
-     - **Windows/Linux:** `Ctrl + Shift + R` or `Ctrl + F5`
-     - **Mac:** `Cmd + Shift + R`
-   - Or increment the version number in `src/lib/assets.ts` (line 15)
+1. Replace `public/owlicon.svg` with your new artwork.
+2. If browsers keep serving an old file, either hard refresh (Windows/Linux: `Ctrl+Shift+R` or `Ctrl+F5`, Mac: `Cmd+Shift+R`) or increment `LOGO_VERSION` in `src/lib/assets.ts`.
 
-## Where the Logo is Used
+### Where it is used
 
-The logo automatically appears in these places:
-
-- ✅ Top navigation bar (Logo component)
-- ✅ Instagram Story generator (owl above cards)
-- ✅ Any other component using the Logo component
-- ✅ **App icon** (Android, iOS) – generated from `assets/logo.png` via `npm run generate:icons`
-
-## Technical Details
-
-All logo references use the centralized configuration in:
-
-- **File:** `src/lib/assets.ts`
-- **Function:** `getOwlLogoPath()`
-
-This ensures:
-
-- ✅ Single source of truth
-- ✅ Cache-busting for updates
-- ✅ Easy to change filename if needed
-
-## If You Rename the File
-
-If you want to use a different filename (e.g., `owl-logo.svg`):
-
-1. Update `OWL_LOGO_PATH` in `src/lib/assets.ts`:
-
-   ```typescript
-   export const OWL_LOGO_PATH = "/your-new-filename.svg";
-   ```
-
-2. That's it! All references will automatically update.
-
-## Force Cache Refresh
-
-If you update the logo but still see the old version:
-
-1. Open `src/lib/assets.ts`
-2. Increment the `LOGO_VERSION` number (line 15):
-   ```typescript
-   const LOGO_VERSION = "2"; // Change from "1" to "2"
-   ```
-3. Save and refresh the page
+Components import `getOwlLogoPath()` from `src/lib/assets.ts` (for example `Logo.tsx`, splash/loading UI). Updating the file and version covers all of those.
 
 ---
 
-**Remember:** Just replace `/public/owlicon.svg` and the logo will update everywhere! 🎉
+## Web / PWA (favicon, manifest, home screen)
+
+These are **static files** under `public/`:
+
+- `public/manifest.json` — `icons` entries (PNG under `public/icons/`)
+- `index.html` — `link rel="icon"`, `apple-touch-icon`, manifest link
+- `public/favicon.ico`, `public/apple-touch-icon.png`
+- `public/icons/icon-{48,72,96,128,192,256,512}.png` (and optional `.webp` copies)
+
+After you change `owlicon.svg`, regenerate the raster icons from that SVG so install icons match the app (same aspect and mark). One approach (Sharp CLI, no project dependency):
+
+```bash
+npx --yes sharp-cli -i public/owlicon.svg -o public/icons/icon-192.png resize 192 192
+# repeat for 48, 72, 96, 128, 256, 512; also apple-touch-icon.png (e.g. 180) and favicon.ico (e.g. 64)
+```
+
+Bump the service worker cache label in `public/sw.js` (`APP_VERSION`) when you ship new icons so clients drop stale cached assets.
+
+---
+
+## Native Android / iOS (store icons)
+
+Use **`npm run generate:icons`** with source images in **`assets/`** (see `assets/README.md`). That updates native projects; it does not automatically replace the hand-maintained PWA files in `public/` unless you adopt the `--pwa` flow and align output paths with your layout.
+
+---
+
+## Rename the public SVG file
+
+1. Add the new file under `public/` (for example `public/owl-mark.svg`).
+2. Set `OWL_LOGO_PATH` in `src/lib/assets.ts` to match (`/owl-mark.svg`).
+3. Update `index.html` if you reference the old filename there.
+
+---
+
+## Force cache refresh (summary)
+
+1. `src/lib/assets.ts` — increment `LOGO_VERSION` for in-app SVG URLs.
+2. `public/sw.js` — increment `APP_VERSION` after changing precached icons or shell assets.

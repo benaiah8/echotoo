@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Hangout from "../../components/Hangout";
-import { onPostChanged } from "../../lib/postEvents";
+import { onPostChanged, onPostDeleted } from "../../lib/postEvents";
 import { applyPostPatch } from "../../lib/applyPostPatch";
+import { getPostDeleteExitDurationMs } from "../../lib/postDeleteExitAnimation";
 
 type Props = {
   recentItems: FeedItem[];
@@ -26,6 +27,12 @@ export default function HomeHorizontalRail({
   const [recent, setRecent] = useState<FeedItem[]>(recentItems);
   const [friends, setFriends] = useState<FeedItem[]>(friendsItems);
   const [location, setLocation] = useState<FeedItem[]>(locationItems);
+  const [exitingPostIds, setExitingPostIds] = useState(() => new Set<string>());
+  const deleteExitTimersRef = useRef<Map<string, number>>(new Map());
+  const listsRef = useRef({ recent, friends, location });
+  useEffect(() => {
+    listsRef.current = { recent, friends, location };
+  }, [recent, friends, location]);
 
   useEffect(() => {
     setRecent(recentItems);
@@ -56,6 +63,60 @@ export default function HomeHorizontalRail({
     return cleanup;
   }, []);
 
+  useEffect(() => {
+    const commitRemove = (postId: string) => {
+      deleteExitTimersRef.current.delete(postId);
+      setExitingPostIds((prev) => {
+        if (!prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+      const drop = (prev: FeedItem[]) =>
+        prev.filter((item) => item.id !== postId);
+      setRecent((prev) => drop(prev));
+      setFriends((prev) => drop(prev));
+      setLocation((prev) => drop(prev));
+    };
+
+    const cleanup = onPostDeleted((postId) => {
+      const { recent: r, friends: f, location: l } = listsRef.current;
+      if (![...r, ...f, ...l].some((p) => p.id === postId)) return;
+      if (deleteExitTimersRef.current.has(postId)) return;
+
+      const durationMs = getPostDeleteExitDurationMs();
+      if (durationMs === 0) {
+        commitRemove(postId);
+        return;
+      }
+
+      setExitingPostIds((prev) => {
+        if (prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.add(postId);
+        return next;
+      });
+
+      const t = window.setTimeout(() => {
+        commitRemove(postId);
+      }, durationMs);
+      deleteExitTimersRef.current.set(postId, t);
+    });
+    return cleanup;
+  }, []);
+
+  const railItemShellClass = useCallback(
+    (id: string) =>
+      [
+        "shrink-0 overflow-visible transition-[opacity,transform] ease-out will-change-[opacity,transform]",
+        "duration-[280ms]",
+        exitingPostIds.has(id)
+          ? "opacity-0 -translate-y-1 pointer-events-none"
+          : "opacity-100 translate-y-0",
+      ].join(" "),
+    [exitingPostIds]
+  );
+
   const renderSection = (
     title: string,
     items: FeedItem[],
@@ -68,16 +129,16 @@ export default function HomeHorizontalRail({
             {title}
           </div>
           <div className="mt-2 -mx-1.5 px-1.5">
-            <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 scroll-hide">
+            <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-4 scroll-hide">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div
                   key={i}
                   className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0"
                 >
                   <div className="relative overflow-visible ui-card pt-2 px-3 pb-3 flex flex-col gap-2 mb-3">
-                    {/* bookmark badge: bottom-left (skeleton style) */}
+                    {/* bookmark: matches Hangout bottom-edge straddle */}
                     <div
-                      className="absolute -bottom-3 -left-3 z-10 grid place-items-center h-8 w-8 rounded-full bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
+                      className="absolute bottom-0 left-3 z-10 flex translate-y-1/2 items-center justify-center p-[3px] rounded-lg bg-[var(--surface)]/80 border border-[var(--border)] shadow-lg"
                       aria-hidden
                     >
                       <div className="w-4 h-4 rounded bg-[var(--text)]/20 animate-pulse" />
@@ -150,7 +211,7 @@ export default function HomeHorizontalRail({
         <div className="text-[var(--text)]/90 text-sm font-medium mb-2 px-1.5">
           {title}
         </div>
-        <div className="overflow-x-auto scroll-hide py-2">
+        <div className="overflow-x-auto scroll-hide pt-2 pb-4">
           <div className="flex gap-3 w-max rail-pad">
             {items.map((p) => {
               const locationsCount =
@@ -160,23 +221,23 @@ export default function HomeHorizontalRail({
               const avatarUrl = p.author?.avatar_url ?? null;
 
               return (
-                <Hangout
-                  key={p.id}
-                  id={p.id}
-                  caption={p.caption || "Untitled hangout"}
-                  createdAt={p.created_at}
-                  authorHandle={authorHandle}
-                  avatarUrl={avatarUrl}
-                  authorId={p.author_id}
-                  isAnonymous={p.is_anonymous || false}
-                  capacity={20} // Default capacity
-                  isOwner={(p as any).isOwner || false} // Pass isOwner prop
-                  onDelete={() => onDelete?.(p.id)} // Pass onDelete callback
-                  status={(p as any).status || "published"} // Default to published if status not available
-                  selectedDates={p.selected_dates} // Pass selected dates for priority sorting
-                  type={p.type} // Pass post type for avatar indicator
-                  post={p}
-                />
+                <div key={p.id} className={railItemShellClass(p.id)}>
+                  <Hangout
+                    id={p.id}
+                    caption={p.caption || "Untitled hangout"}
+                    createdAt={p.created_at}
+                    authorHandle={authorHandle}
+                    avatarUrl={avatarUrl}
+                    authorId={p.author_id}
+                    isAnonymous={p.is_anonymous || false}
+                    isOwner={(p as any).isOwner || false} // Pass isOwner prop
+                    onDelete={() => onDelete?.(p.id)} // Pass onDelete callback
+                    status={(p as any).status || "published"} // Default to published if status not available
+                    selectedDates={p.selected_dates} // Pass selected dates for priority sorting
+                    type={p.type} // Pass post type for avatar indicator
+                    post={p}
+                  />
+                </div>
               );
             })}
           </div>

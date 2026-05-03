@@ -1,9 +1,45 @@
 // src/api/services/posts.ts
+import { isDraftPostId, discardAllDrafts } from "../../lib/drafts";
 import { supabase } from "../../lib/supabaseClient";
 import { createPostNotifications } from "./notifications";
 import { retry } from "../../lib/retry";
+import { publishProfileTrace } from "../../lib/debugProfileFeed";
 
 export type PostType = "experience" | "hangout";
+
+/**
+ * Best-effort FCM for new post: Edge resolves recipients from notifications (server fan-out)
+ * and must not throw (publish should succeed regardless).
+ */
+async function invokePostPublishedPush(data: {
+  id: string;
+  type: PostType;
+  author_id: string;
+}): Promise<void> {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+
+    const { error } = await supabase.functions.invoke("send-post-push", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: {
+        post_id: data.id,
+        entity_type: data.type,
+        actor_id: data.author_id,
+      },
+    });
+    if (error) {
+      console.warn("[send-post-push]", error.message);
+    }
+  } catch (e) {
+    console.warn("[send-post-push]", e instanceof Error ? e.message : e);
+  }
+}
 
 export type NewPost = {
   type: PostType;
@@ -19,6 +55,8 @@ export type NewPost = {
   recurrence_days?: string[] | null; // ["MO","TU",...]
   tags?: string[] | null;
   status?: "draft" | "published"; // NEW: draft or published status
+  /** When true, viewers may submit star ratings (DB default false). */
+  rating_enabled?: boolean;
 };
 
 export async function insertPost(input: NewPost) {
@@ -45,6 +83,7 @@ export async function insertPost(input: NewPost) {
         recurrence_days: input.recurrence_days ?? null,
         tags: input.tags ?? null,
         status: input.status ?? "published", // NEW: default to published
+        rating_enabled: input.rating_enabled ?? false,
         author_id: session.user.id,
       },
     ])
@@ -61,6 +100,7 @@ export async function insertPost(input: NewPost) {
       console.error("Error creating post notifications:", notificationError);
       // Don't throw here - post creation succeeded, notification failure shouldn't break it
     }
+    void invokePostPublishedPush(data);
   }
 
   return data; // { id, ... }
@@ -89,6 +129,9 @@ export async function publishDraft(postId: string) {
     .single();
 
   if (error) throw error;
+  if (data.status === "published") {
+    void invokePostPublishedPush(data);
+  }
   return data;
 }
 
@@ -119,6 +162,12 @@ export async function getPost(id: string) {
 }
 
 export async function deletePost(id: string) {
+  if (isDraftPostId(id)) {
+    discardAllDrafts();
+    publishProfileTrace("DELETE_SUCCESS", { postId: id });
+    return true;
+  }
+
   const {
     data: { session },
     error: sessErr,
@@ -142,6 +191,8 @@ export async function deletePost(id: string) {
   const { error } = await supabase.from("posts").delete().eq("id", id);
 
   if (error) throw error;
+
+  publishProfileTrace("DELETE_SUCCESS", { postId: id });
   return true;
 }
 

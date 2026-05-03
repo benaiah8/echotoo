@@ -8,6 +8,9 @@ import {
 import { retry } from "../../lib/retry";
 import { filterExpiredHangouts } from "../../lib/feedExpiryFilters";
 
+/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+const DEBUG_RSVP_POST_ID = "";
+
 const isCloudinaryUrl = (u: string) =>
   typeof u === "string" && u.includes("res.cloudinary.com");
 
@@ -73,6 +76,8 @@ export type FeedItem = {
   comment_count?: number;
   like_count?: number;
   save_count?: number;
+  effective_like_count?: number;
+  effective_save_count?: number;
   share_count?: number;
   has_images?: boolean; // [OPTIMIZATION: Phase 3.1] Indicates if post has images (for immediate skeleton display)
   rsvp_data?: {
@@ -93,6 +98,15 @@ export type FeedItem = {
   rsvp_capacity?: number | null;
   is_recurring?: boolean | null;
   recurrence_days?: string[] | null;
+  /** Author opt-in for star ratings (optional until RPCs return it everywhere). */
+  rating_enabled?: boolean;
+  /** Aggregate average from post row (feed/detail RPC). */
+  rating_average?: number | null;
+  rating_count?: number | null;
+  effective_rating_average?: number | null;
+  effective_rating_count?: number | null;
+  /** Current viewer's stars; null if logged out or unrated. */
+  viewer_rating?: number | null;
   activities?: Array<{
     id?: string;
     title: string | null;
@@ -152,6 +166,7 @@ export async function getPublicFeed(
        selected_dates,
        tags,
        author_id,
+       rsvp_capacity,
          author:profiles!author_id(
         id, username, display_name, avatar_url, is_private, deleted_at
   )
@@ -169,6 +184,8 @@ export async function getPublicFeed(
   }
   if (q && q.trim()) {
     // console.log("[getPublicFeed] Adding search filter:", q);
+    // Caption-only: PostgREST cannot express tokenized caption+tags search here. Home uses RPC
+    // (get_feed_with_related_data) when USE_OPTIMIZED_FEED is true; keep this path simple.
     query = query.ilike("caption", `%${q.trim()}%`);
   }
 
@@ -205,6 +222,7 @@ export async function getPublicFeed(
              selected_dates,
              tags,
              author_id,
+             rsvp_capacity,
                author:profiles!author_id(
                 id, username, display_name, avatar_url, is_private, deleted_at
           )
@@ -822,6 +840,8 @@ export async function getPublicFeedOptimizedWithCount(
               comment_count?: number;
               like_count?: number;
               save_count?: number;
+              effective_like_count?: number;
+              effective_save_count?: number;
               share_count?: number;
               has_images?: boolean; // [OPTIMIZATION: Phase 3.1] Image presence flag
               is_recurring?: boolean | null;
@@ -832,6 +852,13 @@ export async function getPublicFeedOptimizedWithCount(
                 order_idx: number | null;
               }>; // [OPTIMIZATION: Phase 2.2] First activity with images only (minimal fields for feed)
               rsvp_data?: any;
+              rsvp_capacity?: number | null;
+              rating_enabled?: boolean;
+              rating_average?: number | null;
+              rating_count?: number | null;
+              effective_rating_average?: number | null;
+              effective_rating_count?: number | null;
+              viewer_rating?: number | null;
             }>;
             count: number;
           };
@@ -841,6 +868,19 @@ export async function getPublicFeedOptimizedWithCount(
               "[getPublicFeedOptimizedWithCount] Invalid response structure"
             );
             return { items: [], consumedOffset: 0, count: 0 };
+          }
+
+          if (DEBUG_RSVP_POST_ID) {
+            const raw = result.posts.find((p) => p.id === DEBUG_RSVP_POST_ID);
+            if (raw) {
+              const rc = (raw as { rsvp_capacity?: unknown }).rsvp_capacity;
+              console.log("RSVP DEBUG raw rpc post", {
+                id: raw.id,
+                rsvp_capacity: rc,
+                typeof_rsvp_capacity: typeof rc,
+                optimizedFeedPath: true,
+              });
+            }
           }
 
           // Map to FeedItem format (SHRINK: minimal fields; first_image_url only, no full activities)
@@ -883,7 +923,8 @@ export async function getPublicFeedOptimizedWithCount(
                   }
                 : null;
 
-            return {
+            const rawCap = (post as { rsvp_capacity?: number | null }).rsvp_capacity;
+            const mapped: FeedItem = {
               id: post.id,
               type: post.type,
               caption: post.caption,
@@ -903,14 +944,39 @@ export async function getPublicFeedOptimizedWithCount(
                 | undefined,
               is_liked: post.is_liked,
               is_saved: post.is_saved,
-              comment_count: post.comment_count,
+              like_count: post.like_count ?? 0,
+              save_count: post.save_count ?? 0,
+              effective_like_count: post.effective_like_count ?? (post.like_count ?? 0),
+              effective_save_count: post.effective_save_count ?? (post.save_count ?? 0),
+              comment_count: post.comment_count ?? 0,
               has_images: (post as any).has_images ?? !!firstUrl,
               activities,
               rsvp_data,
+              rsvp_capacity: rawCap ?? null,
               activity_count: (post as any).activity_count,
               first_image_url: firstUrl,
               image_count: (post as any).image_count,
+              rating_enabled: post.rating_enabled,
+              rating_average: post.rating_average ?? null,
+              rating_count: post.rating_count ?? null,
+              effective_rating_average:
+                post.effective_rating_average ?? (post.rating_average ?? null),
+              effective_rating_count:
+                post.effective_rating_count ?? (post.rating_count ?? null),
+              viewer_rating: post.viewer_rating ?? null,
             };
+
+            if (DEBUG_RSVP_POST_ID && post.id === DEBUG_RSVP_POST_ID) {
+              console.log("RSVP DEBUG mapped feed item", {
+                id: post.id,
+                rsvp_capacity: mapped.rsvp_capacity,
+                typeof_rsvp_capacity: typeof mapped.rsvp_capacity,
+                normalization: "post.rsvp_capacity ?? null",
+                rawBeforeNormalize: rawCap,
+              });
+            }
+
+            return mapped;
           });
 
           // [DIAG: Phase 2.2] Check PostgreSQL response structure for activities

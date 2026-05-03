@@ -14,6 +14,11 @@ export type PostDetailDismissHandleBindings = {
 export type PostDetailDismissContextValue = {
   setComposerFocused: (v: boolean) => void;
   dismissHandle: PostDetailDismissHandleBindings;
+  /**
+   * Post-detail modal only: keyboard overlap (px) for fixed bottom chrome, from
+   * {@link useCreateKeyboardInset} — single subscription per modal.
+   */
+  modalKeyboardInsetPx: number;
 };
 
 export const PostDetailDismissContext =

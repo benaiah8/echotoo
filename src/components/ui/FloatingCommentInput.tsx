@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { createComment } from "../../api/services/comments";
 import Avatar from "./Avatar";
 import { supabase } from "../../lib/supabaseClient";
@@ -16,8 +16,13 @@ import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
   resolveSafeAreaBottomLayoutPx,
 } from "../../lib/appSafeAreaBottom";
+import { scrollCommentsSectionIntoView } from "../../lib/postDetailCommentsScroll";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
 
 const COMMENT_IMAGE_UPLOAD_LOG = "[CommentImageUpload]";
+
+/** Align with useCreateKeyboardInset — keyboard "open" for follow-up scroll. */
+const KEYBOARD_LIFT_SCROLL_THRESHOLD_PX = 48;
 
 function mapCommentImageUploadError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -35,6 +40,10 @@ interface Props {
   placeholder?: string;
   /** When true (e.g. post detail modal), ignores BottomTab height and scroll-hide logic */
   isModal?: boolean;
+  /** One-shot: focus composer after open (e.g. feed comment icon). iOS may still require a tap for IME. */
+  autoFocusComposer?: boolean;
+  /** Registers imperative focus for sticky bar / parent (cleared on unmount). */
+  onFocusComposerReady?: (focus: () => void) => void;
 }
 
 export default function FloatingCommentInput({
@@ -44,7 +53,10 @@ export default function FloatingCommentInput({
   onCancel,
   placeholder = "This is where we add the comment",
   isModal = false,
+  autoFocusComposer = false,
+  onFocusComposerReady,
 }: Props) {
+  const { ensureAuthed } = useAuthActionGate();
   const postDetailDismiss = usePostDetailDismiss();
   const [content, setContent] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -56,7 +68,13 @@ export default function FloatingCommentInput({
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Modal + full-page composer text field. */
+  const composerInputRef = useRef<HTMLInputElement>(null);
+  const didAutoFocusRef = useRef(false);
+  /** Tracks IME-open for one follow-up scroll after inset crosses threshold (modal). */
+  const prevKeyboardLiftRef = useRef(0);
 
+  const [composerSurfaceFocused, setComposerSurfaceFocused] = useState(false);
   const [safeBottom, setSafeBottom] = useState(0);
   useEffect(() => {
     const sync = () => setSafeBottom(resolveSafeAreaBottomLayoutPx());
@@ -160,7 +178,65 @@ export default function FloatingCommentInput({
     getUserProfile();
   }, []);
 
+  const scheduleScrollCommentsIntoView = useCallback(
+    (modal: boolean, behavior: ScrollBehavior = "smooth") => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scrollCommentsSectionIntoView({
+            isModal: modal,
+            behavior,
+            block: "start",
+          });
+        });
+      });
+    },
+    []
+  );
+
+  const focusComposer = useCallback(() => {
+    composerInputRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    if (!onFocusComposerReady) return;
+    onFocusComposerReady(focusComposer);
+    return () => {
+      onFocusComposerReady(() => {});
+    };
+  }, [onFocusComposerReady, focusComposer]);
+
+  useEffect(() => {
+    if (!autoFocusComposer || didAutoFocusRef.current) return;
+    const tid = window.setTimeout(() => {
+      const el = composerInputRef.current;
+      if (!el) return;
+      didAutoFocusRef.current = true;
+      el.focus({ preventScroll: true });
+      // scrollIntoView on fixed input does not scroll the sheet; onFocus scrolls comments.
+    }, 180);
+    return () => clearTimeout(tid);
+  }, [autoFocusComposer, isModal]);
+
+  /** Modal: when IME inset crosses "open", snap comments into view (viewport shrank). */
+  useEffect(() => {
+    if (!isModal || !composerSurfaceFocused) return;
+    const lift = postDetailDismiss?.modalKeyboardInsetPx ?? 0;
+    const prev = prevKeyboardLiftRef.current;
+    prevKeyboardLiftRef.current = lift;
+    if (prev >= KEYBOARD_LIFT_SCROLL_THRESHOLD_PX) return;
+    if (lift < KEYBOARD_LIFT_SCROLL_THRESHOLD_PX) return;
+    const t = window.setTimeout(() => {
+      scrollCommentsSectionIntoView({
+        isModal: true,
+        behavior: "auto",
+        block: "start",
+      });
+    }, 0);
+    return () => clearTimeout(t);
+  }, [isModal, composerSurfaceFocused, postDetailDismiss?.modalKeyboardInsetPx]);
+
   const handleImageUpload = async (file: File) => {
+    if (!ensureAuthed()) return;
     setIsUploadingImage(true);
     console.log(COMMENT_IMAGE_UPLOAD_LOG, "selection_ok", {
       name: file.name,
@@ -217,6 +293,7 @@ export default function FloatingCommentInput({
     e.preventDefault();
 
     if ((!content.trim() && !uploadedImage) || isSubmitting) return;
+    if (!ensureAuthed()) return;
 
     // Check character limit
     if (content.length > 1000) {
@@ -305,6 +382,8 @@ export default function FloatingCommentInput({
 
   if (isModal) {
     const dh = postDetailDismiss?.dismissHandle;
+    /** Single source from PostDetailModal: same hook as create flow (vv + Android Capacitor keyboard). */
+    const modalKeyboardLiftPx = postDetailDismiss?.modalKeyboardInsetPx ?? 0;
 
     return (
       <>
@@ -312,7 +391,7 @@ export default function FloatingCommentInput({
           className="pointer-events-none fixed bottom-0 left-0 right-0 z-30"
           style={{
             bottom: "calc(-1px + -1 * var(--safe-area-bottom-layout))",
-            height: "calc(88px + var(--safe-area-bottom-layout))",
+            height: `calc(88px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
             width: "100%",
             background: "var(--gradient-from-bottom)",
           }}
@@ -321,7 +400,7 @@ export default function FloatingCommentInput({
         <div
           className="pointer-events-none fixed left-0 right-0 z-30 flex flex-col items-center px-2 transition-all duration-300"
           style={{
-            bottom: "calc(8px + var(--safe-area-bottom-layout))",
+            bottom: `calc(8px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
           }}
         >
           {dh?.visible ? (
@@ -384,16 +463,23 @@ export default function FloatingCommentInput({
                   </div>
                   <div className="min-w-0">
                     <input
+                      ref={composerInputRef}
                       type="text"
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      onFocus={() =>
-                        postDetailDismiss?.setComposerFocused(true)
-                      }
-                      onBlur={() =>
-                        postDetailDismiss?.setComposerFocused(false)
-                      }
+                      onFocus={() => {
+                        postDetailDismiss?.setComposerFocused(true);
+                        setComposerSurfaceFocused(true);
+                        prevKeyboardLiftRef.current =
+                          postDetailDismiss?.modalKeyboardInsetPx ?? 0;
+                        scheduleScrollCommentsIntoView(true, "smooth");
+                      }}
+                      onBlur={() => {
+                        postDetailDismiss?.setComposerFocused(false);
+                        setComposerSurfaceFocused(false);
+                        prevKeyboardLiftRef.current = 0;
+                      }}
                       placeholder={placeholder}
                       className={[
                         "w-full min-w-0 border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] text-sm leading-tight text-[var(--text)] placeholder:text-[var(--text)]/45 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/40",
@@ -465,10 +551,16 @@ export default function FloatingCommentInput({
           </div>
           <div className="flex-1">
             <input
+              ref={composerInputRef}
               type="text"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={() => {
+                setComposerSurfaceFocused(true);
+                scheduleScrollCommentsIntoView(false, "smooth");
+              }}
+              onBlur={() => setComposerSurfaceFocused(false)}
               placeholder={placeholder}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               maxLength={1000}

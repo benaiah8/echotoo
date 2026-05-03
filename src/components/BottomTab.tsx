@@ -17,9 +17,10 @@ import {
   setCachedAvatar,
   preloadAvatar,
 } from "../lib/avatarCache";
-import { imgUrlPublic } from "../lib/img";
+import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import { supabase } from "../lib/supabaseClient";
-import { getUnreadNotificationCount } from "../api/services/notifications";
+import { getNotificationBadgeData } from "../api/services/notifications";
+import { countPendingInvitesForViewer } from "../api/services/invites";
 import { dbg } from "../lib/authDebug";
 import { isDraftDirty, discardAllDrafts, hasAnyDraftData } from "../lib/drafts";
 import ConfirmDialog from "./ui/ConfirmDialog";
@@ -33,6 +34,25 @@ import {
   CREATE_FLOW_REQUEST_LEAVE_EVENT,
   type CreateFlowRequestLeaveDetail,
 } from "../lib/createFlowLeaveRequest";
+import { EDIT_POST_DATA_KEY } from "../lib/editPostBootstrap";
+import { isCreateFlowResumedLocalDraft } from "../lib/draftEntryGate";
+import BottomTabPeekOwl from "./BottomTabPeekOwl";
+
+/**
+ * When true, the bottom tab follows window scroll: hides on scroll-down, shows on scroll-up.
+ * When false, the tab stays visible (pinned); scroll listener is not attached.
+ * Transition classes below still apply whenever `hidden` is true (e.g. if extended later).
+ */
+const BOTTOM_TAB_SCROLL_LINKED_VISIBILITY = false;
+const GUEST_PROMPT_DELAY_MS = 45_000;
+
+function isGuestPromptEligiblePath(pathname: string): boolean {
+  if (pathname === "/" || pathname === Paths.home) return true;
+  if (pathname.startsWith("/experience/")) return true;
+  if (pathname.startsWith("/hangout/")) return true;
+  if (pathname.startsWith("/u/") && pathname !== "/u/me") return true;
+  return false;
+}
 
 function BottomTab() {
   const dispatch = useDispatch();
@@ -44,7 +64,16 @@ function BottomTab() {
   );
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  /** total unread + per-category unread split (activity dot + unread fallback for invite dot) */
+  const [notifBadge, setNotifBadge] = useState({
+    total: 0,
+    invite: 0,
+    activity: 0,
+  });
+  /** Pending rows in `invites` for blue dot; fallback uses invite unread when count fails */
+  const [pendingInviteCount, setPendingInviteCount] = useState(0);
+  const [inviteDotUsesUnreadFallback, setInviteDotUsesUnreadFallback] =
+    useState(false);
   const navTargetRef = useRef<null | (() => void)>(null);
   const {
     isOpen: createChooserOpen,
@@ -54,6 +83,9 @@ function BottomTab() {
   // [PHASE 1.2] Guard to prevent infinite loop in requireAuth
   const requireAuthCallCountRef = useRef(0);
   const requireAuthLastPathRef = useRef<string | null>(null);
+  const guestPromptTimerRef = useRef<number | null>(null);
+  const guestPromptDismissedRef = useRef(false);
+  const prevAuthModalRef = useRef(false);
 
   useEffect(() => {
     const sync = () => {
@@ -109,19 +141,39 @@ function BottomTab() {
     const loadNotificationCount = async () => {
       if (isAuthedFinal) {
         try {
-          // [OPTIMIZATION] getUnreadNotificationCount() already checks cache first
-          // It will return cached value if not expired, or fetch if expired/missing
-          // RequestManager ensures deduplication if multiple calls happen simultaneously
-          const count = await getUnreadNotificationCount();
-          if (isActive) {
-            setUnreadNotificationCount(count);
+          const [d, pc] = await Promise.all([
+            getNotificationBadgeData(),
+            countPendingInvitesForViewer(),
+          ]);
+          if (!isActive) return;
+          setNotifBadge({
+            total: d.total,
+            invite: d.inviteUnread,
+            activity: d.activityUnread,
+          });
+          if (pc.error) {
+            console.warn(
+              "[BottomTab] countPendingInvitesForViewer:",
+              pc.error
+            );
+            setInviteDotUsesUnreadFallback(true);
+            setPendingInviteCount(0);
+          } else {
+            setInviteDotUsesUnreadFallback(false);
+            setPendingInviteCount(pc.count);
           }
         } catch (error) {
           console.error("Failed to load notification count:", error);
+          if (isActive) {
+            setInviteDotUsesUnreadFallback(true);
+            setPendingInviteCount(0);
+          }
         }
       } else {
         if (isActive) {
-          setUnreadNotificationCount(0);
+          setNotifBadge({ total: 0, invite: 0, activity: 0 });
+          setPendingInviteCount(0);
+          setInviteDotUsesUnreadFallback(false);
         }
       }
     };
@@ -129,8 +181,7 @@ function BottomTab() {
     loadNotificationCount();
 
     // Refresh count when tab becomes visible (user might have read notifications elsewhere)
-    // [OPTIMIZATION] Cache-aware refresh: getUnreadNotificationCount() checks cache first
-    // Only makes network call if cache is expired (60s TTL) or missing
+    // [OPTIMIZATION] getNotificationBadgeData() / cache: same as prior count TTL
     const handleVisibilityChange = () => {
       if (!document.hidden && isAuthedFinal) {
         loadNotificationCount();
@@ -167,20 +218,12 @@ function BottomTab() {
       (useSelector((s: any) => s.auth?.user?.id) as string | undefined) ?? null,
     sessionUserId,
     isAuthedFinal,
-    guest_until: localStorage.getItem("guest_until"),
   });
 
-  // Optional: honor “guest until” suppression from localStorage
-  const suppressAuth = () => {
-    const until = Number(localStorage.getItem("guest_until") || 0);
-    return Date.now() < until;
-  };
-
   // Logged-out variant: protected tabs only open AuthModal, never navigate to protected routes
-  const isLoggedOut = !isAuthedFinal && !suppressAuth();
+  const isLoggedOut = !isAuthedFinal;
   const onProtectedTabClickLoggedOut = () => {
     dispatch(setAuthModal(true));
-    if (location.pathname !== Paths.home) navigate(Paths.home);
   };
 
   // If not authed (and not suppressed), show modal and keep user on feed
@@ -204,7 +247,6 @@ function BottomTab() {
       return; // Prevent infinite loop
     }
 
-    const suppressed = suppressAuth();
     // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
     // console.log(
     //   "🟡 [NAV DEBUG] requireAuth called - isAuthedFinal:",
@@ -214,7 +256,7 @@ function BottomTab() {
     //   "current path:",
     //   location.pathname
     // );
-    if (isAuthedFinal || suppressed) {
+    if (isAuthedFinal) {
       // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
       // console.log(
       //   "🟡 [NAV DEBUG] requireAuth - PASSED, executing nav callback"
@@ -225,11 +267,48 @@ function BottomTab() {
     }
     // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
     // console.log(
-    //   "🟡 [NAV DEBUG] requireAuth - FAILED, redirecting to home or showing modal"
+    //   "🟡 [NAV DEBUG] requireAuth - FAILED, showing auth modal"
     // );
-    if (location.pathname !== Paths.home) navigate(Paths.home);
     dispatch(setAuthModal(true));
   };
+
+  // Track close events so the timer prompt only appears once per page session.
+  useEffect(() => {
+    if (prevAuthModalRef.current && !authModal && !isAuthedFinal) {
+      guestPromptDismissedRef.current = true;
+    }
+    prevAuthModalRef.current = authModal;
+  }, [authModal, isAuthedFinal]);
+
+  // Guest prompt timer: give logged-out users a short exploration window on public browse routes.
+  useEffect(() => {
+    if (guestPromptTimerRef.current) {
+      window.clearTimeout(guestPromptTimerRef.current);
+      guestPromptTimerRef.current = null;
+    }
+
+    if (isAuthedFinal) {
+      guestPromptDismissedRef.current = false;
+      return;
+    }
+
+    if (authModal || guestPromptDismissedRef.current) return;
+    if (!isGuestPromptEligiblePath(location.pathname)) return;
+    if (document.hidden) return;
+
+    guestPromptTimerRef.current = window.setTimeout(() => {
+      if (!document.hidden && !guestPromptDismissedRef.current) {
+        dispatch(setAuthModal(true));
+      }
+    }, GUEST_PROMPT_DELAY_MS);
+
+    return () => {
+      if (guestPromptTimerRef.current) {
+        window.clearTimeout(guestPromptTimerRef.current);
+        guestPromptTimerRef.current = null;
+      }
+    };
+  }, [authModal, dispatch, isAuthedFinal, location.pathname]);
 
   // Redux auth today = { id: string; email: string|null } | null
   const authUser = useSelector((s: any) => s.auth?.user || null);
@@ -369,6 +448,11 @@ function BottomTab() {
   }, [authedId]);
 
   useEffect(() => {
+    if (!BOTTOM_TAB_SCROLL_LINKED_VISIBILITY) {
+      setHidden(false);
+      return;
+    }
+
     const onScroll = () => {
       const current = window.scrollY;
 
@@ -452,7 +536,7 @@ function BottomTab() {
   const tryNavigateAwayFromCreate = useCallback(
     (go: () => void) => {
       const inCreate = location.pathname.startsWith("/create");
-      const editMode = localStorage.getItem("editPostData") !== null;
+      const editMode = localStorage.getItem(EDIT_POST_DATA_KEY) !== null;
       const dirty = isDraftDirty() && hasAnyDraftData();
 
       if (inCreate && (dirty || editMode)) {
@@ -503,7 +587,11 @@ function BottomTab() {
           const onHome = p === Paths.home || p === "/" || p === Paths.games;
           if (onHome) {
             window.scrollTo({ top: 0, behavior: "smooth" });
-            window.dispatchEvent(new CustomEvent(HOME_TAB_REFRESH_EVENT));
+            window.dispatchEvent(
+              new CustomEvent(HOME_TAB_REFRESH_EVENT, {
+                detail: { source: "home-tab" as const },
+              })
+            );
             return;
           }
           navigate(Paths.home);
@@ -527,16 +615,19 @@ function BottomTab() {
         ),
     },
     {
-      icon: (
-        <div className="relative">
-          <PiBell />
-          {unreadNotificationCount > 0 && (
-            <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center min-w-[20px]">
-              {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
-            </div>
-          )}
-        </div>
-      ),
+      icon: (() => {
+        const n = notifBadge.total;
+        return (
+          <div className="relative flex h-[26px] min-w-[36px] shrink-0 items-center justify-center">
+            <PiBell />
+            {n > 0 && (
+              <div className="absolute right-0 top-0 z-10 flex min-h-[1rem] min-w-[1rem] translate-x-[4px] -translate-y-[3px] items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.38)]">
+                {n > 99 ? "99+" : n}
+              </div>
+            )}
+          </div>
+        );
+      })(),
       onClick: () =>
         handleProtectedClick(() =>
           tryNavigateAwayFromCreate(() =>
@@ -597,9 +688,16 @@ function BottomTab() {
     },
   ];
 
+  const avatarTabDisplayUrl = avatarDisplayUrl(avatarUrl);
+
   return (
     <>
       <AuthModal />
+      <BottomTabPeekOwl
+        location={location}
+        activeIconIndex={activeIconIndex}
+        createChooserOpen={createChooserOpen}
+      />
       {/* Gradient: flush with physical screen bottom (1px overlap to eliminate subpixel gap) */}
       <div
         className={[
@@ -644,7 +742,9 @@ function BottomTab() {
             "absolute left-1/2 -translate-x-1/2 z-40 pointer-events-auto",
             "rounded-full",
             "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-            "border border-[var(--bottom-tab-border)]",
+            /* Transparent 1px border keeps inner layout identical to before; ring is outside via shadow */
+            "border border-transparent",
+            "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
           ].join(" ")}
           style={{
             bottom: "calc(5px + var(--safe-area-bottom-layout))",
@@ -667,26 +767,30 @@ function BottomTab() {
                 >
                   {/* Same pill size for active and inactive - no shifting when switching tabs */}
                   <div
-                    className={`flex items-center justify-center h-10 min-w-[60px] px-4 rounded-full relative overflow-hidden ${
-                      index === 1 ? "transition-none" : "transition-colors"
+                    className={`flex items-center justify-center h-10 min-w-[60px] px-4 rounded-full relative ${
+                      index === 2 ? "overflow-visible" : "overflow-hidden"
                     } ${
+                      index === 1 ? "transition-none" : "transition-colors"
+                    }                     ${
                       isActive
                         ? index === 1 && createRouteActive
                           ? "bg-[var(--bottom-tab-create-active-bg)] border border-[var(--bottom-tab-create-active-bg)] shadow-[var(--glass-active-shadow)]"
                           : index === 1 && !createRouteActive
                           ? "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
-                          : index === 3 && imgUrlPublic(avatarUrl)
+                          : index === 0 || index === 2
+                          ? "bg-[var(--bottom-tab-feed-notif-active-bg)] shadow-[var(--bottom-tab-feed-notif-active-shadow)] border border-[var(--bottom-tab-feed-notif-active-border)]"
+                          : index === 3 && avatarTabDisplayUrl
                           ? "shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
                           : "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
                         : "bg-transparent border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
                     }`}
                   >
                     {/* Profile tab active: blurred avatar as faint "mirror" background. Same URL as Avatar img = browser cache reuse, no extra egress */}
-                    {isActive && index === 3 && imgUrlPublic(avatarUrl) && (
+                    {isActive && index === 3 && avatarTabDisplayUrl && (
                       <div
                         className="absolute inset-0 rounded-full"
                         style={{
-                          backgroundImage: `url(${imgUrlPublic(avatarUrl)})`,
+                          backgroundImage: `url(${avatarTabDisplayUrl})`,
                           backgroundSize: "250%",
                           backgroundPosition: "center",
                           filter: "blur(4px)",
@@ -696,7 +800,7 @@ function BottomTab() {
                       />
                     )}
                     {/* Profile tab active but no avatar: fallback to solid pill */}
-                    {isActive && index === 3 && !imgUrlPublic(avatarUrl) && (
+                    {isActive && index === 3 && !avatarTabDisplayUrl && (
                       <div
                         className="absolute inset-0 rounded-full bg-[var(--bottom-tab-active-bg)]"
                         aria-hidden
@@ -721,11 +825,53 @@ function BottomTab() {
                           {isActive ? <PiPlusBold /> : <PiPlusSquareFill />}
                         </div>
                       ) : (
-                        <div className="flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0">
+                        <div
+                          className={[
+                            "flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0",
+                            isActive && (index === 0 || index === 2)
+                              ? "text-[var(--bottom-tab-feed-notif-active-fg)]"
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
                           {item.icon}
                         </div>
                       )}
                     </div>
+                    {index === 2 &&
+                      ((inviteDotUsesUnreadFallback
+                        ? notifBadge.invite > 0
+                        : pendingInviteCount > 0) ||
+                        notifBadge.activity > 0) && (
+                        <div
+                          className="pointer-events-none absolute bottom-[6px] left-1/2 z-[11] flex -translate-x-1/2 gap-[5px]"
+                          aria-hidden
+                        >
+                          {(inviteDotUsesUnreadFallback
+                            ? notifBadge.invite > 0
+                            : pendingInviteCount > 0) && (
+                            <span
+                              className={[
+                                "h-[5px] w-[5px] rounded-full bg-sky-500",
+                                isActive
+                                  ? "shadow-[0_0_10px_rgba(56,189,248,0.95),0_0_4px_rgba(14,165,233,0.6)]"
+                                  : "shadow-[0_0_9px_rgba(56,189,248,0.55)] opacity-95",
+                              ].join(" ")}
+                            />
+                          )}
+                          {notifBadge.activity > 0 && (
+                            <span
+                              className={[
+                                "h-[5px] w-[5px] rounded-full bg-rose-500",
+                                isActive
+                                  ? "shadow-[0_0_10px_rgba(251,113,133,0.92),0_0_4px_rgba(244,63,94,0.55)]"
+                                  : "shadow-[0_0_9px_rgba(251,113,133,0.52)] opacity-95",
+                              ].join(" ")}
+                            />
+                          )}
+                        </div>
+                      )}
                   </div>
                 </button>
               );
@@ -736,19 +882,27 @@ function BottomTab() {
       <ConfirmDialog
         open={leaveOpen}
         onClose={() => setLeaveOpen(false)}
-        title={isEditMode ? "Exit edit mode?" : "Save draft?"}
+        title={
+          isEditMode
+            ? "Discard edits?"
+            : isCreateFlowResumedLocalDraft()
+            ? "Keep draft?"
+            : "Leave create?"
+        }
         message={
           isEditMode
-            ? "You're leaving the edit flow. All your changes will not be saved."
-            : "You're leaving the create flow. Save your progress as a draft, discard it, or stay here."
+            ? "You have unsaved changes to this post. If you leave now, your edits will be lost."
+            : isCreateFlowResumedLocalDraft()
+            ? "Your draft is saved on this device. You can leave and keep it, discard it, or stay to keep editing."
+            : "Your progress is saved on this device. Leave and keep your draft, discard it, or stay to keep editing."
         }
         cancelLabel="Stay"
         {...(isEditMode
           ? {
-              confirmLabel: "Exit",
-              confirmVariant: "danger" as const,
+              confirmLabel: "Discard and exit",
+              confirmVariant: "dangerBlack" as const,
               onConfirm: () => {
-                localStorage.removeItem("editPostData");
+                localStorage.removeItem(EDIT_POST_DATA_KEY);
                 setLeaveOpen(false);
                 const go = navTargetRef.current;
                 navTargetRef.current = null;
@@ -765,7 +919,7 @@ function BottomTab() {
               },
               secondaryVariant: "primary" as const,
               confirmLabel: "Discard",
-              confirmVariant: "default" as const,
+              confirmVariant: "dangerSoft" as const,
               onConfirm: () => {
                 discardAllDrafts();
                 setLeaveOpen(false);

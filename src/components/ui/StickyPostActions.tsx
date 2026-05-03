@@ -1,12 +1,10 @@
-import { PiChatCircleDots, PiShareFat } from "react-icons/pi";
+import { PiArrowLeft, PiChatCircleDots, PiShareFat } from "react-icons/pi";
 import LikeButton from "./LikeButton";
 import SaveButton from "./SaveButton";
 import FollowButton from "./FollowButton";
 import ShareDrawer from "./ShareDrawer";
 import { useState, useEffect } from "react";
-import { useDispatch, useSelector } from "react-redux";
-import { setAuthModal } from "../../reducers/modalReducer";
-import { RootState } from "../../app/store";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { getCommentCount } from "../../api/services/comments";
 import { isDraftPostId } from "../../lib/drafts";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
@@ -41,6 +39,8 @@ interface StickyPostActionsProps {
     is_anonymous?: boolean;
   };
   onInvite?: () => void;
+  /** When set (e.g. post detail modal), replaces default scroll-to-comments on comment tap. */
+  onCommentClick?: () => void;
 }
 
 export default function StickyPostActions({
@@ -55,13 +55,13 @@ export default function StickyPostActions({
   postImageUrl,
   postAuthor,
   onInvite,
+  onCommentClick,
 }: StickyPostActionsProps) {
-  const dispatch = useDispatch();
-  const authState = useSelector((state: RootState) => state.auth);
-  const isAuthenticated = !!authState?.user;
-  const authLoading = authState?.loading ?? true;
+  const { ensureAuthed } = useAuthActionGate();
 
-  const [commentCount, setCommentCount] = useState(0);
+  const [commentCount, setCommentCount] = useState(() =>
+    post && typeof post.comment_count === "number" ? post.comment_count : 0
+  );
   const [authorProfileId, setAuthorProfileId] = useState<string | null>(null);
   const [showShareDrawer, setShowShareDrawer] = useState(false);
 
@@ -92,25 +92,30 @@ export default function StickyPostActions({
     getAuthorProfileId();
   }, [authorId]);
 
-  // Load comment count (use from post if available, otherwise fetch)
+  // Load comment count: prefer canonical post.comment_count (incl. 0), else fetch; reset on postId change
   useEffect(() => {
     if (isDraftPostId(postId)) {
       setCommentCount(0);
       return;
     }
-    if (post?.comment_count !== undefined) {
+    if (typeof post?.comment_count === "number") {
       setCommentCount(post.comment_count);
-    } else {
-      const loadCommentCount = async () => {
-        try {
-          const count = await getCommentCount(postId);
-          setCommentCount(count);
-        } catch (error) {
-          console.error("Error loading comment count:", error);
-        }
-      };
-      loadCommentCount();
+      return;
     }
+    setCommentCount(0);
+    let cancelled = false;
+    const loadCommentCount = async () => {
+      try {
+        const count = await getCommentCount(postId);
+        if (!cancelled) setCommentCount(count);
+      } catch (error) {
+        console.error("Error loading comment count:", error);
+      }
+    };
+    loadCommentCount();
+    return () => {
+      cancelled = true;
+    };
   }, [postId, post?.comment_count]);
 
   const scrollToComments = () => {
@@ -120,11 +125,16 @@ export default function StickyPostActions({
     }
   };
 
-  const handleShareClick = () => {
-    if (!authLoading && !isAuthenticated) {
-      dispatch(setAuthModal(true));
+  const handleCommentClick = () => {
+    if (onCommentClick) {
+      onCommentClick();
       return;
     }
+    scrollToComments();
+  };
+
+  const handleShareClick = () => {
+    if (!ensureAuthed()) return;
     setShowShareDrawer(true);
   };
 
@@ -135,20 +145,38 @@ export default function StickyPostActions({
   const actionGap = barVariant === "floatingGlass" ? "gap-3.5" : "gap-6";
   const sideGap = barVariant === "floatingGlass" ? "gap-0.5" : "gap-3";
 
+  const showModalBack = barVariant === "floatingGlass" && !!onClose;
+  const displayLikeCount = post?.effective_like_count ?? post?.like_count ?? 0;
+  const displaySaveCount = post?.effective_save_count ?? post?.save_count ?? 0;
+
   const actionsRow = (
     <div
       className={
         barVariant === "floatingGlass"
-          ? "flex min-w-0 w-full items-center gap-2 pl-0.5"
+          ? "flex min-w-0 w-full items-center gap-1.5"
           : "flex min-w-0 items-center justify-between gap-2"
       }
     >
-      <div className={`flex min-w-0 shrink-0 items-center ${actionGap}`}>
+      {showModalBack ? (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Back"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-black/20 bg-neutral-950 text-white shadow-sm transition hover:bg-neutral-900 active:scale-[0.97] dark:border-black/10 dark:bg-white dark:text-neutral-950 dark:shadow-sm dark:hover:bg-neutral-100"
+        >
+          <PiArrowLeft className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      ) : null}
+      <div
+        className={`flex min-w-0 shrink-0 items-center ${actionGap} ${
+          showModalBack ? "ml-1.5 sm:ml-2" : ""
+        }`}
+      >
         <button
           type="button"
           className="flex shrink-0 items-center gap-0.5 text-[var(--text)]"
           aria-label="Comment"
-          onClick={scrollToComments}
+          onClick={handleCommentClick}
         >
           <PiChatCircleDots size={iconSm} />
           {commentCount > 0 && (
@@ -175,7 +203,7 @@ export default function StickyPostActions({
           size={iconMd}
           compactCount={barVariant === "floatingGlass"}
           isLiked={post?.is_liked}
-          likeCount={post?.like_count ?? 0}
+          likeCount={displayLikeCount}
           showCount={true}
           post={post}
         />
@@ -184,7 +212,7 @@ export default function StickyPostActions({
           size={iconMd}
           compactCount={barVariant === "floatingGlass"}
           isSaved={post?.is_saved}
-          saveCount={post?.save_count ?? 0}
+          saveCount={displaySaveCount}
           showCount={true}
           post={post}
         />
@@ -203,20 +231,16 @@ export default function StickyPostActions({
             />
           </div>
         )}
-        {onClose && (
+        {onClose && !showModalBack ? (
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className={
-              barVariant === "floatingGlass"
-                ? "flex h-7 min-w-[28px] shrink-0 items-center justify-center rounded-md text-base font-light leading-none text-[var(--text)]/85 hover:bg-[color-mix(in_oklab,var(--text)_10%,transparent)] hover:text-[var(--text)]"
-                : "text-xl leading-none text-[var(--text)] hover:text-[var(--text)]/80"
-            }
+            className="text-xl leading-none text-[var(--text)] hover:text-[var(--text)]/80"
           >
             ×
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -252,9 +276,7 @@ export default function StickyPostActions({
                   "rounded-full shadow-sm",
                 ].join(" ")}
               >
-                <div className="py-1 pl-3 pr-2 sm:py-1.5 sm:pl-3.5 sm:pr-2.5">
-                  {actionsRow}
-                </div>
+                <div className="p-1 sm:p-1.5">{actionsRow}</div>
               </div>
             </div>
           </div>

@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useMemo, useCallback } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  useState,
+} from "react";
 import HomeHangoutSection from "./HomeHangoutSection";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Post from "../../components/Post";
@@ -9,7 +15,11 @@ import { getViewerId } from "../../api/services/follows";
 import { dataCache } from "../../lib/dataCache";
 import { type BatchLoadResult } from "../../types/legacy";
 import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
+import { supabase } from "../../lib/supabaseClient";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
+
+/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+const DEBUG_RSVP_POST_ID = "";
 
 interface Props {
   viewMode: "all" | "hangouts" | "experiences";
@@ -91,6 +101,27 @@ export default function HomePostsSection({
   const renderedItemsCountRef = useRef(0);
   const prefetchedRef = useRef(false);
 
+  /** Auth user id (matches PostDetailBody owner check: session user id vs post.author_id). */
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!cancelled) setAuthUserId(session?.user?.id ?? null);
+    })();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUserId(session?.user?.id ?? null);
+    });
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // [OPTIMIZATION: Phase 2 - Progressive] Client-side filtering removed
   // PostgreSQL now handles type filtering server-side, so no need for offsetAwareLoader wrapper
 
@@ -142,6 +173,15 @@ export default function HomePostsSection({
         viewMode === "all" &&
         renderedItemsCountRef.current % INJECT_EVERY === 0;
 
+      if (DEBUG_RSVP_POST_ID && item.id === DEBUG_RSVP_POST_ID) {
+        const row = item as Record<string, unknown>;
+        console.log("RSVP DEBUG HomePostsSection -> Post", {
+          id: item.id,
+          rsvp_capacity: row.rsvp_capacity,
+          typeof_rsvp_capacity: typeof row.rsvp_capacity,
+        });
+      }
+
       return (
         <React.Fragment key={item.id}>
           <Post
@@ -157,6 +197,7 @@ export default function HomePostsSection({
             selectedDates={item.selected_dates}
             post={item}
             slideshowHostVisible={isVisible}
+            isOwner={authUserId != null && authUserId === item.author_id}
           />
           {shouldInjectRail && (
             <React.Fragment key={`rail-${item.id}`}>
@@ -206,6 +247,7 @@ export default function HomePostsSection({
       railFilteredCount,
       selectedFilters,
       isVisible,
+      authUserId,
     ]
   );
 
@@ -328,6 +370,7 @@ export default function HomePostsSection({
                 post={p}
                 batchedData={batchedData}
                 slideshowHostVisible={isVisible}
+                isOwner={authUserId != null && authUserId === p.author_id}
               />
             ))}
           </>
@@ -389,6 +432,7 @@ export default function HomePostsSection({
             post={p}
             batchedData={batchedData}
             slideshowHostVisible={isVisible}
+            isOwner={authUserId != null && authUserId === p.author_id}
           />
 
           {/* Inject horizontal rail every 8 posts - Legacy mode (not used when useProgressiveFeed=true) */}
@@ -466,6 +510,7 @@ export default function HomePostsSection({
                 post={p}
                 batchedData={batchedData}
                 slideshowHostVisible={isVisible}
+                isOwner={authUserId != null && authUserId === p.author_id}
               />
             </React.Fragment>
           ))}

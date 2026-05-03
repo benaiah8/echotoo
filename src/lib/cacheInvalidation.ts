@@ -148,12 +148,19 @@ export function setupCacheInvalidationListeners(): void {
 
     console.log("[CacheInvalidation] Profile updated event:", profileId);
 
+    // profile_created_* caches are keyed by auth user_id (posts.author_id / profile.user_id), not profiles.id.
+    const postsUserId =
+      event.detail?.profile &&
+      typeof event.detail.profile.user_id === "string"
+        ? event.detail.profile.user_id
+        : null;
+
     // Do not clear profile row here — FullScreenProfileCreation / editors write fresh
     // data first; clearing caused stale UI and races with OwnProfilePage. Still
     // refresh counts and post list caches.
     invalidateRelatedCaches(profileId, {
       followCounts: [profileId],
-      posts: [profileId],
+      posts: postsUserId ? [postsUserId] : [],
     });
   });
 

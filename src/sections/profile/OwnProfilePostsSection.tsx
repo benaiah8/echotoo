@@ -1,4 +1,11 @@
-import { useEffect, useState, useTransition, useCallback, useRef } from "react";
+import {
+  useEffect,
+  useState,
+  useTransition,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
 import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreatedOptimized } from "../../api/queries/getUserPostsCreated";
 import {
@@ -14,14 +21,13 @@ import PostSkeleton from "../../components/skeletons/PostSkeleton";
 import ProgressiveFeed from "../../components/ProgressiveFeed";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { dataCache } from "../../lib/dataCache";
-import { supabase } from "../../lib/supabaseClient";
-import toast from "react-hot-toast";
 import { cancelContextRequests } from "../../lib/requestManager";
 import {
   convertLikedToFeedItem,
   convertSavedToFeedItem,
 } from "../../lib/profilePostsConverters";
-import { enrichFeedItemsWithCounts } from "../../lib/postCountsEnrichment";
+import { LOCAL_DRAFT_DISCARDED_EVENT } from "../../lib/drafts";
+import { publishProfileTrace } from "../../lib/debugProfileFeed";
 // [PHASE 4.1.3] Complete refactor: Single ProgressiveFeed pattern for all tabs
 
 /**
@@ -35,6 +41,8 @@ interface OwnProfilePostsSectionProps {
   visible?: boolean; // [OPTIMIZATION] Only load data when tab is visible
   /** Bumps when user taps profile tab again — remount feeds + drop tab caches */
   feedRefreshEpoch?: number;
+  /** Publish marker consumed → soft-refetch Created first page (`ProgressiveFeed`); PTR / tab refresh does not bump this. */
+  createdFeedRefreshEpoch?: number;
 }
 
 // [DEBUG] Toggle for console logs
@@ -43,9 +51,12 @@ const DEBUG_OWN_PROFILE = false;
 export default function OwnProfilePostsSection({
   visible = true, // Default to true for backward compatibility
   feedRefreshEpoch = 0,
+  createdFeedRefreshEpoch = 0,
 }: OwnProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
+  /** Bumps when local draft keys are cleared so the Created feed drops the draft card without a full refresh. */
+  const [localDraftEpoch, setLocalDraftEpoch] = useState(0);
 
   // React 19: useTransition for non-urgent tab switching
   const [isPending, startTransition] = useTransition();
@@ -135,6 +146,37 @@ export default function OwnProfilePostsSection({
       setTabsInitialized((prev) => ({ ...prev, saved: true }));
     }
   }, [tab, userId]); // Only depend on tab and userId - refs prevent re-running
+
+  const createdSoftTelemetry = useMemo(
+    () => ({
+      onSoftRefreshStart: () =>
+        publishProfileTrace("CREATED_SOFT_REFRESH_START", {}),
+      onSoftRefreshDone: (args: {
+        returnedCount: number;
+        firstPostId: string | null;
+      }) =>
+        publishProfileTrace("CREATED_SOFT_REFRESH_DONE", {
+          returnedCount: args.returnedCount,
+          firstPostId: args.firstPostId,
+        }),
+    }),
+    []
+  );
+
+  const createdFeedKey = userId
+    ? `created-${userId}-r${feedRefreshEpoch}-ld${localDraftEpoch}`
+    : "";
+  const prevCreatedFeedKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!userId || !createdFeedKey) return;
+    if (prevCreatedFeedKeyRef.current === createdFeedKey) return;
+    publishProfileTrace("CREATED_FEED_KEY_CHANGED", {
+      previousKey: prevCreatedFeedKeyRef.current || "(none)",
+      nextKey: createdFeedKey,
+    });
+    prevCreatedFeedKeyRef.current = createdFeedKey;
+  }, [createdFeedKey, userId]);
 
   // [PHASE 4.1.3 REFACTOR] Single ProgressiveFeed pattern - no manual state needed for any tab
   // All tabs now use ProgressiveFeed for consistent loading, caching, and pagination
@@ -274,14 +316,19 @@ export default function OwnProfilePostsSection({
     }
 
     return cached || null;
-  }, [userId, profileUsername, profileDisplayName, profileAvatarUrl]); // [FIX] Use primitives, not profile object
+  }, [userId, profileUsername, profileDisplayName, profileAvatarUrl]); // [FIX] Use primitives, not entire profile object
 
   const setCachedCreated = useCallback(
     (items: FeedItem[]) => {
       const cacheKey = `profile_created_${userId}`;
       // Filter out drafts for Created tab - they're managed by localStorage
       const itemsToCache = items.filter((item: any) => !item.isDraft);
-      dataCache.set(cacheKey, itemsToCache.slice(0, 20), 10 * 60 * 1000); // 10min TTL, cache 20 items
+      const persisted = itemsToCache.slice(0, 20);
+      dataCache.set(cacheKey, persisted, 10 * 60 * 1000); // 10min TTL, cache 20 items
+      publishProfileTrace("CREATED_CACHE_WRITE", {
+        itemCount: persisted.length,
+        firstPostId: persisted[0]?.id ?? null,
+      });
     },
     [userId]
   );
@@ -317,6 +364,22 @@ export default function OwnProfilePostsSection({
   // [PHASE 4.1.3] All tabs now use ProgressiveFeed - no manual loading needed
   // ProgressiveFeed handles caching, loading, pagination automatically
 
+  // Local draft discarded (Hangout/PostMenu/BottomTab/publish) — refresh Created tab draft strip
+  useEffect(() => {
+    const onLocalDraftDiscarded = () => {
+      if (userId) {
+        dataCache.delete(`profile_created_${userId}`);
+      }
+      setLocalDraftEpoch((n) => n + 1);
+    };
+    window.addEventListener(LOCAL_DRAFT_DISCARDED_EVENT, onLocalDraftDiscarded);
+    return () =>
+      window.removeEventListener(
+        LOCAL_DRAFT_DISCARDED_EVENT,
+        onLocalDraftDiscarded
+      );
+  }, [userId]);
+
   // [PHASE 4.1.3] Listen for invite accepted events to clear cache
   useEffect(() => {
     const handleInviteAccepted = () => {
@@ -333,25 +396,6 @@ export default function OwnProfilePostsSection({
       window.removeEventListener("invite:accepted", handleInviteAccepted);
     };
   }, [tab, userId]);
-
-  // [PHASE 4.1.3] Handle post deletion - clears cache to trigger reload
-  // [FIX] Memoize handlePostDelete to prevent Post component re-renders
-  const handlePostDelete = useCallback(
-    async (postId: string) => {
-      try {
-        await supabase.from("posts").delete().eq("id", postId);
-        toast.success("Post deleted successfully");
-        // Clear cache to force reload
-        const cacheKey = `profile_created_${userId}`;
-        dataCache.delete(cacheKey);
-        cancelContextRequests(`profile-${userId}-created`);
-      } catch (error) {
-        console.error("Error deleting post:", error);
-        toast.error("Failed to delete post");
-      }
-    },
-    [userId]
-  ); // Only depend on userId
 
   // [PHASE B.2] Separate loadItems functions for each tab (preparation for multi-ProgressiveFeed pattern)
 
@@ -370,7 +414,9 @@ export default function OwnProfilePostsSection({
         });
       }
       const currentUserId = userId; // Use userId from closure, not profile?.user_id
-      if (!currentUserId) return [];
+      if (!currentUserId) {
+        return [];
+      }
 
       const { getViewerAuthUserId } = await import(
         "../../api/services/follows"
@@ -450,19 +496,18 @@ export default function OwnProfilePostsSection({
         offset
       );
 
-      // Convert to FeedItem format and enrich with counts (RPC may omit like_count/comment_count)
+      // Convert to FeedItem format (RPC now carries canonical engagement counts).
       if (result.data) {
         const mapped = result.data.map(convertLikedToFeedItem);
-        const enriched = await enrichFeedItemsWithCounts(mapped);
         if (DEBUG_OWN_PROFILE) {
           console.log("[OwnProfilePostsSection] loadInteractedItems response", {
             userId,
             offset,
             limit,
-            received: enriched.length,
+            received: mapped.length,
           });
         }
-        return enriched;
+        return mapped;
       }
 
       return [];
@@ -530,19 +575,18 @@ export default function OwnProfilePostsSection({
         });
       }
 
-      // Convert to FeedItem format and enrich with counts (RPC may omit like_count/comment_count)
+      // Convert to FeedItem format (RPC now carries canonical engagement counts).
       if (result.data) {
         const mapped = result.data.map(convertSavedToFeedItem);
-        const enriched = await enrichFeedItemsWithCounts(mapped);
         if (DEBUG_OWN_PROFILE) {
           console.log("[OwnProfilePostsSection] loadSavedItems mapped", {
             userId,
             offset,
             limit,
-            received: enriched.length,
+            received: mapped.length,
           });
         }
-        return enriched;
+        return mapped;
       }
 
       return [];
@@ -572,7 +616,6 @@ export default function OwnProfilePostsSection({
         author={post.author}
         type={post.type}
         isOwner={true} // Created tab is always owner
-        onDelete={() => handlePostDelete(post.id)}
         status={(post as any).status || "published"}
         isDraft={(post as any).isDraft || false}
         isAnonymous={post.is_anonymous || false}
@@ -589,7 +632,7 @@ export default function OwnProfilePostsSection({
         slideshowHostVisible={visible && tab === "created"}
       />
     ),
-    [handlePostDelete, visible, tab]
+    [visible, tab]
   );
 
   const renderInteractedItem = useCallback(
@@ -701,7 +744,7 @@ export default function OwnProfilePostsSection({
         {tabsInitialized.created && (
           <div style={{ display: tab === "created" ? "block" : "none" }}>
             <ProgressiveFeed
-              key={`created-${userId}-r${feedRefreshEpoch}`}
+              key={`created-${userId}-r${feedRefreshEpoch}-ld${localDraftEpoch}`}
               isVisible={visible && tab === "created"}
               tabId="profile"
               loadItems={loadCreatedItems}
@@ -709,6 +752,9 @@ export default function OwnProfilePostsSection({
               getCachedItems={getCachedCreated}
               setCachedItems={setCachedCreated}
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
+              softRefreshEpoch={createdFeedRefreshEpoch}
+              onSoftRefreshStart={createdSoftTelemetry.onSoftRefreshStart}
+              onSoftRefreshDone={createdSoftTelemetry.onSoftRefreshDone}
               enableScrollStopDetection={true}
               enableLazyLoading={true}
               loading={false}

@@ -1,16 +1,58 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import ConfirmDialog from "../ui/ConfirmDialog";
-import { softDeleteAccount } from "../../api/services/account";
+import { deleteAccount } from "../../api/services/account";
+import { deleteMyPushDevices } from "../../api/services/pushDevices";
 import { clearAuthCache } from "../../api/services/follows";
 import { clearCachedProfile } from "../../lib/profileCache";
 import { clearCachedFollowCounts } from "../../lib/followCountsCache";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
+import {
+  AVATAR_PRESET_PREFIX,
+  getAvatarPresets,
+  isAvatarPresetValue,
+} from "../../lib/avatarPresets";
 import { getSupportMailto } from "../../lib/supportConfig";
 import { uploadImage } from "../../api/services/mediaUpload";
 import { useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
+import AvatarCropModal from "./AvatarCropModal";
+import { isPlaceholderUsername } from "../../lib/profileUsername";
+
+const DISPLAY_NAME_MAX = 40;
+const USERNAME_MAX = 24;
+const BIO_MAX = 160;
+const SOCIAL_URL_MAX = 300;
+
+/** In-field counter: bottom-right inside the control, muted so typed text shows through. */
+function FieldCharCount({
+  current,
+  max,
+  insetClassName = "bottom-2 right-2.5",
+}: {
+  current: number;
+  max: number;
+  /** Override position (e.g. textarea needs a bit more lift from the bottom edge). */
+  insetClassName?: string;
+}) {
+  return (
+    <span
+      className={[
+        "pointer-events-none absolute z-[1] text-[10px] tabular-nums text-[var(--text)]/40 opacity-80",
+        insetClassName,
+      ].join(" ")}
+      aria-live="polite"
+    >
+      {current} / {max}
+    </span>
+  );
+}
+
+/** Owl presets bundled at build time; empty picker hidden when length is 0. */
+const ECHO_AVATAR_PRESETS = getAvatarPresets();
+
+type AvatarMode = "photo" | "echo";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
 
@@ -62,10 +104,18 @@ export default function FullScreenProfileCreation({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string>("");
+  /** Create flow: survives duplicate empty hydrate fetches so random Echo persists. Reset when modal closes. */
+  const echoBootstrapRef = useRef<{ done: boolean; value: string | null }>({
+    done: false,
+    value: null,
+  });
+  const [avatarMode, setAvatarMode] = useState<AvatarMode>("photo");
+  /** Shown once when create flow assigns a random preset (empty avatar + presets). */
+  const [echoPickedNote, setEchoPickedNote] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [usernameChecking, setUsernameChecking] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(
-    null
+    null,
   );
   const [isPrivate, setIsPrivate] = useState(false);
   const [socialMediaPublic, setSocialMediaPublic] = useState(false);
@@ -73,6 +123,86 @@ export default function FullScreenProfileCreation({
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [avatarCropOpen, setAvatarCropOpen] = useState(false);
+  const [avatarCropSrc, setAvatarCropSrc] = useState<string | null>(null);
+  const avatarCropObjectUrlRef = useRef<string | null>(null);
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  /** After user types in the username field, display-name sync must not overwrite (create flow only). */
+  const usernameTouchedByUserRef = useRef(false);
+
+  const revokeAvatarCropObjectUrl = useCallback(() => {
+    const u = avatarCropObjectUrlRef.current;
+    if (u) {
+      URL.revokeObjectURL(u);
+      avatarCropObjectUrlRef.current = null;
+    }
+    setAvatarCropSrc(null);
+    setAvatarCropOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      revokeAvatarCropObjectUrl();
+    }
+  }, [open, revokeAvatarCropObjectUrl]);
+
+  useEffect(() => {
+    if (open) {
+      usernameTouchedByUserRef.current = false;
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      echoBootstrapRef.current = { done: false, value: null };
+      setEchoPickedNote(false);
+    }
+  }, [open]);
+
+  const handleCroppedAvatarConfirm = useCallback(
+    async (croppedFile: File) => {
+      setError(null);
+      setUploading(true);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.user?.id) {
+          throw new Error("User not authenticated");
+        }
+        console.log(PROFILE_AVATAR_UPLOAD_LOG, "upload_start", {
+          userId: session.user.id,
+          bytes: croppedFile.size,
+        });
+        const result = await uploadImage(croppedFile, {
+          userId: session.user.id,
+          kind: "avatar",
+        });
+        setAvatarUrl(result);
+        echoBootstrapRef.current = { done: false, value: null };
+        setAvatarMode("photo");
+        setEchoPickedNote(false);
+        revokeAvatarCropObjectUrl();
+        console.log(PROFILE_AVATAR_UPLOAD_LOG, "success");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const phase = msg.includes("Supabase Storage")
+          ? "upload"
+          : msg.includes("not authenticated")
+          ? "auth"
+          : "preparation_or_unknown";
+        console.warn(PROFILE_AVATAR_UPLOAD_LOG, "failed", {
+          phase,
+          message: msg,
+        });
+        setError(mapProfileAvatarUploadError(err));
+        revokeAvatarCropObjectUrl();
+      } finally {
+        setUploading(false);
+      }
+    },
+    [revokeAvatarCropObjectUrl],
+  );
 
   /** Snapshot for dirty detection — only updated on hydrate / after successful save */
   type Baseline = {
@@ -109,9 +239,48 @@ export default function FullScreenProfileCreation({
       social_media_public?: boolean | null;
     }) => {
       const displayNameV = data.display_name ?? "";
-      const usernameV = data.username ?? "";
+      const rawUsername = data.username ?? "";
+      const clearPlaceholder =
+        isFirstTime && isPlaceholderUsername(data.username);
+      const usernameV = clearPlaceholder ? "" : rawUsername;
+      const origForAvailability = clearPlaceholder
+        ? null
+        : data.username ?? null;
       const bioV = data.bio ?? "";
-      const avatarV = data.avatar_url ?? "";
+      const trimmedIncoming = (data.avatar_url ?? "").trim();
+
+      let nextAvatar: string;
+      let nextMode: AvatarMode;
+
+      if (trimmedIncoming) {
+        echoBootstrapRef.current = { done: false, value: null };
+        nextAvatar = trimmedIncoming;
+        nextMode = isAvatarPresetValue(trimmedIncoming) ? "echo" : "photo";
+        setEchoPickedNote(false);
+      } else {
+        if (isFirstTime && ECHO_AVATAR_PRESETS.length > 0) {
+          if (!echoBootstrapRef.current.done) {
+            const pick =
+              ECHO_AVATAR_PRESETS[
+                Math.floor(Math.random() * ECHO_AVATAR_PRESETS.length)
+              ];
+            const presetVal = `${AVATAR_PRESET_PREFIX}${pick.id}`;
+            echoBootstrapRef.current = { done: true, value: presetVal };
+            nextAvatar = presetVal;
+            nextMode = "echo";
+            setEchoPickedNote(true);
+          } else {
+            nextAvatar = echoBootstrapRef.current.value ?? "";
+            nextMode = isAvatarPresetValue(nextAvatar) ? "echo" : "photo";
+          }
+        } else {
+          echoBootstrapRef.current = { done: false, value: null };
+          nextAvatar = "";
+          nextMode = "photo";
+          setEchoPickedNote(false);
+        }
+      }
+
       const ig = data.instagram_url ?? "";
       const tt = data.tiktok_url ?? "";
       const tg = data.telegram_url ?? "";
@@ -120,9 +289,10 @@ export default function FullScreenProfileCreation({
 
       setDisplayName(displayNameV);
       setUsername(usernameV);
-      setOrigUsername(data.username ?? null);
+      setOrigUsername(origForAvailability);
       setBio(bioV);
-      setAvatarUrl(avatarV);
+      setAvatarUrl(nextAvatar);
+      setAvatarMode(nextMode);
       setInstagramUrl(ig);
       setTiktokUrl(tt);
       setTelegramUrl(tg);
@@ -133,7 +303,7 @@ export default function FullScreenProfileCreation({
         displayName: displayNameV,
         username: usernameV,
         bio: bioV,
-        avatarUrl: avatarV,
+        avatarUrl: nextAvatar,
         instagramUrl: ig,
         tiktokUrl: tt,
         telegramUrl: tg,
@@ -141,7 +311,7 @@ export default function FullScreenProfileCreation({
         socialMediaPublic: soc,
       });
     },
-    [setBaselineFromValues]
+    [isFirstTime, setBaselineFromValues],
   );
 
   useEffect(() => {
@@ -174,7 +344,7 @@ export default function FullScreenProfileCreation({
         const { data, error: fetchError } = await supabase
           .from("profiles")
           .select(
-            "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_no, is_private, social_media_public"
+            "display_name, username, bio, avatar_url, instagram_url, tiktok_url, telegram_url, member_no, is_private, social_media_public",
           )
           .eq("id", profileId)
           .maybeSingle();
@@ -184,7 +354,7 @@ export default function FullScreenProfileCreation({
         if (fetchError) {
           console.error(
             "[FullScreenProfileCreation] Error fetching profile data:",
-            fetchError
+            fetchError,
           );
           if (!snap) {
             setError("Failed to load profile data. Please try again.");
@@ -198,7 +368,7 @@ export default function FullScreenProfileCreation({
       } catch (e) {
         console.error(
           "[FullScreenProfileCreation] Unexpected error fetching profile:",
-          e
+          e,
         );
         if (!cancelled && !snap) {
           setError("Failed to load profile data. Please try again.");
@@ -251,7 +421,7 @@ export default function FullScreenProfileCreation({
     window.history.pushState(
       { editProfileModal: true } as const,
       "",
-      window.location.href
+      window.location.href,
     );
 
     const onPopState = () => {
@@ -267,7 +437,7 @@ export default function FullScreenProfileCreation({
       window.history.pushState(
         { editProfileModal: true } as const,
         "",
-        window.location.href
+        window.location.href,
       );
     };
 
@@ -296,9 +466,14 @@ export default function FullScreenProfileCreation({
     setShowExitConfirm(true);
   }, [isDirty, onClose]);
 
-  // Auto-generate username from display name on first time
+  // Auto-generate username from display name on first time (not after manual username edits)
   useEffect(() => {
-    if (isFirstTime && displayName.trim() && !username.trim()) {
+    if (
+      isFirstTime &&
+      displayName.trim() &&
+      !username.trim() &&
+      !usernameTouchedByUserRef.current
+    ) {
       generateUsernameFromDisplayName(displayName.trim());
     }
   }, [displayName, isFirstTime, username]);
@@ -429,7 +604,7 @@ export default function FullScreenProfileCreation({
         const privacyError = await updateProfilePrivacy(
           profileId,
           isPrivate,
-          socialMediaPublic
+          socialMediaPublic,
         );
         if (privacyError.error) {
           console.error("Error updating privacy settings:", privacyError.error);
@@ -459,7 +634,7 @@ export default function FullScreenProfileCreation({
       const { data: updatedProfile } = await supabase
         .from("profiles")
         .select(
-          "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public"
+          "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public",
         )
         .eq("id", profileId)
         .maybeSingle();
@@ -529,7 +704,7 @@ export default function FullScreenProfileCreation({
       window.dispatchEvent(
         new CustomEvent("profile:updated", {
           detail: { id: profileId, profile: profilePayload },
-        })
+        }),
       );
 
       // Close the modal
@@ -552,6 +727,10 @@ export default function FullScreenProfileCreation({
 
   if (!open) return null;
 
+  const avatarPreviewUrl = avatarDisplayUrl(avatarUrl);
+  const echoPickerInteractive =
+    avatarMode === "echo" && ECHO_AVATAR_PRESETS.length > 0;
+
   return (
     <div className="fixed inset-0 z-50 bg-[var(--surface)]">
       <div className="flex flex-col h-full">
@@ -563,8 +742,15 @@ export default function FullScreenProfileCreation({
             background: "var(--gradient-from-top)",
           }}
         >
-          {/* Floating pill */}
-          <div className="relative z-10 flex items-center justify-between w-[80%] max-w-[640px] rounded-full bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] border border-[var(--bottom-tab-border)] py-[10px] px-4 pointer-events-auto">
+          {/* Floating pill — create flow centers title; edit keeps title + Cancel */}
+          <div
+            className={[
+              "relative z-10 flex w-[80%] max-w-[640px] items-center rounded-full",
+              "border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)]",
+              "px-4 py-[10px] backdrop-blur-[var(--glass-blur)] pointer-events-auto",
+              isFirstTime ? "justify-center" : "justify-between",
+            ].join(" ")}
+          >
             <span className="text-base font-semibold text-[var(--text)]">
               {isFirstTime ? "Create Your Profile" : "Edit Profile"}
             </span>
@@ -588,14 +774,34 @@ export default function FullScreenProfileCreation({
             </div>
           )}
 
-          {/* Avatar Section — entire card triggers the same file picker as before */}
-          <div className="mb-6 flex justify-center">
+          {isFirstTime ? (
+            <div className="mb-5 mx-auto w-full max-w-[min(360px,92vw)] px-1 text-center">
+              <p className="mb-1.5 text-sm font-semibold leading-snug text-[var(--text)]">
+                Welcome to EchoToo <span aria-hidden>🦉</span>
+              </p>
+              <p className="text-[13px] leading-snug text-[var(--text)]/75">
+                It&apos;s pronounced &quot;Echo Too&quot; BTW. Create your
+                profile and start discovering hangouts, experiences, and ideas
+                worth sharing.
+              </p>
+            </div>
+          ) : null}
+
+          {/* Profile image: single unified card (preview + toggle + Echo row) */}
+          <div className="mb-6 w-full">
+            {echoPickedNote && isFirstTime ? (
+              <p className="mb-2.5 text-center text-[12px] leading-snug text-[var(--text)]/60">
+                We picked an Echo for you — change it anytime.
+              </p>
+            ) : null}
+
             <input
-              id="avatar-input"
+              ref={avatarFileInputRef}
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={async (e) => {
+              aria-hidden
+              onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
                 if (!file.type.startsWith("image/")) {
@@ -608,136 +814,230 @@ export default function FullScreenProfileCreation({
                   type: file.type,
                 });
                 setError(null);
-                setUploading(true);
-                try {
-                  // Get userId from session for uploadImage
-                  const {
-                    data: { session },
-                  } = await supabase.auth.getSession();
-                  if (!session?.user?.id) {
-                    throw new Error("User not authenticated");
-                  }
-                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "upload_start", {
-                    userId: session.user.id,
-                    bytes: file.size,
-                  });
-                  const result = await uploadImage(file, {
-                    userId: session.user.id,
-                    kind: "avatar",
-                  });
-                  setAvatarUrl(result);
-                  console.log(PROFILE_AVATAR_UPLOAD_LOG, "success");
-                } catch (err: unknown) {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  const phase = msg.includes("Supabase Storage")
-                    ? "upload"
-                    : msg.includes("not authenticated")
-                    ? "auth"
-                    : "preparation_or_unknown";
-                  console.warn(PROFILE_AVATAR_UPLOAD_LOG, "failed", {
-                    phase,
-                    message: msg,
-                  });
-                  setError(mapProfileAvatarUploadError(err));
-                } finally {
-                  setUploading(false);
-                  (e.target as HTMLInputElement).value = "";
-                }
+                revokeAvatarCropObjectUrl();
+                const url = URL.createObjectURL(file);
+                avatarCropObjectUrlRef.current = url;
+                setAvatarCropSrc(url);
+                setAvatarCropOpen(true);
+                (e.target as HTMLInputElement).value = "";
               }}
             />
-            <label
-              htmlFor="avatar-input"
+
+            <div
               aria-busy={uploading}
-              className="relative flex w-full max-w-[min(320px,92vw)] cursor-pointer flex-col items-center gap-3 overflow-hidden rounded-full border border-[var(--glass-active-border)] px-8 py-5 shadow-[var(--glass-active-shadow)] transition-[filter,transform] hover:brightness-[1.03] active:scale-[0.99] focus-within:ring-2 focus-within:ring-[var(--brand)] focus-within:ring-offset-2 focus-within:ring-offset-[var(--surface)]"
+              className={[
+                "relative w-full overflow-hidden rounded-[34px] border border-[var(--border)] sm:rounded-[40px]",
+                "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] shadow-sm",
+              ].join(" ")}
             >
-              {/* Same “mirror” treatment as BottomTab active profile pill */}
-              {imgUrlPublic(avatarUrl) ? (
+              {avatarPreviewUrl ? (
                 <div
-                  className="pointer-events-none absolute inset-0 rounded-full"
+                  className="pointer-events-none absolute inset-0 rounded-[34px] sm:rounded-[40px]"
                   style={{
-                    backgroundImage: `url(${imgUrlPublic(avatarUrl)})`,
-                    backgroundSize: "250%",
+                    backgroundImage: `url(${avatarPreviewUrl})`,
+                    backgroundSize: "240%",
                     backgroundPosition: "center",
                     filter: "blur(4px)",
-                    opacity: 0.88,
+                    opacity: 0.58,
                   }}
                   aria-hidden
                 />
               ) : (
                 <div
-                  className="pointer-events-none absolute inset-0 rounded-full bg-[var(--bottom-tab-active-bg)]"
+                  className="pointer-events-none absolute inset-0 rounded-[34px] bg-[var(--surface-2)]/30 sm:rounded-[40px]"
                   aria-hidden
                 />
               )}
-              {imgUrlPublic(avatarUrl) && (
+              {avatarPreviewUrl ? (
                 <div
-                  className="pointer-events-none absolute inset-0 z-[1] rounded-full"
+                  className="pointer-events-none absolute inset-0 z-[1] rounded-[34px] sm:rounded-[40px]"
                   style={{
                     backgroundColor: "var(--profile-avatar-pill-scrim)",
+                    opacity: 0.86,
                   }}
                   aria-hidden
                 />
-              )}
-              <div className="relative z-10 flex flex-col items-center gap-3">
-                {imgUrlPublic(avatarUrl) ? (
+              ) : null}
+
+              <div className="relative z-10 flex flex-col items-stretch px-2 pb-2 pt-7 sm:px-4 sm:pt-8">
+                {avatarPreviewUrl ? (
                   <img
-                    src={imgUrlPublic(avatarUrl)!}
-                    className="pointer-events-none h-20 w-20 rounded-full border-2 border-[var(--text)] object-cover shadow-md"
+                    src={avatarPreviewUrl}
+                    className="mx-auto mb-5 h-20 w-20 rounded-full border-2 border-[var(--text)]/85 object-cover shadow-sm"
                     alt=""
                   />
                 ) : (
-                  <div className="pointer-events-none flex h-20 w-20 items-center justify-center rounded-full border-2 border-[var(--text)] bg-white/12 text-2xl shadow-md">
+                  <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full border-2 border-[var(--text)]/70 bg-black/15 text-xl font-medium text-[var(--text)]/90 shadow-sm">
                     ?
                   </div>
                 )}
-                <span className="text-sm font-medium text-[var(--text)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.75)]">
-                  {uploading ? "Uploading..." : "Change photo"}
-                </span>
+
+                <div
+                  className={[
+                    "self-center inline-flex max-w-[min(100%,296px)] gap-px rounded-full border-2 border-[var(--border)]",
+                    "bg-[var(--surface-2)]/55 p-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
+                    "ring-1 ring-[var(--text)]/[0.07]",
+                  ].join(" ")}
+                >
+                  <button
+                    type="button"
+                    className={[
+                      "min-h-[30px] min-w-[7.75rem] flex-1 whitespace-nowrap rounded-full px-2.5 py-1 text-center text-[11px] font-semibold leading-tight transition-colors sm:min-h-[31px]",
+                      avatarMode === "photo"
+                        ? "bg-[var(--brand)] text-[var(--brand-ink)] shadow-sm"
+                        : "text-[var(--text)]/70 hover:bg-[var(--surface)]/40 hover:text-[var(--text)]/90",
+                    ].join(" ")}
+                    disabled={uploading}
+                    onClick={() => {
+                      setAvatarMode("photo");
+                      avatarFileInputRef.current?.click();
+                    }}
+                  >
+                    {uploading ? "Uploading…" : "Upload photo"}
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      "min-h-[30px] min-w-[7.75rem] flex-1 whitespace-nowrap rounded-full px-2.5 py-1 text-center text-[11px] font-semibold leading-tight transition-colors sm:min-h-[31px]",
+                      avatarMode === "echo"
+                        ? "bg-[var(--brand)] text-[var(--brand-ink)] shadow-sm"
+                        : "text-[var(--text)]/70 hover:bg-[var(--surface)]/40 hover:text-[var(--text)]/90",
+                    ].join(" ")}
+                    disabled={ECHO_AVATAR_PRESETS.length === 0 || uploading}
+                    onClick={() => setAvatarMode("echo")}
+                  >
+                    Choose Echo
+                  </button>
+                </div>
+
+                {/* Brand-tint fade — separates toggle from Echo row */}
+                <div
+                  role="presentation"
+                  className="my-4 h-px w-full shrink-0 bg-gradient-to-r from-transparent via-[var(--brand)]/40 to-transparent"
+                  aria-hidden
+                />
+
+                {ECHO_AVATAR_PRESETS.length > 0 ? (
+                  <div
+                    aria-disabled={!echoPickerInteractive}
+                    className={[
+                      "w-full min-w-0 shrink-0",
+                      "rounded-[999px] border-2 border-[var(--border)]",
+                      "bg-[var(--surface-2)]/42 p-1.5",
+                      "backdrop-blur-[var(--glass-blur)] ring-1 ring-[var(--text)]/[0.06]",
+                      echoPickerInteractive
+                        ? "opacity-100"
+                        : "pointer-events-none opacity-[0.42] saturate-[0.82]",
+                    ].join(" ")}
+                  >
+                    {/*
+                     * Outer p-1.5: even inset from rail border.
+                     * Inner rounded + overflow-hidden masks scrollport so owls don’t shear on a vertical edge.
+                     */}
+                    <div className="min-w-0 overflow-hidden rounded-[999px]">
+                      <div
+                        className={[
+                          "flex w-full min-w-0 items-center gap-1.5",
+                          "min-h-[2.5rem] overflow-x-auto overflow-y-hidden rounded-[999px]",
+                          "px-1.5 py-1 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]",
+                        ].join(" ")}
+                      >
+                      {ECHO_AVATAR_PRESETS.map((preset) => {
+                        const value = `${AVATAR_PRESET_PREFIX}${preset.id}`;
+                        const selected =
+                          isAvatarPresetValue(avatarUrl) && avatarUrl === value;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            disabled={!echoPickerInteractive}
+                            aria-disabled={!echoPickerInteractive}
+                            aria-label={`Echo ${preset.id}`}
+                            aria-pressed={selected}
+                            className={[
+                              "relative h-[34px] w-[34px] shrink-0 rounded-full disabled:opacity-65",
+                              "overflow-hidden transition-opacity",
+                              "box-border outline-none",
+                              selected
+                                ? "border-2 border-[var(--brand)]"
+                                : "border border-[var(--border)] opacity-92 hover:opacity-100",
+                              echoPickerInteractive
+                                ? ""
+                                : "cursor-not-allowed hover:opacity-92",
+                            ].join(" ")}
+                            onClick={() => {
+                              if (!echoPickerInteractive) return;
+                              setAvatarUrl(value);
+                            }}
+                          >
+                            <img
+                              src={preset.url}
+                              alt=""
+                              className="h-full w-full object-cover"
+                              draggable={false}
+                            />
+                          </button>
+                        );
+                      })}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            </label>
+            </div>
           </div>
 
           {/* Form Fields */}
           <div className="space-y-4">
             {/* Display Name - Required */}
             <div>
-              <label className="block text-sm font-medium text-[var(--text)] mb-2">
+              <label className="mb-2 block text-sm font-medium text-[var(--text)]">
                 Display Name *
               </label>
-              <input
-                className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                maxLength={40}
-                required
-              />
+              <div className="relative">
+                <input
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 pr-14 text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  maxLength={DISPLAY_NAME_MAX}
+                  required
+                />
+                <FieldCharCount
+                  current={displayName.length}
+                  max={DISPLAY_NAME_MAX}
+                />
+              </div>
             </div>
 
             {/* Username - Required */}
             <div>
-              <label className="block text-sm font-medium text-[var(--text)] mb-2">
+              <label className="mb-2 block text-sm font-medium text-[var(--text)]">
                 Username *
               </label>
               <div className="relative">
                 <input
-                  className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 pr-14 text-[var(--text)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  maxLength={24}
+                  onChange={(e) => {
+                    usernameTouchedByUserRef.current = true;
+                    setUsername(e.target.value);
+                  }}
+                  maxLength={USERNAME_MAX}
                   required
                 />
+                <FieldCharCount current={username.length} max={USERNAME_MAX} />
                 {usernameChecking && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                    <div className="w-4 h-4 border-2 border-[var(--text)]/30 border-t-[var(--text)] rounded-full animate-spin" />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 transform">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--text)]/30 border-t-[var(--text)]" />
                   </div>
                 )}
                 {usernameAvailable === true && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-green-400">
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 transform text-green-400">
                     ✓
                   </div>
                 )}
                 {usernameAvailable === false && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-red-400">
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 transform text-red-400">
                     ✗
                   </div>
                 )}
@@ -751,17 +1051,24 @@ export default function FullScreenProfileCreation({
 
             {/* Bio - Optional */}
             <div>
-              <label className="block text-sm font-medium text-[var(--text)] mb-2">
+              <label className="mb-2 block text-sm font-medium text-[var(--text)]">
                 Bio
               </label>
-              <textarea
-                className="w-full px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)] resize-none"
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                rows={3}
-                maxLength={160}
-                placeholder="I'm too lazy to write a bio 😅"
-              />
+              <div className="relative">
+                <textarea
+                  className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 pb-7 pr-12 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  rows={3}
+                  maxLength={BIO_MAX}
+                  placeholder="I'm too lazy to write a bio 😅"
+                />
+                <FieldCharCount
+                  current={bio.length}
+                  max={BIO_MAX}
+                  insetClassName="bottom-3.5 right-2.5"
+                />
+              </div>
             </div>
 
             {/* Social Media Links */}
@@ -772,42 +1079,60 @@ export default function FullScreenProfileCreation({
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs text-[var(--text)]/70 mb-1">
+                  <label className="mb-1 block text-xs text-[var(--text)]/70">
                     Instagram URL
                   </label>
-                  <input
-                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-                    value={instagramUrl}
-                    onChange={(e) => setInstagramUrl(e.target.value)}
-                    placeholder="https://instagram.com/yourusername"
-                    maxLength={100}
-                  />
+                  <div className="relative">
+                    <input
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      value={instagramUrl}
+                      onChange={(e) => setInstagramUrl(e.target.value)}
+                      placeholder="https://instagram.com/yourusername"
+                      maxLength={SOCIAL_URL_MAX}
+                    />
+                    <FieldCharCount
+                      current={instagramUrl.length}
+                      max={SOCIAL_URL_MAX}
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs text-[var(--text)]/70 mb-1">
+                  <label className="mb-1 block text-xs text-[var(--text)]/70">
                     TikTok URL
                   </label>
-                  <input
-                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-                    value={tiktokUrl}
-                    onChange={(e) => setTiktokUrl(e.target.value)}
-                    placeholder="https://tiktok.com/@yourusername"
-                    maxLength={100}
-                  />
+                  <div className="relative">
+                    <input
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      value={tiktokUrl}
+                      onChange={(e) => setTiktokUrl(e.target.value)}
+                      placeholder="https://tiktok.com/@yourusername"
+                      maxLength={SOCIAL_URL_MAX}
+                    />
+                    <FieldCharCount
+                      current={tiktokUrl.length}
+                      max={SOCIAL_URL_MAX}
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs text-[var(--text)]/70 mb-1">
+                  <label className="mb-1 block text-xs text-[var(--text)]/70">
                     Telegram
                   </label>
-                  <input
-                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-                    value={telegramUrl}
-                    onChange={(e) => setTelegramUrl(e.target.value)}
-                    placeholder="@yourusername or https://t.me/yourusername"
-                    maxLength={100}
-                  />
+                  <div className="relative">
+                    <input
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      value={telegramUrl}
+                      onChange={(e) => setTelegramUrl(e.target.value)}
+                      placeholder="@yourusername or https://t.me/yourusername"
+                      maxLength={SOCIAL_URL_MAX}
+                    />
+                    <FieldCharCount
+                      current={telegramUrl.length}
+                      max={SOCIAL_URL_MAX}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -948,6 +1273,13 @@ export default function FullScreenProfileCreation({
         </div>
       </div>
 
+      <AvatarCropModal
+        open={avatarCropOpen}
+        imageSrc={avatarCropSrc}
+        onCancel={revokeAvatarCropObjectUrl}
+        onConfirm={handleCroppedAvatarConfirm}
+      />
+
       {/* Save Changes Confirmation */}
       <ConfirmDialog
         open={showSaveConfirm}
@@ -996,7 +1328,7 @@ export default function FullScreenProfileCreation({
           setIsDeleting(true);
           setError(null);
           try {
-            const result = await softDeleteAccount();
+            const result = await deleteAccount();
             if (!result.success) {
               setError(result.error);
               setShowDeleteConfirm(false);
@@ -1012,6 +1344,7 @@ export default function FullScreenProfileCreation({
             } catch {}
             onClose();
             navigate("/");
+            await deleteMyPushDevices();
             await supabase.auth.signOut();
           } catch (e: any) {
             setError(e?.message || "Failed to delete account");

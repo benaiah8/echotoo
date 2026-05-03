@@ -1,23 +1,25 @@
 /**
- * Desktop-only split-screen website layout.
- *
- * WEB ONLY: Renders only when !isCapacitor() && width >= DESKTOP_BREAKPOINT.
- * Does not affect Capacitor (Android/iOS) or mobile browser experience.
- *
- * Layout:
- * - Left: App inside a phone-like container
- * - Right: EchoToo info panel (name, purpose, Privacy, Terms, contact)
+ * Desktop-only layout:
+ * - Public legal/help routes (desktop web): full-page reading layout (no phone shell)
+ * - All other desktop web routes: phone + right marketing column (no split policy panel)
+ * - Native & mobile web: passthrough (unchanged)
  */
 
-import { Link } from "react-router-dom";
-import { Paths } from "../router/Paths";
+import { useLocation } from "react-router-dom";
 import { useIsDesktopLayout } from "../lib/desktopLayoutDetection";
-import { getOwlLogoPath } from "../lib/assets";
-import { SUPPORT_EMAIL } from "../lib/supportConfig";
-import { PiInstagramLogo, PiPhone } from "react-icons/pi";
+import { isDesktopPolicyHelpPath } from "../lib/desktopPolicyRoutes";
+import DesktopRightPanel from "./desktop/DesktopRightPanel";
+import BottomTab from "./BottomTab";
 
-const APP_PURPOSE =
-  "The only place you need when you go out. Discover local hangouts and experiences, connect with friends, and make the most of your social life.";
+/**
+ * Desktop split (browser width ≥ 900, non-native) only. Shared by phone frame and
+ * right panel so columns stay level. Height budget = viewport minus vertical padding
+ * (24+24; keep in sync with .desktop-shell padding). Uses 100vh (not dvh) so the
+ * min() value always parses in older engines if max-height would otherwise be ignored.
+ */
+const DESKTOP_SHELL_PAD_Y = 24 * 2;
+const DESKTOP_STAGE_MAX_HEIGHT = `min(calc(100vh - ${DESKTOP_SHELL_PAD_Y}px), 844px)`;
+const DESKTOP_PHONE_MIN_HEIGHT = `min(700px, ${DESKTOP_STAGE_MAX_HEIGHT})`;
 
 export default function DesktopShellWrapper({
   children,
@@ -25,137 +27,79 @@ export default function DesktopShellWrapper({
   children: React.ReactNode;
 }) {
   const isDesktop = useIsDesktopLayout();
+  const { pathname } = useLocation();
+  const legalFullPageDesktop =
+    isDesktop && isDesktopPolicyHelpPath(pathname);
 
   if (!isDesktop) {
     return <>{children}</>;
   }
 
-  return (
-    <div
-      className="desktop-shell"
-      style={{
-        display: "flex",
-        minHeight: "100vh",
-        background: "var(--bg)",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: "48px",
-        padding: "24px",
-      }}
-    >
-      {/* Phone frame: app constrained inside a phone-like container */}
-      <div
-        className="desktop-phone-frame"
-        style={{
-          width: "390px",
-          minHeight: "700px",
-          maxHeight: "min(90vh, 844px)",
-          borderRadius: "40px",
-          border: "12px solid var(--surface-2)",
-          boxShadow:
-            "0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.08)",
-          overflow: "hidden",
-          flexShrink: 0,
-          /* Establish containing block for fixed elements inside */
-          transform: "translateZ(0)",
-          position: "relative",
-        }}
-      >
-        <div
-          className="desktop-phone-inner"
-          style={{
-            width: "100%",
-            height: "100%",
-            minHeight: "700px",
-            maxHeight: "min(90vh, 844px)",
-            overflow: "auto",
-            background: "var(--bg)",
-          }}
-        >
+  /** Full-width legal/help on desktop — reuses routed policy page components */
+  if (legalFullPageDesktop) {
+    return (
+      <div className="desktop-public-legal-page min-h-screen bg-[var(--bg)] text-[var(--text)]">
+        <div className="mx-auto w-full max-w-[760px] px-5 sm:px-8 py-8 sm:py-12 pb-16">
           {children}
         </div>
       </div>
+    );
+  }
 
-      {/* Info panel */}
+  return (
+    <div className="desktop-shell-root">
       <div
-        className="desktop-info-panel"
+        className="desktop-shell"
         style={{
-          flex: 1,
-          maxWidth: "420px",
-          padding: "24px 0",
+          display: "flex",
+          minHeight: "100vh",
+          maxHeight: "100vh",
+          boxSizing: "border-box",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "40px",
+          padding: "24px",
         }}
       >
-        <div className="flex flex-col gap-6">
-          {/* Logo + name */}
-          <div className="flex items-center gap-4">
-            <img
-              src={getOwlLogoPath()}
-              alt="EchoToo"
-              style={{ width: 48, height: 48, objectFit: "contain" }}
-              draggable={false}
-            />
-            <h1 className="text-2xl font-semibold text-[var(--text)]">
-              EchoToo
-            </h1>
+        <div
+          className="desktop-phone-frame"
+          style={{
+            width: "390px",
+            minHeight: DESKTOP_PHONE_MIN_HEIGHT,
+            maxHeight: DESKTOP_STAGE_MAX_HEIGHT,
+            borderRadius: "40px",
+            border: "12px solid rgba(255,255,255,0.07)",
+            boxShadow:
+              "0 0 0 1px rgba(255,255,255,0.06), 0 0 100px -24px rgba(247,208,71,0.18), 0 28px 56px -18px rgba(0,0,0,0.65)",
+            overflow: "hidden",
+            flexShrink: 0,
+            transform: "translateZ(0)",
+            position: "relative",
+          }}
+        >
+          <div
+            className="desktop-phone-inner desktop-phone-inner-scroll"
+            style={{
+              width: "100%",
+              height: "100%",
+              minHeight: DESKTOP_PHONE_MIN_HEIGHT,
+              maxHeight: DESKTOP_STAGE_MAX_HEIGHT,
+              overflow: "auto",
+              background: "var(--bg)",
+              position: "relative",
+            }}
+          >
+            {children}
+            {/* Fixed tab positions to this column: ancestor phone frame uses transform */}
+            <BottomTab />
           </div>
+        </div>
 
-          {/* App purpose */}
-          <p className="text-base text-[var(--text)]/85 leading-relaxed">
-            {APP_PURPOSE}
-          </p>
-
-          {/* Legal links - required for Google OAuth verification */}
-          <div className="flex flex-col gap-2">
-            <Link
-              to={Paths.privacy}
-              className="text-[var(--brand)] hover:underline font-medium"
-            >
-              Privacy Policy
-            </Link>
-            <Link
-              to={Paths.terms}
-              className="text-[var(--brand)] hover:underline font-medium"
-            >
-              Terms of Service
-            </Link>
-            <Link
-              to={Paths.support}
-              className="text-[var(--brand)] hover:underline font-medium"
-            >
-              Support
-            </Link>
-          </div>
-
-          {/* Contact - from WelcomeModal / SupportPage */}
-          <div className="text-sm text-[var(--muted)]">
-            <p className="mb-3">
-              Contact us:{" "}
-              <a
-                href={`mailto:${SUPPORT_EMAIL}`}
-                className="text-[var(--brand)] hover:underline"
-              >
-                {SUPPORT_EMAIL}
-              </a>
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <a
-                href="tel:0902327218"
-                className="flex items-center gap-2 text-[var(--text)]/80 hover:text-[var(--brand)] transition"
-              >
-                <PiPhone size={14} />
-                <span>0902327218</span>
-              </a>
-              <a
-                href="https://www.instagram.com/benaiah.a.t/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 text-[var(--text)]/80 hover:text-[var(--brand)] transition"
-              >
-                <PiInstagramLogo size={14} />
-                <span>@benaiah.a.t</span>
-              </a>
-            </div>
-          </div>
+        <div
+          className="desktop-panel-theme-scope desktop-panel-scroll min-h-0 flex flex-col flex-1 w-full min-w-0 max-w-[640px] overflow-y-auto overscroll-y-contain bg-transparent py-4 px-5 sm:px-7 sm:py-6 border-l border-white/[0.06]"
+          style={{ maxHeight: DESKTOP_STAGE_MAX_HEIGHT }}
+        >
+          <DesktopRightPanel />
         </div>
       </div>
     </div>

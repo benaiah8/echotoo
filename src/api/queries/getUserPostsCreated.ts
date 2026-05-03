@@ -2,6 +2,7 @@
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
 import { requestManager } from "../../lib/requestManager";
+import { publishProfileTrace } from "../../lib/debugProfileFeed";
 
 // [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
 // Returns FeedItem format with all related data (follow_status, is_liked, is_saved, rsvp_data, etc.)
@@ -28,6 +29,11 @@ export async function getUserPostsCreatedOptimized(
     const result = await requestManager.execute(
       dedupeKey,
       async (signal: AbortSignal) => {
+        publishProfileTrace("CREATED_QUERY_START", {
+          authorId,
+          offset: from,
+          limit,
+        });
         const { data, error } = await supabase.rpc(
           "get_user_posts_created_with_related_data",
           {
@@ -61,7 +67,6 @@ export async function getUserPostsCreatedOptimized(
       return { data: [], error: null };
     }
 
-    // Map to FeedItem format (same as feed function)
     const feedItems: FeedItem[] = data.posts.map((post: any) => ({
       id: post.id,
       type: post.type,
@@ -82,14 +87,31 @@ export async function getUserPostsCreatedOptimized(
         | undefined,
       is_liked: post.is_liked,
       is_saved: post.is_saved,
-      like_count: post.like_count,
-      comment_count: post.comment_count,
+      like_count: post.like_count ?? 0,
+      save_count: post.save_count ?? 0,
+      effective_like_count: post.effective_like_count ?? (post.like_count ?? 0),
+      effective_save_count: post.effective_save_count ?? (post.save_count ?? 0),
+      comment_count: post.comment_count ?? 0,
       has_images: post.has_images,
+      rating_enabled: post.rating_enabled,
+      rating_average: post.rating_average ?? null,
+      rating_count: post.rating_count ?? null,
+      effective_rating_average:
+        post.effective_rating_average ?? (post.rating_average ?? null),
+      effective_rating_count:
+        post.effective_rating_count ?? (post.rating_count ?? null),
+      viewer_rating: post.viewer_rating ?? null,
       rsvp_data: post.rsvp_data || null,
+      rsvp_capacity: post.rsvp_capacity ?? null,
       // [PHASE 4.1.1 FIX] Include activities from PostgreSQL to prevent extra queries
       // This eliminates 1 activities query per post (5+ fewer network requests)
       activities: post.activities || [],
     }));
+
+    publishProfileTrace("CREATED_QUERY_DONE", {
+      returnedCount: feedItems.length,
+      firstPostId: feedItems[0]?.id ?? null,
+    });
 
     return { data: feedItems, error: null };
   } catch (error: any) {
@@ -128,7 +150,8 @@ export async function getUserPostsCreated(
       anonymous_avatar,
       selected_dates,
       tags,
-      status
+      status,
+      rsvp_capacity
     `
     )
     .eq("author_id", authorId);

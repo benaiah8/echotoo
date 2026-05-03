@@ -1,6 +1,6 @@
 // Avatar cache to reduce egress
 // [OPTIMIZATION: Phase 3.2] Migrated to StorageManager for better performance and Capacitor support
-import { imgUrlPublic } from "./img";
+import { avatarDisplayUrl } from "./avatarDisplayUrl";
 import { getStorageManager } from "./storage/StorageManager";
 import { getCacheDurationMultiplier } from "./connectionAware";
 
@@ -122,7 +122,7 @@ export function setCachedAvatar(userId: string, url: string): void {
 export function preloadAvatar(url: string): void {
   if (!url) return;
 
-  const resolved = imgUrlPublic(url);
+  const resolved = avatarDisplayUrl(url);
   if (!resolved) return;
 
   const img = new Image();

@@ -13,6 +13,9 @@ import { isDraftPostId } from "../../lib/drafts";
 import { emitPostChanged } from "../../lib/postEvents";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { incrementMyXp } from "../../api/services/xp";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
+import HangoutNotificationExplainerModal from "./HangoutNotificationExplainerModal";
+import { shouldShowHangoutExplainerAuto } from "../../lib/hangoutNotificationExplainerPrefs";
 
 interface SaveButtonProps {
   postId: string;
@@ -43,9 +46,11 @@ export default function SaveButton({
   const [isAnimating, setIsAnimating] = useState(false);
   const [currentCount, setCurrentCount] = useState(saveCount);
   const authState = useSelector((state: RootState) => state.auth);
-  const authLoading = authState?.loading ?? true;
+  const { authLoading, ensureAuthed } = useAuthActionGate();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const hasLoadedRef = useRef(false);
+  const [hangoutReminderExplainerOpen, setHangoutReminderExplainerOpen] =
+    useState(false);
 
   // [DEBUG] Warn if falling back to individual query
   // [PHASE 1.1] Silenced to reduce console noise - uncomment for debugging
@@ -118,12 +123,15 @@ export default function SaveButton({
     };
   }, [postId, authLoading, initialIsSaved]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
-  // Update count when prop changes
+  // Reconcile with canonical saveCount when not toggling (optimistic count preserved mid-toggle).
   useEffect(() => {
-    setCurrentCount(saveCount);
-  }, [saveCount]);
+    if (isToggling) return;
+    setCurrentCount(saveCount ?? 0);
+  }, [saveCount, isToggling]);
 
   const handleToggleSave = async () => {
+    if (!ensureAuthed()) return;
+
     // Allow clicking even if still loading initial state, but prevent double-clicks
     if (isToggling) return;
 
@@ -162,7 +170,6 @@ export default function SaveButton({
           emitPostChanged(postId, { viewerSaved: true, savesDelta: 1 });
           toast.error("Failed to unsave post");
         } else {
-          toast.success("Post unsaved");
           // [PHASE 1] Update XP (unsave = -2)
           try {
             await incrementMyXp(-2);
@@ -181,7 +188,6 @@ export default function SaveButton({
           emitPostChanged(postId, { viewerSaved: false, savesDelta: -1 });
           toast.error("Failed to save post");
         } else {
-          toast.success("Post saved");
           // [PHASE 1] Update XP (save = +2)
           try {
             await incrementMyXp(2);
@@ -195,6 +201,10 @@ export default function SaveButton({
             } catch (err) {
               // Fail silently - don't break save action if personalization fails
             }
+          }
+          // Contextual explainer (UI only): saved hangout → optional reminders; prefs gate auto frequency
+          if (post?.type === "hangout" && shouldShowHangoutExplainerAuto()) {
+            setHangoutReminderExplainerOpen(true);
           }
         }
       }
@@ -216,6 +226,11 @@ export default function SaveButton({
   const displaySaved = isSaved ?? false;
 
   return (
+    <>
+      <HangoutNotificationExplainerModal
+        open={hangoutReminderExplainerOpen}
+        onOpenChange={setHangoutReminderExplainerOpen}
+      />
     <button
       ref={buttonRef}
       onClick={handleToggleSave}
@@ -252,5 +267,6 @@ export default function SaveButton({
         </span>
       )}
     </button>
+    </>
   );
 }

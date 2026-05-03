@@ -46,6 +46,10 @@ function setToLocalStorageLegacy(key: string, value: any): void {
 
 interface NotificationCountCacheEntry {
   count: number;
+  /** Unread with type === 'invite' (for tab badge ring); absent on legacy cache rows */
+  inviteUnread?: number;
+  /** Unread with type !== 'invite' (for tab badge ring) */
+  activityUnread?: number;
   timestamp: number;
   userId: string; // Auth user ID to prevent cross-user cache leakage
 }
@@ -74,6 +78,11 @@ export function getCachedNotificationCount(userId: string): number | null {
       return null;
     }
 
+    // Legacy: refetch to populate invite/activity split for bottom tab badge
+    if (entry.inviteUnread === undefined || entry.activityUnread === undefined) {
+      return null;
+    }
+
     return entry.count;
   } catch (error) {
     console.error("Error reading notification count cache:", error);
@@ -82,14 +91,55 @@ export function getCachedNotificationCount(userId: string): number | null {
 }
 
 /**
+ * Full badge split if cache hit (same TTL as count); null if miss/legacy/expired.
+ */
+export function getCachedNotificationBadgeData(
+  userId: string
+): {
+  count: number;
+  inviteUnread: number;
+  activityUnread: number;
+} | null {
+  try {
+    const cache = getFromLocalStorageLegacy<NotificationCountCache>(
+      NOTIFICATION_COUNT_CACHE_KEY
+    );
+    if (!cache) return null;
+    const entry = cache[userId];
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > getCacheDuration()) return null;
+    if (
+      entry.inviteUnread === undefined ||
+      entry.activityUnread === undefined
+    ) {
+      return null;
+    }
+    return {
+      count: entry.count,
+      inviteUnread: entry.inviteUnread,
+      activityUnread: entry.activityUnread,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Set cached notification count
  */
-export function setCachedNotificationCount(userId: string, count: number): void {
+export function setCachedNotificationCount(
+  userId: string,
+  count: number,
+  split?: { inviteUnread: number; activityUnread: number }
+): void {
   try {
     const storage = getStorage();
     const storageKey = `${STORAGE_PREFIX}${userId}`;
     const entry: NotificationCountCacheEntry = {
       count,
+      ...(split
+        ? { inviteUnread: split.inviteUnread, activityUnread: split.activityUnread }
+        : {}),
       timestamp: Date.now(),
       userId,
     };

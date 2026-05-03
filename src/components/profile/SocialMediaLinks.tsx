@@ -1,5 +1,6 @@
 import React from "react";
 import { Profile } from "../../contexts/ProfileContext";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 
 interface SocialMediaLinksProps {
   profile: Profile | null;
@@ -77,8 +78,7 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
       finalUrl = `https://t.me/${url.replace("@", "")}`;
     }
 
-    // Open in new tab
-    window.open(finalUrl, "_blank", "noopener,noreferrer");
+    void openExternalUrl(finalUrl);
   };
 
   return (

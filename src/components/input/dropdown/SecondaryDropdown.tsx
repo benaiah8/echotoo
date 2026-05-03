@@ -2,10 +2,11 @@ import React, { useRef, useState, type ReactNode } from "react";
 import { PiCaretDown, PiCheck } from "react-icons/pi";
 import DropdownContainer from "./DropdownContainer";
 
-interface Option {
+export type SecondaryDropdownOption = {
   label: string;
   value: string;
-}
+  icon?: ReactNode;
+};
 
 interface Props {
   label?: string;
@@ -18,7 +19,7 @@ interface Props {
   values?: string[];
   onChangeValues?: (values: string[]) => void;
 
-  options: Option[];
+  options: SecondaryDropdownOption[];
   className?: string;
   dropdownClassName?: string;
   /** Replaces default trigger chrome (border, height, padding). Portal/dropdown unchanged. */
@@ -52,12 +53,13 @@ const SecondaryDropdown: React.FC<Props> = ({
   const [search, setSearch] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const showSearch = options.length > 5;
+  /** Create-flow: always show search inside the single menu panel (no separate “search layer”). */
+  const showSearch = createFlowMenu ? true : options.length > 5;
 
   const filtered = options.filter(
     (option) =>
       option.label.toLowerCase().includes(search.toLowerCase()) ||
-      option.value.includes(search)
+      option.value.toLowerCase().includes(search.toLowerCase())
   );
 
   const handleParentToggle = (isOpen: boolean) => {
@@ -86,20 +88,20 @@ const SecondaryDropdown: React.FC<Props> = ({
     : selectedSingle?.label || label || "Select";
 
   const menuShellClass = createFlowMenu
-    ? "flex w-full min-w-[260px] max-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl text-[var(--text)]"
+    ? "flex w-full min-w-[260px] max-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl text-[var(--text)]"
     : "flex w-fit max-w-[320px] flex-col text-[var(--text)]";
 
   const searchClass = createFlowMenu
-    ? "w-full border-b border-[var(--border)]/50 bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] px-3 py-2.5 text-xs text-[var(--text)] placeholder:text-[var(--text)]/38 outline-none transition focus-visible:bg-[color-mix(in_oklab,var(--surface)_30%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/35"
+    ? "w-full border-b border-[var(--create-border-panel-line-soft)]/80 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] px-3 py-2.5 text-xs text-[var(--text)] placeholder:text-[var(--text)]/38 outline-none transition focus-visible:bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--brand)]/25"
     : "border-b border-gray-500 bg-transparent px-3 py-2 text-sm outline-none";
 
   const optionBtnClass = (isSelected: boolean) =>
     createFlowMenu
       ? [
-          "mx-1 flex w-[calc(100%-8px)] items-center justify-between rounded-lg px-3 py-2 text-left text-xs text-[var(--text)]/92 transition",
-          "hover:bg-[color-mix(in_oklab,var(--surface)_42%,transparent)] active:scale-[0.99] active:bg-[color-mix(in_oklab,var(--surface)_32%,transparent)]",
+          "mx-1 flex w-[calc(100%-8px)] items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs text-[var(--text)]/92 transition",
+          "hover:bg-[color-mix(in_oklab,var(--surface)_48%,transparent)] active:scale-[0.99] active:bg-[color-mix(in_oklab,var(--surface)_36%,transparent)]",
           isSelected
-            ? "bg-[color-mix(in_oklab,var(--surface)_28%,transparent)]"
+            ? "bg-[color-mix(in_oklab,var(--brand)_12%,transparent)] ring-1 ring-[var(--brand)]/25"
             : "",
         ].join(" ")
       : `px-4 py-2 text-left text-xs w-full flex items-center justify-between ${
@@ -111,7 +113,7 @@ const SecondaryDropdown: React.FC<Props> = ({
     : "px-4 py-2 text-sm text-gray-400";
 
   const portalMenuClass = createFlowMenu
-    ? `!max-h-none !overflow-hidden min-w-[260px] max-w-[min(320px,calc(100vw-32px))] !rounded-xl !border !border-[var(--border)]/50 !bg-[var(--surface-2)] !text-[var(--text)] !shadow-[0_12px_40px_rgba(0,0,0,0.14)] dark:!shadow-[0_12px_40px_rgba(0,0,0,0.45] ${dropdownClassName}`
+    ? `!max-h-none !overflow-hidden min-w-[260px] max-w-[min(320px,calc(100vw-32px))] !rounded-2xl !border !border-[var(--create-border-panel-line-soft)] !bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] !text-[var(--text)] !shadow-[0_24px_64px_-16px_rgba(0,0,0,0.55)] !backdrop-blur-xl !backdrop-saturate-150 supports-[backdrop-filter]:!bg-[color-mix(in_oklab,var(--surface)_42%,transparent)] ${dropdownClassName}`
     : `w-fit ${dropdownClassName}`;
 
   const defaultTrigger =
@@ -126,6 +128,7 @@ const SecondaryDropdown: React.FC<Props> = ({
       dropdownClassName={portalMenuClass}
       left
       disabled={disabled}
+      barePortal={createFlowMenu}
       parentToggle={handleParentToggle}
       dropdown={(closeDropdown) => (
         <div className={menuShellClass}>
@@ -135,14 +138,15 @@ const SecondaryDropdown: React.FC<Props> = ({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
+              onClick={(e) => e.stopPropagation()}
+              placeholder="Filter types…"
               className={searchClass}
             />
           )}
           <div
             className={
               createFlowMenu
-                ? "max-h-56 scroll-hide overflow-y-auto py-1"
+                ? "max-h-56 scroll-hide overflow-y-auto py-1.5"
                 : "max-h-56 scroll-hide overflow-y-auto"
             }
           >
@@ -160,15 +164,19 @@ const SecondaryDropdown: React.FC<Props> = ({
                     onClick={() => {
                       if (multi) {
                         toggleMulti(option.value);
-                        // DO NOT close in multi mode; let users pick many
                       } else {
                         onChange?.(option.value);
                         closeDropdown();
                       }
                     }}
                   >
-                    <span>{option.label}</span>
-                    {multi && isSelected && <PiCheck />}
+                    {option.icon ? (
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] text-[var(--text)]/90">
+                        {option.icon}
+                      </span>
+                    ) : null}
+                    <span className="min-w-0 flex-1 leading-snug">{option.label}</span>
+                    {multi && isSelected && <PiCheck className="shrink-0" />}
                   </button>
                 );
               })

@@ -2,6 +2,12 @@
 
 @import "tailwindcss";
 
+/* App theme uses `html.theme-light` (see src/lib/theme.ts). Tailwind's built-in
+   `dark:` follows prefers-color-scheme, so OS dark + in-app light produced
+   white-on-white text. Use app-light/app-dark for theme-accurate styling. */
+@custom-variant app-light (html.theme-light &);
+@custom-variant app-dark (html:not(.theme-light) &);
+
 :root {
   font-family: "Poppins", sans-serif;
   font-weight: 400;
@@ -68,9 +74,17 @@
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   /* Android 3-button nav: set on documentElement in app (native Android only). */
   --android-extra-bottom: 0px;
+  /* iOS home indicator: some Capacitor WebViews report 0 for env() — set in app (native iOS only). */
+  --ios-extra-bottom: 0px;
   /* Single source for layout: use this instead of env() in components. */
   --safe-area-bottom-layout: calc(
-    env(safe-area-inset-bottom, 0px) + var(--android-extra-bottom, 0px)
+    env(safe-area-inset-bottom, 0px) + var(--android-extra-bottom, 0px) +
+      var(--ios-extra-bottom, 0px)
+  );
+  /* Status bar / notch — env() plus optional native top inset when WebView reports 0. */
+  --android-extra-top: 0px;
+  --safe-area-top-layout: calc(
+    env(safe-area-inset-top, 0px) + var(--android-extra-top, 0px)
   );
   /* Create flow: bottom tab + prev/next bar + safe area - sensible default before JS measures */
   --create-actions-total-bottom: calc(
@@ -93,7 +107,12 @@
     255,
     0.15
   ); /* Active indicator background (square) */
-  --bottom-tab-active-bg: #151516; /* Solid black for bottom tab active state (dark mode) */
+  --bottom-tab-active-bg: #151516; /* Profile / create-overlay active pill (dark mode) */
+  /* Feed + notifications: inverted chip (white pill, dark icon) — light mode reverses */
+  --bottom-tab-feed-notif-active-bg: #ffffff;
+  --bottom-tab-feed-notif-active-fg: #0b0b0c;
+  --bottom-tab-feed-notif-active-border: rgba(0, 0, 0, 0.1);
+  --bottom-tab-feed-notif-active-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   /* Create tab only: inverted chip (white pill, dark plus) */
   --bottom-tab-create-active-bg: #ffffff;
   --bottom-tab-create-active-fg: #0b0b0c;
@@ -105,8 +124,13 @@
     0.4
   ); /* More prominent white-ish border for active indicator (dark mode) */
   --drawer-backdrop: rgba(0, 0, 0, 0.5);
+  /* Blocking / opaque modal scrim (hard update, report) — theme-aware */
+  --modal-opaque-backdrop: rgba(0, 0, 0, 0.82);
   /* Centered confirmation dialogs - phone-sized even on tablets */
   --floating-confirm-max-width: min(380px, 90vw);
+  /* Owl message modal: slightly lighter border on dark UI */
+  --owl-message-modal-border: rgba(255, 255, 255, 0.3);
+  --owl-message-modal-deco-accent: rgba(247, 208, 71, 0.78);
   --auth-google-btn-bg: #ffffff;
   --auth-google-btn-text: #0b0b0c;
   --auth-control-height: 34px; /* Shared height for auth tabs, inputs, buttons - change once to update all */
@@ -116,6 +140,8 @@
     255,
     0.25
   ); /* Visible outline for floating bottom tab (dark mode) */
+  /* Bottom tab pill only: outer ring (box-shadow), stronger than --bottom-tab-border */
+  --bottom-tab-pill-ring: rgba(255, 255, 255, 0.58);
 
   /* Edit profile: scrim over blurred avatar pill so foreground pops */
   --profile-avatar-pill-scrim: rgba(0, 0, 0, 0.42);
@@ -154,6 +180,143 @@
     color-mix(in oklab, var(--bg) 42%, transparent) 45%,
     transparent 100%
   );
+  /* Create chooser bottom CTA — selected Hangout/Experience (high-contrast surface; dark theme default) */
+  --create-chooser-cta-selected-surface: #ffffff;
+  --create-chooser-cta-selected-label: #0b0b0c;
+
+  /* Create flow: Date/Visibility/RSVP + Activities Location/Images/More — white pill on dark app, black pill on light app */
+  --create-meta-pill-bg: #ffffff;
+  --create-meta-pill-fg: #0b0b0c;
+  --create-meta-pill-hover-bg: #ebebeb;
+  --create-meta-pill-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 4px 16px rgba(0, 0, 0, 0.32);
+  --create-meta-pill-endcap-bg: #0b0b0c;
+  --create-meta-pill-endcap-fg: #fafafa;
+  --create-meta-pill-endcap-border: rgba(255, 255, 255, 0.14);
+  --create-meta-pill-schedule-dot-bg: #0b0b0c;
+  --create-meta-pill-schedule-dot-ring: rgba(11, 11, 12, 0.28);
+  --create-meta-pill-images-ring: rgba(11, 11, 12, 0.26);
+  --create-meta-pill-rsvp-ring: rgba(11, 11, 12, 0.42);
+
+  /*
+   * Create flow — border & radius system (html.theme-light / :root = app dark vs light).
+   * Use these instead of ad-hoc neutral-900/18 + app-dark:border-white pairs.
+   * Width: combine with border (1px) or border-2 (2px) in markup — vars are colors only.
+   * --create-border-frame / -muted: 2px card shells (composer, finalize panels, location).
+   * --create-border-panel-line / -soft / -subtle: 1px hairlines on surfaces.
+   * --create-border-dashed / -muted: dashed draft preview + empty slots.
+   * --create-border-divider: border-t between stacked blocks.
+   * --create-border-input-idle: 2px text fields (location, generic inputs).
+   * --create-border-composer-shell: finalize caption card + Activities outer card (subtle).
+   * --create-border-primary-field: caption textarea, activity composer, embedded hashtags (step up from shell).
+   * --create-border-hero-outline: Add photos / activities finalize CTA outer ring (neutral, not brand).
+   * --create-hero-cta-icon-*: icon disc inside those CTAs only.
+   * --create-hero-cta-counter-*: right-side count pill (images / stops).
+   * --create-border-top-chrome / -top-circle / -maps-cta: top bar + map CTA hairlines.
+   */
+  /* Create flow — border & radius system (theme via html.theme-light; do not use Tailwind dark:) */
+  --create-border-w-hairline: 1px;
+  --create-border-w-strong: 2px;
+  --create-radius-panel: 0.75rem;
+  --create-radius-field: 0.5rem;
+  --create-radius-control: 0.375rem;
+  /* Main composer / embedded card outline (2px): bold white on dark app */
+  --create-border-frame: #ffffff;
+  /* Softer 2px frame (e.g. RSVP meta panel) */
+  --create-border-frame-muted: rgba(255, 255, 255, 0.22);
+  /* In-panel hairlines (1px): chips, nested rows — visible on --surface */
+  --create-border-panel-line: rgba(255, 255, 255, 0.88);
+  --create-border-panel-line-soft: rgba(255, 255, 255, 0.45);
+  --create-border-subtle: rgba(255, 255, 255, 0.35);
+  /* Dashed: draft preview (ActivitiesTagsInput) + empty image slot */
+  --create-border-dashed: rgba(255, 255, 255, 0.5);
+  --create-border-dashed-muted: rgba(255, 255, 255, 0.38);
+  /* Section divider (border-t) */
+  --create-border-divider: rgba(255, 255, 255, 0.2);
+  /* Text fields / maps input (2px idle) */
+  --create-border-input-idle: rgba(255, 255, 255, 0.32);
+  /* Finalize caption shell + Activities page main composer card */
+  --create-border-composer-shell: rgba(255, 255, 255, 0.2);
+  --create-border-composer-shell-ring: rgba(247, 208, 71, 0.07);
+  /* Stronger than shell, softer than full white — caption / activity notes / embedded tags */
+  --create-border-primary-field: rgba(255, 255, 255, 0.38);
+  /* Add photos / activities finalize CTAs — subtle white ring (not brand yellow) */
+  --create-border-hero-outline: rgba(255, 255, 255, 0.22);
+  /* Icon disc inside those CTAs */
+  --create-hero-cta-icon-disc-border: rgba(255, 255, 255, 0.26);
+  --create-hero-cta-icon-disc-bg: rgba(255, 255, 255, 0.08);
+  --create-hero-cta-icon-fg: rgba(255, 255, 255, 0.9);
+  --create-hero-cta-icon-shadow: 0 0 18px rgba(255, 255, 255, 0.07);
+  /* Hero CTA right counter (e.g. 0/10) — gray disc, reads on frosted pill */
+  --create-hero-cta-counter-bg: rgba(255, 255, 255, 0.14);
+  --create-hero-cta-counter-border: rgba(255, 255, 255, 0.34);
+  --create-hero-cta-counter-fg: rgba(255, 255, 255, 0.96);
+  --create-hero-cta-counter-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  /* Top bar frosted pill when emphasized */
+  --create-border-top-chrome: rgba(255, 255, 255, 0.4);
+  /* CreateFlowTopBar circle actions + textured map CTA hairline */
+  --create-border-top-circle: rgba(255, 255, 255, 0.25);
+  --create-border-maps-cta: rgba(255, 255, 255, 0.22);
+
+  /*
+   * Create finalize — accent icons (calendar, add photos, map pins, caption *):
+   * bright brand on dark page; on light page use dark amber/ink so glyphs read on white.
+   */
+  --create-accent-icon-fg: #f7d047;
+  --create-accent-icon-glow: color-mix(in oklab, var(--brand) 42%, transparent);
+  --create-caption-required-accent: #f7d047;
+  /* Activity preview timeline (vertical rail + nodes) */
+  --create-timeline-rail: rgba(255, 255, 255, 0.42);
+  --create-timeline-rail-muted: rgba(255, 255, 255, 0.2);
+  --create-timeline-dot: rgba(255, 255, 255, 0.92);
+  --create-timeline-dot-muted: rgba(255, 255, 255, 0.48);
+  /* Leave/Publish strip: frosted, not a solid white card */
+  --create-action-strip-bg: color-mix(
+    in oklab,
+    var(--glass-bg) 72%,
+    transparent
+  );
+  --create-action-strip-shadow: 0 -4px 14px -4px rgba(0, 0, 0, 0.22),
+    0 2px 10px -2px rgba(0, 0, 0, 0.12);
+  /* Public/Friends chip on Date/Vis/RSVP pill — green on white pill (dark app) */
+  --create-visibility-chip-bg: #15803d;
+  --create-visibility-chip-fg: #f0fdf4;
+  --create-visibility-chip-border: color-mix(
+    in oklab,
+    #22c55e 55%,
+    rgba(0, 0, 0, 0.35)
+  );
+  /*
+   * Reusable frosted pill surface + lighting (finalize CTAs — blur + tint, no inner color gradient).
+   * Pair --create-pill-frost-bg with backdrop-filter using --create-pill-backdrop-blur.
+   */
+  --create-pill-frost-bg: rgba(6, 6, 8, 0.58);
+  --create-pill-backdrop-blur: 14px;
+  --create-pill-shadow-elevation: 0 4px 18px -6px rgba(0, 0, 0, 0.55),
+    0 2px 10px -4px rgba(0, 0, 0, 0.4);
+  --create-pill-shadow-warm-glow: 0 22px 46px -14px rgba(247, 208, 71, 0.4),
+    0 10px 28px -10px rgba(247, 208, 71, 0.24);
+  /* Soft amber pool behind the pill (screenshot: shine under bottom edge) */
+  --create-pill-bottom-haze: radial-gradient(
+    ellipse 88% 72% at 50% 100%,
+    rgba(247, 208, 71, 0.52) 0%,
+    rgba(247, 208, 71, 0.14) 44%,
+    transparent 68%
+  );
+  /* Add activity CTA: photo-pill language with centered single-line label. */
+  --create-activity-cta-outline: #f7d047;
+  --create-activity-cta-inner-bg: #000000;
+  --create-activity-cta-outer-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 4px 20px rgba(0, 0, 0, 0.32);
+  --create-activity-cta-pin: #fafafa;
+  --create-activity-cta-pin-filter: drop-shadow(
+      0 0 4px rgba(247, 208, 71, 0.72)
+    )
+    drop-shadow(0 0 11px rgba(247, 208, 71, 0.46))
+    drop-shadow(0 0 18px rgba(247, 208, 71, 0.22))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+  --create-activity-cta-label: rgba(255, 255, 255, 0.96);
 }
 
 .theme-light {
@@ -161,6 +324,8 @@
   --surface: #f2f3f6;
   --surface-2: #e8eaef;
   --text: #0b0b0c;
+  --create-chooser-cta-selected-surface: #0b0b0c;
+  --create-chooser-cta-selected-label: #ffffff;
   --muted: rgba(0, 0, 0, 0.7);
   --border: rgba(0, 0, 0, 0.2);
   --border-contrast: rgba(0, 0, 0, 1); /* High contrast border for logos */
@@ -217,6 +382,10 @@
   ); /* Slightly more opaque yellow for light mode */
   --date-highlight-text: var(--text); /* Text color for highlighted dates */
 
+  /* Owl message modal: slightly darker border on light UI */
+  --owl-message-modal-border: rgba(12, 12, 14, 0.34);
+  --owl-message-modal-deco-accent: rgba(202, 138, 4, 0.72);
+
   /* Frosted glass effect variables (light theme) */
   --glass-bg: rgba(
     242,
@@ -231,7 +400,12 @@
     255,
     0.9
   ); /* Active indicator background (square) - more opaque in light mode */
-  --bottom-tab-active-bg: #ffffff; /* Solid white for bottom tab active state (light mode) */
+  --bottom-tab-active-bg: #ffffff; /* Profile / create-overlay active pill (light mode) */
+  /* Feed + notifications: black pill, light icon (inverse of dark theme) */
+  --bottom-tab-feed-notif-active-bg: #0b0b0c;
+  --bottom-tab-feed-notif-active-fg: #ffffff;
+  --bottom-tab-feed-notif-active-border: rgba(255, 255, 255, 0.16);
+  --bottom-tab-feed-notif-active-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
   /* Create tab only: inverted chip (dark pill, light plus) */
   --bottom-tab-create-active-bg: #0b0b0c;
   --bottom-tab-create-active-fg: #ffffff;
@@ -243,6 +417,8 @@
     0.25
   ); /* More prominent dark border for active indicator (light mode) */
   --drawer-backdrop: rgba(0, 0, 0, 0.28);
+  /* Lighter dim in light mode so the shell doesn’t read as “wrong theme” */
+  --modal-opaque-backdrop: rgba(0, 0, 0, 0.4);
   --auth-google-btn-bg: #1a1a1a;
   --auth-google-btn-text: #ffffff;
   --bottom-tab-border: rgba(
@@ -251,6 +427,8 @@
     0,
     0.2
   ); /* Visible outline for floating bottom tab (light mode) */
+  /* Bottom tab pill only: outer ring (box-shadow), stronger than --bottom-tab-border */
+  --bottom-tab-pill-ring: rgba(11, 11, 12, 0.48);
 
   --profile-avatar-pill-scrim: rgba(255, 255, 255, 0.52);
 
@@ -286,6 +464,94 @@
     color-mix(in oklab, var(--bg) 42%, transparent) 45%,
     transparent 100%
   );
+
+  --create-meta-pill-bg: #1a1a1a;
+  --create-meta-pill-fg: #ffffff;
+  --create-meta-pill-hover-bg: #2f2f2f;
+  --create-meta-pill-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 4px 16px rgba(0, 0, 0, 0.18);
+  --create-meta-pill-endcap-bg: #ffffff;
+  --create-meta-pill-endcap-fg: #0b0b0c;
+  --create-meta-pill-endcap-border: rgba(0, 0, 0, 0.12);
+  --create-meta-pill-schedule-dot-bg: #ffffff;
+  --create-meta-pill-schedule-dot-ring: rgba(255, 255, 255, 0.3);
+  --create-meta-pill-images-ring: rgba(255, 255, 255, 0.28);
+  --create-meta-pill-rsvp-ring: rgba(255, 255, 255, 0.55);
+
+  --create-border-frame: color-mix(in oklab, #0b0b0c 20%, transparent);
+  --create-border-frame-muted: color-mix(in oklab, #0b0b0c 14%, transparent);
+  --create-border-panel-line: rgba(0, 0, 0, 0.14);
+  --create-border-panel-line-soft: rgba(0, 0, 0, 0.22);
+  --create-border-subtle: rgba(0, 0, 0, 0.18);
+  --create-border-dashed: rgba(0, 0, 0, 0.32);
+  --create-border-dashed-muted: rgba(0, 0, 0, 0.24);
+  --create-border-divider: rgba(0, 0, 0, 0.1);
+  --create-border-input-idle: color-mix(in oklab, #0b0b0c 45%, transparent);
+  --create-border-composer-shell: rgba(11, 11, 12, 0.1);
+  --create-border-composer-shell-ring: rgba(202, 138, 4, 0.06);
+  --create-border-primary-field: rgba(11, 11, 12, 0.2);
+  --create-border-hero-outline: rgba(11, 11, 12, 0.14);
+  --create-hero-cta-icon-disc-border: rgba(11, 11, 12, 0.18);
+  --create-hero-cta-icon-disc-bg: rgba(11, 11, 12, 0.05);
+  --create-hero-cta-icon-fg: rgba(11, 11, 12, 0.78);
+  --create-hero-cta-icon-shadow: 0 0 14px rgba(0, 0, 0, 0.06);
+  --create-hero-cta-counter-bg: rgba(11, 11, 12, 0.08);
+  --create-hero-cta-counter-border: rgba(11, 11, 12, 0.18);
+  --create-hero-cta-counter-fg: rgba(11, 11, 12, 0.88);
+  --create-hero-cta-counter-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 1px 2px rgba(0, 0, 0, 0.06);
+  --create-border-top-chrome: rgba(0, 0, 0, 0.18);
+  --create-border-top-circle: rgba(31, 41, 55, 0.88);
+  --create-border-maps-cta: rgba(0, 0, 0, 0.35);
+
+  --create-accent-icon-fg: #5c4300;
+  --create-accent-icon-glow: color-mix(
+    in oklab,
+    var(--brand-ink) 18%,
+    transparent
+  );
+  --create-caption-required-accent: #7a5200;
+  --create-timeline-rail: rgba(0, 0, 0, 0.42);
+  --create-timeline-rail-muted: rgba(0, 0, 0, 0.2);
+  --create-timeline-dot: rgba(0, 0, 0, 0.82);
+  --create-timeline-dot-muted: rgba(0, 0, 0, 0.38);
+  --create-action-strip-bg: color-mix(
+    in oklab,
+    var(--glass-bg) 55%,
+    transparent
+  );
+  --create-action-strip-shadow: 0 -3px 12px -3px rgba(0, 0, 0, 0.08),
+    0 2px 8px -2px rgba(0, 0, 0, 0.05);
+  /* Public/Friends chip on dark pill (light app) — brand yellow pops vs black */
+  --create-visibility-chip-bg: #f7d047;
+  --create-visibility-chip-fg: #0b0b0c;
+  --create-visibility-chip-border: color-mix(
+    in oklab,
+    var(--brand) 42%,
+    #1a1400
+  );
+  --create-pill-frost-bg: rgba(255, 255, 255, 0.76);
+  --create-pill-backdrop-blur: 12px;
+  --create-pill-shadow-elevation: 0 3px 14px -4px rgba(0, 0, 0, 0.12),
+    0 2px 8px -2px rgba(0, 0, 0, 0.08);
+  --create-pill-shadow-warm-glow: 0 18px 38px -12px rgba(180, 120, 20, 0.26),
+    0 8px 24px -8px rgba(247, 208, 71, 0.2);
+  --create-pill-bottom-haze: radial-gradient(
+    ellipse 88% 72% at 50% 100%,
+    rgba(202, 138, 4, 0.38) 0%,
+    rgba(247, 208, 71, 0.12) 46%,
+    transparent 68%
+  );
+  --create-activity-cta-outline: #ca8a04;
+  --create-activity-cta-inner-bg: #ffffff;
+  --create-activity-cta-outer-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 10px rgba(0, 0, 0, 0.08);
+  --create-activity-cta-pin: #0b0b0c;
+  --create-activity-cta-pin-filter: drop-shadow(0 0 3px rgba(202, 138, 4, 0.32))
+    drop-shadow(0 0 7px rgba(202, 138, 4, 0.22))
+    drop-shadow(0 1px 2px rgba(255, 255, 255, 0.35))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.22));
+  --create-activity-cta-label: #0b0b0c;
 }
 
 html,
@@ -312,6 +578,12 @@ body,
 .page-content-wide {
   padding-left: 4px;
   padding-right: 4px;
+}
+
+/* Horizontal rails: inset cards from scroll viewport so first/last items aren’t flush to edges */
+.rail-pad {
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
 }
 
 .ui-surface {
@@ -352,6 +624,29 @@ body,
   border-color: var(--brand);
   background: color-mix(in oklab, var(--brand) 12%, transparent);
   color: var(--brand);
+}
+
+/* Create flow: shared tab pills (Date/Visibility/RSVP + Location/Images/More) — uses --create-meta-pill-* */
+.create-meta-pill {
+  border: 0;
+  background: var(--create-meta-pill-bg);
+  color: var(--create-meta-pill-fg);
+  box-shadow: var(--create-meta-pill-shadow);
+  transition: transform 200ms ease-out, background-color 0.2s, box-shadow 0.2s,
+    opacity 200ms ease-out;
+}
+.create-meta-pill:hover:not(:disabled) {
+  background: var(--create-meta-pill-hover-bg);
+}
+.create-meta-pill:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.create-meta-pill-endcap {
+  background: var(--create-meta-pill-endcap-bg);
+  color: var(--create-meta-pill-endcap-fg);
+  border: 1px solid var(--create-meta-pill-endcap-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .ui-input {
@@ -535,6 +830,130 @@ input:focus {
   }
 }
 
+/* Owl companion message modal — open from bottom-tab peek */
+@keyframes owl-message-modal-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes owl-message-modal-owl-in {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.owl-message-modal-panel {
+  animation: owl-message-modal-panel-in 320ms cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+.owl-message-modal-owl {
+  animation: owl-message-modal-owl-in 420ms cubic-bezier(0.33, 1, 0.68, 1) 90ms both;
+}
+
+@keyframes owl-message-modal-panel-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+@keyframes owl-message-modal-owl-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+}
+
+.owl-message-modal-panel--exit {
+  animation: owl-message-modal-panel-out 320ms cubic-bezier(0.4, 0, 0.68, 1) both;
+}
+
+.owl-message-modal-owl--exit {
+  animation: owl-message-modal-owl-out 300ms cubic-bezier(0.4, 0, 0.68, 1) both;
+}
+
+/* Inner message area: center ink fades to transparent at edges (frosted shell shows through) */
+.owl-message-text-well {
+  background: radial-gradient(
+    ellipse 95% 88% at 50% 46%,
+    rgba(0, 0, 0, 0.94) 0%,
+    rgba(0, 0, 0, 0.38) 48%,
+    transparent 72%
+  );
+}
+
+html.theme-light .owl-message-text-well {
+  background: radial-gradient(
+    ellipse 95% 88% at 50% 46%,
+    rgba(255, 255, 255, 0.97) 0%,
+    rgba(255, 255, 255, 0.32) 48%,
+    transparent 72%
+  );
+}
+
+/* Owl modal copy: stacked lines, rhythm, optional category class on wrapper */
+.owl-message-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  gap: 0.625rem;
+}
+
+.owl-message-line {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  font-size: 0.9375rem;
+  line-height: 1.58;
+  letter-spacing: 0.03em;
+  font-weight: 500;
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+@media (min-width: 640px) {
+  .owl-message-line {
+    font-size: 1rem;
+    letter-spacing: 0.035em;
+  }
+}
+
+.owl-message-line--lead {
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-shadow: 0 0 28px color-mix(in oklab, var(--brand) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owl-message-modal-panel,
+  .owl-message-modal-owl,
+  .owl-message-modal-panel--exit,
+  .owl-message-modal-owl--exit {
+    animation: none !important;
+  }
+}
+
 /* Bottom tab Avatar alignment fix */
 .bottom-tab-avatar-wrapper {
   line-height: 0;
@@ -549,4 +968,115 @@ input:focus {
 /* Profile tab only: avatar drop shadow for separation */
 .bottom-tab-profile-avatar {
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+}
+
+/* ---- Desktop web shell (see DesktopShellWrapper) ---- */
+/* Full-bleed chrome behind phone + panel; does not affect mobile/native (wrapper not mounted). */
+.desktop-shell-root {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  overflow-x: clip;
+  background-color: #060608;
+  /* Shared ambient: warm + cool glows bridge phone + marketing column */
+  background-image:
+    radial-gradient(
+      ellipse 85% 65% at 18% 42%,
+      rgba(247, 208, 71, 0.15),
+      transparent 58%
+    ),
+    radial-gradient(
+      ellipse 75% 55% at 88% 28%,
+      rgba(120, 155, 255, 0.11),
+      transparent 52%
+    ),
+    radial-gradient(
+      ellipse 95% 50% at 48% 108%,
+      rgba(247, 208, 71, 0.07),
+      transparent 48%
+    ),
+    linear-gradient(
+      165deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      transparent 42%
+    ),
+    radial-gradient(
+      ellipse 120% 80% at 50% -10%,
+      rgba(255, 255, 255, 0.03),
+      transparent 55%
+    );
+}
+
+/* Ultra-subtle grain — keeps large gradients from feeling flat */
+.desktop-shell-root::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+}
+
+.desktop-shell {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+/**
+ * Scoped dark tokens for the right-hand marketing / policy panel only.
+ * Phone scroll area stays a direct child of the shell and inherits global app theme from <html>.
+ */
+.desktop-panel-theme-scope {
+  color-scheme: dark;
+  border-radius: 0;
+  /* Mirror :root dark palette (see index.css :root) — independent of html.theme-light */
+  --bg: #0b0b0c;
+  --surface: #151516;
+  --surface-2: #1b1c1e;
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.7);
+  --border: rgba(255, 255, 255, 0.16);
+  --ring: rgba(255, 255, 255, 0.28);
+  --brand: #f7d047;
+  --brand-dark: #d4a03e;
+  --brand-ink: #0b0b0c;
+}
+
+.desktop-panel-scroll::-webkit-scrollbar {
+  width: 9px;
+}
+
+.desktop-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.desktop-panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.desktop-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+/* Phone preview scroll — subtle, works on light and dark app theme */
+.desktop-phone-inner-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.desktop-phone-inner-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.desktop-phone-inner-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--text) 28%, transparent);
+}
+
+.desktop-phone-inner-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--text) 30%, transparent) transparent;
 }

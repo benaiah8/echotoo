@@ -3,7 +3,7 @@ import { CommentWithDetails } from "../../types/comment";
 import { imgUrlPublic } from "../../lib/img";
 import Avatar from "./Avatar";
 import CommentLikeButton from "./CommentLikeButton";
-import { DeleteConfirmModal } from "./DeleteConfirmModal";
+import ConfirmDialog from "./ConfirmDialog";
 import ImageLightbox from "../ImageLightbox";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
@@ -69,7 +69,7 @@ export default function Comment({
 
     setIsDeleting(true);
     try {
-      onDelete?.(comment.id);
+      await onDelete?.(comment.id);
       setShowDeleteModal(false);
     } catch (error) {
       console.error("Error deleting comment:", error);
@@ -272,13 +272,15 @@ export default function Comment({
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmModal
-        isOpen={showDeleteModal}
+      {/* Delete confirmation (shared frosted dialog style). */}
+      <ConfirmDialog
+        open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
         onConfirm={handleConfirmDelete}
         title="Delete Comment"
         message="Are you sure you want to delete this comment? This action cannot be undone."
+        confirmLabel="Delete"
+        confirmVariant="danger"
         isLoading={isDeleting}
       />
     </div>

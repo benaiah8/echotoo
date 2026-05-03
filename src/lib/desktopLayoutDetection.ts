@@ -3,31 +3,34 @@
  *
  * Used to show a split-screen website shell on desktop/laptop browsers
  * (app in phone frame + EchoToo info panel) without affecting:
- * - Mobile browser layout
- * - Capacitor-wrapped native apps (iOS/Android)
+ * - Mobile browser layout (viewport < DESKTOP_BREAKPOINT)
+ * - Native Capacitor apps (iOS/Android)
  *
- * Condition: !isCapacitor() AND screen width >= DESKTOP_BREAKPOINT
+ * Condition: !isNativeApp() AND screen width >= DESKTOP_BREAKPOINT
+ *
+ * Note: `@capacitor/core` installs `window.Capacitor` in normal browsers too.
+ * Use isNativePlatform (via isNativeApp), not presence of Capacitor globals.
  */
 
 import { useState, useEffect } from "react";
-import { isCapacitor } from "./storage/utils/capacitorDetection";
+import { isNativeApp } from "./storage/utils/capacitorDetection";
 
 /** Minimum viewport width (px) to show desktop layout. Below this = mobile experience. */
 export const DESKTOP_BREAKPOINT = 900;
 
 /**
  * Returns true only when we should show the desktop website shell:
- * - Running in a browser (not Capacitor)
+ * - Not running in the native app (browser / responsive web only)
  * - Viewport width >= DESKTOP_BREAKPOINT
  *
- * Capacitor apps always get false (unchanged mobile layout).
+ * Native apps always get false (unchanged mobile-like layout).
  */
 export function useIsDesktopLayout(): boolean {
   const [isDesktop, setIsDesktop] = useState(false);
 
   useEffect(() => {
-    // Never apply desktop layout in Capacitor (native app)
-    if (isCapacitor()) {
+    // Never apply desktop layout inside the native Capacitor shell (iOS/Android).
+    if (isNativeApp()) {
       setIsDesktop(false);
       return;
     }

@@ -49,11 +49,10 @@
 - Helper function `imgUrlPublic()` that converts Supabase storage paths to public URLs
 - Used to process post images for the story
 
-### 9. **public/echotoo logo.png** (or **echotoo logo2.svg**)
+### 9. **Branding / background (web)**
 
-- Logo file used in the story
-- Currently referenced in InstagramStoryGenerator.tsx
-- **Replace this file when you have the new logo**
+- **Owl mark (in-app and cache-busted):** `public/owlicon.svg` — wired through `src/lib/assets.ts` (`getOwlLogoPath()`).
+- **Story frame background:** `public/instagram-story-bg.png` — `getInstagramStoryBackgroundPath()` in `src/lib/assets.ts`.
 
 ## Configuration
 
@@ -73,6 +72,8 @@
 
 - `ShareDrawer.tsx` → `InstagramStoryGenerator.tsx`
 
-**To change logo:**
+**To change the owl or story visuals:**
 
-- Replace `/public/echotoo logo.png` or update path in `InstagramStoryGenerator.tsx` line 176
+- Owl SVG: replace `public/owlicon.svg` and bump `LOGO_VERSION` in `src/lib/assets.ts` if needed.
+- Story background: replace `public/instagram-story-bg.png` and bump `INSTAGRAM_STORY_BG_VERSION` in `src/lib/assets.ts` if needed.
+- For installed PWA / favicon sizes, see `LOGO_UPDATE_GUIDE.md` (web icons under `public/icons/`, `public/manifest.json`, `index.html`).

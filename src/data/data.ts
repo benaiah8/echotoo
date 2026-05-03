@@ -59,6 +59,7 @@ export const activitiesData = [
 ];
 
 export const additionalActiviesData = [
+  "Custom",
   "Dress Code / Attire",
   "What to Bring",
   "Warnings / Advisories",
@@ -68,7 +69,6 @@ export const additionalActiviesData = [
   "Accessibility",
   "Age-Suitability",
   "Host Contact Info",
-  "Custom",
 ];
 
 export const categoriesData = [

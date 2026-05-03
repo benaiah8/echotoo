@@ -6,6 +6,7 @@ import { setAuthUser, setAuthLoading } from "../reducers/authReducer";
 import { setAuthModal } from "../reducers/modalReducer";
 import { getAuthRedirectUrl } from "../lib/authRedirect";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import { deleteMyPushDevices } from "../api/services/pushDevices";
 
 /** Minimal shape of the user we put in Redux */
 export type SimpleUser = {
@@ -23,7 +24,7 @@ export default function useSupabaseAuth() {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: window.location.origin },
+        options: { emailRedirectTo: getAuthRedirectUrl() },
       });
       dispatch(setAuthLoading(false));
       if (error) throw error;
@@ -89,6 +90,7 @@ export default function useSupabaseAuth() {
   }, []);
 
   const signOut = useCallback(async () => {
+    await deleteMyPushDevices();
     await supabase.auth.signOut();
     dispatch(setAuthUser(null as any)); // reducer expects nullable
   }, [dispatch]);

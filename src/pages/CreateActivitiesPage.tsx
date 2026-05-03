@@ -1,20 +1,43 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import toast from "react-hot-toast";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import CreateFlowKeyboardShell, {
   createFlowMainColumnStyle,
 } from "../components/create/CreateFlowKeyboardShell";
 import CreateFlowTopBar from "../components/create/CreateFlowTopBar";
+import FrostedCenterModal, {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "../components/ui/FrostedCenterModal";
+import { getConfirmDialogButtonClass } from "../components/ui/ConfirmDialog";
 import CreateActivityHeaderSection from "../sections/create/CreateActivityHeaderSection";
 import CreateActivityDetailSection from "../sections/create/CreateActivityDetailSection";
-import CreateTabsSection from "../sections/create/CreateTabsSection";
 import { Paths } from "../router/Paths";
+import { PiArrowRight } from "react-icons/pi";
+import {
+  APP_SAFE_BOTTOM_SYNC_EVENT,
+  BOTTOM_TAB_PILL_OFFSET_PX,
+  resolveSafeAreaBottomLayoutPx,
+} from "../lib/appSafeAreaBottom";
 import { ActivityType } from "../types/post";
-import { markDraftDirty } from "../lib/drafts";
+import {
+  hasAnyDraftData,
+  markDraftDirty,
+  notifyLocalDraftPersisted,
+  runCreateEntryDraftCleanup,
+} from "../lib/drafts";
+import {
+  CREATE_FLOW_SESSION_KEY,
+  CREATE_FLOW_SESSION_VALUE,
+  RESUME_DRAFT_SEARCH_PARAM,
+  RESUME_DRAFT_SEARCH_VALUE,
+  markCreateFlowResumedLocalDraft,
+  markCreateFlowSessionActive,
+} from "../lib/draftEntryGate";
 import { CREATE_FLOW_POST_IMAGE_MERGED_EVENT } from "../lib/createFlowDraftStorage";
 import type { CreateFlowPostImageMergedDetail } from "../lib/createFlowDraftStorage";
 import { CREATE_FLOW_LIMITS } from "../lib/createFlowLimits";
-import { dispatchCreateFlowLeaveRequest } from "../lib/createFlowLeaveRequest";
 
 const SEED: ActivityType = {
   title: "Stop 1",
@@ -59,23 +82,37 @@ const normalizeActivity = (a: any) => {
 };
 
 export default function CreateActivitiesPage() {
+  const [draftExpiredOnEntry] = useState(() =>
+    typeof window !== "undefined" ? runCreateEntryDraftCleanup() : false
+  );
+
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const postType = searchParams.get("type") || "experience";
 
-  // Flow: Create → Activities → Finalize (Phase 5A shell) → … → Preview
-  const base = `?type=${postType}`;
-  const paths = [
-    `${Paths.create}${base}`, // step 1 (Create landing)
-    `${Paths.createActivities}${base}`, // step 2 (this page)
-    `${Paths.createFinalize}${base}`, // step 3 (merged final-step shell)
-    `${Paths.preview}${base}`, // step 4 (legacy preview / publish)
-  ];
+  const resumeDraft =
+    searchParams.get(RESUME_DRAFT_SEARCH_PARAM) === RESUME_DRAFT_SEARCH_VALUE;
 
-  // load once
+  const suppressInitialDraftPersist = (() => {
+    try {
+      if (typeof window === "undefined") return false;
+      if (localStorage.getItem("editPostData")) return false;
+      if (resumeDraft) return false;
+      if (
+        sessionStorage.getItem(CREATE_FLOW_SESSION_KEY) ===
+        CREATE_FLOW_SESSION_VALUE
+      ) {
+        return false;
+      }
+      return hasAnyDraftData();
+    } catch {
+      return false;
+    }
+  })();
+
+  // load once — edit wins; never auto-resume local create drafts
   const [activities, setActivities] = useState<ActivityType[]>(() => {
     try {
-      // Check if we're in edit mode
       const editData = localStorage.getItem("editPostData");
       if (editData) {
         const parsed = JSON.parse(editData);
@@ -84,10 +121,20 @@ export default function CreateActivitiesPage() {
         }
       }
 
-      // Fallback to draft data
-      const raw = localStorage.getItem("draftActivities");
-      const data = raw ? JSON.parse(raw) : [SEED];
-      return (Array.isArray(data) ? data : [SEED]).map(normalizeActivity);
+      const sp = new URLSearchParams(window.location.search);
+      const resume =
+        sp.get(RESUME_DRAFT_SEARCH_PARAM) === RESUME_DRAFT_SEARCH_VALUE;
+      const inFlow =
+        sessionStorage.getItem(CREATE_FLOW_SESSION_KEY) ===
+        CREATE_FLOW_SESSION_VALUE;
+
+      if (resume || inFlow) {
+        const raw = localStorage.getItem("draftActivities");
+        const data = raw ? JSON.parse(raw) : [SEED];
+        return (Array.isArray(data) ? data : [SEED]).map(normalizeActivity);
+      }
+
+      return [SEED].map(normalizeActivity);
     } catch {
       return [SEED];
     }
@@ -95,14 +142,75 @@ export default function CreateActivitiesPage() {
 
   const [activityIndex, setActivityIndex] = useState(0);
   const [error, setError] = useState("");
-  const [isEditMode, setIsEditMode] = useState(() => {
+  const [activitiesInfoOpen, setActivitiesInfoOpen] = useState(false);
+  const [isEditMode] = useState(() => {
     return localStorage.getItem("editPostData") !== null;
   });
 
-  // mark draft dirty as soon as we land here
+  /** Cold entry with existing local draft: avoid overwriting LS until the user edits. */
+  const initialActivitiesJsonRef = useRef<string | null>(null);
+  if (initialActivitiesJsonRef.current === null) {
+    initialActivitiesJsonRef.current = JSON.stringify(activities);
+  }
+
   useEffect(() => {
-    markDraftDirty();
+    if (draftExpiredOnEntry) {
+      toast("Draft expired; starting fresh.", { duration: 2500 });
+    }
+  }, [draftExpiredOnEntry]);
+
+  useEffect(() => {
+    if (!isEditMode) markCreateFlowSessionActive();
+  }, [isEditMode]);
+
+  /**
+   * Reserve bottom inset for the bottom tab + home indicator only (no fixed step strip —
+   * “Continue to caption” lives in normal document flow).
+   */
+  useEffect(() => {
+    const GAP_ABOVE_TAB = 16;
+    const SCROLL_END_COMFORT = 28;
+    const el = document.getElementById("bottom-tab");
+    const measure = () => {
+      const btH = el ? Math.round(el.getBoundingClientRect().height) : 0;
+      const safe = resolveSafeAreaBottomLayoutPx();
+      const total =
+        BOTTOM_TAB_PILL_OFFSET_PX +
+        safe +
+        btH +
+        GAP_ABOVE_TAB +
+        SCROLL_END_COMFORT;
+      document.documentElement.style.setProperty(
+        "--create-actions-total-bottom",
+        `${total}px`
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, measure);
+    const mo = el ? new MutationObserver(measure) : null;
+    if (el && mo)
+      mo.observe(el, { attributes: true, childList: true, subtree: true });
+    el?.addEventListener("transitionend", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, measure);
+      mo?.disconnect();
+      el?.removeEventListener("transitionend", measure);
+    };
   }, []);
+
+  /** Deep link / refresh with `resumeDraft=1`: same session semantics as chooser “Continue draft”. */
+  useEffect(() => {
+    if (!isEditMode && resumeDraft) {
+      markCreateFlowResumedLocalDraft();
+    }
+  }, [isEditMode, resumeDraft]);
+
+  // Mark draft dirty in create flow only (not edit)
+  useEffect(() => {
+    if (!isEditMode) markDraftDirty();
+  }, [isEditMode]);
 
   // Sync React state when CreatePostMediaProvider merges images into localStorage (same mount)
   useEffect(() => {
@@ -141,19 +249,25 @@ export default function CreateActivitiesPage() {
         localStorage.setItem("editPostData", JSON.stringify(parsed));
       }
     } else {
-      // In create mode, use draft data
+      if (
+        suppressInitialDraftPersist &&
+        JSON.stringify(activities) === initialActivitiesJsonRef.current
+      ) {
+        return;
+      }
       localStorage.setItem("draftActivities", JSON.stringify(activities));
+      notifyLocalDraftPersisted();
     }
-  }, [activities, isEditMode]);
+  }, [activities, isEditMode, suppressInitialDraftPersist]);
 
   const handleNext = useCallback(() => {
     setError("");
     navigate(`${Paths.createFinalize}?type=${postType}`);
   }, [navigate, postType]);
 
-  const handleLeaveCreateFlow = useCallback(() => {
-    dispatchCreateFlowLeaveRequest(() => navigate(Paths.home));
-  }, [navigate]);
+  const handleBackToCreatePost = useCallback(() => {
+    navigate(`${Paths.createFinalize}?type=${postType}`);
+  }, [navigate, postType]);
 
   const addActivity = useCallback(() => {
     setActivities((prev) => {
@@ -184,16 +298,57 @@ export default function CreateActivitiesPage() {
       <CreateFlowTopBar
         emphasizeWhiteBorder
         leftAction={{
-          icon: "close",
-          label: "Leave create flow",
-          onClick: handleLeaveCreateFlow,
+          icon: "arrow-left",
+          label: "Back to Create post",
+          onClick: handleBackToCreatePost,
         }}
         rightAction={{
-          icon: "arrow-right",
-          label: "Continue to caption",
-          onClick: handleNext,
+          icon: "info",
+          label: "How Activities and stops work",
+          onClick: () => setActivitiesInfoOpen(true),
         }}
       />
+      <FrostedCenterModal
+        open={activitiesInfoOpen}
+        onBackdropClick={() => setActivitiesInfoOpen(false)}
+        aria-labelledby="activities-info-title"
+      >
+        <div
+          className={frostedModalPanelClassName}
+          style={frostedModalPanelStyle}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2
+            id="activities-info-title"
+            className="text-sm font-semibold text-[var(--text)]"
+          >
+            How to use Activities ✨
+          </h2>
+          <div className="mt-3 space-y-2.5 text-xs leading-relaxed text-[var(--text)]/80">
+            <p>
+              Add stops, places, or little steps to help tell the story of your
+              plan 🗺️📍
+            </p>
+            <p>
+              You can keep it quick and simple, or add photos, links, locations,
+              and extra notes 📸🔗📝
+            </p>
+            <p>
+              Use it to make your post easier to follow, save, and come back to
+              later 💛
+            </p>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              className={getConfirmDialogButtonClass("primary", "intrinsic")}
+              onClick={() => setActivitiesInfoOpen(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      </FrostedCenterModal>
       <CreateFlowKeyboardShell>
         <div
           className="flex-1 w-full px-2.5 flex flex-col"
@@ -219,17 +374,19 @@ export default function CreateActivitiesPage() {
 
           {error && <p className="text-red-500 text-xs mt-2">{error}</p>}
 
-          <div className="min-h-0 flex-1" />
-          <CreateTabsSection
-            step={isEditMode ? 1 : 2}
-            paths={paths}
-            onNext={handleNext}
-            isEditMode={isEditMode}
-            forwardOnly
-            nextLabel="Continue to caption"
-            stableOnScroll
-            emphasizeNext
-          />
+          <div className="mt-10 w-full shrink-0 pb-1">
+            <button
+              type="button"
+              onClick={handleNext}
+              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-full border border-[var(--brand)] bg-[var(--brand)] px-5 py-2.5 text-[13px] font-semibold text-[var(--brand-ink)] shadow-sm transition-[filter,transform] hover:brightness-[1.03] active:scale-[0.99] sm:min-h-[52px] sm:py-3 sm:text-[14px]"
+            >
+              <span>Continue to caption</span>
+              <PiArrowRight
+                className="h-[1.1rem] w-[1.1rem] shrink-0"
+                aria-hidden
+              />
+            </button>
+          </div>
         </div>
       </CreateFlowKeyboardShell>
     </PrimaryPageContainer>

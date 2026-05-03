@@ -2,6 +2,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import LocationPickerGoogle from "../components/LocationPickerGoogle";
+import { notifyLocalDraftPersisted } from "../lib/drafts";
 
 export default function CreateMapPage() {
   const navigate = useNavigate();
@@ -29,6 +30,7 @@ export default function CreateMapPage() {
         : a
     );
     localStorage.setItem("draftActivities", JSON.stringify(next));
+    notifyLocalDraftPersisted();
     navigate(-1);
   };
 

@@ -1,7 +1,7 @@
 import Modal from "./Modal";
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { PiEye, PiEyeSlash } from "react-icons/pi";
+import { PiAppleLogo, PiEye, PiEyeSlash } from "react-icons/pi";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { supabase } from "../../lib/supabaseClient";
@@ -74,7 +74,7 @@ const AuthModal = () => {
   const { authModal } = useSelector((s: RootState) => s.modal);
 
   const [tab, setTab] = useState<"login" | "signup">("login");
-  /** When true, show Login / Sign up tabs + email fields (Google + guest stay visible above). */
+  /** When true, show Login / Sign up tabs + email fields (OAuth + guest stay visible above). */
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [signupPhase, setSignupPhase] = useState<SignupPhase>("form");
@@ -261,7 +261,15 @@ const AuthModal = () => {
 
       if (isNativeApp() && data?.url) {
         const { Browser } = await import("@capacitor/browser");
+        console.log("[DBG:OAUTH] browser_open_before", {
+          t: Date.now(),
+          source: "AuthModal.handleGoogle",
+        });
         await Browser.open({ url: data.url });
+        console.log("[DBG:OAUTH] browser_open_after", {
+          t: Date.now(),
+          source: "AuthModal.handleGoogle",
+        });
         // User will return via appUrlOpen; no redirect here.
       } else if (data?.url) {
         window.location.href = data.url;
@@ -271,6 +279,55 @@ const AuthModal = () => {
       setLoading(false);
       const errorMsg = e?.message ?? "Google sign-in failed";
       console.error("[AuthModal] Google sign-in error:", errorMsg);
+      toast.error(`${errorMsg}. Check console for redirect URL.`);
+    }
+  };
+
+  const handleApple = async () => {
+    try {
+      setLoading(true);
+      const redirectTo = getAuthRedirectUrl();
+
+      console.log("[AuthRedirectDebug] Apple sign-in", {
+        origin: window.location.origin,
+        redirectTo,
+        isCapacitor: isCapacitor(),
+        isNativeApp: isNativeApp(),
+      });
+
+      dbg("Apple:start", {
+        redirectTo,
+        isCapacitor: isCapacitor(),
+        isNativeApp: isNativeApp(),
+      });
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "apple",
+        options: { redirectTo },
+      });
+
+      dbg("Apple:returned", { ok: !error, error: error?.message });
+      if (error) throw error;
+
+      if (isNativeApp() && data?.url) {
+        const { Browser } = await import("@capacitor/browser");
+        console.log("[DBG:OAUTH] browser_open_before", {
+          t: Date.now(),
+          source: "AuthModal.handleApple",
+        });
+        await Browser.open({ url: data.url });
+        console.log("[DBG:OAUTH] browser_open_after", {
+          t: Date.now(),
+          source: "AuthModal.handleApple",
+        });
+      } else if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (e: any) {
+      dbg("Apple:catch", { error: e?.message });
+      setLoading(false);
+      const errorMsg = e?.message ?? "Apple sign-in failed";
+      console.error("[AuthModal] Apple sign-in error:", errorMsg);
       toast.error(`${errorMsg}. Check console for redirect URL.`);
     }
   };
@@ -294,12 +351,8 @@ const AuthModal = () => {
     }
   };
 
-  // Stop the auth prompt for 2 hours, then close the modal
+  // Continue browsing as guest for this session; timer logic is handled elsewhere.
   const continueAsGuest = () => {
-    localStorage.setItem(
-      "guest_until",
-      String(Date.now() + 2 * 60 * 60 * 1000)
-    );
     dispatch(setAuthModal(false));
   };
 
@@ -420,6 +473,16 @@ const AuthModal = () => {
         >
           <img src="/IconGoogle.svg" alt="" width={20} height={20} />
           Continue with Google
+        </button>
+
+        <button
+          type="button"
+          className="ui-btn auth-apple-btn flex w-full items-center justify-center gap-2 mb-3"
+          onClick={handleApple}
+          disabled={loading}
+        >
+          <PiAppleLogo className="shrink-0" size={20} aria-hidden />
+          Continue with Apple
         </button>
 
         <button

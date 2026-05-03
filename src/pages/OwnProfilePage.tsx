@@ -35,27 +35,39 @@ import {
   getProfileByUserId,
   getViewerAuthUserId,
 } from "../api/services/follows";
+import { deleteMyPushDevices } from "../api/services/pushDevices";
 import {
   getCachedFollowCounts,
   setCachedFollowCounts,
 } from "../lib/followCountsCache";
-import { imgUrlPublic } from "../lib/img";
+import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
-import ImageLightbox from "../components/ImageLightbox";
+import AvatarPreviewLightbox, {
+  AvatarPreviewLightboxAction,
+} from "../components/profile/AvatarPreviewLightbox";
 import Avatar from "../components/ui/Avatar";
 import FullScreenProfileCreation from "../components/profile/FullScreenProfileCreation";
 import SocialMediaLinks from "../components/profile/SocialMediaLinks";
 import OnboardingFlow from "../components/onboarding/OnboardingFlow";
 import ShareProfileModal from "../components/profile/ShareProfileModal";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import ProfileHeroAvatarAtmosphere from "../components/profile/ProfileHeroAvatarAtmosphere";
 import ProfileStats from "../components/profile/ProfileStats";
 import MemberNumberPill from "../components/profile/MemberNumberPill";
-import { PiCamera, PiLock, PiPencilSimple } from "react-icons/pi";
+import { PiLock, PiPencilSimple, PiShareFat } from "react-icons/pi";
 import { handleError } from "../lib/errorHandling";
+import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
+import { shareUrl } from "../lib/shareUrl";
+import toast from "react-hot-toast";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
+import { publishProfileTrace } from "../lib/debugProfileFeed";
 import { dataCache } from "../lib/dataCache";
+import { consumeOwnCreatedPublishedPending } from "../lib/ownCreatedPublishedPending";
 import { SKIP_WELCOME_ONBOARDING } from "../lib/featureFlags";
+import { Paths } from "../router/Paths";
+import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
+import { getCurrentUserIsReportReviewer } from "../api/services/reportReview";
 
 /**
  * OwnProfilePage - Page for /u/me route
@@ -73,6 +85,8 @@ export default function OwnProfilePage() {
 
   /** Tap profile tab again / pull-to-refresh → remount feeds + purge post caches */
   const [profileFeedRefreshEpoch, setProfileFeedRefreshEpoch] = useState(0);
+  /** Consume publish pending marker → soft-refetch Created first page only (Interacted/Saved unchanged). */
+  const [createdFeedRefreshEpoch, setCreatedFeedRefreshEpoch] = useState(0);
   /** Bumps to re-fetch hero profile (counts, avatar, etc.) */
   const [meRefreshNonce, setMeRefreshNonce] = useState(0);
 
@@ -131,10 +145,29 @@ export default function OwnProfilePage() {
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
   const [headerHidden, setHeaderHidden] = useState(false);
+  const [profileSearchFocused, setProfileSearchFocused] = useState(false);
+  /** Scroll handler reads ref so IME/keyboard scrolls never hide chrome while search is active. */
+  const profileSearchPinnedRef = useRef(false);
   const lastY = useRef<number>(
     typeof window !== "undefined" ? window.scrollY : 0
   );
   const ticking = useRef(false);
+
+  useEffect(() => {
+    profileSearchPinnedRef.current =
+      profileSearchFocused || userQuery.trim().length > 0;
+  }, [profileSearchFocused, userQuery]);
+
+  useEffect(() => {
+    if (profileSearchFocused || userQuery.trim().length > 0) {
+      setHeaderHidden(false);
+    }
+  }, [profileSearchFocused, userQuery]);
+
+  useEffect(() => {
+    if (!isProfileTabVisible) return;
+    dispatchBottomTabPeek("profile", headerHidden);
+  }, [headerHidden, isProfileTabVisible]);
 
   // Hero section state
   const [counts, setCounts] = useState({ followers: 0, following: 0 });
@@ -156,7 +189,15 @@ export default function OwnProfilePage() {
   // auth state and modal state for logo functionality
   const authState = useSelector((state: RootState) => state.auth);
   const isAuthenticated = !!authState?.user;
+  /** Until false, Redux has not finished initial session hydrate (same as onboarding). */
+  const authLoading = authState?.loading ?? true;
+  /**
+   * Signed-in for hero empty-state only: Redux user or resolved session uid.
+   * Avoids showing "Sign in…" when profile row is late/missing but OAuth session exists.
+   */
+  const hasSignedInIdentity = !!(authState?.user?.id || viewerId);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const [isReportReviewer, setIsReportReviewer] = useState(false);
 
   // Get viewer ID
   useEffect(() => {
@@ -165,8 +206,78 @@ export default function OwnProfilePage() {
   }, [isProfileTabVisible]);
 
   useEffect(() => {
+    if (!authState?.user?.id) {
+      setIsReportReviewer(false);
+      return;
+    }
+    if (!isProfileTabVisible) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const ok = await getCurrentUserIsReportReviewer();
+        if (!cancelled) setIsReportReviewer(ok);
+      } catch {
+        if (!cancelled) setIsReportReviewer(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isProfileTabVisible, authState?.user?.id]);
+
+  // New post publish: sessionStorage marker (set by executeCreateFlowPublish) consumed when profile tab visible
+  useEffect(() => {
+    if (!isProfileTabVisible) {
+      return;
+    }
+    const uid = profile?.user_id;
+    if (!uid) return;
+
+    const result = consumeOwnCreatedPublishedPending(uid);
+    if (result.kind === "none") return;
+
+    if (result.kind === "mismatch_cleared") {
+      return;
+    }
+
+    const postId = result.payload.postId;
+    publishProfileTrace("OWN_PROFILE_VISIBLE", {
+      profileUserId: uid,
+      route: location.pathname ?? "",
+      postId,
+    });
+    publishProfileTrace("PENDING_MARKER_FOUND", {
+      postId,
+      markerUserId: result.payload.userId,
+      currentProfileUserId: uid,
+    });
+
+    const createdKey = `profile_created_${uid}`;
+    try {
+      dataCache.delete(createdKey);
+    } catch {
+      /* noop */
+    }
+
+    publishProfileTrace("PENDING_MARKER_CONSUMED", {
+      postId,
+      deletedCacheKey: createdKey,
+    });
+
+    setCreatedFeedRefreshEpoch((n) => {
+      const next = n + 1;
+      publishProfileTrace("CREATED_REFRESH_EPOCH_BUMPED", {
+        newEpoch: next,
+        postId,
+      });
+      return next;
+    });
+  }, [isProfileTabVisible, profile?.user_id, location.pathname]);
+
+  useEffect(() => {
     const onTabRefresh = () => {
       if (!isProfileTabVisible) return;
+
       const uid = profile?.user_id;
       if (uid) {
         try {
@@ -180,9 +291,6 @@ export default function OwnProfilePage() {
       if (profile?.id) invalidateProfile(profile.id);
       setMeRefreshNonce((n) => n + 1);
       setProfileFeedRefreshEpoch((n) => n + 1);
-      if (import.meta.env.DEV) {
-        console.debug("[profile-tab-refresh] own", { uid });
-      }
     };
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
     return () =>
@@ -204,6 +312,10 @@ export default function OwnProfilePage() {
   // Load profile for /u/me - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
     if (!isProfileTabVisible) return;
+    console.log("[PROFILEDBG] profile load effect start", {
+      t: Date.now(),
+      isProfileTabVisible,
+    });
     // console.log('[OwnProfilePage] 🔄 Component MOUNTED - loading profile data');
     let cancelled = false;
     (async () => {
@@ -227,6 +339,10 @@ export default function OwnProfilePage() {
       if (!cachedProfile) {
         // Try to get user ID from session storage or check auth
         const uid = await getViewerAuthUserId();
+        console.log("[PROFILEDBG] getViewerAuthUserId (cache-search path)", {
+          t: Date.now(),
+          uid,
+        });
 
         if (uid) {
           // Try to find cached profile by user_id (search through cache)
@@ -286,8 +402,15 @@ export default function OwnProfilePage() {
         };
 
         const uid = await getViewerAuthUserId();
+        console.log("[PROFILEDBG] getViewerAuthUserId (fetch path)", {
+          t: Date.now(),
+          uid,
+        });
 
         if (!uid) {
+          console.log("[PROFILEDBG] setProfile null — no uid from getViewerAuthUserId", {
+            t: Date.now(),
+          });
           setSafe(() => {
             setProfile(null);
             setLoading(false);
@@ -299,6 +422,13 @@ export default function OwnProfilePage() {
         // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
         // getProfileByUserId() handles caching, RequestManager deduplication, and error handling
         const me = await getProfileByUserId(uid);
+        console.log("[PROFILEDBG] getProfileByUserId result", {
+          t: Date.now(),
+          uid,
+          hasProfile: !!me,
+          profileId: me?.id ?? null,
+          profileUserId: me?.user_id ?? null,
+        });
 
         if (me) {
           // Cache avatar URL separately (getProfileByUserId already caches profile data)
@@ -314,6 +444,9 @@ export default function OwnProfilePage() {
           if (me.username) localStorage.setItem("my_username", me.username);
           if (me.id) localStorage.setItem("my_profile_id", me.id);
         } else if (!cachedProfile) {
+          console.log("[PROFILEDBG] setProfile null — me missing and no cachedProfile", {
+            t: Date.now(),
+          });
           setSafe(() => setProfile(null));
         }
       } catch (e) {
@@ -328,7 +461,12 @@ export default function OwnProfilePage() {
           setProfile(cachedProfile as Profile);
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          console.log("[PROFILEDBG] profile load effect loading=false (finally)", {
+            t: Date.now(),
+          });
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -453,7 +591,9 @@ export default function OwnProfilePage() {
 
           if (Math.abs(delta) > 6) {
             if (delta > 0 && current > 100) {
-              setHeaderHidden(true);
+              if (!profileSearchPinnedRef.current) {
+                setHeaderHidden(true);
+              }
             } else {
               setHeaderHidden(false);
             }
@@ -601,7 +741,7 @@ export default function OwnProfilePage() {
 
   // Generate profile URL - shareable link using username
   const profileUrl = useMemo(() => {
-    const baseUrl = window.location.origin;
+    const baseUrl = getPublicShareBaseUrl();
     if (profile?.username) {
       return `${baseUrl}/u/${profile.username}`;
     }
@@ -643,6 +783,27 @@ export default function OwnProfilePage() {
       profile?.social_media_public,
     ]
   );
+
+  const handleAvatarPreviewShare = useCallback(async () => {
+    if (!profileUrl) return;
+    const nameBit = profile?.display_name || profile?.username;
+    const title = nameBit
+      ? `Check out ${nameBit}'s profile`
+      : "Check out this profile";
+    try {
+      const outcome = await shareUrl({ title, url: profileUrl });
+      if (outcome === "clipboard") {
+        toast.success("Profile link copied to clipboard!");
+      }
+    } catch {
+      toast.error("Could not share");
+    }
+  }, [profileUrl, profile?.display_name, profile?.username]);
+
+  const handleAvatarPreviewEdit = useCallback(() => {
+    setLightbox(false);
+    window.setTimeout(() => setFullScreenEditOpen(true), 0);
+  }, []);
 
   // Open edit if URL has ?edit=1 or first time user
   useEffect(() => {
@@ -730,6 +891,10 @@ export default function OwnProfilePage() {
               onLogoClick={handleLogoClick}
               onSearch={setUserQuery}
               profile={profile}
+              onSearchFocusChange={setProfileSearchFocused}
+              showHangoutReminderSetupInMenu
+              onRequestEditProfile={() => setFullScreenEditOpen(true)}
+              onRequestLogout={() => setShowLogoutConfirm(true)}
             />
           </div>
 
@@ -758,17 +923,18 @@ export default function OwnProfilePage() {
               [stableProfile, loading]
             )}
           >
-            <div
-              style={{
-                paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
-              }}
-            >
+            <div className="relative w-full">
+              <ProfileHeroAvatarAtmosphere avatarPath={profile?.avatar_url} />
+              <div
+                className="relative z-[1]"
+                style={{
+                  paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
+                }}
+              >
               {/* INLINE HERO SECTION - Hardcoded for own profile */}
               <section className="w-full px-1.5 pt-4 pb-6 border-b border-[var(--border)]">
-                {/* Lock icon on left, Edit and Logout buttons on right */}
-                <div className="flex w-full items-start gap-2 mb-1">
-                  {/* Left side: Lock icon for private accounts */}
-                  {!loading && profile?.is_private && (
+                {!loading && profile?.is_private && (
+                  <div className="flex w-full items-start gap-2 mb-1">
                     <div className="relative shrink-0">
                       <button
                         onClick={() => {
@@ -813,29 +979,12 @@ export default function OwnProfilePage() {
                         </div>
                       )}
                     </div>
-                  )}
-
-                  {/* Right side: Edit and Logout buttons - always aligned to the right */}
-                  <div className="ml-auto flex items-center gap-2">
-                    <button
-                      onClick={() => setFullScreenEditOpen(true)}
-                      className="shrink-0 w-9 h-7 rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:bg-[var(--surface-2)]/90 transition flex items-center justify-center"
-                      aria-label="Edit profile"
-                    >
-                      <PiPencilSimple size={14} />
-                    </button>
-                    <button
-                      className="px-4 py-1.5 rounded-full text-xs border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:bg-[var(--surface-2)]/90 transition"
-                      onClick={() => setShowLogoutConfirm(true)}
-                    >
-                      Log out
-                    </button>
                   </div>
-                </div>
+                )}
 
-                {loading ? (
+                {loading || authLoading ? (
                   <>
-                    {/* Loading skeleton */}
+                    {/* Loading skeleton (profile fetch and/or Redux session hydrate) */}
                     <div className="mx-auto mb-2 w-max px-6 py-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)]/50">
                       <div className="h-3 w-24 bg-[var(--text)]/10 rounded animate-pulse" />
                     </div>
@@ -897,9 +1046,9 @@ export default function OwnProfilePage() {
                             setFullScreenEditOpen(true);
                           }}
                           className="absolute left-1/2 -top-px z-10 flex h-[26px] w-[26px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] shadow-[0_2px_8px_rgba(0,0,0,0.26)] ring-1 ring-[var(--surface)] transition hover:bg-[var(--surface-2)]/90 active:scale-95 touch-manipulation"
-                          aria-label="Change profile photo"
+                          aria-label="Edit profile"
                         >
-                          <PiCamera
+                          <PiPencilSimple
                             className="h-[14px] w-[14px] opacity-95"
                             aria-hidden
                           />
@@ -944,9 +1093,20 @@ export default function OwnProfilePage() {
                           xp: false, // XP comes from profile, not async
                         }}
                       />
+                      {isReportReviewer ? (
+                        <div className="mt-4 flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => navigate(Paths.internal)}
+                            className="text-[11px] font-medium text-[var(--text)]/55 underline decoration-[var(--text)]/30 underline-offset-2 hover:text-[var(--text)]/80 active:opacity-80 touch-manipulation"
+                          >
+                            Internal tools
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </>
-                ) : (
+                ) : !hasSignedInIdentity ? (
                   <div className="flex flex-col items-center mt-3">
                     <div className="w-24 h-24 rounded-full bg-[var(--text)]/10" />
                     <div className="text-center mt-3">
@@ -955,14 +1115,28 @@ export default function OwnProfilePage() {
                       </div>
                     </div>
                   </div>
+                ) : (
+                  <div className="flex flex-col items-center mt-3 px-4">
+                    <div className="w-24 h-24 rounded-full bg-[var(--text)]/10" />
+                    <div className="text-center mt-3 max-w-[30ch]">
+                      <div className="text-[15px] font-semibold leading-none text-[var(--text)]/60">
+                        We couldn&apos;t load your profile yet
+                      </div>
+                      <div className="text-[13px] leading-snug text-[var(--text)]/45 mt-2">
+                        Pull down to refresh, or open this tab again in a moment.
+                      </div>
+                    </div>
+                  </div>
                 )}
               </section>
+              </div>
             </div>
 
             {/* Posts Section - Always visible, even during loading */}
             <OwnProfilePostsSection
               visible={isProfileTabVisible}
               feedRefreshEpoch={profileFeedRefreshEpoch}
+              createdFeedRefreshEpoch={createdFeedRefreshEpoch}
             />
 
             {/* Modals and drawers */}
@@ -984,12 +1158,33 @@ export default function OwnProfilePage() {
                     mode={drawerOpen}
                   />
                 )}
-                {profile.avatar_url && imgUrlPublic(profile.avatar_url) && (
-                  <ImageLightbox
-                    src={imgUrlPublic(profile.avatar_url)!}
+                {profile.avatar_url && avatarDisplayUrl(profile.avatar_url) && (
+                  <AvatarPreviewLightbox
+                    src={avatarDisplayUrl(profile.avatar_url)!}
                     alt={profile.display_name || ""}
                     open={lightbox}
                     onClose={() => setLightbox(false)}
+                    actions={
+                      <>
+                        <AvatarPreviewLightboxAction
+                          label="Edit"
+                          icon={
+                            <PiPencilSimple
+                              className="h-5 w-5"
+                              aria-hidden
+                            />
+                          }
+                          onClick={handleAvatarPreviewEdit}
+                        />
+                        <AvatarPreviewLightboxAction
+                          label="Share"
+                          icon={
+                            <PiShareFat className="h-5 w-5" aria-hidden />
+                          }
+                          onClick={() => void handleAvatarPreviewShare()}
+                        />
+                      </>
+                    }
                   />
                 )}
                 {showOnboardingForTesting && (
@@ -1020,6 +1215,7 @@ export default function OwnProfilePage() {
                 try {
                   localStorage.removeItem("guest_until");
                   navigate("/");
+                  await deleteMyPushDevices();
                   await supabase.auth.signOut();
                 } finally {
                   setShowLogoutConfirm(false);

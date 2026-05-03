@@ -12,11 +12,10 @@ import {
   clearCachedFollowStatus,
 } from "../../lib/followCache";
 import toast from "react-hot-toast";
-import { useSelector } from "react-redux";
-import { RootState } from "../../app/store";
 import { PiLock } from "react-icons/pi";
 import { recordSignal } from "../../lib/feedPersonalization";
 import { incrementMyXp } from "../../api/services/xp";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
 
 type Props = {
   targetId: string; // profile id to follow/unfollow
@@ -42,10 +41,10 @@ export default function FollowButton({
   const [currentAction, setCurrentAction] = useState<
     "follow" | "unfollow" | null
   >(null);
-  const authState = useSelector((state: RootState) => state.auth);
-  const authLoading = authState?.loading ?? true;
+  const { authLoading, isAuthenticated, ensureAuthed } = useAuthActionGate();
 
   // Load initial follow status - check cache immediately, don't wait for auth
+  // `initialFollowStatus` in deps: parents (e.g. InviteDrawer) may pass a placeholder "none" then batch "friends"
   useEffect(() => {
     let cancelled = false;
 
@@ -209,7 +208,7 @@ export default function FollowButton({
     return () => {
       cancelled = true;
     };
-  }, [targetId]);
+  }, [targetId, initialFollowStatus]);
 
   // Listen for follow changes from other components
   useEffect(() => {
@@ -304,6 +303,10 @@ export default function FollowButton({
 
   const onToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
+
+    if (!ensureAuthed()) {
+      return;
+    }
 
     if (isProcessing || followStatus === "self") {
       return;
@@ -525,8 +528,22 @@ export default function FollowButton({
 
   const isSelfOrGuest = !viewerId || followStatus === "self";
   const isSelf = followStatus === "self";
+  const showLoggedOutFollowCta = !authLoading && !isAuthenticated;
 
-  // Don't show button if not authenticated or viewing self
+  if (showLoggedOutFollowCta) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`h-6 min-w-[80px] px-2 rounded-full text-[10px] border bg-[var(--brand)] text-[var(--brand-ink)] border-[var(--brand)] transition-all duration-200 ease-out inline-flex items-center justify-center transform active:scale-95 hover:scale-105 hover:bg-[var(--brand)]/90 hover:shadow-md ${className}`}
+        aria-label="Follow"
+      >
+        <span>Follow</span>
+      </button>
+    );
+  }
+
+  // Keep previous behavior for non-logged-in transitional states while auth is resolving.
   if (!viewerId && !initializing) {
     return null;
   }

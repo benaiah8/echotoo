@@ -31,10 +31,68 @@ import {
   type OffsetAwareLoadResult,
   normalizeLoadResult,
 } from "../lib/offsetAwareLoader";
-import { onPostChanged } from "../lib/postEvents";
+import { onPostChanged, onPostDeleted } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
+import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import { batchFetchActivitiesForPosts } from "../api/services/activitiesBatch";
+
+/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+const DEBUG_RSVP_POST_ID = "";
+
+function debugRsvpFreshFetch<T extends { id: string }>(
+  fetchedItems: T[],
+  ctx: string
+) {
+  if (!DEBUG_RSVP_POST_ID) return;
+  const h = fetchedItems.find((i) => i.id === DEBUG_RSVP_POST_ID);
+  if (!h) return;
+  const row = h as Record<string, unknown>;
+  console.log("RSVP DEBUG fresh fetch hit", {
+    id: h.id,
+    rsvp_capacity: row.rsvp_capacity,
+    typeof_rsvp_capacity: typeof row.rsvp_capacity,
+    ctx,
+  });
+}
+
+function debugRsvpMerged<T extends { id: string }>(
+  merged: T[],
+  ctx: string,
+  extra?: Record<string, unknown>
+) {
+  if (!DEBUG_RSVP_POST_ID) return;
+  const h = merged.find((i) => i.id === DEBUG_RSVP_POST_ID);
+  if (!h) return;
+  const row = h as Record<string, unknown>;
+  console.log("RSVP DEBUG merged feed state", {
+    id: h.id,
+    rsvp_capacity: row.rsvp_capacity,
+    typeof_rsvp_capacity: typeof row.rsvp_capacity,
+    ctx,
+    ...extra,
+  });
+}
+
+/** One page fetched: infer whether more backend rows likely exist */
+function inferHasMoreAfterPage(args: {
+  /** Backend rows returned/consumed in this single request (not draft-prepended client length) */
+  consumedOffsetThisPage: number;
+  requestedLimit: number;
+  nextOffset: number;
+  count: number | null | undefined;
+}): boolean {
+  const { consumedOffsetThisPage, requestedLimit, nextOffset, count } = args;
+  if (consumedOffsetThisPage === 0) return false;
+  if (
+    count != null &&
+    count > requestedLimit &&
+    count >= nextOffset
+  ) {
+    return nextOffset < count;
+  }
+  return consumedOffsetThisPage >= requestedLimit;
+}
 
 export interface ProgressiveFeedProps<T> {
   // Data loading
@@ -86,7 +144,15 @@ export interface ProgressiveFeedProps<T> {
   pageSize?: number; // Items to load per page (default: 6)
   maxItems?: number; // Maximum items to load (0 = unlimited)
   isVisible?: boolean; // Default: true (backward compatible) - gates auto-load when hidden
-  /** [DEBUG] Tab id for visibility logging (e.g. "home", "profile") */
+  /** [PROFILE] Bump to refetch first page without remounting — see soft-refresh effect */
+  softRefreshEpoch?: number;
+  /** Telemetry for targeted flows (Created tab publish refresh) */
+  onSoftRefreshStart?: () => void;
+  onSoftRefreshDone?: (args: {
+    returnedCount: number;
+    firstPostId: string | null;
+  }) => void;
+
   tabId?: string;
 }
 
@@ -133,6 +199,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
   maxItems = 0,
   isVisible = true, // [STEP 1] Default: true for backward compatibility
   tabId = "unknown",
+  softRefreshEpoch,
+  onSoftRefreshStart,
+  onSoftRefreshDone,
 }: ProgressiveFeedProps<T>) {
   // PWA detection: Use centralized utility
   const isPWAValue = (() => {
@@ -173,6 +242,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   // Internal state
   const [items, setItems] = useState<T[]>(initialItemsArray);
+  /** Rows mid–exit animation (fade/slide) before removal from `items`. */
+  const [exitingPostIds, setExitingPostIds] = useState(() => new Set<string>());
+  const deleteExitTimersRef = useRef<Map<string, number>>(new Map());
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(externalError);
@@ -196,19 +268,35 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const inFlightOffsetsRef = useRef<Set<string>>(new Set());
   // [FIX B] Use refs for stable dependencies in loadMore
   const hasMoreRef = useRef(true);
+  const commitHasMore = useCallback((next: boolean) => {
+    hasMoreRef.current = next;
+    setHasMore(next);
+  }, []);
   const isVisibleRef = useRef(true);
   // [FIX A] Store observer in ref for proper cleanup
   const observerRef = useRef<IntersectionObserver | null>(null);
+
+  const softEpochRef = useRef(0);
+  softEpochRef.current = softRefreshEpoch ?? 0;
+  /** Latest epoch deemed satisfied by initial load / cache hydrate or a completed soft refresh */
+  const softBaselineEpochRef = useRef<number>(0);
+  const softBaselineCapturedRef = useRef(false);
+  const softRefreshInFlightRef = useRef(false);
+
+  const captureSoftBaselineEpoch = () => {
+    softBaselineEpochRef.current = softEpochRef.current;
+    softBaselineCapturedRef.current = true;
+  };
+
+  const isDraftRow = useCallback((row: T) => {
+    return Boolean((row as { isDraft?: boolean }).isDraft);
+  }, []);
 
   // [CHAIN] Cap chained loads per completion to avoid infinite loops
   const PREFETCH_PX = 600;
   const MAX_CHAINED_LOADS = 1; // One chain max - prevents rapid multiple RPCs
   const chainCountRef = useRef(0);
 
-  // [HASMORE] Track consecutive short pages to avoid infinite loading when backend keeps returning < limit
-  const shortPageStreakRef = useRef(0);
-
-  // [PASS 2] Mount + visibility guards: track scheduled work and clear on hide/unmount
   const mountedRef = useRef(true);
   const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const rafsRef = useRef<number[]>([]);
@@ -267,6 +355,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
           if (item.id !== postId) return item;
           return applyPostPatch(item as Record<string, unknown>, patch) as T;
         });
+        debugRsvpMerged(next, "after-post-changed-patch");
         if (setCachedItems && next.some((n, i) => n !== prev[i])) {
           scheduleTimeout(() => {
             if (!mountedRef.current) return;
@@ -275,6 +364,55 @@ export default function ProgressiveFeed<T extends { id: string }>({
         }
         return next;
       });
+    });
+    return cleanup;
+  }, [setCachedItems, scheduleTimeout]);
+
+  // Remove deleted posts after a short exit animation, then sync cache (no refetch)
+  useEffect(() => {
+    const commitRemove = (postId: string) => {
+      deleteExitTimersRef.current.delete(postId);
+      setExitingPostIds((prev) => {
+        if (!prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+      setItems((prev) => {
+        const next = prev.filter((item) => item.id !== postId);
+        if (next.length === prev.length) return prev;
+        if (setCachedItems) {
+          scheduleTimeout(() => {
+            if (!mountedRef.current) return;
+            setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    };
+
+    const cleanup = onPostDeleted((postId) => {
+      if (!itemsRef.current.some((i) => i.id === postId)) return;
+      if (deleteExitTimersRef.current.has(postId)) return;
+
+      const durationMs = getPostDeleteExitDurationMs();
+      if (durationMs === 0) {
+        commitRemove(postId);
+        return;
+      }
+
+      setExitingPostIds((prev) => {
+        if (prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.add(postId);
+        return next;
+      });
+
+      const t = scheduleTimeout(() => {
+        if (!mountedRef.current) return;
+        commitRemove(postId);
+      }, durationMs);
+      deleteExitTimersRef.current.set(postId, t as unknown as number);
     });
     return cleanup;
   }, [setCachedItems, scheduleTimeout]);
@@ -381,6 +519,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
       if (DEBUG_PF) {
         console.log("[PF] loadMore blocked: not visible", { logId });
       }
+      return;
+    }
+
+    if (softRefreshInFlightRef.current) {
       return;
     }
 
@@ -541,6 +683,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
         count,
       } = normalizeLoadResult(loadResult);
 
+      debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.loadMore");
+
       const oldOffset = offsetRef.current;
       const requestedLimit = actualPageSize;
       const fetchedLen = fetchedItems.length;
@@ -550,29 +694,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
       const nextOffset = oldOffset + backendConsumed;
       offsetRef.current = nextOffset;
 
-      // Rule 3 — hasMore: do NOT rely on count unless plausibly a true total
-      // count often equals page size (e.g. count=5 with 5 posts), not total
-      let nextHasMore: boolean;
-      if (fetchedLen === 0) {
-        nextHasMore = false;
-        shortPageStreakRef.current = 0;
-      } else if (
-        count != null &&
-        count > requestedLimit &&
-        count >= nextOffset
-      ) {
-        // Plausibly a true total: use it
-        nextHasMore = nextOffset < count;
-        shortPageStreakRef.current = 0;
-      } else if (fetchedLen >= requestedLimit) {
-        nextHasMore = true;
-        shortPageStreakRef.current = 0;
-      } else {
-        // fetchedLen < requestedLimit: short page, don't end early unless streak >= 2
-        shortPageStreakRef.current += 1;
-        nextHasMore = shortPageStreakRef.current < 2;
-      }
-      setHasMore(nextHasMore);
+      const nextHasMore = inferHasMoreAfterPage({
+        consumedOffsetThisPage: backendConsumed,
+        requestedLimit,
+        nextOffset,
+        count,
+      });
+      commitHasMore(nextHasMore);
 
       if (DEBUG_PF) {
         const ids = fetchedItems.map((i) => i.id);
@@ -582,8 +710,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
         console.log(
           `[PF] page | requestedLimit=${requestedLimit} oldOffset=${oldOffset} fetchedLen=${fetchedLen} consumedOffset=${consumedOffset} nextOffset=${nextOffset} count=${
             count ?? "n/a"
-          } shortStreak=${
-            shortPageStreakRef.current
           } hasMore=${nextHasMore} ids=${idsStr}`
         );
       }
@@ -624,7 +750,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
           );
           const merged = [...prev, ...toAppend];
           if (maxItems > 0 && merged.length >= maxItems) {
-            setHasMore(false);
+            commitHasMore(false);
           }
           // [TASK B] Feed pipeline debug - items appended vs deduped, final UI length
           if (DEBUG_PF) {
@@ -638,6 +764,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
               mergedLen: merged.length,
             });
           }
+          debugRsvpMerged(merged, "loadMore-append-merge", {
+            prevHadDebugId: prev.some((p) => p.id === DEBUG_RSVP_POST_ID),
+            fetchHadDebugId: fetchedItems.some(
+              (p) => p.id === DEBUG_RSVP_POST_ID
+            ),
+            appendedDebugId: toAppend.some((p) => p.id === DEBUG_RSVP_POST_ID),
+          });
           return merged;
         });
         loadingRef.current = false;
@@ -650,6 +783,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
             hasMoreRef.current &&
             isSentinelNearBottom() &&
             !loadingRef.current &&
+            !softRefreshInFlightRef.current &&
             initialLoadCompleteRef.current
           ) {
             chainCountRef.current++;
@@ -703,12 +837,14 @@ export default function ProgressiveFeed<T extends { id: string }>({
         clearTimeout(timeoutId);
         timeoutId = null;
       }
-      console.log("[PF loadMore] finally", {
-        offsetRef: offsetRef.current,
-        inFlightOffsetsRef: Array.from(inFlightOffsetsRef.current),
-        loadingRef: loadingRef.current,
-        isLoadingMore,
-      });
+      if (DEBUG_PF) {
+        console.log("[PF loadMore] finally", {
+          offsetRef: offsetRef.current,
+          inFlightOffsetsRef: Array.from(inFlightOffsetsRef.current),
+          loadingRef: loadingRef.current,
+          isLoadingMore,
+        });
+      }
       // [PASS 2 C] Post-load scheduling removed. Rely on IO + user scroll for more loads.
     }
   }, [
@@ -722,6 +858,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     scheduleRaf,
     isSentinelNearBottom,
     tabId,
+    commitHasMore,
   ]);
 
   // Store loadMore in ref for use in other hooks
@@ -758,7 +895,22 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // [FIX] Check cache in useEffect, not during render
   // This prevents re-render loops when getCachedItems reference changes
   useEffect(() => {
-    if (items.length > 0) return; // Already have items from initialItems prop
+    if (items.length > 0) {
+      if (DEBUG_RSVP_POST_ID) {
+        const row = items.find((i) => i.id === DEBUG_RSVP_POST_ID);
+        if (row) {
+          const r = row as Record<string, unknown>;
+          console.log("RSVP DEBUG ProgressiveFeed mount effect", {
+            branch: "skipped_cache_lookup_items_already_nonempty",
+            itemsLen: items.length,
+            id: row.id,
+            rsvp_capacity: r.rsvp_capacity,
+            typeof_rsvp_capacity: typeof r.rsvp_capacity,
+          });
+        }
+      }
+      return; // Already have items from initialItems prop
+    }
 
     // Check cache ONCE on mount (not during render)
     // This prevents re-render loops when getCachedItems reference changes
@@ -769,12 +921,30 @@ export default function ProgressiveFeed<T extends { id: string }>({
         const deduplicated = Array.from(
           new Map(cached.map((item) => [item.id, item])).values()
         );
+        if (DEBUG_RSVP_POST_ID) {
+          const ch = deduplicated.find((i) => i.id === DEBUG_RSVP_POST_ID);
+          if (ch) {
+            const row = ch as Record<string, unknown>;
+            console.log("RSVP DEBUG cache hydrate hit", {
+              id: ch.id,
+              rsvp_capacity: row.rsvp_capacity,
+              typeof_rsvp_capacity: typeof row.rsvp_capacity,
+            });
+          }
+          console.log("RSVP DEBUG ProgressiveFeed mount cache branch", {
+            earlyReturnSkippedRpc: true,
+            cacheLen: deduplicated.length,
+            debugPostInCache: !!ch,
+          });
+        }
         setItems(deduplicated);
         offsetRef.current = deduplicated.length;
+        debugRsvpMerged(deduplicated, "after-cache-hydrate-setItems");
         if (setCachedItems) {
           setCachedItems(deduplicated);
         }
         initialLoadCompleteRef.current = true;
+        captureSoftBaselineEpoch();
         return; // Cache loaded, don't proceed to API load
       }
     }
@@ -829,6 +999,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
               count,
             } = normalizeLoadResult(loadResult);
 
+            debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.initialLoad");
+
             const fetchedLen = fetchedItems.length;
             const requestedLimit = initialLoadSize;
             const oldOffset = 0;
@@ -837,26 +1009,13 @@ export default function ProgressiveFeed<T extends { id: string }>({
             // Rule 1 — Backend offset: advance by backend rows consumed
             offsetRef.current = consumedOffset;
 
-            // Rule 3 — hasMore: do NOT rely on count unless plausibly a true total
-            let nextHasMore: boolean;
-            if (fetchedLen === 0) {
-              nextHasMore = false;
-              shortPageStreakRef.current = 0;
-            } else if (
-              count != null &&
-              count > requestedLimit &&
-              count >= nextOffset
-            ) {
-              nextHasMore = nextOffset < count;
-              shortPageStreakRef.current = 0;
-            } else if (fetchedLen >= requestedLimit) {
-              nextHasMore = true;
-              shortPageStreakRef.current = 0;
-            } else {
-              shortPageStreakRef.current += 1;
-              nextHasMore = shortPageStreakRef.current < 2;
-            }
-            setHasMore(nextHasMore);
+            const nextHasMore = inferHasMoreAfterPage({
+              consumedOffsetThisPage: consumedOffset,
+              requestedLimit,
+              nextOffset,
+              count,
+            });
+            commitHasMore(nextHasMore);
 
             if (DEBUG_PF) {
               const ids = fetchedItems.map((i) => i.id);
@@ -866,8 +1025,6 @@ export default function ProgressiveFeed<T extends { id: string }>({
               console.log(
                 `[PF] page | requestedLimit=${requestedLimit} oldOffset=${oldOffset} fetchedLen=${fetchedLen} consumedOffset=${consumedOffset} nextOffset=${nextOffset} count=${
                   count ?? "n/a"
-                } shortStreak=${
-                  shortPageStreakRef.current
                 } hasMore=${nextHasMore} ids=${idsStr}`
               );
             }
@@ -892,6 +1049,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
                   hasMoreRef.current &&
                   isSentinelNearBottom() &&
                   !loadingRef.current &&
+                  !softRefreshInFlightRef.current &&
                   initialLoadCompleteRef.current
                 ) {
                   chainCountRef.current++;
@@ -921,6 +1079,15 @@ export default function ProgressiveFeed<T extends { id: string }>({
                     }
                   );
                 }
+                debugRsvpMerged(merged, "initialLoad-append-merge", {
+                  prevHadDebugId: prev.some((p) => p.id === DEBUG_RSVP_POST_ID),
+                  fetchHadDebugId: fetchedItems.some(
+                    (p) => p.id === DEBUG_RSVP_POST_ID
+                  ),
+                  appendedDebugId: toAppend.some(
+                    (p) => p.id === DEBUG_RSVP_POST_ID
+                  ),
+                });
                 return merged;
               });
               loadingRef.current = false;
@@ -934,7 +1101,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
               }
               initialLoadGuardRef.current = false;
             } else {
-              setHasMore(false);
+              commitHasMore(false);
               loadingRef.current = false;
               setIsLoadingMore(false);
               initialLoadCompleteRef.current = true;
@@ -961,13 +1128,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
             }
           })
           .finally(() => {
-            // CRITICAL FIX: Don't reset loading state here - it's handled in addItem callback
-            // This ensures skeleton stays visible until first item appears
-            // Only mark initial load as complete (allows IntersectionObserver to fire)
-            // Note: loading state will be reset when first item appears (in addItem callback)
-            // or if there are no items (handled in the else block above)
+            captureSoftBaselineEpoch();
+            // CRITICAL FIX: Don't reset loading state here — it's handled in `.then`/`.catch`
             if (items.length === 0) {
-              // If no items were added (error case), mark as complete
               initialLoadCompleteRef.current = true;
             }
           });
@@ -985,6 +1148,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     } else if (items.length > 0 || initialItems) {
       // If we have items (from cache or initialItems), mark initial load as complete
       initialLoadCompleteRef.current = true;
+      captureSoftBaselineEpoch();
     }
 
     // [FIX] Do NOT reset guard in cleanup - prevents StrictMode mount/unmount/mount from
@@ -992,6 +1156,180 @@ export default function ProgressiveFeed<T extends { id: string }>({
     // so real failures can retry. On real unmount the ref is discarded.
     return () => {};
   }, [isVisible]);
+
+  // Refetch offset 0 in place when `softRefreshEpoch` bumps — keeps existing rows until fresh first page merges
+  useEffect(() => {
+    if (softRefreshEpoch === undefined) return;
+
+    const target = softEpochRef.current;
+    if (
+      target <= 0 ||
+      !softBaselineCapturedRef.current ||
+      target <= softBaselineEpochRef.current
+    ) {
+      return;
+    }
+    if (!isVisible) return;
+    const ready =
+      initialLoadCompleteRef.current || itemsRef.current.length > 0;
+    if (!ready || softRefreshInFlightRef.current) return;
+
+    let cancelled = false;
+    softRefreshInFlightRef.current = true;
+
+    const runLimit = calculateInitialLoadSize();
+
+    void (async () => {
+      try {
+        if (cancelled || !mountedRef.current) return;
+
+        onSoftRefreshStart?.();
+        logFetchStart(
+          "ProgressiveFeed",
+          tabId,
+          isVisibleRef.current,
+          undefined
+        );
+
+        const loadResult = await loadItems(0, runLimit);
+
+        if (cancelled || !mountedRef.current) return;
+
+        const normalized = normalizeLoadResult(loadResult);
+        const fetchedItems = normalized.items;
+        const consumedOffset = normalized.consumedOffset;
+        const count = normalized.count;
+
+        debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.softRefresh");
+
+        const fetchedLen = fetchedItems.length;
+
+        if (fetchedLen === 0) {
+          offsetRef.current = 0;
+          commitHasMore(false);
+          setItems([]);
+          if (setCachedItems) {
+            scheduleTimeout(() => {
+              if (!mountedRef.current) return;
+              setCachedItems([]);
+            }, 0);
+          }
+          captureSoftBaselineEpoch();
+          onSoftRefreshDone?.({
+            returnedCount: 0,
+            firstPostId: null,
+          });
+          return;
+        }
+
+        const firstPublished = fetchedItems.find((it) => !isDraftRow(it));
+
+        const nextOffset = consumedOffset;
+        const nextHasMore = inferHasMoreAfterPage({
+          consumedOffsetThisPage: consumedOffset,
+          requestedLimit: runLimit,
+          nextOffset,
+          count,
+        });
+
+        offsetRef.current = nextOffset;
+        commitHasMore(nextHasMore);
+
+        const idsNeedingActivities = fetchedItems
+          .filter(
+            (item: T & { activity_count?: number }) =>
+              (item.activity_count ?? 0) > 0
+          )
+          .map((item) => item.id);
+        if (idsNeedingActivities.length > 0) {
+          batchFetchActivitiesForPosts(idsNeedingActivities);
+        }
+
+        const backendIdsInHead = new Set(
+          fetchedItems.filter((it) => !isDraftRow(it)).map((it) => it.id)
+        );
+
+        setItems((prev) => {
+          const seenFresh = new Set<string>();
+          const headUnique: T[] = [];
+          for (const it of fetchedItems) {
+            if (!seenFresh.has(it.id)) {
+              seenFresh.add(it.id);
+              headUnique.push(it);
+            }
+          }
+
+          const tailKeep = prev.filter(
+            (i) => !isDraftRow(i) && !backendIdsInHead.has(i.id)
+          );
+          const merged = [...headUnique, ...tailKeep];
+
+          if (maxItems > 0 && merged.length >= maxItems) {
+            commitHasMore(false);
+          }
+
+          debugRsvpMerged(merged, "softRefresh-merge");
+
+          if (setCachedItems) {
+            scheduleTimeout(() => {
+              if (!mountedRef.current) return;
+              setCachedItems(merged);
+            }, 0);
+          }
+          return merged;
+        });
+
+        captureSoftBaselineEpoch();
+
+        chainCountRef.current = 0;
+        const tryChainSoft = () => {
+          if (
+            chainCountRef.current < MAX_CHAINED_LOADS &&
+            hasMoreRef.current &&
+            isSentinelNearBottom() &&
+            !loadingRef.current &&
+            !softRefreshInFlightRef.current &&
+            initialLoadCompleteRef.current
+          ) {
+            chainCountRef.current++;
+            loadMoreRef.current?.();
+          } else {
+            chainCountRef.current = 0;
+          }
+        };
+        scheduleRaf(() => scheduleRaf(tryChainSoft));
+
+        onSoftRefreshDone?.({
+          returnedCount: fetchedLen,
+          firstPostId: firstPublished?.id ?? null,
+        });
+      } catch (e) {
+        console.error("[ProgressiveFeed] Soft refresh failed:", e);
+      } finally {
+        softRefreshInFlightRef.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    softRefreshEpoch,
+    isVisible,
+    items.length,
+    loadItems,
+    calculateInitialLoadSize,
+    setCachedItems,
+    tabId,
+    onSoftRefreshStart,
+    onSoftRefreshDone,
+    maxItems,
+    scheduleRaf,
+    scheduleTimeout,
+    isSentinelNearBottom,
+    isDraftRow,
+    commitHasMore,
+  ]);
 
   // Safety check: Update offsetRef if initialItems prop changes after mount
   // This handles edge cases where initialItems changes without component remounting
@@ -1050,20 +1388,23 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
     const observer = new IntersectionObserver(
       (entries) => {
-        console.log("[PF IO] callback", {
-          isIntersecting: entries[0]?.isIntersecting,
-          initialLoadCompleteRef: initialLoadCompleteRef.current,
-          loadingRef: loadingRef.current,
-          isLoadingMore,
-          isVisibleRef: isVisibleRef.current,
-          hasMoreRef: hasMoreRef.current,
-        });
+        if (DEBUG_PF) {
+          console.log("[PF IO] callback", {
+            isIntersecting: entries[0]?.isIntersecting,
+            initialLoadCompleteRef: initialLoadCompleteRef.current,
+            loadingRef: loadingRef.current,
+            isLoadingMore,
+            isVisibleRef: isVisibleRef.current,
+            hasMoreRef: hasMoreRef.current,
+          });
+        }
         // Double-check: Ensure initial load is complete AND not currently loading
         const canLoad =
           entries[0].isIntersecting &&
           initialLoadCompleteRef.current && // Initial load must be complete
           !loadingRef.current && // Primary check - ref is more reliable
           !isLoadingMore && // Secondary check - state
+          !softRefreshInFlightRef.current &&
           loadMoreRef.current &&
           isVisibleRef.current; // [STEP 1] Check visibility
 
@@ -1116,6 +1457,18 @@ export default function ProgressiveFeed<T extends { id: string }>({
       }
     };
   }, [enableLazyLoading, hasMore, isVisible, externalContainerRef]);
+
+  const feedItemShellClass = useCallback(
+    (id: string) =>
+      [
+        "feed-item overflow-visible transition-[opacity,transform] ease-out will-change-[opacity,transform]",
+        "duration-[280ms]",
+        exitingPostIds.has(id)
+          ? "opacity-0 -translate-y-1 pointer-events-none"
+          : "opacity-100 translate-y-0",
+      ].join(" "),
+    [exitingPostIds]
+  );
 
   // Get items to render (virtual scrolling or all)
   const itemsToRender = useMemo(() => {
@@ -1183,6 +1536,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
             return (
               <div
                 key={item.id}
+                className={feedItemShellClass(item.id)}
                 style={{
                   position: "absolute",
                   top: virtualScrolling.getOffsetTop(actualIndex),
@@ -1199,7 +1553,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
         // Note: renderItem should return elements with keys, we don't wrap in Fragment
         <div className="feed-item-container">
           {itemsToRender.map((item, index) => (
-            <div key={item.id} className="feed-item">
+            <div key={item.id} className={feedItemShellClass(item.id)}>
               {renderItem(item, index)}
             </div>
           ))}

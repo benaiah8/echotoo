@@ -23,6 +23,9 @@ import PreviewPage from "../pages/PreviewPage";
 import ExperiencePage from "../pages/ExperiencePage";
 import HangoutPage from "../pages/HangoutPage";
 import FeedTestPage from "../pages/FeedTestPage";
+import ReportsReviewPage from "../pages/reviews/ReportsReviewPage";
+import AppUpdatesPage from "../pages/internal/AppUpdatesPage";
+import InternalLandingPage from "../pages/internal/InternalLandingPage";
 import AuthCallback from "../pages/AuthCallback";
 import PostDetailModal from "../components/PostDetailModal";
 import CreateFlowLayout from "../components/create/CreateFlowLayout";
@@ -32,7 +35,6 @@ import PrivacyPage from "../pages/policy/PrivacyPage";
 import TermsPage from "../pages/policy/TermsPage";
 import CommunityGuidelinesPage from "../pages/policy/CommunityGuidelinesPage";
 import ChildSafetyPage from "../pages/policy/ChildSafetyPage";
-import AccountDeletionPage from "../pages/policy/AccountDeletionPage";
 import DeleteAccountPage from "../pages/policy/DeleteAccountPage";
 import ReportingPage from "../pages/policy/ReportingPage";
 import SupportPage from "../pages/policy/SupportPage";
@@ -146,6 +148,30 @@ export default function AppRouter() {
         {/* Utility routes */}
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path={Paths.feedTest} element={<FeedTestPage />} />
+        <Route
+          path={Paths.internal}
+          element={
+            <RequireAuthRoute>
+              <InternalLandingPage />
+            </RequireAuthRoute>
+          }
+        />
+        <Route
+          path={Paths.internalReports}
+          element={
+            <RequireAuthRoute>
+              <ReportsReviewPage />
+            </RequireAuthRoute>
+          }
+        />
+        <Route
+          path={Paths.internalAppUpdates}
+          element={
+            <RequireAuthRoute>
+              <AppUpdatesPage />
+            </RequireAuthRoute>
+          }
+        />
 
         {/* Policy & legal pages */}
         <Route path={Paths.privacy} element={<PrivacyPage />} />
@@ -155,7 +181,10 @@ export default function AppRouter() {
           element={<CommunityGuidelinesPage />}
         />
         <Route path={Paths.childSafety} element={<ChildSafetyPage />} />
-        <Route path={Paths.accountDeletion} element={<AccountDeletionPage />} />
+        <Route
+          path={Paths.accountDeletion}
+          element={<Navigate to={Paths.deleteAccount} replace />}
+        />
         <Route path={Paths.deleteAccount} element={<DeleteAccountPage />} />
         <Route path={Paths.reporting} element={<ReportingPage />} />
         <Route path={Paths.support} element={<SupportPage />} />

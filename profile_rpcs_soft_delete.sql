@@ -3,6 +3,12 @@
 -- Run each CREATE OR REPLACE FUNCTION block in Supabase SQL Editor
 -- ============================================
 
+-- Effective rating for type = experience (read model; all RPCs must match):
+--   effective_rating_count = COALESCE(demo.demo_rating_count,0) + COALESCE(p.rating_count,0)
+--   effective_rating_average = ROUND(((demo_avg * demo_n) + (real_avg * real_n)) / (demo_n + real_n), 2)
+--     where demo_* = post_demo_engagement, real_* = posts.rating_*; if demo_n + real_n = 0 then 0
+-- Non-experience: effective fields = raw p.rating_count / p.rating_average
+--
 -- -----------------------------------------------------------------------------
 -- 1. get_post_detail_with_related_data
 -- deleted_at IS NULL added:
@@ -65,6 +71,32 @@ BEGIN
         'is_saved', p_viewer_user_id IS NOT NULL AND us.post_id IS NOT NULL,
         'like_count', COALESCE(like_cnt.cnt, 0),
         'save_count', COALESCE(save_cnt.cnt, 0),
+        'effective_like_count', CASE
+          WHEN p.type = 'experience' THEN COALESCE(p.like_count, 0) + COALESCE(demo.demo_like_count, 0)
+          ELSE COALESCE(p.like_count, 0)
+        END,
+        'effective_save_count', CASE
+          WHEN p.type = 'experience' THEN COALESCE(p.save_count, 0) + COALESCE(demo.demo_save_count, 0)
+          ELSE COALESCE(p.save_count, 0)
+        END,
+        'effective_rating_average', CASE
+          WHEN p.type = 'experience' THEN
+            CASE
+              WHEN (COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)) = 0 THEN 0
+              ELSE ROUND(
+                (
+                  (COALESCE(demo.demo_rating_average, 0)::numeric * COALESCE(demo.demo_rating_count, 0)::numeric) +
+                  (COALESCE(p.rating_average, 0)::numeric * COALESCE(p.rating_count, 0)::numeric)
+                ) / NULLIF((COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0))::numeric, 0),
+                2
+              )
+            END
+          ELSE COALESCE(p.rating_average, 0)
+        END,
+        'effective_rating_count', CASE
+          WHEN p.type = 'experience' THEN COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)
+          ELSE COALESCE(p.rating_count, 0)
+        END,
         'comment_count', (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.is_deleted = false),
         'has_images', EXISTS(SELECT 1 FROM activities a WHERE a.post_id = p.id AND a.images IS NOT NULL AND array_length(a.images, 1) > 0),
         'rsvp_data', CASE
@@ -104,6 +136,7 @@ BEGIN
       LEFT JOIN follows rf ON rf.follower_id = author_profile.id AND rf.following_id = v_viewer_profile_id
       LEFT JOIN post_likes ul ON ul.post_id = p.id AND ul.user_id = p_viewer_user_id
       LEFT JOIN saved_posts us ON us.post_id = p.id AND us.user_id = p_viewer_user_id
+      LEFT JOIN public.post_demo_engagement demo ON demo.post_id = p.id
       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS cnt FROM post_likes pl WHERE pl.post_id = p.id) like_cnt ON true
       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS cnt FROM saved_posts sp WHERE sp.post_id = p.id) save_cnt ON true
       LEFT JOIN LATERAL (SELECT COUNT(*)::int AS cnt FROM rsvp_responses rr WHERE rr.post_id = p.id AND rr.status = 'going') rsvp_cnt ON true
@@ -258,8 +291,17 @@ BEGIN
       END,
       'is_liked', p_viewer_user_id IS NOT NULL AND ul.post_id IS NOT NULL,
       'is_saved', p_viewer_user_id IS NOT NULL AND us.post_id IS NOT NULL,
-      'like_count', (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id),
-      'comment_count', (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.is_deleted = false),
+      'like_count', COALESCE(p.like_count, 0),
+      'save_count', COALESCE(p.save_count, 0),
+      'effective_like_count', CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.like_count, 0) + COALESCE(demo.demo_like_count, 0)
+        ELSE COALESCE(p.like_count, 0)
+      END,
+      'effective_save_count', CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.save_count, 0) + COALESCE(demo.demo_save_count, 0)
+        ELSE COALESCE(p.save_count, 0)
+      END,
+      'comment_count', COALESCE(p.comment_count, 0),
       'has_images', EXISTS(SELECT 1 FROM activities a WHERE a.post_id = p.id AND a.images IS NOT NULL AND array_length(a.images, 1) > 0),
       'activities', COALESCE(
         (SELECT jsonb_agg(
@@ -279,7 +321,36 @@ BEGIN
           'going_count', (SELECT COUNT(*) FROM rsvp_responses rr WHERE rr.post_id = p.id AND rr.status = 'going')
         )
         ELSE NULL
-      END
+      END,
+      'rsvp_capacity', p.rsvp_capacity,
+      'rating_enabled', p.rating_enabled,
+      'rating_average', p.rating_average,
+      'rating_count', p.rating_count,
+      'effective_rating_average', CASE
+        WHEN p.type = 'experience' THEN
+          CASE
+            WHEN (COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)) = 0 THEN 0
+            ELSE ROUND(
+              (
+                (COALESCE(demo.demo_rating_average, 0)::numeric * COALESCE(demo.demo_rating_count, 0)::numeric) +
+                (COALESCE(p.rating_average, 0)::numeric * COALESCE(p.rating_count, 0)::numeric)
+              ) / NULLIF((COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0))::numeric, 0),
+              2
+            )
+          END
+        ELSE COALESCE(p.rating_average, 0)
+      END,
+      'effective_rating_count', CASE
+        WHEN p.type = 'experience' THEN COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)
+        ELSE COALESCE(p.rating_count, 0)
+      END,
+      'viewer_rating', (
+        SELECT pr.stars
+        FROM post_ratings pr
+        WHERE pr.post_id = p.id
+          AND pr.user_id = p_viewer_user_id
+        LIMIT 1
+      )
     ) ORDER BY p.created_at DESC
   )
   INTO v_posts
@@ -289,6 +360,7 @@ BEGIN
   LEFT JOIN follows rf ON rf.follower_id = author_profile.id AND rf.following_id = v_viewer_profile_id
   LEFT JOIN post_likes ul ON ul.post_id = p.id AND ul.user_id = p_viewer_user_id
   LEFT JOIN saved_posts us ON us.post_id = p.id AND us.user_id = p_viewer_user_id
+  LEFT JOIN public.post_demo_engagement demo ON demo.post_id = p.id
   LEFT JOIN rsvp_responses ur ON ur.post_id = p.id AND ur.user_id = p_viewer_user_id;
 
   v_result := jsonb_build_object('posts', COALESCE(v_posts, '[]'::jsonb));

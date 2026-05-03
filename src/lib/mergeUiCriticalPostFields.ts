@@ -6,8 +6,14 @@
  */
 const UI_CRITICAL_FIELDS = [
   "like_count",
+  "effective_like_count",
   "comment_count",
   "save_count",
+  "effective_save_count",
+  "rating_average",
+  "rating_count",
+  "effective_rating_average",
+  "effective_rating_count",
   "is_liked",
   "is_saved",
   "follow_status",

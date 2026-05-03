@@ -18,6 +18,7 @@ import HorizontalNumberWheel from "../components/input/HorizontalNumberWheel";
 import CreateFlowPostTagsField from "../components/create/CreateFlowPostTagsField";
 import { CREATE_FLOW_WEEKDAYS } from "../lib/createFlowScheduleConstants";
 import { formatDateSummary } from "../lib/createFlowDateSummary";
+import { notifyLocalDraftPersisted } from "../lib/drafts";
 
 // [LAUNCH] Anonymous posting disabled - only public and friends
 type Visibility = "public" | "friends";
@@ -151,6 +152,7 @@ export default function CreateCategoryPage() {
         }
       } else {
         localStorage.setItem("draftMeta", JSON.stringify(payload));
+        notifyLocalDraftPersisted();
       }
     } catch {}
   }, [

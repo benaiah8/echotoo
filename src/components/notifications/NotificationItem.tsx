@@ -12,6 +12,8 @@ interface Props {
   notification: NotificationWithActor;
   onMarkAsRead: (id: string) => void;
   compact?: boolean;
+  /** Denser, calmer row for activity stream (not invite cards) */
+  activityCalm?: boolean;
   showGoToPostButton?: boolean;
   onInviteAccepted?: (postId: string) => void; // NEW: callback when invite is accepted
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status for follow request notifications
@@ -104,6 +106,7 @@ export default function NotificationItem({
   notification,
   onMarkAsRead,
   compact = false,
+  activityCalm = false,
   showGoToPostButton = true,
   onInviteAccepted,
   batchedFollowStatus,
@@ -135,6 +138,7 @@ export default function NotificationItem({
         notification={notification}
         onMarkAsRead={onMarkAsRead}
         compact={compact}
+        activityCalm={activityCalm}
         initialFollowStatus={batchedFollowStatus}
       />
     );
@@ -214,6 +218,66 @@ export default function NotificationItem({
     }
   };
 
+  if (activityCalm) {
+    return (
+      <Link
+        to={linkTo}
+        state={{ backgroundLocation: location }}
+        onClick={handleClick}
+        className="flex w-full items-start gap-2.5 py-2.5 pl-0.5 pr-0 transition-colors text-left bg-transparent hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)]"
+      >
+        <Avatar
+          variant="default"
+          url={notification.actor?.avatar_url || undefined}
+          name={
+            notification.actor?.display_name ||
+            notification.actor?.username ||
+            undefined
+          }
+          size={28}
+          onClick={() => {}}
+        />
+        <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p
+              className={`text-[13px] leading-snug ${
+                notification.is_read
+                  ? "text-[var(--text)]/65"
+                  : "text-[var(--text)]/90"
+              }`}
+            >
+              {notificationText}
+            </p>
+            <div className="text-[11px] text-[var(--text)]/45 mt-0.5">
+              {timeAgo}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!notification.is_read && (
+              <div className="h-1.5 w-1.5 rounded-full bg-sky-500/80" />
+            )}
+            {showGoToPostButton && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleClick();
+                  navigate(linkTo, {
+                    state: { backgroundLocation: location },
+                  });
+                }}
+                className="px-2 py-0.5 text-[11px] rounded-full border border-[var(--border)]/70 text-[var(--text)]/80 hover:bg-[var(--text)]/5"
+              >
+                {notification.type === "follow" ? "Profile" : "Open"}
+              </button>
+            )}
+          </div>
+        </div>
+      </Link>
+    );
+  }
+
   if (compact) {
     return (
       <div
@@ -264,7 +328,7 @@ export default function NotificationItem({
       to={linkTo}
       state={{ backgroundLocation: location }}
       onClick={handleClick}
-      className={`w-full rounded-lg p-2 gap-2 flex transition-colors bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 border-l-3 ${getBorderColor()}`}
+      className={`w-full rounded-lg p-2 gap-2 flex transition-colors bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 border-l-2 ${getBorderColor()}`}
     >
       <div className="flex-shrink-0">
         <Avatar

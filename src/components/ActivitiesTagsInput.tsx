@@ -16,6 +16,7 @@ import {
   charFieldRingClassForTone,
   charLimitTone,
   formatCharCount,
+  maxCharsForActivityTagLineAtVisibleIndex,
   maxCharsForNextActivityTagEntry,
   visibleActivityTagLines,
 } from "../lib/createFlowLimitUtils";
@@ -30,15 +31,69 @@ function visibleTagLines(tags: string[]): string[] {
   return tags.filter((t) => t.toLowerCase() !== "custom");
 }
 
+/** Physical index in `tags` for the n-th visible (non-custom) line. */
+function tagIndexForVisibleLine(tags: string[], visibleIndex: number): number {
+  let n = -1;
+  for (let i = 0; i < tags.length; i++) {
+    if (tags[i].toLowerCase() === "custom") continue;
+    n++;
+    if (n === visibleIndex) return i;
+  }
+  return -1;
+}
+
+function removeTagAtVisibleIndex(
+  tags: string[],
+  visibleIndex: number
+): string[] {
+  const ti = tagIndexForVisibleLine(tags, visibleIndex);
+  if (ti < 0) return tags;
+  return tags.filter((_, j) => j !== ti);
+}
+
+function replaceVisibleLine(
+  tags: string[],
+  visibleIndex: number,
+  newText: string
+): string[] {
+  const ti = tagIndexForVisibleLine(tags, visibleIndex);
+  if (ti < 0) return tags;
+  const next = [...tags];
+  next[ti] = newText;
+  return next;
+}
+
+/** Commit edit: empty removes line; duplicate of another visible line returns null. */
+function tryCommitEdit(
+  tags: string[],
+  visibleIndex: number,
+  rawInput: string
+): string[] | null {
+  const raw = rawInput.trim();
+  if (raw === "") {
+    return removeTagAtVisibleIndex(tags, visibleIndex);
+  }
+  const maxLen = maxCharsForActivityTagLineAtVisibleIndex(visibleIndex);
+  const next = clampString(raw, maxLen);
+  if (!next) return removeTagAtVisibleIndex(tags, visibleIndex);
+  const visible = visibleTagLines(tags);
+  const otherVis = visible.filter((_, j) => j !== visibleIndex);
+  if (otherVis.includes(next)) return null;
+  return replaceVisibleLine(tags, visibleIndex, next);
+}
+
 /** One visual line → pill; explicit newline or wrapped 2+ lines → rounded rectangle. */
 function ActivityTagLine({
   text,
   isFirst,
   onRemove,
+  onLineClick,
 }: {
   text: string;
   isFirst: boolean;
   onRemove: () => void;
+  /** Tap the line to load text into the composer for editing. */
+  onLineClick?: () => void;
 }) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -100,10 +155,10 @@ function ActivityTagLine({
 
   const shell = useBlock
     ? [
-        "flex w-full min-w-0 items-start gap-1.5 rounded-lg border border-[var(--border)]/72 bg-[color-mix(in_oklab,var(--surface)_52%,transparent)] px-3 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:border-[var(--border)]/60 dark:bg-[color-mix(in_oklab,var(--surface)_40%,transparent)]",
+        "flex w-full min-w-0 items-start gap-1.5 rounded-[var(--create-radius-field)] border-2 border-[var(--create-border-primary-field)] bg-white/95 px-3 py-1.5 shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] app-dark:bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
       ].join(" ")
     : [
-        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--border)]/72 bg-[color-mix(in_oklab,var(--surface)_52%,transparent)] px-2.5 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:border-[var(--border)]/60 dark:bg-[color-mix(in_oklab,var(--surface)_40%,transparent)]",
+        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border-2 border-[var(--create-border-primary-field)] bg-white/95 px-2.5 py-1 shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] app-dark:bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]",
       ].join(" ");
 
   return (
@@ -118,18 +173,44 @@ function ActivityTagLine({
       <div className={["flex min-w-0", shell].join(" ")}>
         <p
           ref={textRef}
+          role={onLineClick ? "button" : undefined}
+          tabIndex={onLineClick ? 0 : undefined}
+          onClick={
+            onLineClick
+              ? (e) => {
+                  e.stopPropagation();
+                  onLineClick();
+                }
+              : undefined
+          }
+          onKeyDown={
+            onLineClick
+              ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onLineClick();
+                  }
+                }
+              : undefined
+          }
           className={[
             "m-0 min-w-0 flex-1 break-words p-0 leading-snug",
             isFirst
-              ? "text-[15px] font-extrabold tracking-tight text-[var(--text)]"
-              : "text-[13px] font-medium text-[var(--text)]/72 dark:text-[var(--text)]/68",
+              ? "text-[15px] font-extrabold tracking-tight text-neutral-900 app-dark:text-[var(--text)]"
+              : "text-[13px] font-medium text-neutral-800/90 app-dark:text-[var(--text)]/68",
+            onLineClick
+              ? "cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)]"
+              : "",
           ].join(" ")}
         >
           {text}
         </p>
         <button
           type="button"
-          onClick={onRemove}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
           className={[
             "shrink-0 rounded-full p-px text-[var(--text)]/50 hover:bg-[var(--surface)]/45 hover:text-[var(--text)]/82",
             useBlock ? "self-start leading-none" : "self-center leading-none",
@@ -144,7 +225,7 @@ function ActivityTagLine({
   );
 }
 
-/** Preview of the next line before commit — dashed white shell, distinct from saved pills. */
+/** Preview of the next line before commit — dashed shell; pill for one visual line, rounded rect for explicit newlines or wrapped text. */
 function ActivityDraftPreviewLine({
   text,
   isFirst,
@@ -152,44 +233,100 @@ function ActivityDraftPreviewLine({
   text: string;
   isFirst: boolean;
 }) {
-  const multiline = text.includes("\n");
-  const shell = multiline
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef(false);
+  const explicitMultiline = text.includes("\n");
+  const [wrapIsMultiline, setWrapIsMultiline] = useState(false);
+
+  const measure = useCallback(() => {
+    const el = textRef.current;
+    if (!el) return;
+    if (explicitMultiline) {
+      if (!wrapRef.current) {
+        wrapRef.current = true;
+        setWrapIsMultiline(true);
+      }
+      return;
+    }
+    const style = window.getComputedStyle(el);
+    const lh = parseFloat(style.lineHeight);
+    const fs = parseFloat(style.fontSize);
+    const lineHeightPx =
+      Number.isFinite(lh) && lh > 0 ? lh : Number.isFinite(fs) ? fs * 1.25 : 16;
+    const h = el.scrollHeight;
+    const prev = wrapRef.current;
+    let next: boolean;
+    if (prev) {
+      next = h > lineHeightPx + 1;
+    } else {
+      next = h > lineHeightPx + 6;
+    }
+    if (next !== prev) {
+      wrapRef.current = next;
+      setWrapIsMultiline(next);
+    }
+  }, [text, explicitMultiline]);
+
+  useLayoutEffect(() => {
+    if (explicitMultiline) {
+      wrapRef.current = true;
+      setWrapIsMultiline(true);
+      return;
+    }
+    wrapRef.current = false;
+    setWrapIsMultiline(false);
+    measure();
+  }, [text, explicitMultiline, measure]);
+
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+
+  const useBlock = explicitMultiline || wrapIsMultiline;
+
+  const shell = useBlock
     ? [
-        "flex w-full min-w-0 items-start gap-1.5 rounded-xl border-2 border-dashed px-3 py-1.5",
-        "border-white/45 bg-white/[0.06]",
-        "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]",
-        "dark:border-white/50 dark:bg-white/[0.07]",
+        "flex w-full min-w-0 items-start gap-1.5 rounded-[var(--create-radius-panel)] border-2 border-dashed border-[var(--create-border-dashed)] px-3 py-1.5",
+        "bg-neutral-950/[0.04]",
+        "shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]",
+        "app-dark:bg-white/[0.07] app-dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]",
       ].join(" ")
     : [
-        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border-2 border-dashed px-2.5 py-1",
-        "border-white/45 bg-white/[0.06]",
-        "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]",
-        "dark:border-white/50 dark:bg-white/[0.07]",
+        "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border-2 border-dashed border-[var(--create-border-dashed)] px-2.5 py-1",
+        "bg-neutral-950/[0.04]",
+        "shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]",
+        "app-dark:bg-white/[0.07] app-dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]",
       ].join(" ");
+
+  const pClass = [
+    "m-0 min-w-0 flex-1 whitespace-pre-wrap break-words p-0 leading-snug italic text-neutral-900/85 app-dark:text-[var(--text)]/78",
+    isFirst
+      ? "text-[15px] font-extrabold tracking-tight"
+      : "text-[13px] font-medium",
+  ].join(" ");
 
   return (
     <div
+      ref={rowRef}
       className={
-        multiline
+        useBlock
           ? "flex w-full min-w-0 items-start justify-start"
           : "flex max-w-full items-center justify-start"
       }
     >
       <div className={["flex min-w-0", shell].join(" ")}>
-        <p
-          className={[
-            "m-0 min-w-0 flex-1 whitespace-pre-wrap break-words p-0 leading-snug italic text-[var(--text)]/78",
-            isFirst
-              ? "text-[15px] font-extrabold tracking-tight"
-              : "text-[13px] font-medium",
-          ].join(" ")}
-        >
+        <p ref={textRef} className={pClass}>
           {text}
         </p>
         <span
           className={[
-            "shrink-0 rounded-full bg-neutral-950 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-white dark:bg-neutral-950",
-            multiline ? "self-start" : "self-center",
+            "shrink-0 rounded-full bg-neutral-950 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-white app-dark:bg-neutral-950",
+            useBlock ? "self-start" : "self-center",
           ].join(" ")}
         >
           Draft
@@ -213,13 +350,19 @@ export default function ActivitiesTagsInput({
 }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  /** Which visible line (0-based) is loaded into the composer for edit; null = composing a new line. */
+  const [editingVisibleIndex, setEditingVisibleIndex] = useState<number | null>(
+    null
+  );
   const ref = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const tagsRef = useRef(tags);
   const blurCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectingSuggestionRef = useRef(false);
+  const editingVisibleIndexRef = useRef<number | null>(null);
 
   tagsRef.current = tags;
+  editingVisibleIndexRef.current = editingVisibleIndex;
 
   const suggestions = activitiesData
     .map((a) => a.title)
@@ -255,6 +398,8 @@ export default function ActivitiesTagsInput({
     }
     if (prevActivityKeyRef.current === activityKey) return;
     prevActivityKeyRef.current = activityKey;
+    setEditingVisibleIndex(null);
+    setInput("");
     const id = requestAnimationFrame(() => {
       ref.current?.focus({ preventScroll: true });
     });
@@ -268,6 +413,7 @@ export default function ActivitiesTagsInput({
   }, []);
 
   const addTag = (t: string) => {
+    if (editingVisibleIndexRef.current !== null) return;
     const raw = t.trim();
     if (!raw) return;
     const currentTags = tagsRef.current;
@@ -299,13 +445,75 @@ export default function ActivitiesTagsInput({
     }
   };
 
-  const removeTag = (t: string) => {
-    onChange(tags.filter((x) => x !== t));
+  const removeAtVisibleIndex = (visibleIndex: number) => {
+    const editing = editingVisibleIndexRef.current;
+    if (editing !== null) {
+      if (editing === visibleIndex) {
+        setEditingVisibleIndex(null);
+        setInput("");
+      } else if (visibleIndex < editing) {
+        setEditingVisibleIndex(editing - 1);
+      }
+    }
+    onChange(removeTagAtVisibleIndex(tagsRef.current, visibleIndex));
+  };
+
+  const applySuggestionOrAppend = (s: string) => {
+    const evi = editingVisibleIndexRef.current;
+    if (evi !== null) {
+      const maxLen = maxCharsForActivityTagLineAtVisibleIndex(evi);
+      const next = clampString(s, maxLen);
+      const currentTags = tagsRef.current;
+      const visible = visibleTagLines(currentTags);
+      const otherVis = visible.filter((_, j) => j !== evi);
+      if (otherVis.includes(next)) return;
+      onChange(replaceVisibleLine(currentTags, evi, next));
+      setEditingVisibleIndex(null);
+      setInput("");
+      setOpen(false);
+      return;
+    }
+    addTag(s);
+  };
+
+  const commitOrAppendFromComposer = () => {
+    const evi = editingVisibleIndexRef.current;
+    const pending = ref.current?.value ?? "";
+    if (evi !== null) {
+      const res = tryCommitEdit(tagsRef.current, evi, pending);
+      if (res === null) return;
+      onChange(res);
+      setEditingVisibleIndex(null);
+      setInput("");
+      setOpen(false);
+      return;
+    }
+    addTag(pending);
+    setOpen(false);
+  };
+
+  const startEditLine = (visibleIndex: number) => {
+    let working = tagsRef.current;
+    const prevEdit = editingVisibleIndexRef.current;
+    if (prevEdit !== null && prevEdit !== visibleIndex) {
+      const res = tryCommitEdit(working, prevEdit, ref.current?.value ?? "");
+      if (res === null) return;
+      onChange(res);
+      working = res;
+    }
+    const linesAfter = visibleTagLines(working);
+    if (visibleIndex < 0 || visibleIndex >= linesAfter.length) return;
+    setEditingVisibleIndex(visibleIndex);
+    setInput(linesAfter[visibleIndex]);
+    setOpen(true);
+    requestAnimationFrame(() => {
+      ref.current?.focus({ preventScroll: true });
+    });
   };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    addTag(input);
+    commitOrAppendFromComposer();
   };
 
   const scheduleCloseAndMaybeCommit = () => {
@@ -326,45 +534,65 @@ export default function ActivitiesTagsInput({
         return;
       }
 
-      const pending = ref.current?.value ?? "";
-      addTag(pending);
-      setOpen(false);
+      commitOrAppendFromComposer();
     }, 120);
   };
 
   const lines = visibleTagLines(tags);
 
-  const composerMaxLen = useMemo(
-    () => maxCharsForNextActivityTagEntry(tags),
-    [tags]
-  );
+  const composerMaxLen = useMemo(() => {
+    if (editingVisibleIndex !== null) {
+      return maxCharsForActivityTagLineAtVisibleIndex(editingVisibleIndex);
+    }
+    return maxCharsForNextActivityTagEntry(tags);
+  }, [tags, editingVisibleIndex]);
 
   const atTagLineLimit =
     visibleActivityTagLines(tags).length >=
     CREATE_FLOW_LIMITS.activities.maxActivityTagLinesPerStop;
 
+  const composerReadOnly = atTagLineLimit && editingVisibleIndex === null;
+
   const composerTone = charLimitTone(input.length, composerMaxLen);
   const composerRingExtra = charFieldRingClassForTone(composerTone);
 
-  const canCommitLine = !atTagLineLimit && input.trim().length > 0;
+  const canCommitLine =
+    editingVisibleIndex !== null
+      ? true
+      : !atTagLineLimit && input.trim().length > 0;
 
-  const showDraftPreview = !atTagLineLimit && input.trim().length > 0;
+  const showDraftPreview =
+    editingVisibleIndex === null && !atTagLineLimit && input.trim().length > 0;
 
   const maxLinesPerStop =
     CREATE_FLOW_LIMITS.activities.maxActivityTagLinesPerStop;
 
   return (
     <div className="w-full max-w-full overflow-hidden">
-      {(lines.length > 0 || showDraftPreview) && (
+      {(lines.length > 0 ||
+        showDraftPreview ||
+        editingVisibleIndex !== null) && (
         <div className="mb-3 flex flex-col gap-1.5">
-          {lines.map((t, i) => (
-            <ActivityTagLine
-              key={`${t}-${i}`}
-              text={t}
-              isFirst={i === 0}
-              onRemove={() => removeTag(t)}
-            />
-          ))}
+          {lines.map((t, i) => {
+            if (editingVisibleIndex === i) {
+              return (
+                <ActivityDraftPreviewLine
+                  key={`draft-edit-${i}`}
+                  text={clampString(input, composerMaxLen)}
+                  isFirst={i === 0}
+                />
+              );
+            }
+            return (
+              <ActivityTagLine
+                key={`line-${i}`}
+                text={t}
+                isFirst={i === 0}
+                onRemove={() => removeAtVisibleIndex(i)}
+                onLineClick={() => startEditLine(i)}
+              />
+            );
+          })}
           {showDraftPreview && (
             <ActivityDraftPreviewLine
               text={clampString(input, composerMaxLen)}
@@ -377,36 +605,40 @@ export default function ActivitiesTagsInput({
       <form ref={formRef} onSubmit={handleSubmit} className="relative">
         <div
           className={[
-            "relative min-w-0 overflow-hidden rounded-xl px-3 py-2.5 transition",
-            atTagLineLimit ? "opacity-[0.72]" : "",
-            "bg-[color-mix(in_oklab,var(--surface)_82%,transparent)]",
-            "ring-[1.5px] ring-[color-mix(in_oklab,var(--brand)_28%,var(--border))] ring-inset",
-            "shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_18%,transparent),0_4px_20px_color-mix(in_oklab,var(--brand)_10%,transparent),0_8px_28px_rgba(0,0,0,0.06)]",
-            "dark:bg-[color-mix(in_oklab,var(--surface)_52%,transparent)]",
-            "focus-within:ring-[color-mix(in_oklab,var(--brand)_42%,var(--border))]",
-            "focus-within:shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_22%,transparent),0_0_0_4px_color-mix(in_oklab,var(--brand)_14%,transparent),0_8px_32px_color-mix(in_oklab,var(--brand)_12%,transparent)]",
+            "relative min-w-0 overflow-hidden rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-primary-field)] bg-white/98 px-3 py-2.5 transition",
+            atTagLineLimit && editingVisibleIndex === null
+              ? "opacity-[0.72]"
+              : "",
+            "app-dark:bg-[color-mix(in_oklab,var(--surface)_52%,transparent)]",
+            "shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_6px_22px_rgba(0,0,0,0.28)]",
+            "focus-within:border-[var(--brand)]/50 focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_18%,transparent),inset_0_1px_0_rgba(0,0,0,0.04)]",
+            "app-dark:focus-within:border-[var(--brand)]/55 app-dark:focus-within:shadow-[0_0_0_2px_color-mix(in_oklab,var(--brand)_22%,transparent),inset_0_1px_0_rgba(255,255,255,0.08)]",
             composerRingExtra,
-            "dark:!ring-[1.5px] dark:!ring-inset dark:!ring-white/42 dark:!border-0 dark:!ring-offset-0",
-            "dark:!shadow-[0_0_0_1px_rgba(255,255,255,0.32),0_6px_26px_rgba(0,0,0,0.42)]",
-            "dark:focus-within:!ring-white/58",
-            "dark:focus-within:!shadow-[0_0_0_1px_rgba(255,255,255,0.42),0_0_0_4px_rgba(255,255,255,0.07),0_8px_32px_rgba(0,0,0,0.45)]",
           ].join(" ")}
         >
           <button
             type="button"
             disabled={!canCommitLine}
             aria-label={
-              canCommitLine
+              editingVisibleIndex !== null
+                ? "Save activity line"
+                : canCommitLine
                 ? "Add activity line"
                 : "Add activity (type text first)"
             }
-            title={canCommitLine ? "Add" : undefined}
+            title={
+              editingVisibleIndex !== null
+                ? "Save"
+                : canCommitLine
+                ? "Add"
+                : undefined
+            }
             onMouseDown={(e) => {
               e.preventDefault();
             }}
             onClick={() => {
               if (!canCommitLine) return;
-              addTag(input);
+              commitOrAppendFromComposer();
             }}
             className={[
               "absolute right-2 top-2 z-[1] flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition",
@@ -415,11 +647,11 @@ export default function ActivitiesTagsInput({
                 ? [
                     "cursor-pointer border-0 bg-white text-neutral-950 shadow-sm",
                     "hover:bg-neutral-100 active:scale-[0.98]",
-                    "dark:bg-white dark:text-neutral-950",
+                    "app-dark:bg-white app-dark:text-neutral-950",
                   ].join(" ")
                 : [
                     "cursor-not-allowed border border-white/15 bg-white/[0.08] text-[var(--text)]/30",
-                    "dark:border-white/12 dark:bg-white/[0.08] dark:text-white/30",
+                    "app-dark:border-white/12 app-dark:bg-white/[0.08] app-dark:text-white/30",
                   ].join(" "),
             ].join(" ")}
           >
@@ -437,12 +669,12 @@ export default function ActivitiesTagsInput({
             value={input}
             rows={3}
             maxLength={composerMaxLen}
-            readOnly={atTagLineLimit}
+            readOnly={composerReadOnly}
             autoCapitalize="sentences"
             autoCorrect="on"
             spellCheck
             aria-describedby={
-              atTagLineLimit ? "activities-tag-line-limit-hint" : undefined
+              composerReadOnly ? "activities-tag-line-limit-hint" : undefined
             }
             onChange={(e) => {
               setInput(clampString(e.target.value, composerMaxLen));
@@ -451,19 +683,30 @@ export default function ActivitiesTagsInput({
             onFocus={() => setOpen(true)}
             onBlur={scheduleCloseAndMaybeCommit}
             onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                if (editingVisibleIndex !== null) {
+                  e.preventDefault();
+                  setEditingVisibleIndex(null);
+                  setInput("");
+                  setOpen(false);
+                }
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                if (atTagLineLimit) return;
-                addTag(input);
+                if (composerReadOnly) return;
+                commitOrAppendFromComposer();
               }
             }}
             enterKeyHint="done"
             placeholder={
-              atTagLineLimit
+              composerReadOnly
                 ? "Max notes reached for this stop"
+                : editingVisibleIndex !== null
+                ? "Edit this line, then tap the check or press Enter"
                 : "Add ideas, plans, or notes for this stop"
             }
-            className="min-h-[3.25rem] w-full resize-none bg-transparent pb-7 pr-12 pl-0.5 pt-0 text-[15px] leading-relaxed text-[var(--text)] outline-none placeholder:text-[14px] placeholder:leading-relaxed placeholder:text-[var(--text)]/52"
+            className="min-h-[3.25rem] w-full resize-none bg-transparent pb-7 pr-12 pl-0.5 pt-0 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-[14px] placeholder:leading-relaxed placeholder:text-neutral-500 app-dark:text-[var(--text)] app-dark:placeholder:text-[var(--text)]/52"
           />
           <span
             className={`pointer-events-none absolute bottom-1 right-1 text-[10px] tabular-nums leading-none ${charCounterClassForTone(
@@ -475,9 +718,9 @@ export default function ActivitiesTagsInput({
           </span>
         </div>
 
-        {atTagLineLimit && (
+        {composerReadOnly && (
           <p
-            className="mt-1.5 text-[11px] leading-snug text-[var(--text)]/48"
+            className="mt-1.5 text-[11px] leading-snug text-neutral-600 app-dark:text-[var(--text)]/48"
             id="activities-tag-line-limit-hint"
           >
             Max {maxLinesPerStop} notes for this stop
@@ -503,7 +746,7 @@ export default function ActivitiesTagsInput({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     selectingSuggestionRef.current = false;
-                    addTag(s);
+                    applySuggestionOrAppend(s);
                   }}
                 >
                   {s}

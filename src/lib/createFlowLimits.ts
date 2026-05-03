@@ -21,8 +21,8 @@ export const CREATE_FLOW_LIMITS = {
     maxAdditionalDetailItemsPerStop: 8,
     additionalDetailCustomTitleMaxChars: 40,
     additionalDetailValueMaxChars: 200,
-    maxImagesPerStop: 10,
-    maxTotalImagesPerPost: 30,
+    /** Max images for the whole post (all stops combined). No separate per-stop cap. */
+    maxTotalImagesPerPost: 10,
   },
 } as const;
 
@@ -34,13 +34,29 @@ export function clampCaption(value: string): string {
   return value.slice(0, CREATE_FLOW_CAPTION_MAX);
 }
 
-/** Normalize a single hashtag token (lowercase, max length). */
+/**
+ * Normalize a single post-level hashtag token: trim, lowercase, strip leading `#`
+ * (including repeated `#` so legacy `##fun` matches `fun`), then cap length.
+ */
 export function normalizeHashtagToken(raw: string): string {
-  const t = raw.trim().toLowerCase();
+  let t = raw.trim().toLowerCase();
+  while (t.startsWith("#")) {
+    t = t.slice(1);
+  }
   if (!t) return "";
   return t.length > CREATE_FLOW_HASHTAG_TOKEN_MAX
     ? t.slice(0, CREATE_FLOW_HASHTAG_TOKEN_MAX)
     : t;
+}
+
+/**
+ * Post-level hashtag display: always exactly one leading `#` for non-empty stored values.
+ * Safe for legacy rows that still include one or more leading `#`.
+ */
+export function formatHashtagForDisplay(raw: string): string {
+  const core = normalizeHashtagToken(raw);
+  if (!core) return "";
+  return `#${core}`;
 }
 
 /** Cap list length and token length for publish payload. */

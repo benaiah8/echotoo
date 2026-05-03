@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 
 interface BottomDrawerProps {
   open: boolean;
@@ -9,6 +10,24 @@ interface BottomDrawerProps {
   className?: string;
   maxHeight?: string;
   showCloseButton?: boolean;
+  /** When set, replaces the default title + Close row (sticky top). */
+  header?: React.ReactNode;
+  /** Classes for the children wrapper; default `p-3`. */
+  contentClassName?: string;
+  /**
+   * Renders **below** the main body, outside the scrollable region, so it stays
+   * pinned to the bottom of the sheet (e.g. message + primary actions in Invite).
+   * When omitted, behavior matches the original single `overflow-y-auto` body.
+   */
+  footer?: React.ReactNode;
+  /**
+   * When `footer` is set: sheet height follows content up to `maxHeight` (short
+   * content = short sheet, footer sits under the main body with no big empty band).
+   * Main area scrolls inside a max-height cap when content is tall.
+   * When false, sheet stays `height: maxHeight` and the main region expands (legacy).
+   * @default false
+   */
+  shrinkSheetToContent?: boolean;
 }
 
 /**
@@ -22,6 +41,18 @@ interface BottomDrawerProps {
  * - Handles safe area insets
  * - Higher z-index (z-[100]) to ensure it's always on top
  */
+const defaultHeaderStyle: React.CSSProperties = {
+  background: `linear-gradient(to bottom,
+    var(--bg) 0%,
+    var(--bg) 5%,
+    transparent 100%
+  )`,
+  backdropFilter: "blur(var(--glass-blur))",
+  WebkitBackdropFilter: "blur(var(--glass-blur))",
+  border: "none",
+  boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+};
+
 export default function BottomDrawer({
   open,
   onClose,
@@ -30,6 +61,10 @@ export default function BottomDrawer({
   className = "",
   maxHeight = "80vh",
   showCloseButton = true,
+  header,
+  contentClassName = "p-3",
+  footer,
+  shrinkSheetToContent = false,
 }: BottomDrawerProps) {
   const [isMounted, setIsMounted] = useState(false);
 
@@ -37,6 +72,8 @@ export default function BottomDrawer({
   useEffect(() => {
     if (open) {
       setIsMounted(true);
+      /** Native WebViews: re-measure env(safe-area) + iOS/Android fallbacks so fixed bottom sheets clear nav / home. */
+      syncAppSafeAreaBottom();
       const scrollbarWidth =
         window.innerWidth - document.documentElement.clientWidth;
       document.body.style.overflow = "hidden";
@@ -77,10 +114,17 @@ export default function BottomDrawer({
 
       {/* Drawer Sheet - with small solid sections at top and bottom, transparent middle (80-90%) */}
       <div
-        className={`absolute left-0 right-0 rounded-t-2xl overflow-hidden ${className}`}
+        className={`absolute inset-x-0 rounded-t-2xl overflow-hidden ${className}`}
         style={{
           bottom: 0, // Flush with bottom
           maxHeight: maxHeight,
+          // With `footer` and full-height mode: fixed height so flex-1 middle works.
+          // With `shrinkSheetToContent`, height comes from content (capped by maxHeight).
+          ...(footer != null
+            ? shrinkSheetToContent
+              ? { minHeight: 0 as number }
+              : { height: maxHeight, minHeight: 0 as number }
+            : {}),
           // Apply top/left/right border on the container so the curve isn't clipped
           borderTop:
             "1px solid var(--glass-active-border-strong, rgba(255, 255, 255, 0.35))",
@@ -97,56 +141,101 @@ export default function BottomDrawer({
           )`,
           backdropFilter: "blur(var(--glass-blur))",
           WebkitBackdropFilter: "blur(var(--glass-blur))",
-          paddingBottom: "calc(1rem + var(--safe-area-bottom-layout))",
+          paddingBottom:
+            "max(1.25rem, calc(0.75rem + var(--safe-area-bottom-layout)))",
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Content container with proper scrolling */}
-        <div
-          className="overflow-y-auto h-full"
-          style={{ maxHeight: maxHeight }}
-        >
-          {/* Header - gradient from solid at top to transparent, no border */}
-          {(title || showCloseButton) && (
+        {footer != null ? (
+          /* Pinned header + main + pinned footer. `shrinkSheetToContent`: short main = short sheet. */
+          <div
+            className={
+              shrinkSheetToContent
+                ? "flex min-h-0 w-full max-w-full flex-col overflow-hidden"
+                : "flex h-full min-h-0 max-h-full flex-col overflow-hidden"
+            }
+            style={{ maxHeight: maxHeight }}
+          >
+            {header != null ? (
+              <div className="z-10 shrink-0 p-3 pb-2" style={defaultHeaderStyle}>
+                {header}
+              </div>
+            ) : (title || showCloseButton) ? (
+              <div
+                className="z-10 flex shrink-0 items-center justify-between p-3"
+                style={defaultHeaderStyle}
+              >
+                {title && (
+                  <div className="text-lg font-semibold text-[var(--text)]">
+                    {title}
+                  </div>
+                )}
+                {showCloseButton && (
+                  <button
+                    className="text-sm text-[var(--text)]/70 hover:text-[var(--text)] transition ml-auto"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onClose();
+                    }}
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            ) : null}
             <div
-              className="flex items-center justify-between p-3 sticky top-0 z-10"
-              style={{
-                // Gradient header: solid at top (dark/light), fading to transparent
-                background: `linear-gradient(to bottom,
-                  var(--bg) 0%,
-                  var(--bg) 5%,
-                  transparent 100%
-                )`,
-                backdropFilter: "blur(var(--glass-blur))",
-                WebkitBackdropFilter: "blur(var(--glass-blur))",
-                // Header now relies on container border; no extra borders here
-                border: "none",
-                boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
-              }}
+              className={
+                shrinkSheetToContent
+                  ? `min-h-0 min-w-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain max-h-[min(58vh,calc(100dvh-13rem))] ${contentClassName}`
+                  : `min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden ${contentClassName}`
+              }
             >
-              {title && (
-                <div className="text-lg font-semibold text-[var(--text)]">
-                  {title}
-                </div>
-              )}
-              {showCloseButton && (
-                <button
-                  className="text-sm text-[var(--text)]/70 hover:text-[var(--text)] transition ml-auto"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    onClose();
-                  }}
-                >
-                  Close
-                </button>
-              )}
+              {children}
             </div>
-          )}
+            <div className="w-full min-w-0 shrink-0">{footer}</div>
+          </div>
+        ) : (
+          /* Original: one scrollable column (header can stick). */
+          <div
+            className="h-full max-h-full overflow-y-auto"
+            style={{ maxHeight: maxHeight }}
+          >
+            {header != null ? (
+              <div
+                className="sticky top-0 z-10 p-3 pb-2"
+                style={defaultHeaderStyle}
+              >
+                {header}
+              </div>
+            ) : (title || showCloseButton) ? (
+              <div
+                className="sticky top-0 z-10 flex items-center justify-between p-3"
+                style={defaultHeaderStyle}
+              >
+                {title && (
+                  <div className="text-lg font-semibold text-[var(--text)]">
+                    {title}
+                  </div>
+                )}
+                {showCloseButton && (
+                  <button
+                    className="ml-auto text-sm text-[var(--text)]/70 transition hover:text-[var(--text)]"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onClose();
+                    }}
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            ) : null}
 
-          {/* Children content */}
-          <div className="p-3">{children}</div>
-        </div>
+            <div className={contentClassName}>{children}</div>
+          </div>
+        )}
       </div>
     </div>,
     document.body

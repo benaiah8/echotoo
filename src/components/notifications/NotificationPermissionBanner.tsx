@@ -62,31 +62,33 @@ export default function NotificationPermissionBanner() {
   }
 
   return (
-    <div className="mx-3 mb-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-      <div className="flex items-start gap-3">
-        <div className="flex-shrink-0">
-          <PiBell size={20} className="text-blue-500" />
+    <div className="mb-2.5 w-full rounded-[14px] border border-[var(--border)]/70 bg-[var(--surface-2)]/80 px-3 py-2.5 backdrop-blur-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+      <div className="flex items-start gap-2.5">
+        <div className="flex shrink-0 pt-0.5 text-sky-500 dark:text-sky-400">
+          <PiBell size={18} aria-hidden />
         </div>
 
-        <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-medium text-[var(--text)] mb-1">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[13px] font-semibold leading-tight tracking-tight text-[var(--text)]">
             Enable notifications
           </h3>
-          <p className="text-xs text-[var(--text)]/70 mb-2">
-            Get notified when someone likes your posts, follows you, or
-            comments.
+          <p className="mt-1 text-[11px] leading-snug text-[var(--text)]/65">
+            Get alerts for likes, follows, comments, and invites—only when they
+            matter.
           </p>
 
-          <div className="flex gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <button
+              type="button"
               onClick={requestPermission}
-              className="px-3 py-1.5 text-xs bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors"
+              className="rounded-full bg-sky-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-sky-600 active:opacity-95 dark:bg-sky-500/95"
             >
               Enable
             </button>
             <button
+              type="button"
               onClick={dismissBanner}
-              className="px-3 py-1.5 text-xs text-[var(--text)]/50 hover:text-[var(--text)] transition-colors"
+              className="rounded-full px-2.5 py-1 text-[11px] font-medium text-[var(--text)]/55 hover:text-[var(--text)]/85"
             >
               Not now
             </button>
@@ -94,10 +96,12 @@ export default function NotificationPermissionBanner() {
         </div>
 
         <button
+          type="button"
           onClick={dismissBanner}
-          className="flex-shrink-0 text-[var(--text)]/30 hover:text-[var(--text)]/60 transition-colors"
+          className="shrink-0 rounded-md p-0.5 text-[var(--text)]/35 transition-colors hover:bg-[var(--text)]/[0.06] hover:text-[var(--text)]/65"
+          aria-label="Dismiss"
         >
-          <PiX size={16} />
+          <PiX size={16} aria-hidden />
         </button>
       </div>
     </div>

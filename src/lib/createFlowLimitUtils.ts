@@ -39,11 +39,11 @@ export function charLimitTone(len: number, maxLen: number): CharLimitTone {
 export function charCounterClassForTone(tone: CharLimitTone): string {
   switch (tone) {
     case "max":
-      return "font-medium text-[color-mix(in_oklab,var(--brand)_88%,var(--text))]";
+      return "font-semibold text-[color-mix(in_oklab,var(--brand-dark)_82%,var(--text))]";
     case "warning":
-      return "text-[color-mix(in_oklab,var(--brand)_55%,var(--text))] text-[var(--text)]/70";
+      return "font-medium text-[color-mix(in_oklab,var(--brand-dark)_52%,var(--text))]";
     default:
-      return "text-[var(--text)]/38";
+      return "text-[var(--text)]/42 app-dark:text-[var(--text)]/52";
   }
 }
 
@@ -71,6 +71,15 @@ export function visibleActivityTagLines(tags: string[]): string[] {
 export function maxCharsForNextActivityTagEntry(tags: string[]): number {
   const visible = visibleActivityTagLines(tags);
   return visible.length === 0
+    ? CREATE_FLOW_LIMITS.activities.activityPrimaryLineMaxChars
+    : CREATE_FLOW_LIMITS.activities.activityNoteLineMaxChars;
+}
+
+/** Max length for an existing line at visible index (0 = primary, 1+ = note lines). */
+export function maxCharsForActivityTagLineAtVisibleIndex(
+  visibleIndex: number
+): number {
+  return visibleIndex === 0
     ? CREATE_FLOW_LIMITS.activities.activityPrimaryLineMaxChars
     : CREATE_FLOW_LIMITS.activities.activityNoteLineMaxChars;
 }

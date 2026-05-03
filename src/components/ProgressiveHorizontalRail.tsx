@@ -22,8 +22,9 @@ import React, {
 } from "react";
 import { useScrollStopDetection } from "../hooks/useScrollStopDetection";
 import { useAdaptiveBuffer } from "../hooks/useAdaptiveBuffer";
-import { onPostChanged } from "../lib/postEvents";
+import { onPostChanged, onPostDeleted } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
+import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 
 export interface ProgressiveHorizontalRailProps<T> {
@@ -121,6 +122,12 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
 
   // Internal state
   const [items, setItems] = useState<T[]>(initialItemsArray);
+  const [exitingPostIds, setExitingPostIds] = useState(() => new Set<string>());
+  const deleteExitTimersRef = useRef<Map<string, number>>(new Map());
+  const itemsRef = useRef<T[]>(initialItemsArray);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   // [POST EVENTS] Patch rail items on save/like/follow so cards update immediately
   useEffect(() => {
@@ -142,6 +149,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
     });
     return cleanup;
   }, [setCachedItems]);
+
   // [FIX] Initialize isLoadingMore to true if we have no initial items
   // This ensures skeleton shows immediately instead of blank screen
   const [isLoadingMore, setIsLoadingMore] = useState(
@@ -168,6 +176,65 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
       aliveRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const commitRemove = (postId: string) => {
+      deleteExitTimersRef.current.delete(postId);
+      setExitingPostIds((prev) => {
+        if (!prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
+      setItems((prev) => {
+        const next = prev.filter((item) => item.id !== postId);
+        if (next.length === prev.length) return prev;
+        if (setCachedItems) {
+          setTimeout(() => {
+            if (aliveRef.current) setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    };
+
+    const cleanup = onPostDeleted((postId) => {
+      if (!itemsRef.current.some((i) => i.id === postId)) return;
+      if (deleteExitTimersRef.current.has(postId)) return;
+
+      const durationMs = getPostDeleteExitDurationMs();
+      if (durationMs === 0) {
+        commitRemove(postId);
+        return;
+      }
+
+      setExitingPostIds((prev) => {
+        if (prev.has(postId)) return prev;
+        const next = new Set(prev);
+        next.add(postId);
+        return next;
+      });
+
+      const t = window.setTimeout(() => {
+        if (!aliveRef.current) return;
+        commitRemove(postId);
+      }, durationMs);
+      deleteExitTimersRef.current.set(postId, t);
+    });
+    return cleanup;
+  }, [setCachedItems]);
+
+  const railItemShellClass = useCallback(
+    (id: string) =>
+      [
+        "overflow-visible transition-[opacity,transform] ease-out will-change-[opacity,transform]",
+        "duration-[280ms]",
+        exitingPostIds.has(id)
+          ? "opacity-0 -translate-y-1 pointer-events-none"
+          : "opacity-100 translate-y-0",
+      ].join(" "),
+    [exitingPostIds]
+  );
 
   // Adaptive buffer
   const { bufferSize: adaptiveBufferSize, isWiFi } = useAdaptiveBuffer({
@@ -483,7 +550,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
     return (
       <div
         ref={containerRef as React.RefObject<HTMLDivElement>}
-        className="overflow-x-auto scroll-hide py-2"
+        className="overflow-x-auto scroll-hide pt-2 pb-4"
       >
         <div className="flex gap-3 w-max rail-pad">{emptyComponent}</div>
       </div>
@@ -493,7 +560,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   return (
     <div
       ref={containerRef as React.RefObject<HTMLDivElement>}
-      className="overflow-x-auto scroll-hide py-2"
+      className="overflow-x-auto scroll-hide pt-2 pb-4"
     >
       <div className="flex gap-3 w-max rail-pad">
         {/* [ENHANCEMENT: Empty State] Show empty card as first item when filteredCount === 0 */}
@@ -517,7 +584,9 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
 
           return (
             <React.Fragment key={item.id}>
-              {rendered}
+              <div className={`shrink-0 ${railItemShellClass(item.id)}`}>
+                {rendered}
+              </div>
               {shouldShowSeparator && (
                 <div
                   className="w-px h-full bg-blue-500/50 mx-2 shrink-0"

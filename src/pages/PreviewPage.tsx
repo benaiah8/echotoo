@@ -5,6 +5,8 @@ import CreateFlowKeyboardShell, {
   createFlowPreviewColumnStyle,
 } from "../components/create/CreateFlowKeyboardShell";
 import { Paths, postDetailPath } from "../router/Paths";
+import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
+import { shareUrl } from "../lib/shareUrl";
 import { supabase } from "../lib/supabaseClient";
 import { useDispatch } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
@@ -21,6 +23,7 @@ import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill"
 import InviteDrawer from "../components/ui/InviteDrawer";
 import PostedSuccessModal from "../components/ui/PostedSuccessModal";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
+import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
 
 const BOTTOM_NAV_H = 56;
 const GAP_BELOW_ACTIONS = 4;
@@ -35,6 +38,8 @@ type DraftMeta = {
   recurrenceDays?: string[]; // ["MO","TU",...]
   anonymousName?: string; // NEW: anonymous name for anonymous posts
   anonymousAvatar?: string; // NEW: anonymous avatar (letter/number/emoji)
+  /** Mirrors `posts.rating_enabled`; defaults false until rating UI exists. */
+  ratingEnabled?: boolean;
 };
 
 type DraftActivity = {
@@ -118,8 +123,9 @@ export default function PreviewPage() {
         recurrenceDays: editData.recurrence_days || [],
         anonymousName: editData.anonymous_name || undefined,
         anonymousAvatar: editData.anonymous_avatar || undefined,
+        ratingEnabled: editData.ratingEnabled ?? false,
       }
-    : meta;
+    : { ...meta, ratingEnabled: meta.ratingEnabled ?? false };
 
   const finalActivities = isEditMode ? editData.activities || [] : activities;
 
@@ -197,6 +203,7 @@ export default function PreviewPage() {
         activities: sanitizedActivities as DraftActivity[],
         isEditMode,
         editPostId: isEditMode ? editData.postId : undefined,
+        ratingEnabled: finalMeta.ratingEnabled ?? false,
       });
 
       setNewPostId(post.id);
@@ -208,8 +215,9 @@ export default function PreviewPage() {
 
         const editDataAfter = read<any>("editPostData", null);
         const returnPath = editDataAfter?.returnPath || "/u/me";
+        const returnState = editDataAfter?.returnState;
         localStorage.removeItem("editPostData");
-        nav(returnPath);
+        navigateAfterEditPublish(nav, { returnPath, returnState });
       } else {
         console.log("[PreviewPage] posted success modal opened");
         setShowPostedModal(true);
@@ -263,6 +271,7 @@ export default function PreviewPage() {
           : null,
         tags: tags.length ? tags : null,
         status: "draft", // Explicitly set as draft
+        rating_enabled: finalMeta.ratingEnabled ?? false,
       });
 
       // Insert activities for draft
@@ -477,6 +486,7 @@ export default function PreviewPage() {
     selected_dates: finalMeta.selectedDates || null,
     is_recurring: finalMeta.isRecurring || null,
     recurrence_days: finalMeta.recurrenceDays || null,
+    rating_enabled: finalMeta.ratingEnabled ?? false,
   };
 
   return (
@@ -533,27 +543,14 @@ export default function PreviewPage() {
           onShareClick={async () => {
             try {
               if (!newPostId) return;
-              const postUrl = `${window.location.origin}${postDetailPath(
+              const postUrl = `${getPublicShareBaseUrl()}${postDetailPath(
                 postType === "hangout" ? "hangout" : "experience",
                 newPostId
               )}`;
-              const shareData = {
-                title: `Check out this ${
-                  postType === "hangout" ? "hangout" : "experience"
-                }`,
-                url: postUrl,
-              };
-
-              if (
-                navigator.share &&
-                navigator.canShare &&
-                navigator.canShare(shareData)
-              ) {
-                await navigator.share(shareData);
-              } else {
-                await navigator.clipboard.writeText(postUrl);
-                console.log("Link copied to clipboard");
-              }
+              const title = `Check out this ${
+                postType === "hangout" ? "hangout" : "experience"
+              }`;
+              await shareUrl({ title, url: postUrl });
             } catch (error) {
               console.error("Error sharing:", error);
             }

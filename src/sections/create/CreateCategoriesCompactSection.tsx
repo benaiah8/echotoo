@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import SecondaryDropdown from "../../components/input/dropdown/SecondaryDropdown";
 import PrimaryInput from "../../components/input/PrimaryInput";
 import { categoriesData as _rawCategoriesData } from "../../data/data";
+import { notifyLocalDraftPersisted } from "../../lib/drafts";
 
 type DraftMeta = { title: string; description: string };
 type DraftCategories = {
@@ -97,11 +98,15 @@ export default function CreateCategoriesCompactSection({
     }, [categoriesData.length]);
 
   // keep meta in sync (used elsewhere)
-  useEffect(() => write("draftMeta", meta), [meta]);
+  useEffect(() => {
+    write("draftMeta", meta);
+    notifyLocalDraftPersisted();
+  }, [meta]);
 
   // emit combined tags whenever cats changes
   useEffect(() => {
     write("draftCategories", cats);
+    notifyLocalDraftPersisted();
     const tags = [
       ...(cats.activityTypes ?? []),
       ...(cats.themes ?? []),

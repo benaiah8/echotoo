@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { useParams, Navigate } from "react-router-dom";
+import { useParams, Navigate, useLocation } from "react-router-dom";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import { getPostByIdOptimized } from "../api/queries/getPostById";
 import PostDetailBody, { Post } from "../components/detail/PostDetailBody";
 import PostDetailSkeleton from "../components/skeletons/PostDetailSkeleton";
 import { supabase } from "../lib/supabaseClient";
+import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 // [OPTIMIZATION: Phase 3.4] Removed batch loader - PostgreSQL function provides all data
 
 export default function HangoutPage() {
+  const location = useLocation();
+  const navState = location.state as PostDetailNavigateState | null;
   const { id } = useParams<{ id: string }>();
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +62,7 @@ export default function HangoutPage() {
   }, [id]);
 
   if (id?.startsWith("draft-")) {
-    return <Navigate to="/create/activities?type=hangout" replace />;
+    return <Navigate to="/create/finalize?type=hangout" replace />;
   }
   if (loading) {
     return (
@@ -80,7 +83,10 @@ export default function HangoutPage() {
 
   return (
     <PrimaryPageContainer>
-      <PostDetailBody post={post} />
+      <PostDetailBody
+        post={post}
+        autoFocusCommentComposer={Boolean(navState?.focusCommentComposer)}
+      />
     </PrimaryPageContainer>
   );
 }

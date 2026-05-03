@@ -5,6 +5,7 @@ import {
   useJsApiLoader,
 } from "@react-google-maps/api";
 import { useEffect, useRef, useState } from "react";
+import toast from "react-hot-toast";
 
 const defaultCenter = { lat: 9.017, lng: 38.746 };
 
@@ -52,7 +53,13 @@ export default function LocationPickerGoogle({
 
   // center on user location and zoom in for meter-level accuracy
   const goToMyLocation = () => {
-    navigator.geolocation?.getCurrentPosition(
+    if (!navigator.geolocation) {
+      toast.error(
+        "Location isn’t available on this device. Search or tap the map to choose a place."
+      );
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         const { latitude: lat, longitude: lng, accuracy } = coords;
         setCenter({ lat, lng });
@@ -63,7 +70,11 @@ export default function LocationPickerGoogle({
           mapInstance.setZoom(accuracy && accuracy < 30 ? 18 : 17);
         }
       },
-      () => {},
+      () => {
+        toast.error(
+          "Couldn’t get your location. Allow location access in Settings, or search and tap the map."
+        );
+      },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
     );
   };
@@ -121,7 +132,9 @@ export default function LocationPickerGoogle({
       {/* FLOATING: Go To My Location (aligned with map controls, auto-lifted above footer) */}
       <div
         className="absolute right-2 z-20"
-        style={{ bottom: footerH + 12 }} // auto offset
+        style={{
+          bottom: `calc(${footerH + 12}px + env(safe-area-inset-bottom, 0px))`,
+        }}
       >
         <button
           onClick={goToMyLocation}
@@ -135,7 +148,7 @@ export default function LocationPickerGoogle({
       {/* FOOTER: Search + Buttons (search is BELOW the map, inside black area) */}
       <div
         ref={footerRef}
-        className="bg-[var(--surface-2)] text-[var(--text)] w-full p-4 pt-3 space-y-3"
+        className="bg-[var(--surface-2)] text-[var(--text)] w-full space-y-3 px-4 pt-3 pb-[max(1rem,calc(1rem+env(safe-area-inset-bottom,0px)))]"
       >
         <div className="max-w-2xl mx-auto">
           <Autocomplete

@@ -17,16 +17,17 @@ interface DrawerProfileCardProps {
   className?: string;
   avatarVariant?: "default" | "anon";
   avatarSize?: number;
+  /**
+   * `pill` = full-width stadium row, tighter padding, avatar inset (invite-style).
+   * `default` = rounded card (`rounded-xl`).
+   */
+  rowShape?: "default" | "pill";
 }
 
 /**
- * Reusable Profile Card Component for Drawers
- *
- * Features:
- * - Frosted glass styling matching bottom tab active state
- * - Theme-aware (light/dark mode)
- * - Consistent styling across all drawers
- * - Optional follow button or custom badge
+ * Reusable profile row for drawers — frosted glass shell.
+ * `rowShape="pill"` → stadium row, tighter padding, invite list.
+ * `default` → rounded-xl card (Follow list, RSVP, etc.).
  */
 export default function DrawerProfileCard({
   id,
@@ -42,10 +43,17 @@ export default function DrawerProfileCard({
   className = "",
   avatarVariant = "default",
   avatarSize = 36,
+  rowShape = "default",
 }: DrawerProfileCardProps) {
+  const isPill = rowShape === "pill";
+
   return (
     <div
-      className={`flex items-center gap-3 p-2 rounded-xl transition-colors ${
+      className={`flex min-h-0 items-center ${
+        isPill
+          ? "gap-2.5 rounded-full py-1.5 pl-1.5 pr-2.5"
+          : "gap-3 rounded-xl py-2 pl-1.5 pr-2"
+      } ${
         onClick ? "cursor-pointer" : ""
       } ${className}`}
       style={{
@@ -57,23 +65,50 @@ export default function DrawerProfileCard({
       }}
       onClick={onClick}
     >
-      <Avatar
-        url={avatar_url || undefined}
-        name={display_name || "User"}
-        size={avatarSize}
-        variant={avatarVariant}
-        userId={id} // Pass profile ID for caching
-      />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm leading-tight truncate text-[var(--text)]">
-          {display_name || "Unnamed"}
-        </div>
-        <div className="text-xs text-[var(--text)]/60 truncate">
-          @{username || "user"}
+      <div
+        className={
+          isPill
+            ? "flex shrink-0 items-center self-center"
+            : "shrink-0 self-center"
+        }
+      >
+        <Avatar
+          url={avatar_url || undefined}
+          name={display_name || "User"}
+          size={avatarSize}
+          variant={avatarVariant}
+          userId={id} // Pass profile ID for caching
+          tightLineBox={isPill}
+        />
+      </div>
+      <div
+        className={`min-w-0 flex-1 self-center ${
+          isPill ? "" : "py-0.5"
+        }`}
+      >
+        <div
+          className={`flex min-h-0 min-w-0 flex-col justify-center ${
+            isPill ? "gap-0" : "gap-0.5"
+          }`}
+        >
+          <div
+            className={`truncate text-sm font-medium text-[var(--text)] ${
+              isPill ? "leading-snug" : "leading-tight"
+            }`}
+          >
+            {display_name || "Unnamed"}
+          </div>
+          <div
+            className={`truncate text-xs text-[var(--text)]/60 ${
+              isPill ? "leading-none" : "leading-tight"
+            }`}
+          >
+            @{username || "user"}
+          </div>
         </div>
       </div>
       <div
-        className="flex items-center gap-2"
+        className="flex shrink-0 items-center justify-end gap-2 self-center"
         onClick={(e) => e.stopPropagation()}
       >
         {showCustomBadge ? (
@@ -81,7 +116,7 @@ export default function DrawerProfileCard({
         ) : showFollowButton ? (
           <FollowButton
             targetId={id}
-            className="ml-2"
+            className="shrink-0"
             onChange={onFollowChange}
             followStatus={followStatus}
           />

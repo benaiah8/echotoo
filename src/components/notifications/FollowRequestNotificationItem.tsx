@@ -27,6 +27,7 @@ interface Props {
   notification: NotificationWithActor;
   onMarkAsRead: (id: string) => void;
   compact?: boolean;
+  activityCalm?: boolean;
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status from batch loader
   initialFollowStatus?: "none" | "pending" | "following" | "friends";
 }
@@ -63,8 +64,10 @@ export default function FollowRequestNotificationItem({
   notification,
   onMarkAsRead,
   compact = false,
+  activityCalm = false,
   initialFollowStatus,
 }: Props) {
+  const effectiveCompact = compact || activityCalm;
   const followerProfileId = notification.additional_data?.follower_profile_id;
   const followingProfileId = notification.additional_data?.following_profile_id;
   const requestStatus =
@@ -423,7 +426,7 @@ export default function FollowRequestNotificationItem({
       ? "border-b-blue-500" // Blue for sent requests
       : "border-b-green-500"; // Green for received requests
 
-  if (compact) {
+  if (effectiveCompact) {
     return (
       <div
         className={`p-3 border-b-2 ${bottomBorderColor} last:border-b-0 ${

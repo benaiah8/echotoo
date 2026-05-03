@@ -70,6 +70,19 @@ export function invalidatePostDetailCache(postId: string): void {
   }
 }
 
+/** Clears cached post-detail responses for this viewer (e.g. after block/unblock). */
+export function invalidatePostDetailCacheForViewer(
+  viewerUserId: string | null
+): void {
+  const suffix = `:${viewerUserId ?? "null"}`;
+  for (const key of Array.from(postDetailCache.keys())) {
+    if (key.endsWith(suffix)) postDetailCache.delete(key);
+  }
+  for (const key of Array.from(postDetailInFlight.keys())) {
+    if (key.endsWith(suffix)) postDetailInFlight.delete(key);
+  }
+}
+
 async function getPostByIdOptimizedImpl(
   postId: string,
   viewerUserId: string | null
@@ -124,9 +137,11 @@ async function getPostByIdOptimizedImpl(
         | undefined,
       is_liked: post.is_liked,
       is_saved: post.is_saved,
-      like_count: post.like_count,
-      save_count: post.save_count,
-      comment_count: post.comment_count,
+      like_count: post.like_count ?? 0,
+      save_count: post.save_count ?? 0,
+      effective_like_count: post.effective_like_count ?? (post.like_count ?? 0),
+      effective_save_count: post.effective_save_count ?? (post.save_count ?? 0),
+      comment_count: post.comment_count ?? 0,
       has_images: post.has_images,
       rsvp_data: post.rsvp_data || null,
       // Additional fields for PostDetailBody compatibility
@@ -135,6 +150,14 @@ async function getPostByIdOptimizedImpl(
       rsvp_capacity: post.rsvp_capacity,
       is_recurring: post.is_recurring,
       recurrence_days: post.recurrence_days,
+      rating_enabled: post.rating_enabled,
+      rating_average: post.rating_average ?? null,
+      rating_count: post.rating_count ?? null,
+      effective_rating_average:
+        post.effective_rating_average ?? (post.rating_average ?? null),
+      effective_rating_count:
+        post.effective_rating_count ?? (post.rating_count ?? null),
+      viewer_rating: post.viewer_rating ?? null,
       // Activities are included in the post object from PostgreSQL
       activities: post.activities || [],
     };

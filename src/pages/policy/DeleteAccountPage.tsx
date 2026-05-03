@@ -13,7 +13,7 @@ export default function DeleteAccountPage() {
         intro="You can request account deletion from within the EchoToo app. This page provides the steps and a fallback contact method for users who cannot access the app."
       >
         {/* POLICY CONTENT START */}
-        <p>Last updated: March 15, 2026</p>
+        <p>Last updated: April 13, 2026</p>
 
         <p>
           This page is intended for account deletion requests and Google Play
@@ -48,16 +48,19 @@ export default function DeleteAccountPage() {
 
         <h3>What Happens When You Delete Your Account</h3>
         <p>
-          EchoToo currently handles account deletion by marking your profile as
-          deleted. Your profile is removed from active visibility in the app
-          immediately after you confirm deletion.
+          When you confirm deletion in the app, EchoToo processes your request
+          to remove your account access. As part of that flow, your profile and
+          your posts are removed from EchoToo under the ordinary operation of
+          the service, so they should no longer appear in the app to you or
+          others.
         </p>
         <p>
-          At this time, account deletion does not guarantee removal of all
-          related data. Some data may remain associated with the account
-          according to our current implementation, including posts, comments,
-          uploaded media, and authentication records. We do not claim that
-          everything is immediately permanently erased.
+          Some limited information may still be retained where required or
+          reasonably necessary for legal, safety, fraud-prevention,
+          abuse-prevention, or operational reasons (for example, backups,
+          short-term logs, or records we must keep to comply with law or
+          protect users). We do not claim that every possible copy of every
+          record is permanently erased from every system or location immediately.
         </p>
         <p>
           EchoToo may improve or expand its deletion and data removal process

@@ -1,6 +1,62 @@
 import { supabase } from "../../lib/supabaseClient";
 import { getViewerAuthUserId } from "./follows";
 
+/** Max length for optional invite note (plain text, in-app). */
+export const INVITE_NOTE_MAX_LENGTH = 200;
+
+/** Max invitees in a single send (large events; enforced client + server). */
+export const INVITE_MAX_PER_SEND = 2000;
+
+function normalizeInviteNote(
+  note: string | undefined | null
+): string | null {
+  const t = (note ?? "").trim();
+  if (!t) return null;
+  return t.slice(0, INVITE_NOTE_MAX_LENGTH);
+}
+
+/**
+ * Best-effort remote push for new invites (Edge Function). Must not throw — invite flow must
+ * succeed even if push fails. Mirrors send-post-push invoke pattern; uses postId+postType for native tap.
+ */
+async function invokeSendInvitePushBestEffort(params: {
+  postId: string;
+  postType: "hangout" | "experience";
+  actorId: string;
+  recipientUserIds: string[];
+  inviteId?: string;
+}): Promise<void> {
+  if (params.recipientUserIds.length === 0) return;
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+
+    const { error } = await supabase.functions.invoke("send-invite-push", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: {
+        post_id: params.postId,
+        post_type: params.postType,
+        actor_id: params.actorId,
+        recipient_user_ids: params.recipientUserIds,
+        ...(params.inviteId ? { invite_id: params.inviteId } : {}),
+      },
+    });
+    if (error) {
+      console.warn("[send-invite-push]", error.message);
+    }
+  } catch (e) {
+    console.warn(
+      "[send-invite-push]",
+      e instanceof Error ? e.message : e
+    );
+  }
+}
+
 export type InviteStatus = "pending" | "accepted" | "declined" | "expired";
 
 export type Invite = {
@@ -9,6 +65,8 @@ export type Invite = {
   inviter_id: string;
   invitee_id: string;
   status: InviteStatus;
+  /** Optional inviter message; in-app only; null or omitted for legacy rows */
+  note?: string | null;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -40,37 +98,45 @@ export type InviteWithDetails = Invite & {
  */
 export async function sendInvites(
   postId: string,
-  inviteeIds: string[]
+  inviteeIds: string[],
+  note?: string | null
 ): Promise<{ data: Invite[] | null; error: any; alreadyInvited?: string[] }> {
   try {
+    const noteForDb = normalizeInviteNote(note);
     console.log("Sending invites for post:", postId, "to users:", inviteeIds);
+
+    if (inviteeIds.length > INVITE_MAX_PER_SEND) {
+      return {
+        data: null,
+        error: new Error(
+          `You can invite up to ${INVITE_MAX_PER_SEND} people at a time.`
+        ),
+      };
+    }
 
     const userId = await getViewerAuthUserId();
     if (!userId) throw new Error("Not authenticated");
 
     console.log("Current user:", userId);
 
-    // Check if user owns the post
+    // Any authenticated user can invite; post must exist (RLS also governs insert).
     const { data: post, error: postError } = await supabase
       .from("posts")
-      .select("author_id")
+      .select("id")
       .eq("id", postId)
-      .single();
+      .maybeSingle();
 
     if (postError || !post) {
       console.error("Post error:", postError);
       throw new Error("Post not found");
     }
 
-    console.log("Post author:", post.author_id);
-
-    if (post.author_id !== userId) throw new Error("Not authorized");
-
-    // Check for existing invites to avoid duplicates
+    // Deduplicate only against this inviter’s existing rows (multi-inviter model)
     const { data: existingInvites, error: existingError } = await supabase
       .from("invites")
       .select("invitee_id")
       .eq("post_id", postId)
+      .eq("inviter_id", userId)
       .in("invitee_id", inviteeIds);
 
     if (existingError) {
@@ -102,6 +168,7 @@ export async function sendInvites(
       post_id: postId,
       inviter_id: userId,
       invitee_id: inviteeId,
+      note: noteForDb,
     }));
 
     console.log("Inserting new invites:", invites);
@@ -126,6 +193,7 @@ export async function sendInvites(
     // Create notifications for sent invites (for the inviter)
     // This happens even if notification creation fails (don't fail invite creation)
     if (data && data.length > 0) {
+      let postTypeForPush: "hangout" | "experience" | null = null;
       try {
         // Get post details for notifications
         const { data: postData, error: postDataError } = await supabase
@@ -139,6 +207,11 @@ export async function sendInvites(
             "Error fetching post data for notifications:",
             postDataError
           );
+        } else if (
+          postData?.type === "hangout" ||
+          postData?.type === "experience"
+        ) {
+          postTypeForPush = postData.type;
         }
 
         // Get invitee profile IDs for actor info
@@ -183,6 +256,7 @@ export async function sendInvites(
               post_type: postData?.type || "hangout",
               post_caption: postData?.caption || null,
               invite_direction: "sent", // Mark as sent invite
+              ...(noteForDb ? { invite_note: noteForDb } : {}),
             },
             is_read: false,
           };
@@ -228,6 +302,16 @@ export async function sendInvites(
           "Exception during notification creation:",
           notificationCreationError
         );
+      }
+
+      if (postTypeForPush) {
+        void invokeSendInvitePushBestEffort({
+          postId,
+          postType: postTypeForPush,
+          actorId: userId,
+          recipientUserIds: newInviteeIds,
+          inviteId: data.length === 1 ? data[0].id : undefined,
+        });
       }
     }
 
@@ -397,6 +481,33 @@ export async function getPostInvites(
     return { data, error };
   } catch (error) {
     return { data: null, error };
+  }
+}
+
+/**
+ * Head-count only: pending invites received by the current user (same filters as {@link getPendingInvites}).
+ */
+export async function countPendingInvitesForViewer(): Promise<{
+  count: number;
+  error: any | null;
+}> {
+  try {
+    const userId = await getViewerAuthUserId();
+    if (!userId) {
+      return { count: 0, error: new Error("Not authenticated") };
+    }
+
+    const { count, error } = await supabase
+      .from("invites")
+      .select("*", { count: "exact", head: true })
+      .eq("invitee_id", userId)
+      .eq("status", "pending");
+
+    if (error) return { count: 0, error };
+
+    return { count: count ?? 0, error: null };
+  } catch (error) {
+    return { count: 0, error };
   }
 }
 

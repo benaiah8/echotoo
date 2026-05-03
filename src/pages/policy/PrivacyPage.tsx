@@ -165,16 +165,21 @@ export default function PrivacyPage() {
         </p>
 
         <h3>9. Account Deletion</h3>
-        <p>EchoToo currently provides an account deletion option in the app.</p>
         <p>
-          At this time, account deletion removes your profile from active
-          visibility by marking the profile as deleted. This action is
-          immediate.
+          EchoToo provides an account deletion option in the app. When you
+          confirm deletion, EchoToo processes your request to remove your
+          account access. As part of that flow, your profile and your posts are
+          removed from EchoToo under the ordinary operation of the service, so
+          they should no longer appear in the app to you or others.
         </p>
         <p>
-          However, account deletion does not currently guarantee removal of all
-          related content or backend records, including posts, comments,
-          uploaded images, or authentication records.
+          Some limited information may still be retained where required or
+          reasonably necessary for legal, safety, fraud-prevention,
+          abuse-prevention, or operational reasons (for example, backups,
+          short-term logs, or records we must keep to comply with law or
+          protect users). We do not claim that every possible copy of every
+          record is permanently erased from every system or location
+          immediately.
         </p>
         <p>
           If you have questions about your data or want to request additional

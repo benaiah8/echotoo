@@ -7,8 +7,19 @@ import {
 /** Fired after `--android-extra-bottom` is updated so UI can re-measure. */
 export const APP_SAFE_BOTTOM_SYNC_EVENT = "echotoo:safe-bottom-sync";
 
+/**
+ * Leading constant in BottomTab `#bottom-tab` style: `bottom: calc(5px + var(--safe-area-bottom-layout))`.
+ * Fixed action strips above the tab must include this plus safe area so they sit above the pill on Capacitor.
+ */
+export const BOTTOM_TAB_PILL_OFFSET_PX = 5;
+
 /** Typical 3-button nav + margin; only used when env() reports almost nothing. */
 const ANDROID_BOTTOM_MIN_PX = 52;
+/**
+ * Home indicator / home swipe strip when `env(safe-area-inset-bottom)` under-reports
+ * in Capacitor iOS WebView.
+ */
+const IOS_BOTTOM_MIN_PX = 32;
 /** If env() is at least this, trust it (gesture bar ~20–34px on many devices). */
 const ENV_TRUST_MIN_PX = 14;
 
@@ -35,16 +46,25 @@ function computeAndroidNativeExtraPx(): number {
   return Math.max(0, ANDROID_BOTTOM_MIN_PX - envPx);
 }
 
+function computeIOSNativeExtraPx(): number {
+  const envPx = probeEnvSafeInsetBottomPx();
+  if (envPx >= ENV_TRUST_MIN_PX) return 0;
+  return Math.max(0, IOS_BOTTOM_MIN_PX - envPx);
+}
+
 export function syncAppSafeAreaBottom(): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  let extra = 0;
-  if (isIOS()) {
-    extra = 0;
-  } else if (isNativeApp() && isAndroid()) {
-    extra = keyboardOpen ? 0 : computeAndroidNativeExtraPx();
+  let androidExtra = 0;
+  let iosExtra = 0;
+  if (isNativeApp() && isAndroid()) {
+    androidExtra = keyboardOpen ? 0 : computeAndroidNativeExtraPx();
   }
-  root.style.setProperty("--android-extra-bottom", `${extra}px`);
+  if (isNativeApp() && isIOS()) {
+    iosExtra = keyboardOpen ? 0 : computeIOSNativeExtraPx();
+  }
+  root.style.setProperty("--android-extra-bottom", `${androidExtra}px`);
+  root.style.setProperty("--ios-extra-bottom", `${iosExtra}px`);
   window.dispatchEvent(new Event(APP_SAFE_BOTTOM_SYNC_EVENT));
 }
 
@@ -65,9 +85,9 @@ export function resolveSafeAreaBottomLayoutPx(): number {
 }
 
 /**
- * iOS: leaves layout to env() only (home indicator is reliable with viewport-fit=cover).
+ * iOS: adds --ios-extra-bottom when env() under-reports in the Capacitor WebView.
  * Android native: adds --android-extra-bottom when env() under-reports (common with 3-button nav).
- * Android keyboard open: extra cleared so we do not stack with Keyboard resize.
+ * Keyboard open: native extras cleared so we do not stack with Keyboard resize.
  */
 export function initAppSafeAreaBottom(): () => void {
   const run = () => syncAppSafeAreaBottom();
@@ -79,7 +99,7 @@ export function initAppSafeAreaBottom(): () => void {
 
   let keyboardCleanup: (() => void) | undefined;
 
-  if (isNativeApp() && isAndroid()) {
+  if (isNativeApp() && (isAndroid() || isIOS())) {
     void import("@capacitor/keyboard")
       .then(async ({ Keyboard }) => {
         const hShow = await Keyboard.addListener("keyboardDidShow", () => {

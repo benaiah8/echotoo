@@ -1,6 +1,6 @@
 // src/components/ui/CachedAvatar.tsx
 import { useState, useEffect } from "react";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import {
   getCachedAvatar,
   setCachedAvatar,
@@ -47,7 +47,7 @@ export default function CachedAvatar({
     setCachedAvatar(profileId, avatarUrl);
   }, [profileId, avatarUrl]);
 
-  const resolved = imgUrlPublic(displayUrl);
+  const resolved = avatarDisplayUrl(displayUrl);
   if (!displayUrl || !resolved) {
     return <div className={`${className} bg-white/15`} />;
   }

@@ -3,17 +3,20 @@ import LikeButton from "./LikeButton";
 import SaveButton from "./SaveButton";
 import FollowButton from "./FollowButton";
 import RSVPComponent from "./RSVPComponent";
+import PostRatingChip from "./PostRatingChip";
+import PostRatingModal from "./PostRatingModal";
 import ShareDrawer from "./ShareDrawer";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
 import { useState, useEffect, useRef } from "react";
 import { getCommentCount } from "../../api/services/comments";
-import { useDispatch, useSelector } from "react-redux";
-import { setAuthModal } from "../../reducers/modalReducer";
-import { RootState } from "../../app/store";
 import { type BatchLoadResult } from "../../types/legacy";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { storyCreatorFromPost } from "../../lib/shareStoryCreator";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
+
+/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+const DEBUG_RSVP_POST_ID = "";
 
 interface PostActionsProps {
   postId: string;
@@ -50,15 +53,16 @@ export default function PostActions({
 }: PostActionsProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const dispatch = useDispatch();
-  // [OPTIMIZATION: Phase 1 - PostgreSQL] Use provided comment_count, fallback to 0
+  const initialCanonicalComments =
+    post && typeof post.comment_count === "number"
+      ? post.comment_count
+      : 0;
   const [commentCount, setCommentCount] = useState<number>(
-    post?.comment_count ?? 0
+    initialCanonicalComments
   );
   const [showShareDrawer, setShowShareDrawer] = useState(false);
-  const authState = useSelector((state: RootState) => state.auth);
-  const isAuthenticated = !!authState?.user;
-  const authLoading = authState?.loading ?? true;
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const { ensureAuthed } = useAuthActionGate();
   const commentButtonRef = useRef<HTMLButtonElement>(null);
   const hasLoadedCommentCountRef = useRef(false);
 
@@ -73,20 +77,30 @@ export default function PostActions({
   //   });
   // }, []);
 
-  // Update comment count when post prop changes (if provided from PostgreSQL)
   useEffect(() => {
-    if (post?.comment_count !== undefined) {
+    hasLoadedCommentCountRef.current = false;
+  }, [postId]);
+
+  // Update comment count when post prop carries a canonical count (incl. 0)
+  useEffect(() => {
+    if (typeof post?.comment_count === "number") {
       setCommentCount(post.comment_count);
       hasLoadedCommentCountRef.current = true;
     }
   }, [post?.comment_count]);
+
+  // When navigating between posts, avoid showing the previous post's count until we have data
+  useEffect(() => {
+    if (typeof post?.comment_count === "number") return;
+    setCommentCount(0);
+  }, [postId, post?.comment_count]);
 
   // Lazy load comment count only if not provided from PostgreSQL
   // Use IntersectionObserver to only load when component is visible
   useEffect(() => {
     // Skip if already provided from PostgreSQL or already loaded
     if (
-      post?.comment_count !== undefined ||
+      typeof post?.comment_count === "number" ||
       hasLoadedCommentCountRef.current ||
       !commentButtonRef.current
     ) {
@@ -121,13 +135,34 @@ export default function PostActions({
 
   const storyCreator = storyCreatorFromPost(post, postAuthor);
 
-  const handleCommentClick = () => {
-    // Check auth immediately, but don't block if still loading
-    if (!authLoading && !isAuthenticated) {
-      dispatch(setAuthModal(true));
-      return;
-    }
+  /** Match PostDetailBody: RSVP only when the post row has a numeric capacity (null/undefined = off). */
+  const rsvpCap = post?.rsvp_capacity;
+  const hangoutRsvpConfigured =
+    postType === "hangout" && typeof rsvpCap === "number";
+  const ratingEnabled = post?.rating_enabled === true;
+  const displayLikeCount = post?.effective_like_count ?? post?.like_count ?? 0;
+  const displaySaveCount = post?.effective_save_count ?? post?.save_count ?? 0;
+  const displayRatingAverage =
+    post?.effective_rating_average ?? post?.rating_average ?? null;
+  const displayRatingCount =
+    post?.effective_rating_count ?? post?.rating_count ?? null;
 
+  if (
+    DEBUG_RSVP_POST_ID &&
+    (postId === DEBUG_RSVP_POST_ID || post?.id === DEBUG_RSVP_POST_ID)
+  ) {
+    console.log("RSVP DEBUG PostActions props", {
+      id: post?.id ?? postId,
+      postType: postType ?? null,
+      rsvp_capacity: post?.rsvp_capacity,
+      typeof_rsvp_capacity: typeof post?.rsvp_capacity,
+      authorId: authorId ?? null,
+      hangoutRsvpConfigured,
+      branch: hangoutRsvpConfigured ? "RSVPComponent" : "FollowButton",
+    });
+  }
+
+  const handleCommentClick = () => {
     // Navigate to post detail page (as overlay with background preserved)
     const postType = window.location.pathname.includes("/hangout")
       ? "hangout"
@@ -140,31 +175,14 @@ export default function PostActions({
         state: {
           backgroundLocation: location,
           initialPost: post ?? undefined,
+          focusCommentComposer: true,
         },
       }
     );
-
-    // Scroll to comments section after navigation
-    setTimeout(() => {
-      const commentsSection = document.querySelector("[data-comments-section]");
-      if (commentsSection) {
-        commentsSection.scrollIntoView({ behavior: "smooth" });
-      } else {
-        // Fallback: scroll to bottom of page
-        window.scrollTo({
-          top: document.body.scrollHeight,
-          behavior: "smooth",
-        });
-      }
-    }, 500); // Increased timeout for better reliability
   };
 
   const handleShareClick = () => {
-    // Check auth immediately, but don't block if still loading
-    if (!authLoading && !isAuthenticated) {
-      dispatch(setAuthModal(true));
-      return;
-    }
+    if (!ensureAuthed()) return;
 
     // Open share drawer
     setShowShareDrawer(true);
@@ -178,7 +196,7 @@ export default function PostActions({
           postId={postId}
           size={16}
           isSaved={post?.is_saved ?? batchedData?.saveStatuses?.get(postId)}
-          saveCount={post?.save_count ?? 0}
+          saveCount={displaySaveCount}
           showCount={true}
           post={post} // [PHASE 3] Pass post for personalization
         />
@@ -186,7 +204,7 @@ export default function PostActions({
           postId={postId}
           size={16}
           isLiked={post?.is_liked ?? batchedData?.likeStatuses?.get(postId)}
-          likeCount={post?.like_count ?? 0}
+          likeCount={displayLikeCount}
           showCount={true}
           post={post} // [PHASE 3] Pass post for personalization
         />
@@ -217,13 +235,23 @@ export default function PostActions({
 
       {/* Right side: Follow/RSVP button */}
       <div className="flex items-center">
-        {authorId && (
-          <div className="h-7 min-w-[92px] flex items-center justify-end">
-            {postType === "hangout" ? (
-              // Show RSVP button for hangouts
+        <div className="min-h-[28px] min-w-[92px] flex items-center justify-end">
+          {ratingEnabled ? (
+            <PostRatingChip
+              ratingEnabled={post?.rating_enabled}
+              ratingAverage={displayRatingAverage}
+              ratingCount={displayRatingCount}
+              viewerRating={post?.viewer_rating ?? null}
+              onClick={() => {
+                if (!ensureAuthed()) return;
+                setShowRatingModal(true);
+              }}
+            />
+          ) : authorId ? (
+            hangoutRsvpConfigured ? (
               <RSVPComponent
                 postId={postId}
-                capacity={20} // Default capacity, could be improved by passing from parent
+                capacity={rsvpCap}
                 className=""
                 postAuthor={
                   postAuthor || {
@@ -235,10 +263,9 @@ export default function PostActions({
                   }
                 }
                 rsvpData={post?.rsvp_data ?? batchedData?.rsvpData?.get(postId)}
-                post={post} // [PHASE 3] Pass post for personalization
+                post={post}
               />
             ) : (
-              // Show Follow button for experiences
               <FollowButton
                 targetId={authorId}
                 followStatus={
@@ -246,9 +273,9 @@ export default function PostActions({
                   batchedData?.followStatuses?.get(authorId)
                 }
               />
-            )}
-          </div>
-        )}
+            )
+          ) : null}
+        </div>
       </div>
 
       {/* Share Drawer */}
@@ -266,6 +293,15 @@ export default function PostActions({
         selectedDates={post?.selected_dates}
         isRecurring={post?.is_recurring}
         recurrenceDays={post?.recurrence_days}
+      />
+
+      <PostRatingModal
+        open={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        postId={postId}
+        ratingAverage={displayRatingAverage}
+        ratingCount={displayRatingCount}
+        viewerRating={post?.viewer_rating ?? null}
       />
     </div>
   );

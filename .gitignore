@@ -16,6 +16,7 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+.cursor/
 .DS_Store
 *.suo
 *.ntvs*
@@ -36,6 +37,9 @@ android/
 
 # Local iOS artifact downloads / extracts (do not commit)
 _incoming_ios_artifact/
+
+# Supabase CLI linked-project temp (never commit)
+supabase/.temp/
 
 # Generated icons (if created at project root when running without --android --ios)
 /icons

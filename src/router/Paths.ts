@@ -15,6 +15,12 @@ export const Paths = {
   profile: "/profile",
   createMap: "/create/map",
   feedTest: "/feed-test",
+  /** Reviewer-only internal landing (links to reports, app updates, etc.). */
+  internal: "/internal",
+  /** Reviewer-only report queue (not in bottom nav; RLS + allowlist). */
+  internalReports: "/internal/reports",
+  /** Reviewer-only app updates / release tooling (same allowlist as reports). */
+  internalAppUpdates: "/internal/app-updates",
   hangoutDetail: "/hangout/:id",
 
   // Profile routes

@@ -1,3 +1,5 @@
+-- Effective rating (experience): count = COALESCE(demo.demo_rating_count,0)+COALESCE(p.rating_count,0);
+-- average = ROUND(((demo_avg*demo_n)+(real_avg*real_n))/(demo_n+real_n),2); non-experience = raw p.rating_*
 -- Patched: viewer lookup, author join, rsvp_profile join
 CREATE OR REPLACE FUNCTION public.get_post_detail_with_related_data(p_post_id uuid, p_viewer_user_id uuid DEFAULT NULL::uuid)
  RETURNS jsonb
@@ -34,6 +36,44 @@ BEGIN
     'is_recurring', p.is_recurring,
     'recurrence_days', p.recurrence_days,
     'tags', p.tags,
+    'rating_enabled', p.rating_enabled,
+    'rating_average', p.rating_average,
+    'rating_count', p.rating_count,
+    'like_count', COALESCE(p.like_count, 0),
+    'save_count', COALESCE(p.save_count, 0),
+    'effective_like_count', CASE
+      WHEN p.type = 'experience' THEN COALESCE(p.like_count, 0) + COALESCE(demo.demo_like_count, 0)
+      ELSE COALESCE(p.like_count, 0)
+    END,
+    'effective_save_count', CASE
+      WHEN p.type = 'experience' THEN COALESCE(p.save_count, 0) + COALESCE(demo.demo_save_count, 0)
+      ELSE COALESCE(p.save_count, 0)
+    END,
+    'effective_rating_average', CASE
+      WHEN p.type = 'experience' THEN
+        CASE
+          WHEN (COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)) = 0 THEN 0
+          ELSE ROUND(
+            (
+              (COALESCE(demo.demo_rating_average, 0)::numeric * COALESCE(demo.demo_rating_count, 0)::numeric) +
+              (COALESCE(p.rating_average, 0)::numeric * COALESCE(p.rating_count, 0)::numeric)
+            ) / NULLIF((COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0))::numeric, 0),
+            2
+          )
+        END
+      ELSE COALESCE(p.rating_average, 0)
+    END,
+    'effective_rating_count', CASE
+      WHEN p.type = 'experience' THEN COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)
+      ELSE COALESCE(p.rating_count, 0)
+    END,
+    'viewer_rating', (
+      SELECT pr.stars
+      FROM post_ratings pr
+      WHERE pr.post_id = p.id
+        AND pr.user_id = p_viewer_user_id
+      LIMIT 1
+    ),
     -- Author profile
     'author', jsonb_build_object(
       'id', author_profile.id,
@@ -59,13 +99,8 @@ BEGIN
     'is_liked', CASE WHEN p_viewer_user_id IS NOT NULL AND user_like.post_id IS NOT NULL THEN true ELSE false END,
     -- Save status
     'is_saved', CASE WHEN p_viewer_user_id IS NOT NULL AND user_save.post_id IS NOT NULL THEN true ELSE false END,
-    -- Comment count
-    'comment_count', (
-      SELECT COUNT(*)
-      FROM comments c
-      WHERE c.post_id = p.id
-        AND c.is_deleted = false
-    ),
+    -- Engagement counts (canonical columns on posts)
+    'comment_count', COALESCE(p.comment_count, 0),
     -- Has images flag
     'has_images', CASE
       WHEN EXISTS (
@@ -129,6 +164,8 @@ BEGIN
   LEFT JOIN saved_posts user_save ON
     user_save.post_id = p.id
     AND user_save.user_id = p_viewer_user_id
+  LEFT JOIN public.post_demo_engagement demo ON
+    demo.post_id = p.id
   -- Join RSVP users (only "going" status, limit 10)
   LEFT JOIN LATERAL (
     SELECT COALESCE(
@@ -167,6 +204,11 @@ BEGIN
     user_rsvp.post_id = p.id
     AND user_rsvp.user_id = p_viewer_user_id
   WHERE p.id = p_post_id
+    -- v1 user_blocks: no post detail across a blocked pair (symmetric)
+    AND (
+      p_viewer_user_id IS NULL
+      OR NOT public.users_are_blocked_pair(p_viewer_user_id, p.author_id)
+    )
     -- Privacy filter: show post if:
     -- 1. Author is not private, OR
     -- 2. Author is private AND viewer is following (approved status), OR
@@ -309,12 +351,17 @@ BEGIN
       END as follow_status,
       CASE WHEN p_viewer_user_id IS NOT NULL AND user_like.post_id IS NOT NULL THEN true ELSE false END as is_liked,
       CASE WHEN p_viewer_user_id IS NOT NULL AND user_save.post_id IS NOT NULL THEN true ELSE false END as is_saved,
-      (
-        SELECT COUNT(*)
-        FROM comments c
-        WHERE c.post_id = p.id
-          AND c.is_deleted = false
-      ) as comment_count,
+      COALESCE(p.like_count, 0) as like_count,
+      COALESCE(p.save_count, 0) as save_count,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.like_count, 0) + COALESCE(demo.demo_like_count, 0)
+        ELSE COALESCE(p.like_count, 0)
+      END as effective_like_count,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.save_count, 0) + COALESCE(demo.demo_save_count, 0)
+        ELSE COALESCE(p.save_count, 0)
+      END as effective_save_count,
+      COALESCE(p.comment_count, 0) as comment_count,
       CASE
         WHEN EXISTS (
           SELECT 1
@@ -347,7 +394,36 @@ BEGIN
             'currentUserStatus', COALESCE(user_rsvp.status, NULL)
           )
         ELSE NULL
-      END as rsvp_data
+      END as rsvp_data,
+      p.rsvp_capacity as rsvp_capacity,
+      p.rating_enabled,
+      p.rating_average,
+      p.rating_count,
+      CASE
+        WHEN p.type = 'experience' THEN
+          CASE
+            WHEN (COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)) = 0 THEN 0
+            ELSE ROUND(
+              (
+                (COALESCE(demo.demo_rating_average, 0)::numeric * COALESCE(demo.demo_rating_count, 0)::numeric) +
+                (COALESCE(p.rating_average, 0)::numeric * COALESCE(p.rating_count, 0)::numeric)
+              ) / NULLIF((COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0))::numeric, 0),
+              2
+            )
+          END
+        ELSE COALESCE(p.rating_average, 0)
+      END as effective_rating_average,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)
+        ELSE COALESCE(p.rating_count, 0)
+      END as effective_rating_count,
+      (
+        SELECT pr.stars
+        FROM post_ratings pr
+        WHERE pr.post_id = p.id
+          AND pr.user_id = p_viewer_user_id
+        LIMIT 1
+      ) as viewer_rating
     FROM posts p
     INNER JOIN profiles author_profile ON author_profile.user_id = p.author_id AND author_profile.deleted_at IS NULL
     LEFT JOIN follows mutual_follow ON
@@ -362,6 +438,8 @@ BEGIN
     LEFT JOIN saved_posts user_save ON
       user_save.post_id = p.id
       AND user_save.user_id = p_viewer_user_id
+    LEFT JOIN public.post_demo_engagement demo ON
+      demo.post_id = p.id
     LEFT JOIN LATERAL (
       SELECT COALESCE(
         (
@@ -405,6 +483,12 @@ BEGIN
         OR (p_is_owner = true AND p_include_drafts = true)
         OR (p_is_owner = true AND p_include_drafts = false AND p.status = 'published')
       )
+      -- v1 user_blocks: other-profile created tab — hide when viewer and profile owner are blocked pair
+      AND (
+        p_viewer_user_id IS NULL
+        OR p_is_owner = true
+        OR NOT public.users_are_blocked_pair(p_viewer_user_id, p_user_id)
+      )
       AND (
         author_profile.is_private = false
         OR v_viewer_profile_id = author_profile.id
@@ -431,10 +515,21 @@ BEGIN
       'follow_status', follow_status,
       'is_liked', is_liked,
       'is_saved', is_saved,
+      'like_count', like_count,
+      'save_count', save_count,
+      'effective_like_count', effective_like_count,
+      'effective_save_count', effective_save_count,
       'comment_count', comment_count,
       'has_images', has_images,
       'activities', activities,
-      'rsvp_data', rsvp_data
+      'rsvp_data', rsvp_data,
+      'rsvp_capacity', rsvp_capacity,
+      'rating_enabled', rating_enabled,
+      'rating_average', rating_average,
+      'rating_count', rating_count,
+      'effective_rating_average', effective_rating_average,
+      'effective_rating_count', effective_rating_count,
+      'viewer_rating', viewer_rating
     ) ORDER BY created_at DESC
   )
   INTO v_posts

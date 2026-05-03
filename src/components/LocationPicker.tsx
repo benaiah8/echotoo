@@ -23,7 +23,6 @@ export default function LocationPicker({
 }: {
   onSelect: (coords: { lat: number; lng: number }) => void;
 }) {
-  console.log("LocationIQ key:", import.meta.env.VITE_LOCATIONIQ_KEY);
   const [center, setCenter] = useState<LatLngExpression>([9.017, 38.746]);
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);

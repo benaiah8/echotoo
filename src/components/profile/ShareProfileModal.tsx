@@ -2,6 +2,8 @@ import { useState } from "react";
 import { PiCopy, PiShareFat } from "react-icons/pi";
 import toast from "react-hot-toast";
 import BottomDrawer from "../ui/BottomDrawer";
+import { shareUrl } from "../../lib/shareUrl";
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 interface ShareProfileModalProps {
   isOpen: boolean;
@@ -35,27 +37,19 @@ export default function ShareProfileModal({
 
   const handleWebShare = async () => {
     try {
-      const shareData = {
-        title: profileName
-          ? `Check out ${profileName}'s profile`
-          : "Check out this profile",
-        url: profileUrl,
-      };
-
-      if (
-        navigator.share &&
-        navigator.canShare &&
-        navigator.canShare(shareData)
-      ) {
-        await navigator.share(shareData);
+      const title = profileName
+        ? `Check out ${profileName}'s profile`
+        : "Check out this profile";
+      const outcome = await shareUrl({ title, url: profileUrl });
+      if (outcome === "dismissed") return;
+      if (outcome === "clipboard") {
+        toast.success("Profile link copied to clipboard!");
         onClose();
-      } else {
-        // Fallback to copy
-        handleCopyLink();
+        return;
       }
+      onClose();
     } catch (error) {
       console.error("Error sharing:", error);
-      // Fallback to copy
       handleCopyLink();
     }
   };
@@ -90,7 +84,9 @@ export default function ShareProfileModal({
         >
           <PiShareFat size={16} />
           <span>
-            {typeof navigator.share === "function" ? "Share" : "Copy"}
+            {typeof navigator.share === "function" || isNativeApp()
+              ? "Share"
+              : "Copy"}
           </span>
         </button>
       </div>

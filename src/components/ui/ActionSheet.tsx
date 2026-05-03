@@ -1,5 +1,10 @@
 // src/components/ui/ActionSheet.tsx
 import React, { useEffect, useState } from "react";
+import {
+  APP_SAFE_BOTTOM_SYNC_EVENT,
+  BOTTOM_TAB_PILL_OFFSET_PX,
+  resolveSafeAreaBottomLayoutPx,
+} from "../../lib/appSafeAreaBottom";
 
 type Props = {
   onBack: () => void;
@@ -60,6 +65,18 @@ export default function ActionSheet({
   const [btHeight, setBtHeight] = useState(0);
   const [btWidth, setBtWidth] = useState(0);
   const [hidden, setHidden] = useState(false);
+  const [safeBottom, setSafeBottom] = useState(0);
+
+  useEffect(() => {
+    const sync = () => setSafeBottom(resolveSafeAreaBottomLayoutPx());
+    sync();
+    window.addEventListener("resize", sync);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.removeEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, sync);
+    };
+  }, []);
 
   useEffect(() => {
     const el = document.getElementById("bottom-tab");
@@ -107,7 +124,12 @@ export default function ActionSheet({
     return () => window.removeEventListener("scroll", onScroll);
   }, [stableActions]);
 
-  const bottomOffset = btHeight > 0 ? btHeight + GAP_ABOVE_TAB : GAP_ABOVE_TAB;
+  /** Match BottomTab: tab sits at (5px + safe area) above physical bottom; strip sits above tab + gap. */
+  const bottomOffset =
+    BOTTOM_TAB_PILL_OFFSET_PX +
+    safeBottom +
+    (btHeight > 0 ? btHeight : 0) +
+    GAP_ABOVE_TAB;
   const rowH = PREVIEW_ACTION_STRIP_HEIGHT_PX;
   const actionsLocked =
     Boolean(pendingUploadsNotice) || lockActionsWhilePendingUploads;
@@ -148,11 +170,10 @@ export default function ActionSheet({
       >
         <div
           className={[
-            "pointer-events-auto flex items-stretch gap-2 rounded-full",
-            "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+            "pointer-events-auto flex items-stretch gap-2 rounded-full backdrop-blur-[var(--glass-blur)]",
             enhancedSurface
-              ? "shadow-[0_-10px_28px_-6px_rgba(0,0,0,0.2),0_6px_20px_-4px_rgba(0,0,0,0.12)] dark:shadow-[0_-14px_40px_-8px_rgba(0,0,0,0.55),0_8px_24px_-6px_rgba(0,0,0,0.35)]"
-              : "",
+              ? "bg-[var(--create-action-strip-bg)] shadow-[var(--create-action-strip-shadow)]"
+              : "bg-[var(--glass-bg)]",
             btWidth > 0 ? "max-w-none" : "max-w-[min(640px,calc(100vw-24px))]",
           ].join(" ")}
           style={outerStyle}

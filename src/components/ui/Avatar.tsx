@@ -1,6 +1,5 @@
 // src/components/ui/Avatar.tsx
-import { optimizeImageUrl } from "../../lib/imageOptimization";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import React, { useState, useEffect } from "react";
 import {
   getCachedAvatar,
@@ -14,21 +13,26 @@ export default function Avatar({
   size = 96,
   onClick,
   variant = "default",
-  postType,
   anonymousAvatar,
   userId, // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
   className = "",
+  tightLineBox = false,
 }: {
   url?: string | null;
   name?: string | null;
   size?: number;
   onClick?: () => void;
   variant?: "default" | "friends" | "anon";
-  postType?: "hangout" | "experience";
   anonymousAvatar?: string | null; // NEW: custom anonymous avatar
   userId?: string | null; // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
   /** Merges onto the root wrapper (e.g. flex centering in toolbars). */
   className?: string;
+  /**
+   * If true, removes the extra line-box gap that can appear below the inner
+   * `inline-block` shell (e.g. in dense flex rows like `DrawerProfileCard` pill).
+   * Default `false` keeps prior layout everywhere else.
+   */
+  tightLineBox?: boolean;
 }) {
   const letter =
     variant === "anon" && anonymousAvatar
@@ -61,6 +65,7 @@ export default function Avatar({
 
   // [OPTIMIZATION: Phase 3.2] Use cached URL if available, otherwise use provided URL
   const displayUrl = cachedUrl || url;
+  const resolvedAvatarSrc = avatarDisplayUrl(displayUrl);
 
   const handleClick = () => {
     if (variant === "anon") {
@@ -106,20 +111,13 @@ export default function Avatar({
     };
   };
 
-  const getPostTypeColor = () => {
-    switch (postType) {
-      case "hangout":
-        return "bg-green-500";
-      case "experience":
-        return "bg-yellow-500";
-      default:
-        return "";
-    }
-  };
-
   return (
     <div className={className ? `relative ${className}` : "relative"}>
-      <div className="relative inline-block leading-none">
+      <div
+        className={`relative inline-block leading-none${
+          tightLineBox ? " [vertical-align:top]" : ""
+        }`}
+      >
         <div
           className={`relative rounded-full overflow-hidden ${
             onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""
@@ -140,9 +138,9 @@ export default function Avatar({
               : undefined
           }
         >
-          {imgUrlPublic(displayUrl) ? (
+          {resolvedAvatarSrc ? (
             <img
-              src={imgUrlPublic(displayUrl)!}
+              src={resolvedAvatarSrc}
               alt=""
               className="w-full h-full object-cover rounded-full"
               loading="lazy"
@@ -161,10 +159,11 @@ export default function Avatar({
             />
           ) : (
             <div
-              className="w-full h-full rounded-full flex items-center justify-center font-semibold"
+              className="flex h-full w-full select-none items-center justify-center rounded-full font-semibold leading-none"
               style={{
                 ...getBackgroundStyle(),
                 fontSize: Math.max(12, Math.round((size ?? 48) * 0.45)) + "px",
+                lineHeight: 1,
               }}
             >
               {variant === "anon" && !anonymousAvatar ? (
@@ -203,14 +202,6 @@ export default function Avatar({
             </div>
           )}
         </div>
-
-        {/* Post type indicator dot */}
-        {postType && (
-          <div
-            className={`absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 w-2 h-2 rounded-full border border-[var(--bg)] ${getPostTypeColor()}`}
-            style={{ minWidth: "8px", minHeight: "8px" }}
-          />
-        )}
       </div>
 
       {/* Anonymous message panel */}

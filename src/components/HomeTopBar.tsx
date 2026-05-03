@@ -1,5 +1,10 @@
 import React, { useEffect } from "react";
-import { PiDotsThree, PiFunnelSimple, PiMagnifyingGlass } from "react-icons/pi";
+import {
+  PiDotsThree,
+  PiFunnelSimple,
+  PiMagnifyingGlass,
+  PiX,
+} from "react-icons/pi";
 import Logo from "./ui/Logo";
 import ThemeSwitch from "./ui/ThemeSwitch";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
@@ -25,6 +30,8 @@ export interface HomeTopBarProps {
   setViewMode: (m: "all" | "hangouts" | "experiences") => void;
   selectedFilters: string[];
   onFilterChange: (filters: string[]) => void;
+  /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
+  onSearchFocusChange?: (focused: boolean) => void;
 }
 
 export default function HomeTopBar({
@@ -43,6 +50,7 @@ export default function HomeTopBar({
   setViewMode,
   selectedFilters,
   onFilterChange,
+  onSearchFocusChange,
 }: HomeTopBarProps) {
   const [threeDotOpen, setThreeDotOpen] = React.useState(false);
 
@@ -81,8 +89,9 @@ export default function HomeTopBar({
           transformClass,
         ].join(" ")}
         style={{
-          top: "calc(-1px + -1 * env(safe-area-inset-top, 0px))",
-          height: "calc(66px + env(safe-area-inset-top, 0px))",
+          /* top: 0 — do not pull gradient above the viewport (negative inset read as under notch). */
+          top: 0,
+          height: "calc(66px + var(--safe-area-top-layout))",
           width: "100%",
           background: "var(--gradient-from-top)",
         }}
@@ -97,8 +106,8 @@ export default function HomeTopBar({
         ].join(" ")}
         style={{
           paddingTop: atTop
-            ? "env(safe-area-inset-top, 0px)"
-            : "calc(8px + env(safe-area-inset-top, 0px))",
+            ? "var(--safe-area-top-layout)"
+            : "calc(8px + var(--safe-area-top-layout))",
           transitionProperty: hidden ? undefined : "transform, padding-top",
           transitionDuration: hidden ? undefined : "300ms",
           transitionTimingFunction: hidden
@@ -121,11 +130,15 @@ export default function HomeTopBar({
           <div
             className={[
               "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-              "border border-[var(--bottom-tab-border)]",
+              /* Floating pill: same outer ring as bottom tab. Full-width: subtle hairline only. */
+              atTop
+                ? "border border-[var(--bottom-tab-border)] shadow-none"
+                : "border border-transparent shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
             ].join(" ")}
             style={{
               borderRadius: atTop ? 0 : 24,
-              transition: "border-radius 300ms cubic-bezier(0.33, 1, 0.68, 1)",
+              transition:
+                "border-radius 300ms cubic-bezier(0.33, 1, 0.68, 1), box-shadow 300ms cubic-bezier(0.33, 1, 0.68, 1)",
               backfaceVisibility: "hidden",
             }}
           >
@@ -135,11 +148,45 @@ export default function HomeTopBar({
                 <PiMagnifyingGlass size={18} className="shrink-0" />
                 <input
                   type="text"
+                  enterKeyHint="search"
+                  autoComplete="off"
                   placeholder="Where To?"
-                  className="w-full pl-2 pr-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0"
+                  className={`w-full pl-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0 ${
+                    search.trim() ? "pr-[2.125rem]" : "pr-2"
+                  }`}
                   value={search}
                   onChange={(e) => onSearch(e.target.value)}
+                  onFocus={() => onSearchFocusChange?.(true)}
+                  onBlur={() => onSearchFocusChange?.(false)}
                 />
+                {search.trim() ? (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    className={[
+                      /* h-9 field (36px): h-6 chip + right-1.5 (6px) = equal ~6px inset top/right/bottom */
+                      "absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full p-0.5",
+                      "border transition-[transform,box-shadow,background-color,border-color] active:scale-[0.96]",
+                      /* Light: raised neutral chip */
+                      "border-neutral-900/10 bg-[color-mix(in_oklab,#ffffff_92%,var(--surface-2))] text-neutral-700",
+                      "shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_2px_6px_rgba(0,0,0,0.12),0_1px_0_rgba(0,0,0,0.04)]",
+                      "hover:border-neutral-900/16 hover:bg-white hover:shadow-[inset_0_1px_0_rgba(255,255,255,1),0_3px_10px_rgba(0,0,0,0.14)]",
+                      /* Dark: soft lift + inner highlight */
+                      "app-dark:border-white/14 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_55%,#1a1a1c)] app-dark:text-white/78",
+                      "app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_3px_10px_rgba(0,0,0,0.45),0_1px_0_rgba(255,255,255,0.06)]",
+                      "app-dark:hover:border-white/22 app-dark:hover:bg-[color-mix(in_oklab,var(--surface-2)_70%,#222)] app-dark:hover:text-white/92",
+                      "app-dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_4px_14px_rgba(0,0,0,0.5)]",
+                    ].join(" ")}
+                    onMouseDown={(ev) => {
+                      ev.preventDefault();
+                    }}
+                    onClick={() => {
+                      onSearch("");
+                    }}
+                  >
+                    <PiX className="h-3 w-3 shrink-0" strokeWidth={2.25} aria-hidden />
+                  </button>
+                ) : null}
               </div>
               <button
                 type="button"

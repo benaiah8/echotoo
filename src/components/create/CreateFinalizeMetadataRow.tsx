@@ -1,49 +1,65 @@
 /**
- * Create finalize: Date / Visibility / RSVP pills + single shared panel.
- * Matches CreateActivityDetailSection add-on pills (white on dark, neutral on light).
+ * Create finalize: Date / View / RSVP / Rate pills + single shared panel.
+ * Pill chrome uses `create-meta-pill` + --create-meta-pill-* (see index.css).
  */
 import { useState, type ReactNode } from "react";
-import { PiCalendar, PiEye, PiUsers } from "react-icons/pi";
+import { PiCalendar, PiEye, PiStar, PiUsers } from "react-icons/pi";
 
-export type FinalizeMetaPanelKey = "date" | "visibility" | "rsvp";
+export type FinalizeMetaPanelKey = "date" | "visibility" | "rsvp" | "rate";
 
-/** Same idea as Activities “Location / Images / More details” row */
-const ADDON_TAB_BASE =
-  "relative flex h-9 min-h-0 min-w-0 items-center justify-between gap-1 rounded-full border-0 px-2.5 py-1.5 text-left " +
-  "bg-white text-neutral-950 shadow-sm transition-transform duration-200 ease-out " +
-  "hover:bg-neutral-100 active:scale-[0.99] " +
-  "dark:bg-white dark:text-neutral-950 dark:shadow-[0_1px_8px_rgba(0,0,0,0.35)] dark:hover:bg-neutral-100";
+/** ~8% shorter than h-8 / h-9; extra horizontal inset so labels/endcaps aren’t flush to the rim. */
+const META_TAB_LAYOUT =
+  "create-meta-pill relative flex h-[29px] min-h-[29px] min-w-0 items-center gap-0.5 rounded-full px-2.5 py-0.5 text-left sm:h-[33px] sm:min-h-[33px] sm:gap-1 sm:px-3 sm:py-1";
 
-/** Date + Visibility panels: strong white frame on dark (matches Activities composer card) */
+const PILL_LABEL_CLUSTER =
+  "flex min-w-0 flex-1 items-center gap-0.5 sm:gap-0.5";
+
+/** Date + Visibility panels (frame matches Activities composer card) */
 const PANEL_CLASS_DATE_VISIBILITY =
-  "rounded-xl border border-[var(--border)]/55 bg-[var(--surface)]/24 p-3 " +
-  "shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_18%,transparent),0_2px_14px_rgba(0,0,0,0.05)] " +
-  "dark:border-white dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.35)]";
+  "rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-frame)] bg-white/95 p-3 " +
+  "shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_12%,transparent),0_2px_14px_rgba(0,0,0,0.05)] " +
+  "app-dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] app-dark:shadow-[0_4px_20px_rgba(0,0,0,0.35)]";
 
-/** RSVP panel: slightly softer chrome when expanded */
-const PANEL_CLASS_RSVP =
-  "rounded-xl border border-[var(--border)]/55 bg-[color-mix(in_oklab,var(--surface)_14%,transparent)] p-3 " +
-  "shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] dark:border-white/22 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]";
+/** RSVP / Rate panels: slightly softer frame when expanded */
+const PANEL_CLASS_SECONDARY =
+  "rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-frame-muted)] bg-white/95 p-3 " +
+  "shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] app-dark:bg-[color-mix(in_oklab,var(--surface)_14%,transparent)] app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]";
+
+const ICON_LABEL = "text-[var(--create-meta-pill-fg)]";
+
+const PILL_LABEL_CLASS =
+  "truncate text-[10px] font-semibold leading-none sm:text-[11px] " + ICON_LABEL;
+
+const ICON_CLASS = `h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5 ${ICON_LABEL}`;
 
 export type CreateFinalizeMetadataRowProps = {
   hasSchedule: boolean;
-  visibilityShort: string;
+  /** Short visibility endcap, e.g. Pu / Fr */
+  visibilityPillEnd: ReactNode;
   rsvpPillEnd: ReactNode;
+  /** On / Off endcap for Rate */
+  ratePillEnd: ReactNode;
   /** When true (hangout + RSVP on), emphasize the RSVP pill with a visible ring */
   rsvpEnabled?: boolean;
+  /** When true, emphasize the Rate pill when ratings are enabled */
+  rateEnabled?: boolean;
   datePanel: ReactNode;
   visibilityPanel: ReactNode;
   rsvpPanel: ReactNode;
+  ratePanel: ReactNode;
 };
 
 export default function CreateFinalizeMetadataRow({
   hasSchedule,
-  visibilityShort,
+  visibilityPillEnd,
   rsvpPillEnd,
+  ratePillEnd,
   rsvpEnabled = false,
+  rateEnabled = false,
   datePanel,
   visibilityPanel,
   rsvpPanel,
+  ratePanel,
 }: CreateFinalizeMetadataRowProps) {
   const [panel, setPanel] = useState<FinalizeMetaPanelKey | null>(null);
 
@@ -58,21 +74,27 @@ export default function CreateFinalizeMetadataRow({
     const anyOpen = panel !== null;
     const scale =
       selected && anyOpen
-        ? "z-10 scale-[1.06] shadow-md dark:shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+        ? "z-10 scale-[1.06] shadow-md shadow-black/45"
         : anyOpen
         ? "scale-[0.96] opacity-[0.88]"
         : "";
     const rsvpOnRing =
       key === "rsvp" && rsvpEnabled
-        ? "ring-2 ring-neutral-900/85 ring-offset-2 ring-offset-white dark:ring-white dark:ring-offset-zinc-950"
+        ? "ring-2 ring-[var(--create-meta-pill-rsvp-ring)] ring-offset-1 ring-offset-[var(--bg)] sm:ring-offset-2"
         : "";
-    return [ADDON_TAB_BASE, scale, rsvpOnRing].filter(Boolean).join(" ");
+    const rateOnRing =
+      key === "rate" && rateEnabled
+        ? "ring-2 ring-[var(--create-meta-pill-rsvp-ring)] ring-offset-1 ring-offset-[var(--bg)] sm:ring-offset-2"
+        : "";
+    return [META_TAB_LAYOUT, scale, rsvpOnRing, rateOnRing]
+      .filter(Boolean)
+      .join(" ");
   };
 
   return (
     <div className="w-full">
       <div
-        className="grid grid-cols-3 gap-1.5"
+        className="grid grid-cols-4 gap-1 sm:gap-1.5"
         role="tablist"
         aria-label="Post metadata"
       >
@@ -83,25 +105,20 @@ export default function CreateFinalizeMetadataRow({
           className={finalizeTabClass("date")}
           onClick={() => toggle("date")}
         >
-          <span className="flex min-w-0 items-center gap-1">
-            <PiCalendar
-              className="h-3.5 w-3.5 shrink-0 text-neutral-950"
-              aria-hidden
-            />
-            <span className="truncate text-[11px] font-semibold leading-none text-neutral-950 sm:text-[12px]">
-              Date
-            </span>
+          <span className={PILL_LABEL_CLUSTER}>
+            <PiCalendar className={ICON_CLASS} aria-hidden />
+            <span className={PILL_LABEL_CLASS}>Date</span>
           </span>
           {hasSchedule ? (
             <span
-              className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+              className="inline-flex h-3 w-3 shrink-0 items-center justify-center sm:h-3.5 sm:w-3.5"
               role="img"
               aria-label="Schedule set"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-neutral-950 ring-1 ring-neutral-950/15" />
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--create-meta-pill-schedule-dot-bg)] ring-1 ring-[var(--create-meta-pill-schedule-dot-ring)]" />
             </span>
           ) : (
-            <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
+            <span className="inline-flex h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden />
           )}
         </button>
 
@@ -109,21 +126,15 @@ export default function CreateFinalizeMetadataRow({
           type="button"
           role="tab"
           aria-selected={panel === "visibility"}
+          aria-label="View"
           className={finalizeTabClass("visibility")}
           onClick={() => toggle("visibility")}
         >
-          <span className="flex min-w-0 items-center gap-1">
-            <PiEye
-              className="h-3.5 w-3.5 shrink-0 text-neutral-950"
-              aria-hidden
-            />
-            <span className="truncate text-[10px] font-semibold leading-tight text-neutral-950 sm:text-[11px]">
-              Visibility
-            </span>
+          <span className={PILL_LABEL_CLUSTER}>
+            <PiEye className={ICON_CLASS} aria-hidden />
+            <span className={PILL_LABEL_CLASS}>View</span>
           </span>
-          <span className="max-w-[3.25rem] truncate text-[9px] font-semibold leading-none text-neutral-950/75 sm:max-w-[4rem] sm:text-[10px]">
-            {visibilityShort}
-          </span>
+          <span className="flex shrink-0 items-center">{visibilityPillEnd}</span>
         </button>
 
         <button
@@ -133,28 +144,43 @@ export default function CreateFinalizeMetadataRow({
           className={finalizeTabClass("rsvp")}
           onClick={() => toggle("rsvp")}
         >
-          <span className="flex min-w-0 items-center gap-1">
-            <PiUsers
-              className="h-3.5 w-3.5 shrink-0 text-neutral-950"
-              aria-hidden
-            />
-            <span className="truncate text-[11px] font-semibold leading-none text-neutral-950 sm:text-[12px]">
-              RSVP
-            </span>
+          <span className={PILL_LABEL_CLUSTER}>
+            <PiUsers className={ICON_CLASS} aria-hidden />
+            <span className={PILL_LABEL_CLASS}>RSVP</span>
           </span>
-          {rsvpPillEnd}
+          <span className="flex shrink-0 items-center">{rsvpPillEnd}</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={panel === "rate"}
+          className={[
+            finalizeTabClass("rate"),
+            rateEnabled ? "create-meta-pill-rate--on" : "create-meta-pill-rate--off",
+          ].join(" ")}
+          onClick={() => toggle("rate")}
+        >
+          <span className={PILL_LABEL_CLUSTER}>
+            <PiStar className={ICON_CLASS} aria-hidden />
+            <span className={PILL_LABEL_CLASS}>Rate</span>
+          </span>
+          <span className="flex shrink-0 items-center">{ratePillEnd}</span>
         </button>
       </div>
 
       {panel !== null && (
         <div
           className={`mt-2 w-full ${
-            panel === "rsvp" ? PANEL_CLASS_RSVP : PANEL_CLASS_DATE_VISIBILITY
+            panel === "rsvp" || panel === "rate"
+              ? PANEL_CLASS_SECONDARY
+              : PANEL_CLASS_DATE_VISIBILITY
           }`}
         >
           {panel === "date" && datePanel}
           {panel === "visibility" && visibilityPanel}
           {panel === "rsvp" && rsvpPanel}
+          {panel === "rate" && ratePanel}
         </div>
       )}
     </div>

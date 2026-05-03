@@ -13,7 +13,6 @@ import PostSkeleton from "../../components/skeletons/PostSkeleton";
 import ProgressiveFeed from "../../components/ProgressiveFeed";
 import Post from "../../components/Post";
 import { convertLikedToFeedItem } from "../../lib/profilePostsConverters";
-import { enrichFeedItemsWithCounts } from "../../lib/postCountsEnrichment";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { dataCache } from "../../lib/dataCache";
 import { cancelContextRequests } from "../../lib/requestManager";
@@ -376,19 +375,18 @@ export default function OtherProfilePostsSection({
           );
         }
 
-        // Convert LikedPostWithDetails[] to FeedItem[] and enrich with counts (RPC may omit like_count/comment_count)
+        // Convert LikedPostWithDetails[] to FeedItem[] (RPC now carries canonical engagement counts).
         const feedItems: FeedItem[] = filteredPosts.map(convertLikedToFeedItem);
-        const enriched = await enrichFeedItemsWithCounts(feedItems);
 
         if (DEBUG_OTHER_PROFILE) {
           console.log(
             "[OtherProfilePostsSection] loadInteractedItems: Received",
-            enriched.length,
+            feedItems.length,
             "posts after filtering"
           );
         }
 
-        return enriched;
+        return feedItems;
       } catch (error: any) {
         // Edge Case 6: Handle exceptions
         console.error(

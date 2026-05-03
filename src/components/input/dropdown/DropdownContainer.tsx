@@ -11,6 +11,8 @@ type DropdownContainerProps = {
   forceOpen?: boolean;
   left?: boolean;
   disabled?: boolean;
+  /** When true, portal uses only z-index/scroll/maxHeight; `dropdownClassName` supplies all surface chrome. */
+  barePortal?: boolean;
 };
 
 const DropdownContainer: React.FC<DropdownContainerProps> = ({
@@ -23,6 +25,7 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
   forceOpen,
   left,
   disabled = false,
+  barePortal = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -108,7 +111,11 @@ const DropdownContainer: React.FC<DropdownContainerProps> = ({
           <div
             ref={dropdownRef}
             data-dropdown-portal=""
-            className={`absolute bg-[var(--surface-2)] border text-black border-gray-700 shadow-md rounded-md overflow-auto scroll-hide z-[9999] ${maxHeight} ${dropdownClassName}`}
+            className={
+              barePortal
+                ? `absolute scroll-hide overflow-auto z-[9999] ${maxHeight} ${dropdownClassName}`
+                : `absolute bg-[var(--surface-2)] border text-black border-gray-700 shadow-md rounded-md overflow-auto scroll-hide z-[9999] ${maxHeight} ${dropdownClassName}`
+            }
             style={{
               top: dropdownPosition.top + 6,
               left: left ? dropdownPosition.left : undefined,

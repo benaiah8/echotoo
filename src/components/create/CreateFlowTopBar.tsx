@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { PiArrowLeft, PiArrowRight, PiCheck, PiX } from "react-icons/pi";
+import { PiArrowLeft, PiArrowRight, PiCheck, PiInfo, PiX } from "react-icons/pi";
 import {
   CREATE_FLOW_TOP_GAP_BELOW_SAFE_AREA_PX,
   readCreateFlowBottomTabWidthPx,
@@ -20,7 +20,7 @@ const LABELS = {
 } as const;
 
 function phaseLabel(pathname: string): string {
-  if (pathname.startsWith(Paths.createFinalize)) return "Finish";
+  if (pathname.startsWith(Paths.createFinalize)) return "Create post";
   if (pathname.startsWith(Paths.createCategories)) return "Caption";
   return "Activities";
 }
@@ -29,7 +29,8 @@ export type CreateFlowTopBarActionIcon =
   | "close"
   | "arrow-right"
   | "arrow-left"
-  | "check";
+  | "check"
+  | "info";
 
 export type CreateFlowTopBarAction = {
   onClick: () => void;
@@ -41,7 +42,7 @@ export type CreateFlowTopBarAction = {
 export type CreateFlowTopBarProps = {
   leftAction?: CreateFlowTopBarAction;
   rightAction?: CreateFlowTopBarAction;
-  /** Solid white-ish border (Activities + Finish only; other create steps keep default chrome). */
+  /** Solid white-ish border (Activities + Create post only; other create steps keep default chrome). */
   emphasizeWhiteBorder?: boolean;
 };
 
@@ -56,6 +57,8 @@ function ActionIcon({ icon }: { icon: CreateFlowTopBarActionIcon }) {
       return <PiArrowLeft className={cls} aria-hidden />;
     case "check":
       return <PiCheck className={cls} aria-hidden />;
+    case "info":
+      return <PiInfo className={cls} aria-hidden />;
     default:
       return null;
   }
@@ -70,12 +73,12 @@ function CircleAction({ action }: { action: CreateFlowTopBarAction }) {
       aria-label={action.label}
       className={[
         "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-        "border border-neutral-800/90 bg-neutral-950 text-white",
+        "border border-[var(--create-border-top-circle)] bg-neutral-950 text-white",
         "shadow-[0_2px_10px_rgba(0,0,0,0.22),0_1px_3px_rgba(0,0,0,0.14)]",
         "transition hover:brightness-110 active:scale-[0.96]",
-        "dark:border-white/25 dark:bg-white dark:text-neutral-950",
-        "dark:shadow-[0_4px_16px_rgba(0,0,0,0.55),0_2px_6px_rgba(0,0,0,0.35)]",
-        "dark:hover:brightness-95",
+        "app-dark:bg-white app-dark:text-neutral-950",
+        "app-dark:shadow-[0_4px_16px_rgba(0,0,0,0.55),0_2px_6px_rgba(0,0,0,0.35)]",
+        "app-dark:hover:brightness-95",
       ].join(" ")}
     >
       <ActionIcon icon={action.icon} />
@@ -165,10 +168,10 @@ export default function CreateFlowTopBar({
 
   const chrome = emphasizeWhiteBorder
     ? [
-        "pointer-events-auto shrink-0 border border-white/40",
+        "pointer-events-auto shrink-0 border border-[var(--create-border-top-chrome)]",
         "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
         "shadow-[0_4px_24px_rgba(0,0,0,0.12)]",
-        "dark:border-white/50 dark:shadow-[0_4px_28px_rgba(0,0,0,0.35)]",
+        "app-dark:shadow-[0_4px_28px_rgba(0,0,0,0.35)]",
       ].join(" ")
     : [
         "pointer-events-auto shrink-0 border border-[var(--bottom-tab-border)]",

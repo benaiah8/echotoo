@@ -28,6 +28,38 @@ type ProfileResult = {
   onboarding_step?: number | null;
 } | null;
 
+/**
+ * Hide other user's profile when a block exists and the viewer did NOT initiate it.
+ * If the viewer is the blocker, profile still loads so they can unblock from the UI.
+ */
+export async function profileHiddenByUserBlocksForSession(
+  targetAuthUserId: string
+): Promise<boolean> {
+  if (!targetAuthUserId) return false;
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const vid = session?.user?.id;
+  if (!vid || vid === targetAuthUserId) return false;
+  const { data: pair, error } = await supabase.rpc("users_are_blocked_pair", {
+    p_a: vid,
+    p_b: targetAuthUserId,
+  });
+  if (error) {
+    console.warn("[follows] users_are_blocked_pair:", error.message);
+    return false;
+  }
+  if (!pair) return false;
+  const { data: myBlockRow } = await supabase
+    .from("user_blocks")
+    .select("id")
+    .eq("blocker_user_id", vid)
+    .eq("blocked_user_id", targetAuthUserId)
+    .maybeSingle();
+  if (myBlockRow?.id) return false;
+  return true;
+}
+
 const profileByUserIdDedupe = new Map<
   string,
   { promise: Promise<ProfileResult>; ts: number }
@@ -93,6 +125,7 @@ export function invalidateProfileByUserIdCache(userId: string) {
 
 /** Return the viewer's *profile id* (not auth user id). */
 export async function getViewerId(): Promise<string | null> {
+  console.log("[VIEWERDBG] getViewerId enter", { t: Date.now() });
   try {
     // [PHASE 2.3 - FIX] Check localStorage first (fast, synchronous path)
     // Why: Eliminates profiles?select=id requests on page reloads
@@ -105,6 +138,12 @@ export async function getViewerId(): Promise<string | null> {
         // Note: We don't validate it here for speed (validation happens naturally on first use)
         // If invalid, database queries will fail and components will handle it gracefully
         // This eliminates redundant profiles?select=id requests on page reloads
+        console.log("[VIEWERDBG] getViewerId exit", {
+          path: "localStorage_my_profile_id",
+          usedLocalStorageMyProfileId: true,
+          returnedProfileId: storedProfileId,
+          t: Date.now(),
+        });
         return storedProfileId;
       }
     } catch (localStorageError) {
@@ -126,12 +165,17 @@ export async function getViewerId(): Promise<string | null> {
         } catch (localStorageError) {
           // Ignore localStorage errors - in-memory cache still works
         }
+        console.log("[VIEWERDBG] getViewerId exit", {
+          path: "authCache_profileId",
+          usedLocalStorageMyProfileId: false,
+          cacheHit: "auth_memory_profileId",
+          returnedProfileId: authCache.profileId,
+          t: Date.now(),
+        });
         return authCache.profileId;
       }
-      // If cached but no profileId (user not logged in), return null
-      if (authCache.userId === null) {
-        return null;
-      }
+      // Do not short-circuit on authCache.userId === null — that was a transient negative
+      // cache from a failed getSession/getUser and would block retries for ~30s (Android OAuth).
       // If userId exists but profileId missing, fall through to fetch it (use RequestManager)
     }
 
@@ -151,15 +195,20 @@ export async function getViewerId(): Promise<string | null> {
           Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
         ) {
           if (authCache.profileId) {
+            console.log("[VIEWERDBG] getViewerId RM inner cache_hit profileId", {
+              returnedProfileId: authCache.profileId,
+              t: Date.now(),
+            });
             return authCache.profileId;
           }
-          if (authCache.userId === null) {
-            return null;
-          }
+          // No short-circuit on userId === null — avoid poisoning (see getViewerAuthUserId).
         }
 
         // Check if aborted before making requests
         if (signal.aborted) {
+          console.log("[VIEWERDBG] getViewerId RM aborted (pre-session)", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -171,8 +220,17 @@ export async function getViewerId(): Promise<string | null> {
           const { data: sessionData, error: sessionError } =
             await supabase.auth.getSession();
 
+          console.log("[VIEWERDBG] getViewerId RM getSession", {
+            t: Date.now(),
+            sessionError: sessionError?.message ?? null,
+            sessionUserId: sessionData.session?.user?.id ?? null,
+          });
+
           // Check if aborted after async operation
           if (signal.aborted) {
+            console.log("[VIEWERDBG] getViewerId RM aborted (post-session)", {
+              t: Date.now(),
+            });
             return null;
           }
 
@@ -190,8 +248,17 @@ export async function getViewerId(): Promise<string | null> {
             const { data: userData, error: userError } =
               await supabase.auth.getUser();
 
+            console.log("[VIEWERDBG] getViewerId RM getUser", {
+              t: Date.now(),
+              userError: userError?.message ?? null,
+              userId: userData.user?.id ?? null,
+            });
+
             // Check if aborted after async operation
             if (signal.aborted) {
+              console.log("[VIEWERDBG] getViewerId RM aborted (post-getUser)", {
+                t: Date.now(),
+              });
               return null;
             }
 
@@ -205,8 +272,11 @@ export async function getViewerId(): Promise<string | null> {
         }
 
         if (!authId) {
-          // Cache the null result to prevent repeated failed checks
-          authCache = { userId: null, profileId: null, timestamp: Date.now() };
+          // Do not write authCache { userId: null } — transient session misses must not block
+          // real sessions for 30s (shared cache with getViewerAuthUserId).
+          console.log("[VIEWERDBG] getViewerId RM no authId after session+getUser", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -221,11 +291,21 @@ export async function getViewerId(): Promise<string | null> {
             profileId: cachedViewer.profileId,
             timestamp: Date.now(),
           };
+          console.log("[VIEWERDBG] getViewerId exit", {
+            path: "viewerProfileId_ttl_cache",
+            returnedProfileId: cachedViewer.profileId,
+            authUserId: authId,
+            usedLocalStorageMyProfileId: false,
+            t: Date.now(),
+          });
           return cachedViewer.profileId;
         }
 
         // Check if aborted before database query
         if (signal.aborted) {
+          console.log("[VIEWERDBG] getViewerId RM aborted (pre-getProfileByUserId)", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -236,6 +316,9 @@ export async function getViewerId(): Promise<string | null> {
 
         // Check if aborted after async operation
         if (signal.aborted) {
+          console.log("[VIEWERDBG] getViewerId RM aborted (post-getProfileByUserId)", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -247,6 +330,10 @@ export async function getViewerId(): Promise<string | null> {
             profileId: null,
             timestamp: Date.now(),
           };
+          console.log("[VIEWERDBG] getViewerId RM profile missing after fetch", {
+            t: Date.now(),
+            authUserId: authId,
+          });
           return null;
         }
 
@@ -269,6 +356,13 @@ export async function getViewerId(): Promise<string | null> {
           // Ignore localStorage errors - in-memory cache still works
         }
 
+        console.log("[VIEWERDBG] getViewerId exit", {
+          path: "getProfileByUserId",
+          returnedProfileId: profile.id,
+          authUserId: authId,
+          wroteLocalStorageMyProfileId: true,
+          t: Date.now(),
+        });
         return profile.id;
       },
       "high" // High priority - needed by many components on mount
@@ -277,6 +371,10 @@ export async function getViewerId(): Promise<string | null> {
     return result.data ?? null;
   } catch (error) {
     console.error("getViewerId error:", error);
+    console.log("[VIEWERDBG] getViewerId exception", {
+      t: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
@@ -309,17 +407,22 @@ export async function getViewerId(): Promise<string | null> {
  * @returns Auth user ID (string) or null if not authenticated
  */
 export async function getViewerAuthUserId(): Promise<string | null> {
+  console.log("[VIEWERDBG] getViewerAuthUserId enter", { t: Date.now() });
   try {
     // [OPTIMIZATION] Check in-memory cache first (fastest path)
     // If getViewerId() already ran, userId is already cached - return immediately
     if (authCache && Date.now() - authCache.timestamp < AUTH_CACHE_DURATION) {
       if (authCache.userId) {
+        console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+          path: "cache_hit_auth_userId",
+          cacheHit: true,
+          returnedAuthUserId: authCache.userId,
+          t: Date.now(),
+        });
         return authCache.userId;
       }
-      // If cached but no userId (user not logged in), return null
-      if (authCache.userId === null) {
-        return null;
-      }
+      // Do not treat authCache.userId === null as authoritative — never negative-cache;
+      // fall through and re-fetch session so OAuth/Android timing cannot stick "logged out".
       // If profileId exists but userId missing (rare edge case), fall through to fetch
     }
 
@@ -338,15 +441,22 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
         ) {
           if (authCache.userId) {
+            console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+              path: "RM_inner_cache_hit_auth_userId",
+              cacheHit: true,
+              returnedAuthUserId: authCache.userId,
+              t: Date.now(),
+            });
             return authCache.userId;
           }
-          if (authCache.userId === null) {
-            return null;
-          }
+          // No early return on userId === null — retry getSession/getUser below.
         }
 
         // [ABORT CHECK] Check if aborted before making requests
         if (signal.aborted) {
+          console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (pre-session)", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -359,8 +469,17 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           const { data: sessionData, error: sessionError } =
             await supabase.auth.getSession();
 
+          console.log("[VIEWERDBG] getViewerAuthUserId RM getSession", {
+            t: Date.now(),
+            sessionError: sessionError?.message ?? null,
+            sessionUserId: sessionData.session?.user?.id ?? null,
+          });
+
           // [ABORT CHECK] Check if aborted after async operation
           if (signal.aborted) {
+            console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (post-session)", {
+              t: Date.now(),
+            });
             return null;
           }
 
@@ -378,8 +497,17 @@ export async function getViewerAuthUserId(): Promise<string | null> {
             const { data: userData, error: userError } =
               await supabase.auth.getUser();
 
+            console.log("[VIEWERDBG] getViewerAuthUserId RM getUser", {
+              t: Date.now(),
+              userError: userError?.message ?? null,
+              userId: userData.user?.id ?? null,
+            });
+
             // [ABORT CHECK] Check if aborted after async operation
             if (signal.aborted) {
+              console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (post-getUser)", {
+                t: Date.now(),
+              });
               return null;
             }
 
@@ -388,14 +516,15 @@ export async function getViewerAuthUserId(): Promise<string | null> {
             }
           } catch (error) {
             // Both methods failed - user not authenticated or network error
-            // Cache null to prevent repeated failed checks
           }
         }
 
         if (!authId) {
-          // [CACHE NULL RESULT] Cache the null result to prevent repeated failed checks
-          // This prevents spam requests when user is not authenticated
-          authCache = { userId: null, profileId: null, timestamp: Date.now() };
+          // Never negative-cache: a miss here is often transient (Android WebView OAuth).
+          // Genuine sign-out clears auth via clearAuthCache on SIGNED_OUT (App.tsx).
+          console.log("[VIEWERDBG] getViewerAuthUserId RM no authId after session+getUser", {
+            t: Date.now(),
+          });
           return null;
         }
 
@@ -408,6 +537,13 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           timestamp: Date.now(),
         };
 
+        console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+          path: "session_or_user_resolved",
+          cacheHit: false,
+          updatedAuthCacheUserId: true,
+          returnedAuthUserId: authId,
+          t: Date.now(),
+        });
         return authId;
       },
       "high" // High priority - needed by many components on mount
@@ -418,6 +554,10 @@ export async function getViewerAuthUserId(): Promise<string | null> {
     // [ERROR HANDLING] Log error but don't throw - return null gracefully
     // This prevents breaking the app if auth check fails
     console.error("getViewerAuthUserId error:", error);
+    console.log("[VIEWERDBG] getViewerAuthUserId exception", {
+      t: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
@@ -490,6 +630,9 @@ export async function getProfileByUserId(userId: string): Promise<{
     if (cachedProfile) {
       if (DEBUG_PROFILE_FETCH)
         console.debug("[getProfileByUserId] cache hit", userId);
+      if (await profileHiddenByUserBlocksForSession(cachedProfile.user_id)) {
+        return null;
+      }
       return cachedProfile;
     }
 
@@ -529,6 +672,9 @@ export async function getProfileByUserId(userId: string): Promise<{
             console.log(
               `[getProfileByUserId] ✅ Cache HIT (during RequestManager execution) for userId: ${userId}`
             );
+            if (await profileHiddenByUserBlocksForSession(cachedAgain.user_id)) {
+              return null;
+            }
             return cachedAgain;
           }
 
@@ -575,6 +721,10 @@ export async function getProfileByUserId(userId: string): Promise<{
             console.log(
               `[getProfileByUserId] No profile found in DB for userId: ${userId}`
             );
+            return null;
+          }
+
+          if (await profileHiddenByUserBlocksForSession(profile.user_id)) {
             return null;
           }
 
@@ -697,6 +847,9 @@ export async function getProfileByIdOrUsername(
       console.log(
         `[getProfileByIdOrUsername] ✅ Cache HIT by profile ID: ${identifier}`
       );
+      if (await profileHiddenByUserBlocksForSession(cached.user_id)) {
+        return null;
+      }
       return cached;
     }
 
@@ -762,6 +915,10 @@ export async function getProfileByIdOrUsername(
     }
 
     if (!data) {
+      return null;
+    }
+
+    if (await profileHiddenByUserBlocksForSession(data.user_id)) {
       return null;
     }
 

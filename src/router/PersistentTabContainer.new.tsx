@@ -56,7 +56,7 @@ import OtherProfilePage from "../pages/OtherProfilePage";
  * @param path - URL pathname (e.g., "/", "/games", "/notifications")
  * @returns TabId - The tab identifier for this path
  */
-function getTabFromPath(path: string): TabId {
+export function getTabFromPath(path: string): TabId {
   // Home tab - root path (includes /games redirect)
   if (path === "/" || path === "/games") {
     return "home";
@@ -189,9 +189,11 @@ export function PersistentTabContainer({
             minHeight: "100vh",
           }}
         >
-          <RequireAuthRoute>
-            <OwnProfilePage />
-          </RequireAuthRoute>
+          {activeTab === "profile" ? (
+            <RequireAuthRoute>
+              <OwnProfilePage />
+            </RequireAuthRoute>
+          ) : null}
         </div>
 
         {/* Notifications Tab */}
@@ -203,9 +205,11 @@ export function PersistentTabContainer({
             minHeight: "100vh",
           }}
         >
-          <RequireAuthRoute>
-            <NotificationPage />
-          </RequireAuthRoute>
+          {activeTab === "notifications" ? (
+            <RequireAuthRoute>
+              <NotificationPage />
+            </RequireAuthRoute>
+          ) : null}
         </div>
 
         {/* Other Profile Tab */}

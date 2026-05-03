@@ -7,16 +7,14 @@ import { setAuthUser } from "./reducers/authReducer";
 import { supabase } from "./lib/supabaseClient";
 import { clearAuthCache } from "./api/services/follows";
 import { clearCachedProfile } from "./lib/profileCache";
-import { Toaster } from "react-hot-toast";
 import { applyTheme, getInitialTheme } from "./lib/theme";
-import BottomTab from "./components/BottomTab";
 import { BrowserRouter } from "react-router-dom";
 import { CreateChooserProvider } from "./context/CreateChooserContext";
-import InstallAppButton from "./components/InstallAppButton"; // PWA: Install app button
+import { OwlMessageModalProvider } from "./context/OwlMessageModalContext";
 import OnboardingWrapper from "./components/onboarding/OnboardingWrapper";
 import CapacitorOAuthListener from "./components/CapacitorOAuthListener";
 import DesktopShellWrapper from "./components/DesktopShellWrapper";
-import WebOnlyHomeHero from "./components/WebOnlyHomeHero";
+import AppFloatingChrome from "./components/AppFloatingChrome";
 import {
   isCapacitor,
   isNativeApp,
@@ -27,6 +25,10 @@ import AnimatedLogo from "./components/ui/AnimatedLogo";
 import { setupCacheInvalidationListeners } from "./lib/cacheInvalidation";
 import { networkRecovery } from "./lib/networkRecovery";
 import { initAppSafeAreaBottom } from "./lib/appSafeAreaBottom";
+import AppUpdateRuntimeController from "./components/AppUpdateRuntimeController";
+import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMount";
+import PushRegistrationMount from "./components/PushRegistrationMount";
+import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
 
 function App() {
   const dispatch = useDispatch();
@@ -54,6 +56,7 @@ function App() {
 
     dumpAuthEnv();
 
+    let authDbgOrder = 0;
     supabase.auth.getSession().then(({ data }) => {
       const u = data.session?.user;
       dbg("getSession", {
@@ -61,12 +64,26 @@ function App() {
         userId: u?.id,
         email: u?.email,
       });
+      console.log("[AUTHDBG] App bootstrap getSession", {
+        t: Date.now(),
+        order: ++authDbgOrder,
+        source: "initial_getSession",
+        hasSession: !!data.session,
+        sessionUserId: u?.id ?? null,
+      });
       dispatch(setAuthUser(u ? { id: u.id, email: u.email } : (null as any)));
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       const u = session?.user;
       dbg("onAuthStateChange", { event, hasSession: !!session, userId: u?.id });
+      console.log("[AUTHDBG] App onAuthStateChange", {
+        t: Date.now(),
+        order: ++authDbgOrder,
+        event,
+        hasSession: !!session,
+        sessionUserId: u?.id ?? null,
+      });
 
       // [PHASE 2.3 - FIX] Only clear feed cache on explicit logout (SIGNED_OUT)
       // Why: Cache keys already include viewerProfileId, so no cross-user data leakage
@@ -145,32 +162,23 @@ function App() {
 
       {/* Router MUST wrap BottomTab and all route content */}
       <BrowserRouter>
+        {isNativeApp() && <NativePushTapNavigationBridge />}
+        <PostEngagementRealtimeMount />
+        {isNativeApp() && <PushRegistrationMount />}
         {isNativeApp() && <CapacitorOAuthListener />}
+        {!showSplash && <AppUpdateRuntimeController />}
         <CreateChooserProvider>
-          <div className="app-shell">
-            <WebOnlyHomeHero />
-            <DesktopShellWrapper>
-              <OnboardingWrapper>
-                <AppRouter />
-              </OnboardingWrapper>
+          <OwlMessageModalProvider>
+            <div className="app-shell">
+              <DesktopShellWrapper>
+                <OnboardingWrapper>
+                  <AppRouter />
+                </OnboardingWrapper>
+              </DesktopShellWrapper>
 
-              {/* Floating bottom tab - Telegram-style pill with margins */}
-              <BottomTab />
-
-              <Toaster
-                position="top-center"
-                toastOptions={{
-                  style: { background: "#111", color: "#fff" },
-                  success: {
-                    iconTheme: { primary: "#F7D047", secondary: "#111" },
-                  },
-                }}
-              />
-
-              {/* PWA: Install app button */}
-              <InstallAppButton />
-            </DesktopShellWrapper>
-          </div>
+              <AppFloatingChrome />
+            </div>
+          </OwlMessageModalProvider>
         </CreateChooserProvider>
       </BrowserRouter>
     </GlobalErrorHandler>

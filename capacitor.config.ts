@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.echotoo.app",
-  appName: "Echotoo",
+  appName: "EchoToo",
   webDir: "dist",
   plugins: {
     Keyboard: {

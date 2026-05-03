@@ -15,12 +15,32 @@ import { applyPostPatch } from "../lib/applyPostPatch";
 import { mergeUiCriticalPostFields } from "../lib/mergeUiCriticalPostFields";
 import { PostDetailDismissContext } from "../context/PostDetailDismissContext";
 import { hapticImpactLight } from "../lib/hapticsLight";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
+import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
+import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 
 /** Thumb-sized gesture: small movement arms; short drag commits */
 const DISMISS_ARM_PX = 14;
 const DISMISS_COMMIT_PX = 72;
 /** Visual polish (fade / scale / blur) reaches ~full by this drag distance */
 const DISMISS_VISUAL_RANGE_PX = 140;
+
+/** Bottom-handle drag commit — keep in sync with finishDismiss delay (+~20ms buffer) */
+const EXIT_MS_DRAG = 420;
+const EXIT_NAV_MS_DRAG = 440;
+/**
+ * Back / backdrop / Escape: slower than drag dismiss; `finishDismiss` adds a buffer so
+ * `navigate` runs after CSS finishes (WebViews can lag — see buffers below).
+ */
+const EXIT_MS_PROGRAMMATIC = 800;
+/** Extra ms after transition before `navigate` — browser */
+const PROGRAMMATIC_NAV_BUFFER_WEB_MS = 100;
+/**
+ * iOS WKWebView / Android System WebView often finish compositor work slightly after the
+ * nominal transition duration; extra slack avoids popping the route before the sheet settles.
+ */
+const PROGRAMMATIC_NAV_BUFFER_NATIVE_MS = 260;
 
 function maxDismissDragPx(): number {
   if (typeof window === "undefined") return 480;
@@ -37,12 +57,10 @@ export default function PostDetailModal() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const state = location.state as {
-    backgroundLocation?: Location;
-    initialPost?: FeedItem;
-  } | null;
+  const state = location.state as PostDetailNavigateState | null;
   const backgroundLocation = state?.backgroundLocation;
   const initialPost = state?.initialPost;
+  const focusCommentComposer = Boolean(state?.focusCommentComposer);
 
   const hasMatchingInitialPost = !!id && !!initialPost && initialPost.id === id;
   const [post, setPost] = useState<Post | null>(() => {
@@ -64,14 +82,37 @@ export default function PostDetailModal() {
   const pointerActiveRef = useRef(false);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingRef = useRef(false);
+  /** Which exit duration to use for CSS when `isExiting` — set before setState in each path */
+  const exitMotionMsRef = useRef(EXIT_MS_DRAG);
+  const playExitAnimationRef = useRef<() => void>(() => {});
+  const isExitingRef = useRef(false);
+  const composerFocusedRef = useRef(false);
+  /** One scroll-to-comments per modal open when arriving from feed comment control. */
+  const focusCommentsScrollDoneRef = useRef(false);
+
+  const { keyboardInsetPx: modalKeyboardInsetPx } = useCreateKeyboardInset();
 
   const handleClose = useCallback(() => {
     if (backgroundLocation) {
-      navigate(-1);
+      // Do not use navigate(-1): after edit→republish the previous history entry is often
+      // /create/... — go to the real underlying tab (home/profile) instead.
+      const { pathname, search, hash, state: bgState } = backgroundLocation;
+      navigate(
+        { pathname, search: search ?? "", hash: hash ?? "" },
+        { state: bgState, replace: true }
+      );
     } else {
       navigate("/", { replace: true });
     }
   }, [navigate, backgroundLocation]);
+
+  useEffect(() => {
+    isExitingRef.current = isExiting;
+  }, [isExiting]);
+
+  useEffect(() => {
+    composerFocusedRef.current = composerFocused;
+  }, [composerFocused]);
 
   useEffect(() => {
     dragOffsetRef.current = dragOffset;
@@ -99,11 +140,25 @@ export default function PostDetailModal() {
     setHandlePressed(false);
     pointerActiveRef.current = false;
     closingRef.current = false;
+    exitMotionMsRef.current = EXIT_MS_DRAG;
     if (exitTimerRef.current) {
       clearTimeout(exitTimerRef.current);
       exitTimerRef.current = null;
     }
+    focusCommentsScrollDoneRef.current = false;
   }, [id]);
+
+  useEffect(() => {
+    if (!focusCommentComposer || !post || focusCommentsScrollDoneRef.current) return;
+    focusCommentsScrollDoneRef.current = true;
+    const t = window.setTimeout(() => {
+      document.querySelector("[data-comments-section]")?.scrollIntoView({
+        behavior: "smooth",
+        block: "end",
+      });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [focusCommentComposer, post?.id]);
 
   const hasMatching = !!id && !!initialPost && initialPost.id === id;
   useEffect(() => {
@@ -173,6 +228,73 @@ export default function PostDetailModal() {
     return cleanup;
   }, []);
 
+  const finishDismiss = useCallback(
+    (navDelayMs: number = EXIT_NAV_MS_DRAG) => {
+      if (closingRef.current) return;
+      closingRef.current = true;
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => {
+        const runClose = () => {
+          handleClose();
+          closingRef.current = false;
+        };
+        // Native WebViews: let the compositor present the last transition frame before routing.
+        if (isNativeApp()) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(runClose);
+          });
+        } else {
+          runClose();
+        }
+      }, navDelayMs);
+    },
+    [handleClose]
+  );
+
+  /**
+   * Same exit motion as committing the bottom dismiss drag: translate off-screen, fade/blur, then navigate.
+   * Use for back button, backdrop, Escape, and loading/error close — not raw handleClose.
+   */
+  const playExitAnimation = useCallback(() => {
+    if (closingRef.current || isExiting) return;
+    setComposerFocused(false);
+    pointerActiveRef.current = false;
+    setHandlePressed(false);
+    setIsPointerDragging(false);
+    armedHapticRef.current = false;
+    const motionMs = EXIT_MS_PROGRAMMATIC;
+    exitMotionMsRef.current = motionMs;
+    setIsExiting(true);
+    setDragOffset(exitTranslatePx(-1));
+    const navBuffer = isNativeApp()
+      ? PROGRAMMATIC_NAV_BUFFER_NATIVE_MS
+      : PROGRAMMATIC_NAV_BUFFER_WEB_MS;
+    finishDismiss(motionMs + navBuffer);
+  }, [finishDismiss, isExiting]);
+
+  useEffect(() => {
+    playExitAnimationRef.current = playExitAnimation;
+  }, [playExitAnimation]);
+
+  useEffect(() => {
+    return subscribeAndroidPostDetailModalBack(() => {
+      if (closingRef.current || isExitingRef.current) return;
+      if (composerFocusedRef.current) {
+        const ae = document.activeElement as HTMLElement | null;
+        if (
+          ae &&
+          (ae.tagName === "INPUT" ||
+            ae.tagName === "TEXTAREA" ||
+            ae.isContentEditable)
+        ) {
+          ae.blur();
+          return;
+        }
+      }
+      playExitAnimationRef.current();
+    });
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -183,22 +305,12 @@ export default function PostDetailModal() {
           pointerActiveRef.current = false;
           return;
         }
-        handleClose();
+        playExitAnimation();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleClose, isPointerDragging]);
-
-  const finishDismiss = useCallback(() => {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-    exitTimerRef.current = setTimeout(() => {
-      handleClose();
-      closingRef.current = false;
-    }, 440);
-  }, [handleClose]);
+  }, [playExitAnimation, isPointerDragging]);
 
   const onHandlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -246,9 +358,10 @@ export default function PostDetailModal() {
 
       const last = dragOffsetRef.current;
       if (Math.abs(last) >= DISMISS_COMMIT_PX * 0.92) {
+        exitMotionMsRef.current = EXIT_MS_DRAG;
         setIsExiting(true);
         setDragOffset(exitTranslatePx(last));
-        finishDismiss();
+        finishDismiss(EXIT_NAV_MS_DRAG);
       } else {
         setDragOffset(0);
       }
@@ -259,6 +372,7 @@ export default function PostDetailModal() {
   const dismissContextValue = useMemo(
     () => ({
       setComposerFocused,
+      modalKeyboardInsetPx,
       dismissHandle: {
         visible: !composerFocused,
         pressed: handlePressed,
@@ -271,6 +385,7 @@ export default function PostDetailModal() {
     }),
     [
       composerFocused,
+      modalKeyboardInsetPx,
       handlePressed,
       onHandlePointerDown,
       onHandlePointerMove,
@@ -290,7 +405,7 @@ export default function PostDetailModal() {
   const sheetBlurPx = visualT * 2.8;
 
   const motionEase = "cubic-bezier(0.22, 1, 0.32, 1)";
-  const motionMs = isExiting ? 420 : 380;
+  const motionMs = isExiting ? exitMotionMsRef.current : 380;
   const sheetTransition =
     isPointerDragging && !isExiting
       ? "none"
@@ -322,7 +437,7 @@ export default function PostDetailModal() {
           onClick={(e) => {
             if (e.target !== e.currentTarget) return;
             if (isPointerDragging || isExiting) return;
-            handleClose();
+            playExitAnimation();
           }}
           aria-hidden
         />
@@ -343,12 +458,15 @@ export default function PostDetailModal() {
             }}
           >
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl bg-[var(--bg)] shadow-xl safe-area-inset-bottom">
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div
+                className="min-h-0 flex-1 overflow-y-auto"
+                data-post-detail-modal-scroll
+              >
                 <div className="relative px-4 pb-6">
                   {(loading || (error && !post)) && (
                     <button
                       type="button"
-                      onClick={handleClose}
+                      onClick={playExitAnimation}
                       className="absolute top-3 right-3 z-50 h-9 w-9 rounded-full bg-black/60 backdrop-blur flex items-center justify-center text-white hover:bg-black/75"
                       aria-label="Close"
                     >
@@ -361,7 +479,13 @@ export default function PostDetailModal() {
                       {error}
                     </div>
                   )}
-                  {post && <PostDetailBody post={post} onClose={handleClose} />}
+                  {post && (
+                    <PostDetailBody
+                      post={post}
+                      onClose={playExitAnimation}
+                      autoFocusCommentComposer={focusCommentComposer}
+                    />
+                  )}
                 </div>
               </div>
             </div>

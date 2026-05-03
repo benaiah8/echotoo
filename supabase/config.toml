@@ -1,0 +1,15 @@
+# Minimal Supabase CLI config for Edge Functions.
+# Link project: `supabase link --project-ref <ref>`
+# Deploy function: `supabase functions deploy delete-account`
+# Deploy function: `supabase functions deploy send-post-push`
+# Deploy function: `supabase functions deploy send-invite-push`
+
+[functions.delete-account]
+# JWT verification is done inside the function via auth.getUser(token).
+verify_jwt = false
+
+[functions.send-post-push]
+verify_jwt = false
+
+[functions.send-invite-push]
+verify_jwt = false

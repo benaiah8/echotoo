@@ -4,10 +4,14 @@
  */
 import { supabase } from "./supabaseClient";
 import { insertPost } from "../api/services/posts";
+import { invalidatePostDetailCache } from "../api/queries/getPostById";
 import { dataCache } from "./dataCache";
 import { recordSignal } from "./feedPersonalization";
 import { incrementMyXp } from "../api/services/xp";
 import { sanitizeTagsForPublish } from "./createFlowLimits";
+import { isDefaultStopTitle } from "./createFlowMeaningfulActivity";
+import { publishProfileTrace } from "./debugProfileFeed";
+import { setOwnCreatedPublishedPending } from "./ownCreatedPublishedPending";
 
 export type CreateFlowDraftActivity = {
   title?: string;
@@ -27,6 +31,43 @@ const isHttpUrl = (v: unknown): v is string =>
   (/^https?:\/\//.test(v) || (v.includes("/") && v.includes(".")));
 
 const isCloudinaryUrl = (u: string) => u.includes("res.cloudinary.com");
+
+function hasMeaningfulExtras(
+  additionalInfo: CreateFlowDraftActivity["additionalInfo"]
+): boolean {
+  if (!Array.isArray(additionalInfo)) return false;
+  return additionalInfo.some(
+    (x) =>
+      (x?.title ?? "").trim().length > 0 && (x?.value ?? "").trim().length > 0
+  );
+}
+
+function hasMeaningfulActivityAtIndex(
+  activity: CreateFlowDraftActivity,
+  index: number
+): boolean {
+  const images = cleanImagesForActivity(activity?.images);
+  if (images.length > 0) return true;
+
+  const title = (activity.title ?? "").trim();
+  if (title && !isDefaultStopTitle(title, index)) return true;
+
+  if ((activity.customActivity ?? "").trim()) return true;
+  if ((activity.activityType ?? "").trim()) return true;
+  if ((activity.locationDesc ?? "").trim()) return true;
+  if ((activity.location ?? "").trim()) return true;
+  if ((activity.locationNotes ?? "").trim()) return true;
+  if ((activity.locationUrl ?? "").trim()) return true;
+
+  const tags = Array.isArray(activity.tags)
+    ? activity.tags.map((t) => String(t).trim()).filter(Boolean)
+    : [];
+  if (tags.length > 0) return true;
+
+  if (hasMeaningfulExtras(activity.additionalInfo)) return true;
+
+  return false;
+}
 
 export function cleanImagesForActivity(arr: unknown): string[] {
   const valid = Array.isArray(arr) ? arr.map(String).filter(isHttpUrl) : [];
@@ -61,6 +102,8 @@ export type ExecuteCreateFlowPublishInput = {
   activities: CreateFlowDraftActivity[];
   isEditMode: boolean;
   editPostId?: string;
+  /** When true, post accepts star ratings (defaults false). */
+  ratingEnabled?: boolean;
 };
 
 export type ExecuteCreateFlowPublishResult = {
@@ -89,6 +132,7 @@ export async function executeCreateFlowPublish(
 
   const dbVisibility = input.visibility === "friends" ? "friends" : "public";
   const tags = sanitizeTagsForPublish(input.tags);
+  const ratingEnabled = input.ratingEnabled ?? false;
 
   let post: ExecuteCreateFlowPublishResult["post"];
 
@@ -109,6 +153,7 @@ export async function executeCreateFlowPublish(
           ? input.recurrenceDays
           : null,
         tags: tags.length ? tags : null,
+        rating_enabled: ratingEnabled,
         updated_at: new Date().toISOString(),
       })
       .eq("id", input.editPostId);
@@ -138,6 +183,7 @@ export async function executeCreateFlowPublish(
         ? input.recurrenceDays
         : null,
       tags: tags.length ? tags : null,
+      rating_enabled: ratingEnabled,
     });
   }
 
@@ -171,7 +217,12 @@ export async function executeCreateFlowPublish(
     images: cleanImagesForActivity(a?.images),
   }));
 
-  if (sanitizedActivities.length) {
+  // Do not persist seeded placeholder stops with no user-provided content.
+  const activitiesToPersist = sanitizedActivities.filter((a, i) =>
+    hasMeaningfulActivityAtIndex(a, i)
+  );
+
+  if (activitiesToPersist.length) {
     if (input.isEditMode && input.editPostId) {
       const { error: deleteErr } = await supabase
         .from("activities")
@@ -180,7 +231,7 @@ export async function executeCreateFlowPublish(
       if (deleteErr) throw deleteErr;
     }
 
-    const items = sanitizedActivities.map(
+    const items = activitiesToPersist.map(
       (a: CreateFlowDraftActivity, i: number) => ({
         post_id: post.id,
         order_idx: i,
@@ -216,8 +267,30 @@ export async function executeCreateFlowPublish(
     /* ignore */
   }
 
-  dataCache.delete(`profile_created_${session.user.id}`);
+  const createdCacheKey = `profile_created_${session.user.id}`;
+  dataCache.delete(createdCacheKey);
   dataCache.clearFeedCache().catch(() => {});
+  invalidatePostDetailCache(post.id);
+
+  const isNewPublish = !input.isEditMode;
+  if (isNewPublish) {
+    setOwnCreatedPublishedPending({
+      postId: post.id,
+      userId: session.user.id,
+      createdAt: new Date().toISOString(),
+      type: typeof post.type === "string" ? post.type : undefined,
+    });
+    publishProfileTrace("PENDING_MARKER_WRITTEN", {
+      postId: post.id,
+      userId: session.user.id,
+    });
+  }
+
+  publishProfileTrace("PUBLISH_SUCCESS", {
+    postId: post.id,
+    userId: session.user.id,
+    isEditMode: input.isEditMode,
+  });
 
   return { post };
 }

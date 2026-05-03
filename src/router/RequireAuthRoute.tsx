@@ -10,8 +10,7 @@ interface RequireAuthRouteProps {
 }
 
 /**
- * Route guard: if not logged in (and not suppressed by guest_until),
- * opens AuthModal and redirects to home.
+ * Route guard: if not logged in, opens AuthModal and redirects to home.
  * Auth logic matches BottomTab.requireAuth().
  * Uses useEffect for dispatch+navigate so AuthModal opens reliably (Navigate caused unmount before dispatch).
  */
@@ -42,14 +41,9 @@ export function RequireAuthRoute({ children }: RequireAuthRouteProps) {
   const authedId = reduxUserId ?? sessionUserId;
   const isAuthedFinal = !!authedId;
 
-  const suppressAuth = () => {
-    const until = Number(localStorage.getItem("guest_until") || 0);
-    return Date.now() < until;
-  };
-
   const lastHandledKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (isAuthedFinal || suppressAuth()) return;
+    if (isAuthedFinal) return;
     if (lastHandledKeyRef.current === location.key) return;
     lastHandledKeyRef.current = location.key;
 
@@ -59,7 +53,7 @@ export function RequireAuthRoute({ children }: RequireAuthRouteProps) {
     }
   }, [dispatch, navigate, location.key, location.pathname, isAuthedFinal]);
 
-  if (isAuthedFinal || suppressAuth()) {
+  if (isAuthedFinal) {
     return <>{children}</>;
   }
 

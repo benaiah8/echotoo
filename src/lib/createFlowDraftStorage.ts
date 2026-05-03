@@ -3,8 +3,9 @@
  * Preserves non-image fields; keeps `activities[i].images` as `string[]`.
  */
 
+import { EDIT_POST_DATA_KEY } from "./editPostBootstrap";
+
 const DRAFT_ACTIVITIES_KEY = "draftActivities";
-const EDIT_POST_DATA_KEY = "editPostData";
 
 /** Dispatched after a successful merge so CreateActivitiesPage can sync React state if mounted. */
 export const CREATE_FLOW_POST_IMAGE_MERGED_EVENT = "createFlow:postImageMerged";

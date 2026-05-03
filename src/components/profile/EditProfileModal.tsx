@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import { uploadImage } from "../../api/services/mediaUpload";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
@@ -174,9 +174,9 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
         <div className="flex items-center justify-between rounded-xl p-3 border border-[var(--border)] bg-[var(--surface-2)]">
           <div className="flex items-center gap-3">
             {/* preview */}
-            {imgUrlPublic(avatarUrl) ? (
+            {avatarDisplayUrl(avatarUrl) ? (
               <img
-                src={imgUrlPublic(avatarUrl)!}
+                src={avatarDisplayUrl(avatarUrl)!}
                 className="w-12 h-12 rounded-full object-cover"
                 alt=""
               />

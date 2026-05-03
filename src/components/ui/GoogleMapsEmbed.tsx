@@ -1,5 +1,6 @@
 // src/components/ui/GoogleMapsEmbed.tsx
 import React, { useState } from "react";
+import { openMapsLocationUrl } from "../../lib/openMapsLocationUrl";
 
 interface GoogleMapsEmbedProps {
   url: string;
@@ -37,7 +38,7 @@ export default function GoogleMapsEmbed({
   };
 
   const handleOpenInMaps = () => {
-    window.open(url, "_blank", "noopener,noreferrer");
+    void openMapsLocationUrl(url);
   };
 
   // If it's a share link, show a simple button

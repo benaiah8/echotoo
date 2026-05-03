@@ -8,6 +8,7 @@ import CreateTabsSection from "../sections/create/CreateTabsSection";
 import CalendarModal from "../components/CalendarModal";
 import DurationSelect from "../components/DurationSelect";
 import { Paths } from "../router/Paths";
+import { notifyLocalDraftPersisted } from "../lib/drafts";
 
 // [LAUNCH] Anonymous posting disabled - removed anonymous from DraftMeta
 type DraftMeta = {
@@ -68,6 +69,7 @@ export default function CreateTitlePage() {
     };
     try {
       localStorage.setItem("draftMeta", JSON.stringify(payload));
+      notifyLocalDraftPersisted();
     } catch {}
   }, [caption, duration, durationNotes, isRecurring, selectedDates]);
 

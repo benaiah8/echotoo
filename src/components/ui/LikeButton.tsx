@@ -9,6 +9,7 @@ import { isDraftPostId } from "../../lib/drafts";
 import { emitPostChanged } from "../../lib/postEvents";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { incrementMyXp } from "../../api/services/xp";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
 
 interface LikeButtonProps {
   postId: string;
@@ -42,7 +43,7 @@ export default function LikeButton({
   const [currentCount, setCurrentCount] = useState(likeCount);
   const [isAnimating, setIsAnimating] = useState(false);
   const authState = useSelector((state: RootState) => state.auth);
-  const authLoading = authState?.loading ?? true;
+  const { authLoading, ensureAuthed } = useAuthActionGate();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const hasLoadedRef = useRef(false);
   const pendingRef = useRef(false); // Ref-based guard: blocks duplicate clicks before state updates
@@ -118,17 +119,20 @@ export default function LikeButton({
     };
   }, [postId, authLoading, initialIsLiked]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
-  // Reconcile internal state with props when upstream (post:changed) updates post
-  // Only sync when not in the middle of an action to avoid overwriting optimistic state
+  // Reconcile internal state with props when upstream (post:changed / refetch) updates post.
+  // While toggling, keep optimistic count + heart state; when the toggle finishes, sync again
+  // so canonical props always win (fixes missed sync when updates arrived during pendingRef).
   useEffect(() => {
-    if (pendingRef.current) return;
+    if (isToggling) return;
     const isLikedProp = initialIsLiked ?? false;
     const countProp = likeCount ?? 0;
     setIsLiked((prev) => (prev !== isLikedProp ? isLikedProp : prev));
-    setCurrentCount((prev) => (prev !== countProp ? countProp : prev));
-  }, [initialIsLiked, likeCount]);
+    setCurrentCount(countProp);
+  }, [initialIsLiked, likeCount, isToggling]);
 
   const handleToggleLike = async () => {
+    if (!ensureAuthed()) return;
+
     // Ref-based guard: blocks duplicate clicks synchronously (before React re-renders)
     if (pendingRef.current) return;
     if (isToggling) return;
@@ -172,7 +176,6 @@ export default function LikeButton({
           emitPostChanged(postId, { viewerLiked: true, likesDelta: 1 });
           toast.error("Failed to unlike post");
         } else {
-          toast.success("Post unliked");
           // [PHASE 1] Update XP (unlike = -1)
           try {
             await incrementMyXp(-1);
@@ -193,7 +196,6 @@ export default function LikeButton({
           emitPostChanged(postId, { viewerLiked: false, likesDelta: -1 });
           toast.error("Failed to like post");
         } else {
-          toast.success("Post liked");
           // [PHASE 1] Update XP (like = +1)
           try {
             await incrementMyXp(1);

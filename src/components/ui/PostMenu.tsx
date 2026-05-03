@@ -3,18 +3,22 @@ import { createPortal } from "react-dom";
 import { PiDotsThree, PiFlag, PiPencilSimple, PiTrash } from "react-icons/pi";
 import toast from "react-hot-toast";
 import { deletePost } from "../../api/services/posts";
+import { discardAllDrafts, isDraftPostId } from "../../lib/drafts";
+import { emitPostDeleted } from "../../lib/postEvents";
 import ConfirmDialog from "./ConfirmDialog";
-import { getReportPostMailto } from "../../lib/supportConfig";
 
 interface PostMenuProps {
   postId: string;
   onEdit?: () => void;
+  /** After successful server delete only — navigate, close modal, or list cleanup. Do not call deletePost here. */
   onDelete?: () => void;
   className?: string;
   variant?: "default" | "boxed";
   isDraft?: boolean;
   /** When false, shows Report instead of Edit/Delete (Play Store compliance) */
   isOwner?: boolean;
+  /** Non-owner: parent opens in-app report flow */
+  onRequestReport?: () => void;
 }
 
 export default function PostMenu({
@@ -25,6 +29,7 @@ export default function PostMenu({
   variant = "default",
   isDraft = false,
   isOwner = true,
+  onRequestReport,
 }: PostMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -82,8 +87,17 @@ export default function PostMenu({
   const confirmDelete = async () => {
     setIsDeleting(true);
     try {
+      if (isDraft || isDraftPostId(postId)) {
+        discardAllDrafts();
+        toast.success("Draft discarded");
+        emitPostDeleted(postId);
+        onDelete?.();
+        setShowDeleteModal(false);
+        return;
+      }
       await deletePost(postId);
       toast.success("Post deleted successfully");
+      emitPostDeleted(postId);
       onDelete?.();
       setShowDeleteModal(false);
     } catch (error) {
@@ -150,16 +164,17 @@ export default function PostMenu({
                 </button>
               </>
             ) : (
-              <a
-                href={getReportPostMailto(postId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2 block"
-                onClick={() => setIsOpen(false)}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  onRequestReport?.();
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
               >
                 <PiFlag size={16} />
                 Report
-              </a>
+              </button>
             )}
           </div>,
           document.body

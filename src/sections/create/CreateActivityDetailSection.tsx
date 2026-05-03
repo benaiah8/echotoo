@@ -1,6 +1,14 @@
 // src/sections/create/CreateActivityDetailSection.tsx
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { PiCheck, PiImage, PiListBullets, PiMapPin } from "react-icons/pi";
 import { ActivityType } from "../../types/post";
 import ActivitiesTagsInput from "../../components/ActivitiesTagsInput";
@@ -21,18 +29,17 @@ function tagsIncludeCustomSentinel(tagList: string[]): boolean {
 
 type AddonKey = "location" | "images" | "more";
 
-/** Match “Next stop”: white pill, h-7, no outline border — selection = scale, not extra border */
-const ADDON_TAB_BASE =
-  "relative flex h-7 min-h-[1.75rem] min-w-0 items-center justify-between gap-0.5 rounded-full border-0 px-2 text-left " +
-  "bg-white text-neutral-950 shadow-sm transition-transform duration-200 ease-out " +
-  "hover:bg-neutral-100 active:scale-[0.99] " +
-  "dark:bg-white dark:text-neutral-950 dark:shadow-[0_1px_8px_rgba(0,0,0,0.35)] dark:hover:bg-neutral-100";
+/** Uses `create-meta-pill` + --create-meta-pill-* (index.css); matches CreateFinalizeMetadataRow. */
+const ADDON_TAB_LAYOUT =
+  "create-meta-pill relative flex h-7 min-h-[1.75rem] min-w-0 items-center justify-between gap-0.5 rounded-full px-2 text-left";
+
+const ADDON_ICON_LABEL = "text-[var(--create-meta-pill-fg)]";
 
 interface CreateActivityDetailSectionProps {
   activity: number;
   activityIndex: number;
   activities: ActivityType[];
-  setActivities: (activities: ActivityType[]) => void;
+  setActivities: Dispatch<SetStateAction<ActivityType[]>>;
 }
 
 export default function CreateActivityDetailSection({
@@ -141,22 +148,25 @@ export default function CreateActivityDetailSection({
   }, [activity.location, activity.locationUrl]);
 
   const detailsCount = (activity.additionalInfo || []).length;
-  const imageCount = (activity.images || []).length;
+  const totalImagesPost = useMemo(
+    () => activities.reduce((n, act) => n + (act.images?.length ?? 0), 0),
+    [activities]
+  );
 
   const addonTabClass = (key: AddonKey) => {
     const selected = addon === key;
     const anyOpen = addon !== null;
     const scale =
       selected && anyOpen
-        ? "z-10 scale-[1.06] shadow-md dark:shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
+        ? "z-10 scale-[1.06] shadow-md shadow-black/35"
         : anyOpen
         ? "scale-[0.96] opacity-[0.88]"
         : "";
     const imagesNudge =
       key === "images" && !anyOpen
-        ? "ring-1 ring-black/10 dark:ring-white/25"
+        ? "ring-1 ring-[var(--create-meta-pill-images-ring)]"
         : "";
-    return [ADDON_TAB_BASE, scale, imagesNudge].filter(Boolean).join(" ");
+    return [ADDON_TAB_LAYOUT, scale, imagesNudge].filter(Boolean).join(" ");
   };
 
   return (
@@ -164,9 +174,9 @@ export default function CreateActivityDetailSection({
       <section className="mt-3 w-full">
         <div
           className={[
-            "rounded-xl border border-[var(--border)]/55 bg-[var(--surface)]/24 px-3 pb-2 pt-2.5",
-            "shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_18%,transparent),0_2px_14px_rgba(0,0,0,0.05)]",
-            "dark:border-white dark:shadow-[0_4px_20px_rgba(0,0,0,0.35)]",
+            "rounded-[var(--create-radius-panel)] border border-[var(--create-border-composer-shell)] bg-white/95 px-3 pb-2 pt-2.5",
+            "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.06)]",
+            "app-dark:bg-[var(--surface)]/24 app-dark:shadow-[0_4px_20px_rgba(0,0,0,0.35)]",
           ].join(" ")}
         >
           <ActivitiesTagsInput
@@ -228,32 +238,34 @@ export default function CreateActivityDetailSection({
           >
             <span className="flex min-w-0 items-center gap-1">
               <PiMapPin
-                className="h-3.5 w-3.5 shrink-0 text-neutral-950"
+                className={`h-3.5 w-3.5 shrink-0 ${ADDON_ICON_LABEL}`}
                 aria-hidden
               />
-              <span className="truncate text-[11px] font-semibold leading-none text-neutral-950">
+              <span
+                className={`truncate text-[11px] font-semibold leading-none ${ADDON_ICON_LABEL}`}
+              >
                 Location
               </span>
             </span>
             {locationStatus === "strong" ? (
               <span
-                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-neutral-950 text-white shadow-sm"
+                className="create-meta-pill-endcap inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
                 role="img"
                 aria-label="Place and map link added"
               >
                 <PiCheck
-                  className="h-2.5 w-2.5 text-white"
+                  className="h-2.5 w-2.5 text-[var(--create-meta-pill-endcap-fg)]"
                   strokeWidth={2.75}
                   aria-hidden
                 />
               </span>
             ) : locationStatus === "partial" ? (
               <span
-                className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-neutral-950"
+                className="create-meta-pill-endcap inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
                 role="img"
                 aria-label="Place added; add a map link to finish"
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
               </span>
             ) : (
               <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
@@ -268,16 +280,18 @@ export default function CreateActivityDetailSection({
           >
             <span className="flex min-w-0 items-center gap-1">
               <PiImage
-                className="h-3.5 w-3.5 shrink-0 text-neutral-950"
+                className={`h-3.5 w-3.5 shrink-0 ${ADDON_ICON_LABEL}`}
                 aria-hidden
               />
-              <span className="truncate text-[11px] font-semibold leading-none text-neutral-950 sm:text-[12px]">
+              <span
+                className={`truncate text-[11px] font-semibold leading-none sm:text-[12px] ${ADDON_ICON_LABEL}`}
+              >
                 Images
               </span>
             </span>
-            {imageCount > 0 ? (
-              <span className="inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full bg-neutral-950 px-0.5 text-[9px] font-semibold tabular-nums leading-none text-white shadow-sm">
-                {imageCount}
+            {totalImagesPost > 0 ? (
+              <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
+                {totalImagesPost}
               </span>
             ) : (
               <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
@@ -292,15 +306,17 @@ export default function CreateActivityDetailSection({
           >
             <span className="flex min-w-0 items-center gap-1">
               <PiListBullets
-                className="h-3.5 w-3.5 shrink-0 text-neutral-950"
+                className={`h-3.5 w-3.5 shrink-0 ${ADDON_ICON_LABEL}`}
                 aria-hidden
               />
-              <span className="truncate text-[10px] font-semibold leading-tight text-neutral-950 sm:text-[11px]">
+              <span
+                className={`truncate text-[10px] font-semibold leading-tight sm:text-[11px] ${ADDON_ICON_LABEL}`}
+              >
                 More details
               </span>
             </span>
             {detailsCount > 0 ? (
-              <span className="inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full bg-neutral-950 px-0.5 text-[9px] font-semibold tabular-nums leading-none text-white shadow-sm">
+              <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
                 {detailsCount}
               </span>
             ) : (
@@ -325,9 +341,8 @@ export default function CreateActivityDetailSection({
                 key={`create-img-${activityIndex}`}
                 embedded
                 activities={activities}
-                activity={activity}
                 activityIndex={activityIndex}
-                handleChange={handleChange}
+                setActivities={setActivities}
               />
             )}
             {addon === "more" && (

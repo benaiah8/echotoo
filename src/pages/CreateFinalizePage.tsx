@@ -2,7 +2,7 @@
  * Merged create final step: caption-first editing + preview body shell.
  * Publishes directly via {@link executeCreateFlowPublish}; same success flow as Preview.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { PiWarning } from "react-icons/pi";
@@ -18,6 +18,7 @@ import CreateFlowKeyboardShell, {
 import CalendarModal from "../components/CalendarModal";
 import {
   FinalizeDateSchedulePanel,
+  FinalizeRatePanel,
   FinalizeRsvpPanel,
   FinalizeVisibilityPanel,
 } from "../components/create/CreateFinalizeMetaPanels";
@@ -27,20 +28,39 @@ import PostDetailBody, {
   Post as DetailPost,
 } from "../components/detail/PostDetailBody";
 import { useCreatePostMedia } from "../components/create/CreatePostMediaProvider";
+import CreateFinalizeHeroImageCta from "../components/create/CreateFinalizeHeroImageCta";
+import CreateFinalizeActivitiesCta from "../components/create/CreateFinalizeActivitiesCta";
+import CreateFinalizeHeroImageDock from "../components/create/CreateFinalizeHeroImageDock";
+import { hasMeaningfulActivityContent } from "../lib/createFlowMeaningfulActivity";
 import ActionSheet from "../components/ui/ActionSheet";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill";
 import PostedSuccessModal from "../components/ui/PostedSuccessModal";
 import InviteDrawer from "../components/ui/InviteDrawer";
 import { Paths, postDetailPath } from "../router/Paths";
+import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
+import { shareUrl } from "../lib/shareUrl";
 import { supabase } from "../lib/supabaseClient";
-import { discardAllDrafts } from "../lib/drafts";
+import { discardAllDrafts, notifyLocalDraftPersisted } from "../lib/drafts";
+import {
+  markCreateFlowResumedLocalDraft,
+  markCreateFlowSessionActive,
+  RESUME_DRAFT_SEARCH_PARAM,
+  RESUME_DRAFT_SEARCH_VALUE,
+} from "../lib/draftEntryGate";
+import { dispatchCreateFlowLeaveRequest } from "../lib/createFlowLeaveRequest";
 import { getViewerAuthUserId } from "../api/services/follows";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
 import { clampCaption, CREATE_FLOW_CAPTION_MAX } from "../lib/createFlowLimits";
-import { resolveSafeAreaBottomLayoutPx } from "../lib/appSafeAreaBottom";
+import {
+  APP_SAFE_BOTTOM_SYNC_EVENT,
+  BOTTOM_TAB_PILL_OFFSET_PX,
+  resolveSafeAreaBottomLayoutPx,
+} from "../lib/appSafeAreaBottom";
 import { CREATE_FLOW_CAPTION_REQUIRED_NOTICE_ID } from "../lib/createFlowNoticeIds";
 import { formatDateSummary } from "../lib/createFlowDateSummary";
+import { useCreateDraftActivitiesState } from "../hooks/useCreateDraftActivitiesState";
+import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
 
 const GAP_ABOVE_TAB = 16;
 const PREVIEW_ACTION_STRIP_HEIGHT_PX = 36;
@@ -64,6 +84,8 @@ type DraftMeta = {
   selectedDates?: string[];
   isRecurring?: boolean;
   recurrenceDays?: string[];
+  /** Mirrors `posts.rating_enabled`; defaults false until rating UI exists. */
+  ratingEnabled?: boolean;
 };
 
 type DraftActivity = {
@@ -77,6 +99,11 @@ type DraftActivity = {
   tags?: string[];
   images?: unknown[];
   additionalInfo?: { title: string; value: string }[];
+};
+
+type SanitizedDraftActivity = DraftActivity & {
+  _idx: number;
+  images: string[];
 };
 
 function read<T>(key: string, def: T): T {
@@ -178,7 +205,7 @@ function FinalizePublishWarningBox({
   explanation: string;
 }) {
   return (
-    <div className="flex gap-2.5 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_88%,transparent)] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+    <div className="flex gap-2.5 rounded-[var(--create-radius-panel)] border border-[var(--create-border-subtle)] bg-[color-mix(in_oklab,var(--surface-2)_88%,transparent)] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
       <PiWarning
         className="mt-0.5 h-4 w-4 shrink-0 text-amber-500/90 dark:text-amber-400/85"
         aria-hidden
@@ -195,7 +222,14 @@ function FinalizePublishWarningBox({
   );
 }
 
-function readFinalizeInitialDraft(): {
+/** Default for new drafts / edit rows without explicit `ratingEnabled`. */
+function defaultRatingEnabledForPostType(
+  postType: "experience" | "hangout"
+): boolean {
+  return postType === "experience";
+}
+
+function readFinalizeInitialDraft(postType: "experience" | "hangout"): {
   tags: string[];
   visibility: VisibilityCtl;
   selectedDates: Date[];
@@ -203,10 +237,14 @@ function readFinalizeInitialDraft(): {
   recurrenceDays: string[];
   rsvpCapacity: number;
   rsvpEnabled: boolean;
+  ratingEnabled: boolean;
 } {
   const ed = read<any>("editPostData", null);
   const m = read<DraftMeta>("draftMeta", {});
   if (ed) {
+    const t = (ed.type || "experience").toLowerCase();
+    const edPostType: "experience" | "hangout" =
+      t === "hangout" ? "hangout" : "experience";
     return {
       tags: Array.isArray(ed.tags) ? ed.tags.map(String) : [],
       visibility: coerceVisibility(ed.visibility),
@@ -220,6 +258,10 @@ function readFinalizeInitialDraft(): {
       rsvpCapacity: typeof ed.rsvp_capacity === "number" ? ed.rsvp_capacity : 5,
       rsvpEnabled:
         typeof ed.rsvp_capacity === "number" && ed.rsvp_capacity >= 0,
+      ratingEnabled:
+        typeof ed.ratingEnabled === "boolean"
+          ? ed.ratingEnabled
+          : defaultRatingEnabledForPostType(edPostType),
     };
   }
   return {
@@ -231,6 +273,10 @@ function readFinalizeInitialDraft(): {
     rsvpCapacity: typeof m.rsvpCapacity === "number" ? m.rsvpCapacity : 5,
     /** Off unless draft explicitly saved RSVP on (do not infer from capacity alone). */
     rsvpEnabled: m.rsvpEnabled === true,
+    ratingEnabled:
+      typeof m.ratingEnabled === "boolean"
+        ? m.ratingEnabled
+        : defaultRatingEnabledForPostType(postType),
   };
 }
 
@@ -250,8 +296,24 @@ export default function CreateFinalizePage() {
   /** When true, hero/author/below at full opacity; false = caption-focus dimming. */
   const [fullProminence, setFullProminence] = useState(false);
 
-  const editData = read<any>("editPostData", null);
+  const editData = useMemo(() => read<any>("editPostData", null), []);
   const isEditMode = editData !== null;
+
+  useEffect(() => {
+    if (!isEditMode) markCreateFlowSessionActive();
+  }, [isEditMode]);
+
+  const resumeDraft =
+    q.get(RESUME_DRAFT_SEARCH_PARAM) === RESUME_DRAFT_SEARCH_VALUE;
+
+  /** Cold/deep link with `resumeDraft=1`: match Activities page session flag for leave-dialog copy. */
+  useEffect(() => {
+    if (!isEditMode && resumeDraft) {
+      markCreateFlowResumedLocalDraft();
+    }
+  }, [isEditMode, resumeDraft]);
+
+  const publishActionLabel = isEditMode ? "Republish" : "Publish";
 
   const postType = isEditMode
     ? ((editData.type || "experience").toLowerCase() as
@@ -261,11 +323,16 @@ export default function CreateFinalizePage() {
         | "experience"
         | "hangout");
 
-  const activities = read<DraftActivity[]>("draftActivities", []);
+  const {
+    activities: draftActivitiesState,
+    setActivities: setDraftActivitiesState,
+    totalPostImages,
+  } = useCreateDraftActivitiesState(isEditMode);
 
-  const finalActivities = isEditMode ? editData.activities || [] : activities;
-
-  const initialDraft = useMemo(() => readFinalizeInitialDraft(), []);
+  const initialDraft = useMemo(
+    () => readFinalizeInitialDraft(postType),
+    [postType]
+  );
 
   const [caption, setCaption] = useState(() => readInitialCaption());
   const [tags, setTags] = useState<string[]>(() => initialDraft.tags);
@@ -287,16 +354,36 @@ export default function CreateFinalizePage() {
   const [rsvpEnabled, setRsvpEnabled] = useState(
     () => initialDraft.rsvpEnabled
   );
+  const [ratingEnabled, setRatingEnabled] = useState(
+    () => initialDraft.ratingEnabled
+  );
   const [showCal, setShowCal] = useState(false);
 
-  const sanitizedActivities = useMemo(
+  const sanitizedActivities = useMemo((): SanitizedDraftActivity[] => {
+    return (draftActivitiesState || []).map((a: DraftActivity, i: number) => ({
+      ...a,
+      images: cleanImages(a?.images),
+      _idx: i,
+    }));
+  }, [draftActivitiesState]);
+
+  const hasMeaningfulActivities = useMemo(
     () =>
-      (finalActivities || []).map((a: DraftActivity, i: number) => ({
-        ...a,
-        images: cleanImages(a?.images),
-        _idx: i,
-      })),
-    [finalActivities]
+      hasMeaningfulActivityContent(
+        sanitizedActivities.map((a) => ({
+          title: a.title,
+          activityType: a.activityType,
+          customActivity: a.customActivity,
+          locationDesc: a.locationDesc,
+          location: a.location,
+          locationNotes: a.locationNotes,
+          locationUrl: a.locationUrl,
+          tags: a.tags,
+          images: Array.isArray(a.images) ? (a.images as string[]) : [],
+          additionalInfo: a.additionalInfo,
+        }))
+      ),
+    [sanitizedActivities]
   );
 
   const dbVisibility = visibility === "friends" ? "friends" : "public";
@@ -336,12 +423,14 @@ export default function CreateFinalizePage() {
         ))}
         {finalizePublishWarnings.length === 0 ? (
           <p className="text-[11px] leading-relaxed text-[var(--text)]/72">
-            Your post will go live when you publish.
+            {isEditMode
+              ? "Your changes will go live when you republish."
+              : "Your post will go live when you publish."}
           </p>
         ) : null}
       </div>
     ),
-    [finalizePublishWarnings]
+    [finalizePublishWarnings, isEditMode]
   );
 
   const toggleDay = (code: string) =>
@@ -349,19 +438,36 @@ export default function CreateFinalizePage() {
       prev.includes(code) ? prev.filter((d) => d !== code) : [...prev, code]
     );
 
-  const visibilityShort = visibility === "friends" ? "Friends" : "Public";
+  const visibilityAbbrev = visibility === "friends" ? "Fr" : "Pu";
+
+  const visibilityPillEnd = (
+    <span
+      className="create-meta-pill-endcap inline-flex h-4 min-w-[1.1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[8px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]"
+      aria-hidden
+    >
+      {visibilityAbbrev}
+    </span>
+  );
+
+  const ratePillEnd = (
+    <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1.1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[8px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
+      {ratingEnabled ? "On" : "Off"}
+    </span>
+  );
 
   const rsvpPillEnd =
     postType === "hangout" ? (
       rsvpEnabled && typeof rsvpCapacity === "number" ? (
-        <span className="inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full border border-black/12 bg-white px-0.5 text-[9px] font-semibold tabular-nums leading-none text-black shadow-[0_1px_2px_rgba(0,0,0,0.12)] dark:border-white/20 dark:bg-white/90 dark:text-black">
+        <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
           {rsvpCapacity}
         </span>
       ) : (
         <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
       )
     ) : (
-      <span className="text-[9px] font-medium text-neutral-950/40">—</span>
+      <span className="text-[9px] font-medium text-[var(--create-meta-pill-fg)] opacity-45">
+        —
+      </span>
     );
 
   const { hasPendingUploads, jobs } = useCreatePostMedia();
@@ -399,6 +505,7 @@ export default function CreateFinalizePage() {
           parsed.selected_dates = selectedIso;
           parsed.is_recurring = isRecurring;
           parsed.recurrence_days = recurrenceDays;
+          parsed.ratingEnabled = ratingEnabled;
           localStorage.setItem("editPostData", JSON.stringify(parsed));
         }
       } else {
@@ -413,11 +520,13 @@ export default function CreateFinalizePage() {
             visibility,
             rsvpCapacity,
             rsvpEnabled,
+            ratingEnabled,
             selectedDates: selectedIso,
             isRecurring,
             recurrenceDays,
           })
         );
+        notifyLocalDraftPersisted();
       }
     } catch {
       /* ignore */
@@ -428,6 +537,7 @@ export default function CreateFinalizePage() {
     visibility,
     rsvpCapacity,
     rsvpEnabled,
+    ratingEnabled,
     selectedDates,
     isRecurring,
     recurrenceDays,
@@ -485,7 +595,12 @@ export default function CreateFinalizePage() {
     const measure = () => {
       const btH = el ? Math.round(el.getBoundingClientRect().height) : 0;
       const safe = resolveSafeAreaBottomLayoutPx();
-      const total = btH + GAP_ABOVE_TAB + PREVIEW_ACTION_STRIP_HEIGHT_PX + safe;
+      const total =
+        BOTTOM_TAB_PILL_OFFSET_PX +
+        safe +
+        btH +
+        GAP_ABOVE_TAB +
+        PREVIEW_ACTION_STRIP_HEIGHT_PX;
       document.documentElement.style.setProperty(
         "--create-actions-total-bottom",
         `${total}px`
@@ -493,12 +608,14 @@ export default function CreateFinalizePage() {
     };
     measure();
     window.addEventListener("resize", measure);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, measure);
     const mo = el ? new MutationObserver(measure) : null;
     if (el && mo)
       mo.observe(el, { attributes: true, childList: true, subtree: true });
     el?.addEventListener("transitionend", measure);
     return () => {
       window.removeEventListener("resize", measure);
+      window.removeEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, measure);
       mo?.disconnect();
       el?.removeEventListener("transitionend", measure);
     };
@@ -602,6 +719,7 @@ export default function CreateFinalizePage() {
       : null,
     is_recurring: isRecurring || null,
     recurrence_days: recurrenceDays.length ? recurrenceDays : null,
+    rating_enabled: ratingEnabled,
   };
 
   const showCaptionHighlight = notices.some(
@@ -666,16 +784,18 @@ export default function CreateFinalizePage() {
         activities: sanitizedActivities,
         isEditMode,
         editPostId: isEditMode ? editData.postId : undefined,
+        ratingEnabled,
       });
 
       if (isEditMode && editData?.postId) {
         const returnPath = editData.returnPath || "/u/me";
+        const returnState = editData.returnState;
         localStorage.removeItem("draftMeta");
         localStorage.removeItem("draftActivities");
         discardAllDrafts();
         localStorage.removeItem("editPostData");
         setPublishModalOpen(false);
-        nav(returnPath);
+        navigateAfterEditPublish(nav, { returnPath, returnState });
         return;
       }
 
@@ -707,22 +827,26 @@ export default function CreateFinalizePage() {
     return nav("/u/me");
   };
 
-  const goBack = () => {
+  const handleLeaveCreateFlow = useCallback(() => {
+    dispatchCreateFlowLeaveRequest(() => nav(Paths.home));
+  }, [nav]);
+
+  const goToActivities = useCallback(() => {
     nav(`${Paths.createActivities}?type=${postType}`);
-  };
+  }, [nav, postType]);
 
   return (
     <PrimaryPageContainer back capacitorNotchScrim>
       <CreateFlowTopBar
         emphasizeWhiteBorder
         leftAction={{
-          icon: "arrow-left",
-          label: "Back to activities",
-          onClick: goBack,
+          icon: "close",
+          label: "Leave create flow",
+          onClick: handleLeaveCreateFlow,
         }}
         rightAction={{
           icon: "check",
-          label: "Publish",
+          label: publishActionLabel,
           onClick: requestPublish,
         }}
       />
@@ -766,9 +890,11 @@ export default function CreateFinalizePage() {
               composeFinalizeBelowCaption={
                 <CreateFinalizeMetadataRow
                   hasSchedule={hasSchedule}
-                  visibilityShort={visibilityShort}
+                  visibilityPillEnd={visibilityPillEnd}
                   rsvpPillEnd={rsvpPillEnd}
+                  ratePillEnd={ratePillEnd}
                   rsvpEnabled={postType === "hangout" && rsvpEnabled}
+                  rateEnabled={ratingEnabled}
                   datePanel={
                     <FinalizeDateSchedulePanel
                       dateSummary={dateSummary}
@@ -794,9 +920,36 @@ export default function CreateFinalizePage() {
                       setRsvpCapacity={setRsvpCapacity}
                     />
                   }
+                  ratePanel={
+                    <FinalizeRatePanel
+                      ratingEnabled={ratingEnabled}
+                      setRatingEnabled={setRatingEnabled}
+                    />
+                  }
                 />
               }
               composeFinalizeStripPreviewMeta
+              composeFinalizeShowActivityTimeline={hasMeaningfulActivities}
+              composeFinalizeEmptyHeroCta={
+                <CreateFinalizeHeroImageCta
+                  totalImagesPost={totalPostImages}
+                  variant="empty"
+                />
+              }
+              composeFinalizeHeroBottomOverlayCta={
+                <CreateFinalizeHeroImageDock
+                  activities={draftActivitiesState}
+                  setActivities={setDraftActivitiesState}
+                  totalImagesPost={totalPostImages}
+                />
+              }
+              composeFinalizeActivitiesCta={
+                <CreateFinalizeActivitiesCta
+                  hasMeaningfulActivities={hasMeaningfulActivities}
+                  stopCount={draftActivitiesState.length}
+                  onClick={goToActivities}
+                />
+              }
               previewHeroOverlay={
                 previewUploadingCount > 0 ? (
                   <PreviewUploadOverlayPill
@@ -809,11 +962,11 @@ export default function CreateFinalizePage() {
         </div>
 
         <ActionSheet
-          onBack={goBack}
+          onBack={handleLeaveCreateFlow}
           onPublish={requestPublish}
           publishing={publishing}
-          backText="Back"
-          publishText="Publish"
+          backText="Leave"
+          publishText={publishActionLabel}
           stableActions
           enhancedSurface
           lockActionsWhilePendingUploads={hasPendingUploads}
@@ -823,9 +976,9 @@ export default function CreateFinalizePage() {
           open={publishModalOpen}
           onClose={() => !publishing && setPublishModalOpen(false)}
           onConfirm={() => void handleFinalizePublish()}
-          title="Publish this post?"
+          title={isEditMode ? "Republish this post?" : "Publish this post?"}
           message={finalizePublishModalMessage}
-          confirmLabel="Publish"
+          confirmLabel={publishActionLabel}
           cancelLabel="Back"
           confirmVariant="primary"
           isLoading={publishing}
@@ -837,25 +990,14 @@ export default function CreateFinalizePage() {
           onShareClick={async () => {
             try {
               if (!newPostId) return;
-              const postUrl = `${window.location.origin}${postDetailPath(
+              const postUrl = `${getPublicShareBaseUrl()}${postDetailPath(
                 postType === "hangout" ? "hangout" : "experience",
                 newPostId
               )}`;
-              const shareData = {
-                title: `Check out this ${
-                  postType === "hangout" ? "hangout" : "experience"
-                }`,
-                url: postUrl,
-              };
-              if (
-                navigator.share &&
-                navigator.canShare &&
-                navigator.canShare(shareData)
-              ) {
-                await navigator.share(shareData);
-              } else {
-                await navigator.clipboard.writeText(postUrl);
-              }
+              const title = `Check out this ${
+                postType === "hangout" ? "hangout" : "experience"
+              }`;
+              await shareUrl({ title, url: postUrl });
             } catch (error) {
               console.error("Error sharing:", error);
             }

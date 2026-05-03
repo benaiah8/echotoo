@@ -7,6 +7,7 @@ import {
 import { getViewerAuthUserId } from "./follows";
 import {
   getCachedNotificationCount,
+  getCachedNotificationBadgeData,
   setCachedNotificationCount,
   clearCachedNotificationCount,
 } from "../../lib/notificationCountCache";
@@ -20,6 +21,145 @@ const notificationsResponseCache = new Map<
 >();
 const NOTIFICATIONS_TTL_MS = 4000;
 
+export type NotificationBadgeData = {
+  total: number;
+  inviteUnread: number;
+  activityUnread: number;
+};
+
+/**
+ * Unread head counts: total, invite-only, non-invite. Cached together for bottom-tab badge.
+ */
+async function loadNotificationBadgeDataFromNetwork(
+  userId: string,
+  signal?: AbortSignal
+): Promise<NotificationBadgeData> {
+  const base = () =>
+    supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("is_read", false);
+
+  if (signal?.aborted) {
+    return { total: 0, inviteUnread: 0, activityUnread: 0 };
+  }
+
+  const [rTotal, rInvite, rAct] = await Promise.all([
+    base(),
+    supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("is_read", false)
+      .eq("type", "invite"),
+    supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("is_read", false)
+      .neq("type", "invite"),
+  ]);
+
+  if (signal?.aborted) {
+    return { total: 0, inviteUnread: 0, activityUnread: 0 };
+  }
+
+  if (rTotal.error) throw rTotal.error;
+  if (rInvite.error) throw rInvite.error;
+  if (rAct.error) throw rAct.error;
+
+  const total = rTotal.count ?? 0;
+  const inviteUnread = rInvite.count ?? 0;
+  const activityUnread = rAct.count ?? 0;
+
+  setCachedNotificationCount(userId, total, { inviteUnread, activityUnread });
+  return { total, inviteUnread, activityUnread };
+}
+
+/**
+ * Total unread + per-category split (for bottom tab badge ring). Uses same cache as getUnreadNotificationCount.
+ */
+export async function getNotificationBadgeData(): Promise<NotificationBadgeData> {
+  const userId = await getViewerAuthUserId();
+  if (!userId) throw new Error("User not authenticated");
+
+  const cached = getCachedNotificationBadgeData(userId);
+  if (cached) {
+    return {
+      total: cached.count,
+      inviteUnread: cached.inviteUnread,
+      activityUnread: cached.activityUnread,
+    };
+  }
+
+  const { requestManager } = await import("../../lib/requestManager");
+  const dedupeKey = `notification_badge_data_${userId}`;
+
+  const result = await requestManager.execute(
+    dedupeKey,
+    async (signal) => {
+      const again = getCachedNotificationBadgeData(userId);
+      if (again) {
+        return {
+          total: again.count,
+          inviteUnread: again.inviteUnread,
+          activityUnread: again.activityUnread,
+        };
+      }
+      if (signal.aborted) {
+        return { total: 0, inviteUnread: 0, activityUnread: 0 };
+      }
+      return loadNotificationBadgeDataFromNetwork(userId, signal);
+    },
+    "high"
+  );
+
+  return result.data ?? { total: 0, inviteUnread: 0, activityUnread: 0 };
+}
+
+/**
+ * Best-effort remote push for new post (Edge Function). Must not throw — publishing must succeed even if push fails.
+ */
+async function invokeSendPostPush(params: {
+  postId: string;
+  entityType: "hangout" | "experience";
+  actorId: string;
+  recipientUserIds: string[];
+}): Promise<void> {
+  console.log("[SPP] invoke", {
+    postId: params.postId,
+    entityType: params.entityType,
+    recipientCount: params.recipientUserIds.length,
+  });
+  if (params.recipientUserIds.length === 0) return;
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+
+    const { error } = await supabase.functions.invoke("send-post-push", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: {
+        post_id: params.postId,
+        entity_type: params.entityType,
+        actor_id: params.actorId,
+        recipient_user_ids: params.recipientUserIds,
+      },
+    });
+
+    if (error) {
+      console.warn("[send-post-push]", error.message);
+    }
+  } catch (e) {
+    console.warn("[send-post-push]", e instanceof Error ? e.message : e);
+  }
+}
+
 /**
  * Clear the notifications response cache (call when user marks read, deletes, etc.)
  */
@@ -31,15 +171,18 @@ export function clearNotificationsResponseCache(): void {
  * Get notifications for the current user
  * [OPTIMIZATION: Phase 2] Uses RequestManager for deduplication
  * [OPTIMIZATION: StrictMode] Uses short TTL response cache for remount duplicates
+ * @param options.typeGroup — optional filter: invite-only or all non-invite (activity)
  */
 export async function getNotifications(
   limit = 20,
-  offset = 0
+  offset = 0,
+  options?: { typeGroup?: "invite" | "activity" }
 ): Promise<NotificationWithActor[]> {
   const userId = await getViewerAuthUserId();
   if (!userId) throw new Error("User not authenticated");
 
-  const dedupeKey = `notifications_${userId}_${limit}_${offset}`;
+  const tg = options?.typeGroup;
+  const dedupeKey = `notifications_${userId}_${limit}_${offset}_${tg ?? "all"}`;
 
   // [OPTIMIZATION: StrictMode] Check cache first - prevents 2nd network call
   // when component remounts after 1st call completed (RequestManager no longer in-flight)
@@ -58,12 +201,17 @@ export async function getNotifications(
         throw new Error("Request aborted");
       }
 
-      const { data, error } = await supabase
+      let q = supabase
         .from("notifications")
         .select("*")
         .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
+        .order("created_at", { ascending: false });
+      if (tg === "invite") {
+        q = q.eq("type", "invite");
+      } else if (tg === "activity") {
+        q = q.neq("type", "invite");
+      }
+      const { data, error } = await q.range(offset, offset + limit - 1);
 
       // [ABORT CHECK] Check if aborted after async operation
       if (signal.aborted) {
@@ -174,61 +322,19 @@ export async function getNotifications(
 
 /**
  * Get unread notification count for the current user
- * [OPTIMIZATION: Phase 2] Cached with RequestManager deduplication
+ * [OPTIMIZATION: Phase 2] Shares cache + network fetch with getNotificationBadgeData
  */
 export async function getUnreadNotificationCount(): Promise<number> {
   const userId = await getViewerAuthUserId();
   if (!userId) throw new Error("User not authenticated");
 
-  // [OPTIMIZATION] Check cache first (fast, synchronous path)
   const cachedCount = getCachedNotificationCount(userId);
   if (cachedCount !== null) {
     return cachedCount;
   }
 
-  // [OPTIMIZATION] Use RequestManager for deduplication
-  // Multiple components calling this simultaneously will share the same request
-  const { requestManager } = await import("../../lib/requestManager");
-  const dedupeKey = `notification_count_${userId}`;
-
-  const result = await requestManager.execute(
-    dedupeKey,
-    async (signal) => {
-      // [RACE CONDITION FIX] Check cache again inside RequestManager
-      // Another call might have populated it
-      const cachedCountAgain = getCachedNotificationCount(userId);
-      if (cachedCountAgain !== null) {
-        return cachedCountAgain;
-      }
-
-      // [ABORT CHECK] Check if aborted before making request
-      if (signal.aborted) {
-        return 0;
-      }
-
-      const { count, error } = await supabase
-        .from("notifications")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", userId)
-        .eq("is_read", false);
-
-      // [ABORT CHECK] Check if aborted after async operation
-      if (signal.aborted) {
-        return 0;
-      }
-
-      if (error) throw error;
-      const finalCount = count || 0;
-
-      // [CACHE UPDATE] Cache the result
-      setCachedNotificationCount(userId, finalCount);
-
-      return finalCount;
-    },
-    "high" // High priority - needed by BottomTab on mount
-  );
-
-  return result.data ?? 0;
+  const d = await getNotificationBadgeData();
+  return d.total;
 }
 
 /**
@@ -274,6 +380,59 @@ export async function markAllNotificationsAsRead(): Promise<void> {
   clearCachedNotificationCount(userId);
   clearNotificationsResponseCache();
 
+  window.dispatchEvent(new CustomEvent("notifications:updated"));
+}
+
+/**
+ * Mark unread **invite** (type=invite) or **activity** (type≠invite) rows only.
+ * No schema change; same RLS as single-row updates.
+ */
+export async function markViewNotificationsAsRead(
+  typeGroup: "invite" | "activity"
+): Promise<void> {
+  const userId = await getViewerAuthUserId();
+  if (!userId) throw new Error("User not authenticated");
+
+  let q = supabase
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("user_id", userId)
+    .eq("is_read", false);
+  if (typeGroup === "invite") {
+    q = q.eq("type", "invite");
+  } else {
+    q = q.neq("type", "invite");
+  }
+
+  const { error } = await q;
+
+  if (error) throw error;
+
+  clearCachedNotificationCount(userId);
+  clearNotificationsResponseCache();
+  window.dispatchEvent(new CustomEvent("notifications:updated"));
+}
+
+/**
+ * Mark specific notification rows read (e.g. current list on screen). Empty id list is a no-op.
+ */
+export async function markNotificationIdsAsRead(
+  ids: string[]
+): Promise<void> {
+  if (ids.length === 0) return;
+  const userId = await getViewerAuthUserId();
+  if (!userId) throw new Error("User not authenticated");
+
+  const { error } = await supabase
+    .from("notifications")
+    .update({ is_read: true })
+    .eq("user_id", userId)
+    .in("id", ids);
+
+  if (error) throw error;
+
+  clearCachedNotificationCount(userId);
+  clearNotificationsResponseCache();
   window.dispatchEvent(new CustomEvent("notifications:updated"));
 }
 
@@ -326,41 +485,138 @@ export async function createPostNotifications(
   authorId: string
 ): Promise<void> {
   try {
+    console.log("[CPN] entry", { postId, postType, authorId });
+
+    // follows.following_id and notification_settings.target_user_id use profile id, not auth user id
+    const { data: authorProfile, error: authorProfileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("user_id", authorId)
+      .maybeSingle();
+
+    console.log("[CPN] authorProfile", {
+      authorProfileId: authorProfile?.id ?? "missing",
+    });
+
+    if (authorProfileError) {
+      console.warn(
+        "[createPostNotifications] Could not resolve author profile:",
+        authorProfileError.message
+      );
+      return;
+    }
+    if (!authorProfile?.id) {
+      console.warn(
+        "[createPostNotifications] No profile for author user_id; skipping post notifications"
+      );
+      return;
+    }
+
+    const authorProfileId = authorProfile.id;
+
     // Get all followers of the author
     const { data: followers, error: followersError } = await supabase
       .from("follows")
       .select("follower_id")
-      .eq("following_id", authorId);
+      .eq("following_id", authorProfileId);
 
     if (followersError) {
       console.error("Error fetching followers:", followersError);
+      console.log("[CPN] followers", {
+        count: 0,
+        followerIds: [] as string[],
+        err: followersError.message,
+      });
       return;
     }
 
-    if (!followers || followers.length === 0) {
+    const followerRows = followers ?? [];
+    const followerIds = followerRows.map((f) => f.follower_id);
+    console.log("[CPN] followers", {
+      count: followerIds.length,
+      followerIds,
+    });
+
+    if (followerRows.length === 0) {
+      console.log("[CPN] skip_no_followers");
       return; // No followers to notify
     }
 
-    // Get notification settings for these followers
-    const followerIds = followers.map((f) => f.follower_id);
+    // follows.follower_id is profile id; notifications + notification_settings use auth user id
+    const { data: followerProfiles, error: followerProfilesError } =
+      await supabase
+        .from("profiles")
+        .select("id, user_id")
+        .in("id", followerIds);
+
+    if (followerProfilesError) {
+      console.warn(
+        "[createPostNotifications] Could not load follower profiles:",
+        followerProfilesError.message
+      );
+      return;
+    }
+
+    const followerProfileIdToAuthUserId = new Map<string, string>();
+    for (const row of followerProfiles ?? []) {
+      if (row?.id && row?.user_id) {
+        followerProfileIdToAuthUserId.set(row.id, row.user_id);
+      }
+    }
+
+    const followerAuthUserIds = [
+      ...new Set(
+        followerIds
+          .map((pid) => followerProfileIdToAuthUserId.get(pid))
+          .filter((uid): uid is string => uid !== undefined)
+      ),
+    ];
+
+    console.log("[CPN] follower_auth_map", {
+      followerProfileCount: followerIds.length,
+      resolvedAuthCount: followerAuthUserIds.length,
+    });
+
+    if (followerAuthUserIds.length === 0) {
+      console.log("[CPN] skip_no_follower_auth_resolved");
+      return;
+    }
+
+    // Get notification settings for these followers (receiver keys are auth user ids)
     const { data: notificationSettings, error: settingsError } = await supabase
       .from("notification_settings")
       .select("user_id")
-      .eq("target_user_id", authorId)
-      .in("user_id", followerIds)
+      .eq("target_user_id", authorProfileId)
+      .in("user_id", followerAuthUserIds)
       .eq("enabled", true);
+
+    console.log("[CPN] settings", {
+      count: notificationSettings?.length ?? 0,
+      enabledFollowerIds: notificationSettings?.map((s) => s.user_id) ?? [],
+      settingsError: settingsError?.message ?? null,
+    });
 
     if (settingsError) {
       console.error("Error fetching notification settings:", settingsError);
-      // Fallback: notify all followers if settings query fails
-      const notifications = followers.map((follow) => ({
-        user_id: follow.follower_id,
-        actor_id: authorId,
-        type: "post" as const,
-        entity_type: postType,
-        entity_id: postId,
-        additional_data: {},
-      }));
+      // Fallback: notify all followers with resolvable auth ids if settings query fails
+      const notifications = followerRows
+        .map((follow) => {
+          const user_id = followerProfileIdToAuthUserId.get(follow.follower_id);
+          if (!user_id) return null;
+          return {
+            user_id,
+            actor_id: authorId,
+            type: "post" as const,
+            entity_type: postType,
+            entity_id: postId,
+            additional_data: {},
+          };
+        })
+        .filter((n): n is NonNullable<typeof n> => n !== null);
+
+      console.log("[CPN] insert_attempt", {
+        count: notifications.length,
+      });
 
       const { error: insertError } = await supabase
         .from("notifications")
@@ -368,36 +624,72 @@ export async function createPostNotifications(
 
       if (insertError) {
         console.error("Error creating post notifications:", insertError);
+      } else {
+        console.log("[CPN] insert_success");
+        const recipientUserIds = notifications.map((n) => n.user_id);
+        console.log("[CPN] push_invoke", {
+          recipientCount: recipientUserIds.length,
+          postId,
+        });
+        void invokeSendPostPush({
+          postId,
+          entityType: postType,
+          actorId: authorId,
+          recipientUserIds,
+        });
       }
       return;
     }
 
-    // Only notify followers who have notifications enabled
+    // Only notify followers who have notifications enabled (settings.user_id is auth)
     const enabledFollowerIds = new Set(
       notificationSettings?.map((s) => s.user_id) || []
     );
-    const notificationsToCreate = followers
-      .filter((follow) => enabledFollowerIds.has(follow.follower_id))
-      .map((follow) => ({
-        user_id: follow.follower_id,
-        actor_id: authorId,
-        type: "post" as const,
-        entity_type: postType,
-        entity_id: postId,
-        additional_data: {},
-      }));
+    const notificationsToCreate = followerRows
+      .filter((follow) => {
+        const authId = followerProfileIdToAuthUserId.get(follow.follower_id);
+        return authId !== undefined && enabledFollowerIds.has(authId);
+      })
+      .map((follow) => {
+        const user_id = followerProfileIdToAuthUserId.get(follow.follower_id)!;
+        return {
+          user_id,
+          actor_id: authorId,
+          type: "post" as const,
+          entity_type: postType,
+          entity_id: postId,
+          additional_data: {},
+        };
+      });
 
     if (notificationsToCreate.length === 0) {
+      console.log("[CPN] skip_no_notifications_to_create");
       return; // No enabled notifications to send
     }
 
     // Insert notifications
+    console.log("[CPN] insert_attempt", {
+      count: notificationsToCreate.length,
+    });
+
     const { error: insertError } = await supabase
       .from("notifications")
       .insert(notificationsToCreate);
 
     if (insertError) {
       console.error("Error creating post notifications:", insertError);
+    } else {
+      console.log("[CPN] insert_success");
+      console.log("[CPN] push_invoke", {
+        recipientCount: notificationsToCreate.length,
+        postId,
+      });
+      void invokeSendPostPush({
+        postId,
+        entityType: postType,
+        actorId: authorId,
+        recipientUserIds: notificationsToCreate.map((n) => n.user_id),
+      });
     }
   } catch (error) {
     console.error("Error in createPostNotifications:", error);

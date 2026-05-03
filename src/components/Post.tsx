@@ -7,6 +7,7 @@ import React, {
   useMemo,
 } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useDispatch, useSelector } from "react-redux";
 import { Paths } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
 import MediaCarousel from "./MediaCarousel";
@@ -14,7 +15,16 @@ import Avatar from "./ui/Avatar";
 import PostMenu from "./ui/PostMenu";
 import InviteDrawer from "./ui/InviteDrawer";
 import PostActions from "./ui/PostActions";
+import {
+  PostFeedDetailsHintRow,
+  PostTypeMetaChip,
+} from "./ui/PostFeedSurfaceMeta";
 import { getPostForEdit } from "../api/services/posts";
+import {
+  buildCanonicalEditPostData,
+  createEditActivitiesHref,
+  persistCanonicalEditPostData,
+} from "../lib/editPostBootstrap";
 import toast from "react-hot-toast";
 
 import { imgUrlPublic } from "../lib/img";
@@ -35,6 +45,13 @@ import {
 import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { requestManager } from "../lib/requestManager";
+import { RootState } from "../app/store";
+import { setAuthModal } from "../reducers/modalReducer";
+import ReportModal from "./ui/ReportModal";
+import {
+  buildPostReportDraftFromFeedItem,
+  type ReportDraft,
+} from "../types/report";
 
 /** In-memory set of postIds we've attempted fallback for (avoids loops + repeat requests) */
 const fallbackAttemptedPostIds = new Set<string>();
@@ -45,13 +62,17 @@ const perPostFetchInFlight = new Map<
   Promise<Array<{ images: string[] | null; order_idx: number | null }>>
 >();
 
+/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+const DEBUG_RSVP_POST_ID = "";
+
 type PostProps = {
   postId: string;
   caption: string | null;
   createdAt: string;
   type?: "experience" | "hangout"; // NEW: post type for navigation
   isOwner?: boolean; // NEW: whether this is the current user's own post
-  onDelete?: () => void; // NEW: callback when post is deleted
+  /** After PostMenu successfully deletes — list removal is handled via `post:deleted`; use this for extra cleanup only. */
+  onDelete?: () => void;
   status?: "draft" | "published"; // NEW: post status for visual indicators
   isDraft?: boolean; // NEW: whether this is a draft from localStorage
   isAnonymous?: boolean; // NEW: whether the author is anonymous
@@ -101,6 +122,18 @@ function Post({
   slideshowHostVisible = true,
 }: PostProps) {
   const navigate = useNavigate();
+
+  if (
+    DEBUG_RSVP_POST_ID &&
+    (postId === DEBUG_RSVP_POST_ID || post?.id === DEBUG_RSVP_POST_ID)
+  ) {
+    console.log("RSVP DEBUG Post render", {
+      postIdProp: postId,
+      postObjectId: post?.id,
+      rsvp_capacity: post?.rsvp_capacity,
+      typeof_rsvp_capacity: typeof post?.rsvp_capacity,
+    });
+  }
 
   // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch profiles and follow status for visible post authors
   // Why: Instant profile page loads, better perceived performance
@@ -343,6 +376,23 @@ function Post({
   // Why: Prevents "Cannot access before initialization" errors
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
+  const dispatch = useDispatch();
+  const authState = useSelector((state: RootState) => state.auth);
+  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
+
+  const handleRequestPostReport = useCallback(() => {
+    const authLoading = authState?.loading ?? true;
+    const isAuthenticated = !!authState?.user;
+    if (!authLoading && !isAuthenticated) {
+      dispatch(setAuthModal(true));
+      return;
+    }
+    if (!post) {
+      toast.error("Unable to report this post right now.");
+      return;
+    }
+    setReportDraft(buildPostReportDraftFromFeedItem(post));
+  }, [authState?.loading, authState?.user, dispatch, post]);
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
@@ -358,7 +408,7 @@ function Post({
     const isDraftPost =
       status === "draft" || isDraft || postId.startsWith("draft-");
     if (isDraftPost) {
-      navigate(`/create/activities?type=${type}`);
+      navigate(`${Paths.createFinalize}?type=${type}`);
       return;
     }
 
@@ -399,48 +449,18 @@ function Post({
     const isDraftPost =
       status === "draft" || isDraft || postId.startsWith("draft-");
     if (isDraftPost) {
-      navigate(`/create/activities?type=${type}`);
+      navigate(`${Paths.createFinalize}?type=${type}`);
       return;
     }
     try {
       const { post, activities } = await getPostForEdit(postId);
 
-      // Store the current location so we can return to it after edit/cancel
-      const returnPath = window.location.pathname;
+      const editData = buildCanonicalEditPostData(post, activities, {
+        returnPath: window.location.pathname,
+      });
+      persistCanonicalEditPostData(editData);
 
-      // Store the post data in localStorage for the edit flow
-      const editData = {
-        postId: post.id,
-        type: post.type,
-        caption: post.caption,
-        visibility: post.visibility,
-        is_anonymous: post.is_anonymous,
-        rsvp_capacity: post.rsvp_capacity,
-        selected_dates: post.selected_dates,
-        is_recurring: post.is_recurring,
-        recurrence_days: post.recurrence_days,
-        tags: post.tags,
-        returnPath: returnPath, // Store where we came from
-        activities: activities.map((activity) => ({
-          id: activity.id,
-          title: activity.title,
-          activityType: activity.activity_type || "",
-          customActivity: activity.custom_activity || "",
-          locationDesc: activity.location_desc || "",
-          location: activity.location_name || "",
-          locationNotes: activity.location_notes || "",
-          locationUrl: activity.location_url || "",
-          additionalInfo: activity.additional_info || [],
-          tags: activity.tags || [],
-          images: activity.images || [],
-          order_idx: activity.order_idx,
-        })),
-      };
-
-      localStorage.setItem("editPostData", JSON.stringify(editData));
-
-      // Navigate to the activities page (first step of edit flow)
-      navigate(Paths.createActivities);
+      navigate(createEditActivitiesHref(post.type));
     } catch (error) {
       console.error("Error loading post for edit:", error);
       toast.error("Failed to load post for editing");
@@ -675,6 +695,8 @@ function Post({
   }, [post?.activities, postId, tried, showImageSkeleton, hasImages]); // Added hasImages to dependencies since we use it in the effect
 
   const isDraftPost = status === "draft" || isDraft;
+  /** Synthetic id from profile Created tab — compose draft lives in localStorage only, not the server. */
+  const isLocalComposeDraft = postId.startsWith("draft-");
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize invite handler
   // Why: Prevents function recreation on every render, stable reference
@@ -693,9 +715,8 @@ function Post({
       }`}
     >
       <div className="flex gap-3">
-        {/* LEFT: avatar column */}
-        {/* LEFT: avatar column */}
-        <div className="pt-1">
+        {/* LEFT: avatar column — shrink-0 avoids flex min-width clipping the circle */}
+        <div className="shrink-0 pt-1">
           <div
             role="button"
             onClick={isAnonymous ? undefined : goToProfile}
@@ -714,7 +735,6 @@ function Post({
               url={isAnonymous ? undefined : author?.avatar_url || undefined}
               name={displayName}
               size={40}
-              postType={type}
               variant={isAnonymous ? "anon" : "default"}
               anonymousAvatar={isAnonymous ? anonymousAvatar : undefined}
               userId={isAnonymous ? null : author?.id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
@@ -725,7 +745,7 @@ function Post({
         {/* RIGHT: content column — everything on one vertical rail */}
         <div className="flex-1 min-w-0 relative">
           {/* header: name · date + draft badge + follow */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <button
               className="text-xs font-medium hover:underline"
               onClick={isAnonymous ? undefined : goToProfile}
@@ -742,6 +762,7 @@ function Post({
             >
               {displayName}
             </button>
+            <PostTypeMetaChip type={type} />
             <span
               className={`text-[10px] ${
                 shouldHighlight
@@ -765,6 +786,11 @@ function Post({
               </span>
             )}
           </div>
+          {isLocalComposeDraft && (
+            <p className="mt-1 text-[10px] leading-snug text-[var(--text)]/50">
+              On this device only — not uploaded until you publish.
+            </p>
+          )}
 
           {/* Three dots menu - Edit/Delete for owner, Report for non-owner */}
           <div className="absolute top-0 right-0">
@@ -774,6 +800,7 @@ function Post({
               onEdit={handleEdit}
               onDelete={onDelete}
               isDraft={isDraftPost}
+              onRequestReport={handleRequestPostReport}
             />
           </div>
 
@@ -795,14 +822,20 @@ function Post({
             </p>
           )}
 
+          {!isLocalComposeDraft && (
+            <PostFeedDetailsHintRow
+              onOpenDetails={goToDetails}
+              className="mt-2"
+            />
+          )}
+
           {/* Continue Editing button for drafts */}
           {isDraftPost && isOwner && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                // Navigate to continue editing the draft
-                window.location.href = `/create/activities?type=${type}`;
+                navigate(`${Paths.createFinalize}?type=${type}`);
               }}
               className="mt-3 px-3 py-1.5 text-xs bg-yellow-500 text-black rounded-full hover:brightness-110 transition"
             >
@@ -824,7 +857,7 @@ function Post({
               <div className="mt-3" role="button" onClick={goToDetails}>
                 <MediaCarousel
                   images={images}
-                  maxHeight="44vh"
+                  maxHeight="40vh"
                   autoplay={images.length > 1}
                   hostVisible={slideshowHostVisible}
                 />
@@ -869,6 +902,12 @@ function Post({
         postCaption={caption || "Untitled"}
         onClosingChange={setIsInviteDrawerClosing}
       />
+
+      <ReportModal
+        open={reportDraft !== null}
+        draft={reportDraft}
+        onClose={() => setReportDraft(null)}
+      />
     </article>
   );
 }
@@ -882,7 +921,7 @@ export default React.memo(Post, (prevProps, nextProps) => {
   const nextSig = (nextProps.post?.activities ?? [])
     .map((a) => a?.images?.length ?? 0)
     .join(",");
-  return (
+  const skipRenderBecausePropsEqual =
     prevProps.postId === nextProps.postId &&
     prevProps.caption === nextProps.caption &&
     prevProps.authorId === nextProps.authorId &&
@@ -903,11 +942,41 @@ export default React.memo(Post, (prevProps, nextProps) => {
       (nextProps.post?.activities?.length ?? 0) &&
     prevSig === nextSig &&
     prevProps.post?.like_count === nextProps.post?.like_count &&
+    prevProps.post?.effective_like_count ===
+      nextProps.post?.effective_like_count &&
+    prevProps.post?.save_count === nextProps.post?.save_count &&
+    prevProps.post?.effective_save_count ===
+      nextProps.post?.effective_save_count &&
     prevProps.post?.is_liked === nextProps.post?.is_liked &&
     prevProps.post?.is_saved === nextProps.post?.is_saved &&
     prevProps.post?.comment_count === nextProps.post?.comment_count &&
     prevProps.post?.follow_status === nextProps.post?.follow_status &&
+    prevProps.post?.rating_enabled === nextProps.post?.rating_enabled &&
+    prevProps.post?.rating_average === nextProps.post?.rating_average &&
+    prevProps.post?.rating_count === nextProps.post?.rating_count &&
+    prevProps.post?.effective_rating_average ===
+      nextProps.post?.effective_rating_average &&
+    prevProps.post?.effective_rating_count ===
+      nextProps.post?.effective_rating_count &&
+    prevProps.post?.viewer_rating === nextProps.post?.viewer_rating &&
     JSON.stringify(prevProps.selectedDates) ===
-      JSON.stringify(nextProps.selectedDates)
-  );
+      JSON.stringify(nextProps.selectedDates);
+
+  if (
+    DEBUG_RSVP_POST_ID &&
+    (prevProps.postId === DEBUG_RSVP_POST_ID ||
+      nextProps.postId === DEBUG_RSVP_POST_ID ||
+      prevProps.post?.id === DEBUG_RSVP_POST_ID ||
+      nextProps.post?.id === DEBUG_RSVP_POST_ID)
+  ) {
+    console.log("RSVP DEBUG Post memo compare", {
+      prevPostId: prevProps.postId,
+      nextPostId: nextProps.postId,
+      prev_rsvp_capacity: prevProps.post?.rsvp_capacity,
+      next_rsvp_capacity: nextProps.post?.rsvp_capacity,
+      skipRenderBecausePropsEqual,
+    });
+  }
+
+  return skipRenderBecausePropsEqual;
 });

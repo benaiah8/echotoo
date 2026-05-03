@@ -5,15 +5,14 @@ import { getViewerAuthUserId } from "../../api/services/follows";
 import Avatar from "./Avatar";
 import RSVPListDrawer from "./RSVPListDrawer";
 import FollowButton from "./FollowButton";
-import { useDispatch } from "react-redux";
-import { setAuthModal } from "../../reducers/modalReducer";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import { isDraftPostId } from "../../lib/drafts";
 import { getCachedRSVPData, setCachedRSVPData } from "../../lib/rsvpCache";
 import { type RSVPData } from "../../types/legacy";
 import { recordSignal } from "../../lib/feedPersonalization";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { incrementMyXp } from "../../api/services/xp";
+import useAuthActionGate from "../../hooks/useAuthActionGate";
 
 interface RSVPUser {
   id: string;
@@ -51,7 +50,7 @@ export default function RSVPComponent({
   rsvpData: initialRsvpData, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded RSVP data
   post, // [PHASE 3] Optional post data for personalization
 }: RSVPComponentProps) {
-  const dispatch = useDispatch();
+  const { ensureAuthed } = useAuthActionGate();
   const [rsvpUsers, setRsvpUsers] = useState<RSVPUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [showRSVPList, setShowRSVPList] = useState(false);
@@ -349,7 +348,7 @@ export default function RSVPComponent({
     // Check authentication and initialization first
     if (!currentUser || isToggling || !isInitialized) {
       if (!currentUser) {
-        dispatch(setAuthModal(true));
+        if (!ensureAuthed()) return;
       }
       return;
     }
@@ -605,9 +604,9 @@ export default function RSVPComponent({
                       }}
                       aria-label="avatar"
                     >
-                      {imgUrlPublic(user.avatar_url) ? (
+                      {avatarDisplayUrl(user.avatar_url) ? (
                         <img
-                          src={imgUrlPublic(user.avatar_url)!}
+                          src={avatarDisplayUrl(user.avatar_url)!}
                           alt=""
                           className="w-full h-full object-cover rounded-full"
                           loading="lazy"

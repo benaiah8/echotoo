@@ -294,6 +294,11 @@ export default function InviteNotificationItem({
           postType === "hangout" ? "a hangout" : "an experience"
         }`;
 
+  const inviteNote =
+    typeof notification.additional_data?.invite_note === "string"
+      ? notification.additional_data.invite_note
+      : null;
+
   const linkTo = notification.additional_data?.post_id
     ? `${Paths.experience}/${notification.additional_data.post_id}`
     : "#";
@@ -339,6 +344,11 @@ export default function InviteNotificationItem({
             >
               {notificationText}
             </p>
+            {inviteNote ? (
+              <p className="text-xs text-[var(--text)]/55 mt-1 line-clamp-3 break-words whitespace-pre-wrap">
+                {inviteNote}
+              </p>
+            ) : null}
             <div className="text-xs text-[var(--text)]/50 mt-0.5">
               {timeAgo}
             </div>
@@ -413,13 +423,16 @@ export default function InviteNotificationItem({
     );
   }
 
+  const isSentInvite =
+    notification.additional_data?.invite_direction === "sent";
+
   return (
     <div
       className={`w-full rounded-lg p-3 gap-3 flex transition-colors border-b-2 ${bottomBorderColor} ${
         notification.is_read
           ? "bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80"
           : "bg-[var(--surface-2)] border-l-4 border-l-blue-500"
-      }`}
+      } ${isSentInvite ? "opacity-[0.92]" : ""}`}
     >
       <div className="flex-shrink-0">
         <Avatar
@@ -449,6 +462,12 @@ export default function InviteNotificationItem({
             <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1" />
           )}
         </div>
+
+        {inviteNote ? (
+          <p className="text-xs text-[var(--text)]/55 mt-1.5 line-clamp-3 break-words whitespace-pre-wrap">
+            {inviteNote}
+          </p>
+        ) : null}
 
         <div className="text-xs text-[var(--text)]/50 mt-1.5">{timeAgo}</div>
 

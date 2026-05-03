@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
-import { Paths } from "../../router/Paths";
+import { subscribeAndroidHardwareBack } from "../../lib/androidPostDetailModalBack";
 import CreateChooserPanel from "./CreateChooserPanel";
+import CreateDraftEntryDialog from "./CreateDraftEntryDialog";
+import { useCreateDraftEntryGate } from "../../hooks/useCreateDraftEntryGate";
 
 const EXIT_MS = 300;
 const NAV_DELAY_MS = 280;
@@ -17,7 +18,10 @@ type Props = {
  * Body scroll locked while open. Enter/exit transitions; backdrop tap closes smoothly.
  */
 export default function CreateChooserOverlay({ open, onClose }: Props) {
-  const navigate = useNavigate();
+  const { onPickerContinue, draftEntryDialogProps } = useCreateDraftEntryGate({
+    closeChooserOverlay: onClose,
+    navDelayMs: NAV_DELAY_MS,
+  });
   const [visible, setVisible] = useState(open);
   const [animateIn, setAnimateIn] = useState(false);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -70,11 +74,24 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
   };
 
   const handleContinue = (type: "hangout" | "experience") => {
-    onClose();
-    window.setTimeout(() => {
-      navigate(`${Paths.createActivities}?type=${type}`);
-    }, NAV_DELAY_MS);
+    onPickerContinue(type);
   };
+
+  const draftDialogOpenRef = useRef(false);
+  const onDismissDraftRef = useRef(draftEntryDialogProps.onDismiss);
+  draftDialogOpenRef.current = draftEntryDialogProps.open;
+  onDismissDraftRef.current = draftEntryDialogProps.onDismiss;
+
+  useEffect(() => {
+    if (!open) return;
+    return subscribeAndroidHardwareBack(() => {
+      if (draftDialogOpenRef.current) {
+        onDismissDraftRef.current();
+        return;
+      }
+      onClose();
+    });
+  }, [open, onClose]);
 
   if (!visible) return null;
 
@@ -117,6 +134,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
       >
         <CreateChooserPanel variant="overlay" onContinue={handleContinue} />
       </div>
+      <CreateDraftEntryDialog {...draftEntryDialogProps} />
     </div>,
     document.body
   );

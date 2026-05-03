@@ -11,6 +11,10 @@
 -- - Exclude: PAST scheduled non-recurring hangouts
 -- - Keep: UNSCHEDULED, RECURRING, UPCOMING, experiences
 -- - After migration: run verify_feed_pagination.sql to compare true_total before/after
+--
+-- Effective rating (type = experience; must match profile/user RPCs):
+--   count = COALESCE(demo.demo_rating_count,0) + COALESCE(p.rating_count,0)
+--   average = ROUND(((demo_avg*demo_n)+(real_avg*real_n))/(demo_n+real_n), 2) with real from posts.rating_*
 -- ============================================
 
 -- Drop function if exists (for safe re-creation)
@@ -69,7 +73,27 @@ BEGIN
     WHERE
       (p_type IS NULL OR p.type = p_type)
       AND (p_tags IS NULL OR (p.tags IS NOT NULL AND p.tags && p_tags))
-      AND (p_search IS NULL OR p.caption ILIKE '%' || p_search || '%')
+      -- Free-text search: caption OR post-level tags; whitespace tokens OR'd; # ignored on query/tags; case-insensitive
+      AND (
+        p_search IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM regexp_split_to_table(btrim(p_search), '[[:space:]]+') AS qsplit(raw_tok)
+          CROSS JOIN LATERAL (
+            SELECT NULLIF(regexp_replace(lower(btrim(qsplit.raw_tok)), '^#+', ''), '') AS nq
+          ) n
+          WHERE n.nq IS NOT NULL
+          AND (
+            p.caption ILIKE '%' || n.nq || '%'
+            OR EXISTS (
+              SELECT 1
+              FROM unnest(COALESCE(p.tags, ARRAY[]::text[])) AS tag_arr(t)
+              WHERE NULLIF(regexp_replace(lower(btrim(tag_arr.t)), '^#+', ''), '') IS NOT NULL
+              AND regexp_replace(lower(btrim(tag_arr.t)), '^#+', '') ILIKE '%' || n.nq || '%'
+            )
+          )
+        )
+      )
       AND (
         author_profile.is_private = false
         OR v_viewer_profile_id = author_profile.id
@@ -97,6 +121,11 @@ BEGIN
             )
           )
         )
+      )
+      -- v1 user_blocks: hide posts where viewer and author are a blocked pair (symmetric)
+      AND (
+        p_viewer_user_id IS NULL
+        OR NOT public.users_are_blocked_pair(p_viewer_user_id, p.author_id)
       )
   ),
   -- True total count (B2: stable across pages)
@@ -145,11 +174,17 @@ BEGIN
       END AS follow_status,
       CASE WHEN p_viewer_user_id IS NOT NULL AND user_like.post_id IS NOT NULL THEN true ELSE false END AS is_liked,
       CASE WHEN p_viewer_user_id IS NOT NULL AND user_save.post_id IS NOT NULL THEN true ELSE false END AS is_saved,
-      (
-        SELECT COUNT(*)
-        FROM comments c
-        WHERE c.post_id = p.id AND c.is_deleted = false
-      ) AS comment_count,
+      COALESCE(p.like_count, 0) AS like_count,
+      COALESCE(p.save_count, 0) AS save_count,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.like_count, 0) + COALESCE(demo.demo_like_count, 0)
+        ELSE COALESCE(p.like_count, 0)
+      END AS effective_like_count,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(p.save_count, 0) + COALESCE(demo.demo_save_count, 0)
+        ELSE COALESCE(p.save_count, 0)
+      END AS effective_save_count,
+      COALESCE(p.comment_count, 0) AS comment_count,
       -- [SHRINK] Activity summary only; NO full activities.images arrays
       (SELECT COUNT(*)::int FROM activities a WHERE a.post_id = p.id) AS activity_count,
       EXISTS(
@@ -176,7 +211,36 @@ BEGIN
             'going_count', COALESCE(rsvp_going_cnt.cnt, 0)
           )
         ELSE NULL
-      END AS rsvp_data
+      END AS rsvp_data,
+      p.rsvp_capacity AS rsvp_capacity,
+      p.rating_enabled,
+      p.rating_average,
+      p.rating_count,
+      CASE
+        WHEN p.type = 'experience' THEN
+          CASE
+            WHEN (COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)) = 0 THEN 0
+            ELSE ROUND(
+              (
+                (COALESCE(demo.demo_rating_average, 0)::numeric * COALESCE(demo.demo_rating_count, 0)::numeric) +
+                (COALESCE(p.rating_average, 0)::numeric * COALESCE(p.rating_count, 0)::numeric)
+              ) / NULLIF((COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0))::numeric, 0),
+              2
+            )
+          END
+        ELSE COALESCE(p.rating_average, 0)
+      END AS effective_rating_average,
+      CASE
+        WHEN p.type = 'experience' THEN COALESCE(demo.demo_rating_count, 0) + COALESCE(p.rating_count, 0)
+        ELSE COALESCE(p.rating_count, 0)
+      END AS effective_rating_count,
+      (
+        SELECT pr.stars
+        FROM post_ratings pr
+        WHERE pr.post_id = p.id
+          AND pr.user_id = p_viewer_user_id
+        LIMIT 1
+      ) AS viewer_rating
     FROM page_ids
     INNER JOIN posts p ON p.id = page_ids.id
     INNER JOIN profiles author_profile ON author_profile.user_id = p.author_id AND author_profile.deleted_at IS NULL
@@ -190,6 +254,8 @@ BEGIN
       user_like.post_id = p.id AND user_like.user_id = p_viewer_user_id
     LEFT JOIN saved_posts user_save ON
       user_save.post_id = p.id AND user_save.user_id = p_viewer_user_id
+    LEFT JOIN public.post_demo_engagement demo ON
+      demo.post_id = p.id
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS cnt
       FROM rsvp_responses r
@@ -211,6 +277,10 @@ BEGIN
         'tags', fp.tags,
         'is_liked', fp.is_liked,
         'is_saved', fp.is_saved,
+        'like_count', fp.like_count,
+        'save_count', fp.save_count,
+        'effective_like_count', fp.effective_like_count,
+        'effective_save_count', fp.effective_save_count,
         'comment_count', fp.comment_count,
         'follow_status', fp.follow_status,
         'activity_count', fp.activity_count,
@@ -222,7 +292,14 @@ BEGIN
         'anonymous_avatar', fp.anonymous_avatar,
         'selected_dates', fp.selected_dates,
         'author_id', fp.author_id,
-        'rsvp_data', fp.rsvp_data
+        'rsvp_data', fp.rsvp_data,
+        'rsvp_capacity', fp.rsvp_capacity,
+        'rating_enabled', fp.rating_enabled,
+        'rating_average', fp.rating_average,
+        'rating_count', fp.rating_count,
+        'effective_rating_average', fp.effective_rating_average,
+        'effective_rating_count', fp.effective_rating_count,
+        'viewer_rating', fp.viewer_rating
       ) ORDER BY fp.created_at DESC
     ) FROM filtered_posts fp)
   INTO v_true_total, v_posts
@@ -248,7 +325,7 @@ COMMENT ON FUNCTION get_feed_with_related_data IS
 Parameters:
 - p_type: Filter by post type (experience/hangout)
 - p_tags: Filter by tags (array)
-- p_search: Search in captions
+- p_search: Free-text search in caption OR posts.tags (tokens whitespace-split, OR across tokens; # stripped, case-insensitive)
 - p_limit: Number of posts to return
 - p_offset: Pagination offset
 - p_viewer_user_id: Auth user ID for privacy/follow checks

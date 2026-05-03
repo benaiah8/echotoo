@@ -9,7 +9,7 @@ import {
 import html2canvas from "html2canvas";
 import toast from "react-hot-toast";
 import { PiCalendarBlank } from "react-icons/pi";
-import { imgUrlPublic } from "../../lib/img";
+import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import { getInstagramStoryBackgroundPath } from "../../lib/assets";
 import { formatInstagramStoryEventLine } from "../../lib/instagramStoryEventLine";
 import { shareOrDownloadStoryImage } from "../../lib/instagramStoryExport";
@@ -210,7 +210,7 @@ export default function InstagramStoryGenerator({
   const safeCreatorName = creatorName || "";
   const safeCreatorHandle = creatorHandle || "";
   const processedAvatarUrl = creatorAvatarUrl
-    ? imgUrlPublic(creatorAvatarUrl) ?? null
+    ? avatarDisplayUrl(creatorAvatarUrl) ?? null
     : null;
   const hasAvatar = !!processedAvatarUrl;
 
