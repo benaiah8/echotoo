@@ -40,16 +40,95 @@ jobs:
           VITE_SUPPORT_EMAIL: ${{ secrets.VITE_SUPPORT_EMAIL }}
         run: |
           set -eo pipefail
+          # Public defaults — safe to echo. Never echo Supabase/Google secret values.
+
+          vite_media_provider="${VITE_MEDIA_PROVIDER:-}"
+          if [ -z "$vite_media_provider" ]; then
+            vite_media_provider="supabase"
+            echo "Using default VITE_MEDIA_PROVIDER=supabase"
+          fi
+
+          vite_allow_cloudinary="${VITE_ALLOW_CLOUDINARY:-}"
+          if [ -z "$vite_allow_cloudinary" ]; then
+            vite_allow_cloudinary="false"
+            echo "Using default VITE_ALLOW_CLOUDINARY=false"
+          fi
+
+          vite_support_email="${VITE_SUPPORT_EMAIL:-}"
+          if [ -z "$vite_support_email" ]; then
+            vite_support_email="support@echotoo.com"
+            echo "Using default VITE_SUPPORT_EMAIL=support@echotoo.com"
+          fi
+
+          # VITE_LOCATIONIQ_KEY may legitimately stay empty.
+
           {
             echo "VITE_SUPABASE_URL=${VITE_SUPABASE_URL}"
             echo "VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}"
             echo "VITE_PUBLIC_APP_URL=${VITE_PUBLIC_APP_URL}"
             echo "VITE_GOOGLE_MAPS_KEY=${VITE_GOOGLE_MAPS_KEY}"
-            echo "VITE_LOCATIONIQ_KEY=${VITE_LOCATIONIQ_KEY}"
-            echo "VITE_MEDIA_PROVIDER=${VITE_MEDIA_PROVIDER}"
-            echo "VITE_ALLOW_CLOUDINARY=${VITE_ALLOW_CLOUDINARY}"
-            echo "VITE_SUPPORT_EMAIL=${VITE_SUPPORT_EMAIL}"
+            echo "VITE_LOCATIONIQ_KEY=${VITE_LOCATIONIQ_KEY:-}"
+            echo "VITE_MEDIA_PROVIDER=${vite_media_provider}"
+            echo "VITE_ALLOW_CLOUDINARY=${vite_allow_cloudinary}"
+            echo "VITE_SUPPORT_EMAIL=${vite_support_email}"
           } > .env
+
+      - name: Validate Vite env secrets
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_PUBLIC_APP_URL: ${{ secrets.VITE_PUBLIC_APP_URL }}
+          VITE_GOOGLE_MAPS_KEY: ${{ secrets.VITE_GOOGLE_MAPS_KEY }}
+          VITE_LOCATIONIQ_KEY: ${{ secrets.VITE_LOCATIONIQ_KEY }}
+          VITE_MEDIA_PROVIDER: ${{ secrets.VITE_MEDIA_PROVIDER }}
+          VITE_ALLOW_CLOUDINARY: ${{ secrets.VITE_ALLOW_CLOUDINARY }}
+          VITE_SUPPORT_EMAIL: ${{ secrets.VITE_SUPPORT_EMAIL }}
+        run: |
+          set -eo pipefail
+          # Never echo secret values — only names, public defaults annotations, warnings, errors.
+
+          require_present() {
+            local name="$1"
+            local val="${!name}"
+            if [ -z "$val" ]; then
+              echo "::error::Missing $name"
+              exit 1
+            fi
+            echo "$name is present"
+          }
+          require_https_prefix() {
+            local name="$1"
+            local val="${!name}"
+            case "$val" in
+              https://*) ;;
+              *)
+                echo "::error::$name must start with https://"
+                exit 1
+                ;;
+            esac
+          }
+          warn_optional_missing() {
+            local name="$1"
+            local val="${!name}"
+            if [ -z "$val" ]; then
+              echo "::warning::Optional $name is missing"
+              echo "Optional $name is missing"
+            else
+              echo "Optional $name is present"
+            fi
+          }
+
+          require_present VITE_SUPABASE_URL
+          require_https_prefix VITE_SUPABASE_URL
+          require_present VITE_SUPABASE_ANON_KEY
+          require_present VITE_PUBLIC_APP_URL
+          require_https_prefix VITE_PUBLIC_APP_URL
+          require_present VITE_GOOGLE_MAPS_KEY
+
+          warn_optional_missing VITE_LOCATIONIQ_KEY
+          warn_optional_missing VITE_MEDIA_PROVIDER
+          warn_optional_missing VITE_ALLOW_CLOUDINARY
+          warn_optional_missing VITE_SUPPORT_EMAIL
 
       - name: Build web assets
         run: npm run build
