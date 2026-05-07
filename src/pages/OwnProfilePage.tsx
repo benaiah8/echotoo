@@ -61,13 +61,14 @@ import { shareUrl } from "../lib/shareUrl";
 import toast from "react-hot-toast";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
-import { publishProfileTrace } from "../lib/debugProfileFeed";
 import { dataCache } from "../lib/dataCache";
-import { consumeOwnCreatedPublishedPending } from "../lib/ownCreatedPublishedPending";
 import { SKIP_WELCOME_ONBOARDING } from "../lib/featureFlags";
 import { Paths } from "../router/Paths";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { getCurrentUserIsReportReviewer } from "../api/services/reportReview";
+
+/** Verbose profile-tab load instrumentation (PROFILEDBG). Off by default. */
+const DEBUG_PROFILE_LOAD = false;
 
 /**
  * OwnProfilePage - Page for /u/me route
@@ -85,8 +86,6 @@ export default function OwnProfilePage() {
 
   /** Tap profile tab again / pull-to-refresh → remount feeds + purge post caches */
   const [profileFeedRefreshEpoch, setProfileFeedRefreshEpoch] = useState(0);
-  /** Consume publish pending marker → soft-refetch Created first page only (Interacted/Saved unchanged). */
-  const [createdFeedRefreshEpoch, setCreatedFeedRefreshEpoch] = useState(0);
   /** Bumps to re-fetch hero profile (counts, avatar, etc.) */
   const [meRefreshNonce, setMeRefreshNonce] = useState(0);
 
@@ -225,55 +224,6 @@ export default function OwnProfilePage() {
     };
   }, [isProfileTabVisible, authState?.user?.id]);
 
-  // New post publish: sessionStorage marker (set by executeCreateFlowPublish) consumed when profile tab visible
-  useEffect(() => {
-    if (!isProfileTabVisible) {
-      return;
-    }
-    const uid = profile?.user_id;
-    if (!uid) return;
-
-    const result = consumeOwnCreatedPublishedPending(uid);
-    if (result.kind === "none") return;
-
-    if (result.kind === "mismatch_cleared") {
-      return;
-    }
-
-    const postId = result.payload.postId;
-    publishProfileTrace("OWN_PROFILE_VISIBLE", {
-      profileUserId: uid,
-      route: location.pathname ?? "",
-      postId,
-    });
-    publishProfileTrace("PENDING_MARKER_FOUND", {
-      postId,
-      markerUserId: result.payload.userId,
-      currentProfileUserId: uid,
-    });
-
-    const createdKey = `profile_created_${uid}`;
-    try {
-      dataCache.delete(createdKey);
-    } catch {
-      /* noop */
-    }
-
-    publishProfileTrace("PENDING_MARKER_CONSUMED", {
-      postId,
-      deletedCacheKey: createdKey,
-    });
-
-    setCreatedFeedRefreshEpoch((n) => {
-      const next = n + 1;
-      publishProfileTrace("CREATED_REFRESH_EPOCH_BUMPED", {
-        newEpoch: next,
-        postId,
-      });
-      return next;
-    });
-  }, [isProfileTabVisible, profile?.user_id, location.pathname]);
-
   useEffect(() => {
     const onTabRefresh = () => {
       if (!isProfileTabVisible) return;
@@ -312,10 +262,12 @@ export default function OwnProfilePage() {
   // Load profile for /u/me - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
     if (!isProfileTabVisible) return;
-    console.log("[PROFILEDBG] profile load effect start", {
-      t: Date.now(),
-      isProfileTabVisible,
-    });
+    if (DEBUG_PROFILE_LOAD) {
+      console.log("[PROFILEDBG] profile load effect start", {
+        t: Date.now(),
+        isProfileTabVisible,
+      });
+    }
     // console.log('[OwnProfilePage] 🔄 Component MOUNTED - loading profile data');
     let cancelled = false;
     (async () => {
@@ -339,10 +291,12 @@ export default function OwnProfilePage() {
       if (!cachedProfile) {
         // Try to get user ID from session storage or check auth
         const uid = await getViewerAuthUserId();
-        console.log("[PROFILEDBG] getViewerAuthUserId (cache-search path)", {
-          t: Date.now(),
-          uid,
-        });
+        if (DEBUG_PROFILE_LOAD) {
+          console.log("[PROFILEDBG] getViewerAuthUserId (cache-search path)", {
+            t: Date.now(),
+            uid,
+          });
+        }
 
         if (uid) {
           // Try to find cached profile by user_id (search through cache)
@@ -402,15 +356,20 @@ export default function OwnProfilePage() {
         };
 
         const uid = await getViewerAuthUserId();
-        console.log("[PROFILEDBG] getViewerAuthUserId (fetch path)", {
-          t: Date.now(),
-          uid,
-        });
+        if (DEBUG_PROFILE_LOAD) {
+          console.log("[PROFILEDBG] getViewerAuthUserId (fetch path)", {
+            t: Date.now(),
+            uid,
+          });
+        }
 
         if (!uid) {
-          console.log("[PROFILEDBG] setProfile null — no uid from getViewerAuthUserId", {
-            t: Date.now(),
-          });
+          if (DEBUG_PROFILE_LOAD) {
+            console.log(
+              "[PROFILEDBG] setProfile null — no uid from getViewerAuthUserId",
+              { t: Date.now() }
+            );
+          }
           setSafe(() => {
             setProfile(null);
             setLoading(false);
@@ -422,13 +381,15 @@ export default function OwnProfilePage() {
         // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
         // getProfileByUserId() handles caching, RequestManager deduplication, and error handling
         const me = await getProfileByUserId(uid);
-        console.log("[PROFILEDBG] getProfileByUserId result", {
-          t: Date.now(),
-          uid,
-          hasProfile: !!me,
-          profileId: me?.id ?? null,
-          profileUserId: me?.user_id ?? null,
-        });
+        if (DEBUG_PROFILE_LOAD) {
+          console.log("[PROFILEDBG] getProfileByUserId result", {
+            t: Date.now(),
+            uid,
+            hasProfile: !!me,
+            profileId: me?.id ?? null,
+            profileUserId: me?.user_id ?? null,
+          });
+        }
 
         if (me) {
           // Cache avatar URL separately (getProfileByUserId already caches profile data)
@@ -444,9 +405,12 @@ export default function OwnProfilePage() {
           if (me.username) localStorage.setItem("my_username", me.username);
           if (me.id) localStorage.setItem("my_profile_id", me.id);
         } else if (!cachedProfile) {
-          console.log("[PROFILEDBG] setProfile null — me missing and no cachedProfile", {
-            t: Date.now(),
-          });
+          if (DEBUG_PROFILE_LOAD) {
+            console.log(
+              "[PROFILEDBG] setProfile null — me missing and no cachedProfile",
+              { t: Date.now() }
+            );
+          }
           setSafe(() => setProfile(null));
         }
       } catch (e) {
@@ -462,9 +426,11 @@ export default function OwnProfilePage() {
         }
       } finally {
         if (!cancelled) {
-          console.log("[PROFILEDBG] profile load effect loading=false (finally)", {
-            t: Date.now(),
-          });
+          if (DEBUG_PROFILE_LOAD) {
+            console.log("[PROFILEDBG] profile load effect loading=false (finally)", {
+              t: Date.now(),
+            });
+          }
           setLoading(false);
         }
       }
@@ -1136,7 +1102,6 @@ export default function OwnProfilePage() {
             <OwnProfilePostsSection
               visible={isProfileTabVisible}
               feedRefreshEpoch={profileFeedRefreshEpoch}
-              createdFeedRefreshEpoch={createdFeedRefreshEpoch}
             />
 
             {/* Modals and drawers */}

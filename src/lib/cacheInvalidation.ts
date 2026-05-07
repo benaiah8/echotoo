@@ -27,6 +27,8 @@ import { clearMutualFriendsCache } from "./mutualFriendsCache";
 import { invalidatePostDetailCache } from "../api/queries/getPostById";
 import { clearCachedRSVPData } from "./rsvpCache";
 
+const DEBUG_CACHE_INVALIDATION = false;
+
 /**
  * [OPTIMIZATION: Phase 3 - Cache] Cache relationship mapping
  * Why: Maps which caches need to be invalidated when a profile changes
@@ -60,19 +62,23 @@ export function invalidateRelatedCaches(
     avatar?: { userId: string; avatarUrl: string };
   }
 ): void {
-  console.log(
-    "[CacheInvalidation] Invalidating caches for profile:",
-    profileId,
-    relationships
-  );
+  if (DEBUG_CACHE_INVALIDATION) {
+    console.log(
+      "[CacheInvalidation] Invalidating caches for profile:",
+      profileId,
+      relationships
+    );
+  }
 
   // [OPTIMIZATION: Phase 3 - Smart] Update cache instead of invalidating when possible
   // Why: Prevents flicker, shows updated data immediately
   if (updateData?.profile) {
     setCachedProfile(updateData.profile);
-    console.log(
-      "[CacheInvalidation] Updated profile cache instead of invalidating"
-    );
+    if (DEBUG_CACHE_INVALIDATION) {
+      console.log(
+        "[CacheInvalidation] Updated profile cache instead of invalidating"
+      );
+    }
   } else if (relationships.profile?.includes(profileId)) {
     clearCachedProfile(profileId);
   }
@@ -146,7 +152,9 @@ export function setupCacheInvalidationListeners(): void {
     const profileId = event.detail?.id;
     if (!profileId) return;
 
-    console.log("[CacheInvalidation] Profile updated event:", profileId);
+    if (DEBUG_CACHE_INVALIDATION) {
+      console.log("[CacheInvalidation] Profile updated event:", profileId);
+    }
 
     // profile_created_* caches are keyed by auth user_id (posts.author_id / profile.user_id), not profiles.id.
     const postsUserId =
@@ -169,7 +177,9 @@ export function setupCacheInvalidationListeners(): void {
     const targetId = event.detail?.targetId;
     if (!targetId) return;
 
-    console.log("[CacheInvalidation] Follow changed event:", targetId);
+    if (DEBUG_CACHE_INVALIDATION) {
+      console.log("[CacheInvalidation] Follow changed event:", targetId);
+    }
 
     // Invalidate follow-related caches
     invalidateRelatedCaches(targetId, {

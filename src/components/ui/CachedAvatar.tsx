@@ -1,10 +1,11 @@
 // src/components/ui/CachedAvatar.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import {
   getCachedAvatar,
   setCachedAvatar,
   preloadAvatar,
+  clearCachedAvatar,
 } from "../../lib/avatarCache";
 
 interface CachedAvatarProps {
@@ -20,35 +21,30 @@ export default function CachedAvatar({
   className = "w-9 h-9 rounded-full object-cover",
   alt = "Profile picture",
 }: CachedAvatarProps) {
-  const [displayUrl, setDisplayUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [imgFailed, setImgFailed] = useState(false);
 
-  useEffect(() => {
-    if (!avatarUrl) {
-      setDisplayUrl(null);
-      setIsLoading(false);
-      return;
-    }
-
-    // Check cache first
-    const cachedUrl = getCachedAvatar(profileId);
-    if (cachedUrl) {
-      setDisplayUrl(cachedUrl);
-      setIsLoading(false);
-      return;
-    }
-
-    // If not cached, show the URL and preload for next time
-    setDisplayUrl(avatarUrl);
-    setIsLoading(false);
-
-    // Preload and cache for next time
-    preloadAvatar(avatarUrl);
-    setCachedAvatar(profileId, avatarUrl);
+  /** Non-empty prop always wins over persisted cache (same rule as `Avatar`). */
+  const resolvedSource = useMemo(() => {
+    const t = avatarUrl != null ? String(avatarUrl).trim() : "";
+    if (t !== "") return avatarUrl!;
+    return getCachedAvatar(profileId) ?? null;
   }, [profileId, avatarUrl]);
 
-  const resolved = avatarDisplayUrl(displayUrl);
-  if (!displayUrl || !resolved) {
+  useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedSource, profileId]);
+
+  useEffect(() => {
+    if (resolvedSource == null || String(resolvedSource).trim() === "") return;
+    const cached = getCachedAvatar(profileId);
+    if (cached !== resolvedSource) {
+      setCachedAvatar(profileId, resolvedSource);
+      preloadAvatar(resolvedSource);
+    }
+  }, [profileId, resolvedSource]);
+
+  const resolved = imgFailed ? null : avatarDisplayUrl(resolvedSource);
+  if (!resolvedSource || !resolved) {
     return <div className={`${className} bg-white/15`} />;
   }
 
@@ -58,12 +54,11 @@ export default function CachedAvatar({
       className={className}
       alt={alt}
       onLoad={() => {
-        // Cache the URL when it loads successfully
-        setCachedAvatar(profileId, displayUrl);
+        setCachedAvatar(profileId, resolvedSource);
       }}
       onError={() => {
-        // Don't show broken images
-        setDisplayUrl(null);
+        clearCachedAvatar(profileId);
+        setImgFailed(true);
       }}
     />
   );

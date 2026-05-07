@@ -1,12 +1,10 @@
 /**
  * Debug utility for tab visibility and fetch gating.
- * Enable via localStorage: set DBG_TAB_VISIBILITY=1
- * Or runs automatically in development (import.meta.env.DEV).
+ * Opt-in only: localStorage DBG_TAB_VISIBILITY=1 (quiet by default in dev and prod).
  */
 const ON = () =>
-  import.meta.env.DEV ||
-  (typeof localStorage !== "undefined" &&
-    localStorage.getItem("DBG_TAB_VISIBILITY") === "1");
+  typeof localStorage !== "undefined" &&
+  localStorage.getItem("DBG_TAB_VISIBILITY") === "1";
 
 function ts() {
   return new Date().toISOString().split("T")[1].replace("Z", "");

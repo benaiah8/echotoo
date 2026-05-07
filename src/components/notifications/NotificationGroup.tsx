@@ -204,13 +204,11 @@ export default function NotificationGroup({
         {/* Expanded state - individual notifications */}
         {isExpanded && notifications.length > 0 && (
           <div className="px-4 py-2">
-            <div className="ml-3 space-y-2">
+            <div className="ml-3">
               {notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`ui-card ${
-                    notification.is_read ? "" : `border-l-4 ${borderColorClass}`
-                  }`}
+                  className="border-b border-[var(--border)]/40 last:border-b-0"
                 >
                   <NotificationItem
                     notification={notification}

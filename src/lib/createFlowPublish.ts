@@ -10,8 +10,11 @@ import { recordSignal } from "./feedPersonalization";
 import { incrementMyXp } from "../api/services/xp";
 import { sanitizeTagsForPublish } from "./createFlowLimits";
 import { isDefaultStopTitle } from "./createFlowMeaningfulActivity";
-import { publishProfileTrace } from "./debugProfileFeed";
-import { setOwnCreatedPublishedPending } from "./ownCreatedPublishedPending";
+import { persistOwnCreatedPrependPending } from "./ownCreatedPendingPrepend";
+
+/** Legacy sessionStorage key — no longer written; cleared on new publish for hygiene. */
+const LEGACY_OWN_CREATED_PUBLISHED_PENDING_KEY =
+  "echotoo:own-created-published-pending";
 
 export type CreateFlowDraftActivity = {
   title?: string;
@@ -119,6 +122,7 @@ export type ExecuteCreateFlowPublishResult = {
 
 /**
  * Inserts or updates post + activities; side effects: XP, personalization, caches, publishedPostLast.
+ * New publishes also write `echotoo:own-created-prepend-pending` for local Created prepend (no profile_created cache wipe).
  */
 export async function executeCreateFlowPublish(
   input: ExecuteCreateFlowPublishInput
@@ -268,29 +272,93 @@ export async function executeCreateFlowPublish(
   }
 
   const createdCacheKey = `profile_created_${session.user.id}`;
-  dataCache.delete(createdCacheKey);
+  if (input.isEditMode && input.editPostId) {
+    dataCache.delete(createdCacheKey);
+  }
   dataCache.clearFeedCache().catch(() => {});
   invalidatePostDetailCache(post.id);
 
   const isNewPublish = !input.isEditMode;
-  if (isNewPublish) {
-    setOwnCreatedPublishedPending({
-      postId: post.id,
-      userId: session.user.id,
-      createdAt: new Date().toISOString(),
-      type: typeof post.type === "string" ? post.type : undefined,
+  if (isNewPublish && session?.user?.id) {
+    try {
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.removeItem(LEGACY_OWN_CREATED_PUBLISHED_PENDING_KEY);
+      }
+    } catch {
+      /* noop */
+    }
+
+    type DbPostExtras = {
+      created_at?: string;
+      visibility?: "public" | "friends" | "private";
+      recurrence_days?: string[] | null;
+      selected_dates?: string[] | null;
+      is_recurring?: boolean | null;
+      rsvp_capacity?: number | null;
+      rating_enabled?: boolean | null;
+    };
+    const row = post as ExecuteCreateFlowPublishResult["post"] & DbPostExtras;
+
+    const markerAt = new Date().toISOString();
+    const prependActivities = activitiesToPersist.map((a, i) => {
+      const imgs = cleanImagesForActivity(a.images);
+      return {
+        order_idx: i,
+        title:
+          a.title || a.customActivity || a.activityType || `Stop ${i + 1}`,
+        images: imgs.length ? imgs : null,
+        location_name: a.location ?? null,
+        location_desc: a.locationDesc ?? null,
+        location_url: a.locationUrl ?? null,
+        location_notes: a.locationNotes ?? null,
+        additional_info: a.additionalInfo ?? null,
+        tags: a.tags ?? null,
+      };
     });
-    publishProfileTrace("PENDING_MARKER_WRITTEN", {
+
+    persistOwnCreatedPrependPending({
+      v: 1,
       postId: post.id,
-      userId: session.user.id,
+      authorId: session.user.id,
+      type:
+        input.postType === "hangout" || post.type === "hangout"
+          ? "hangout"
+          : "experience",
+      caption: typeof post.caption === "string" ? post.caption : null,
+      tags: tags.length ? tags : null,
+      created_at:
+        typeof row.created_at === "string" && row.created_at.length
+          ? row.created_at
+          : markerAt,
+      selected_dates:
+        Array.isArray(row.selected_dates) && row.selected_dates.length
+          ? row.selected_dates
+          : input.selectedDatesIso.length
+            ? input.selectedDatesIso
+            : null,
+      is_recurring:
+        typeof row.is_recurring === "boolean" || row.is_recurring === null
+          ? row.is_recurring
+          : input.isRecurring ?? null,
+      recurrence_days:
+        Array.isArray(row.recurrence_days) && row.recurrence_days.length
+          ? row.recurrence_days
+          : input.recurrenceDays.length
+            ? input.recurrenceDays
+            : null,
+      rsvp_capacity:
+        typeof row.rsvp_capacity === "number" || row.rsvp_capacity === null
+          ? row.rsvp_capacity
+          : input.rsvpCapacity,
+      rating_enabled:
+        typeof row.rating_enabled === "boolean"
+          ? row.rating_enabled
+          : ratingEnabled,
+      visibility: row.visibility ?? null,
+      activities: prependActivities,
+      markerAt,
     });
   }
-
-  publishProfileTrace("PUBLISH_SUCCESS", {
-    postId: post.id,
-    userId: session.user.id,
-    isEditMode: input.isEditMode,
-  });
 
   return { post };
 }

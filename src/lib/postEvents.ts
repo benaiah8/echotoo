@@ -1,5 +1,3 @@
-import { publishProfileTrace } from "./debugProfileFeed";
-
 /**
  * Central post-change event helper.
  * Emit events on mutations (like, save, comment) so feed/profile cards
@@ -52,8 +50,6 @@ export function onPostChanged(
 export const POST_DELETED_EVENT = "post:deleted" as const;
 
 export function emitPostDeleted(postId: string): void {
-  publishProfileTrace("POST_DELETED_EVENT_EMITTED", { postId });
-  publishProfileTrace("CREATED_CACHE_AFTER_DELETE", { postId });
   window.dispatchEvent(
     new CustomEvent(POST_DELETED_EVENT, { detail: { postId } })
   );

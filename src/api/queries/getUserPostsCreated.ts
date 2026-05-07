@@ -2,7 +2,6 @@
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
 import { requestManager } from "../../lib/requestManager";
-import { publishProfileTrace } from "../../lib/debugProfileFeed";
 
 // [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
 // Returns FeedItem format with all related data (follow_status, is_liked, is_saved, rsvp_data, etc.)
@@ -29,11 +28,6 @@ export async function getUserPostsCreatedOptimized(
     const result = await requestManager.execute(
       dedupeKey,
       async (signal: AbortSignal) => {
-        publishProfileTrace("CREATED_QUERY_START", {
-          authorId,
-          offset: from,
-          limit,
-        });
         const { data, error } = await supabase.rpc(
           "get_user_posts_created_with_related_data",
           {
@@ -107,11 +101,6 @@ export async function getUserPostsCreatedOptimized(
       // This eliminates 1 activities query per post (5+ fewer network requests)
       activities: post.activities || [],
     }));
-
-    publishProfileTrace("CREATED_QUERY_DONE", {
-      returnedCount: feedItems.length,
-      firstPostId: feedItems[0]?.id ?? null,
-    });
 
     return { data: feedItems, error: null };
   } catch (error: any) {

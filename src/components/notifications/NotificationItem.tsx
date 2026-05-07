@@ -15,7 +15,6 @@ interface Props {
   /** Denser, calmer row for activity stream (not invite cards) */
   activityCalm?: boolean;
   showGoToPostButton?: boolean;
-  onInviteAccepted?: (postId: string) => void; // NEW: callback when invite is accepted
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status for follow request notifications
   batchedFollowStatus?: "none" | "pending" | "following" | "friends";
 }
@@ -108,7 +107,6 @@ export default function NotificationItem({
   compact = false,
   activityCalm = false,
   showGoToPostButton = true,
-  onInviteAccepted,
   batchedFollowStatus,
 }: Props) {
   const location = useLocation();
@@ -122,7 +120,6 @@ export default function NotificationItem({
         onMarkAsRead={onMarkAsRead}
         compact={compact}
         showGoToPostButton={showGoToPostButton}
-        onInviteAccepted={onInviteAccepted}
       />
     );
   }

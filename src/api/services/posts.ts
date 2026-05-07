@@ -3,7 +3,6 @@ import { isDraftPostId, discardAllDrafts } from "../../lib/drafts";
 import { supabase } from "../../lib/supabaseClient";
 import { createPostNotifications } from "./notifications";
 import { retry } from "../../lib/retry";
-import { publishProfileTrace } from "../../lib/debugProfileFeed";
 
 export type PostType = "experience" | "hangout";
 
@@ -164,7 +163,6 @@ export async function getPost(id: string) {
 export async function deletePost(id: string) {
   if (isDraftPostId(id)) {
     discardAllDrafts();
-    publishProfileTrace("DELETE_SUCCESS", { postId: id });
     return true;
   }
 
@@ -192,7 +190,6 @@ export async function deletePost(id: string) {
 
   if (error) throw error;
 
-  publishProfileTrace("DELETE_SUCCESS", { postId: id });
   return true;
 }
 

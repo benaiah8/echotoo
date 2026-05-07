@@ -25,6 +25,9 @@ async function invokeSendInvitePushBestEffort(params: {
   actorId: string;
   recipientUserIds: string[];
   inviteId?: string;
+  threadId?: string;
+  threadKind?: string;
+  target?: "invite_thread" | "notifications";
 }): Promise<void> {
   if (params.recipientUserIds.length === 0) return;
   try {
@@ -44,6 +47,9 @@ async function invokeSendInvitePushBestEffort(params: {
         actor_id: params.actorId,
         recipient_user_ids: params.recipientUserIds,
         ...(params.inviteId ? { invite_id: params.inviteId } : {}),
+        ...(params.threadId ? { thread_id: params.threadId } : {}),
+        ...(params.threadKind ? { thread_kind: params.threadKind } : {}),
+        ...(params.target ? { target: params.target } : {}),
       },
     });
     if (error) {
@@ -67,6 +73,8 @@ export type Invite = {
   status: InviteStatus;
   /** Optional inviter message; in-app only; null or omitted for legacy rows */
   note?: string | null;
+  /** Set when invite belongs to invite_threads (RPC-created sends) */
+  thread_id?: string | null;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -92,6 +100,68 @@ export type InviteWithDetails = Invite & {
     avatar_url: string | null;
   };
 };
+
+function coerceUuidArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && Boolean(x));
+}
+
+/** jsonb payload from create_invite_thread_with_invites */
+type InviteThreadRpcResult = {
+  thread_id: string | null;
+  thread_kind: string | null;
+  inserted_invite_ids: string[];
+  inserted_invitee_ids: string[];
+  already_invited_invitee_ids: string[];
+  skipped_self_invitee_ids: string[];
+  skipped_blocked_invitee_ids: string[];
+  effective_recipient_count: number;
+  note_was_included: boolean;
+};
+
+function parseInviteThreadRpcResult(raw: unknown): InviteThreadRpcResult {
+  const o = raw as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") {
+    return {
+      thread_id: null,
+      thread_kind: null,
+      inserted_invite_ids: [],
+      inserted_invitee_ids: [],
+      already_invited_invitee_ids: [],
+      skipped_self_invitee_ids: [],
+      skipped_blocked_invitee_ids: [],
+      effective_recipient_count: 0,
+      note_was_included: false,
+    };
+  }
+
+  const threadId: string | null =
+    o.thread_id === null
+      ? null
+      : typeof o.thread_id === "string"
+        ? o.thread_id
+        : null;
+
+  const threadKind: string | null =
+    typeof o.thread_kind === "string" ? o.thread_kind : null;
+
+  return {
+    thread_id: threadId,
+    thread_kind: threadKind,
+    inserted_invite_ids: coerceUuidArray(o.inserted_invite_ids),
+    inserted_invitee_ids: coerceUuidArray(o.inserted_invitee_ids),
+    already_invited_invitee_ids: coerceUuidArray(o.already_invited_invitee_ids),
+    skipped_self_invitee_ids: coerceUuidArray(o.skipped_self_invitee_ids),
+    skipped_blocked_invitee_ids: coerceUuidArray(
+      o.skipped_blocked_invitee_ids
+    ),
+    effective_recipient_count:
+      typeof o.effective_recipient_count === "number"
+        ? o.effective_recipient_count
+        : 0,
+    note_was_included: Boolean(o.note_was_included),
+  };
+}
 
 /**
  * Send invites to multiple users for a post
@@ -119,7 +189,7 @@ export async function sendInvites(
 
     console.log("Current user:", userId);
 
-    // Any authenticated user can invite; post must exist (RLS also governs insert).
+    // Fast client check — RPC validates again (authoritative).
     const { data: post, error: postError } = await supabase
       .from("posts")
       .select("id")
@@ -131,31 +201,32 @@ export async function sendInvites(
       throw new Error("Post not found");
     }
 
-    // Deduplicate only against this inviter’s existing rows (multi-inviter model)
-    const { data: existingInvites, error: existingError } = await supabase
-      .from("invites")
-      .select("invitee_id")
-      .eq("post_id", postId)
-      .eq("inviter_id", userId)
-      .in("invitee_id", inviteeIds);
-
-    if (existingError) {
-      console.error("Error checking existing invites:", existingError);
-      throw new Error("Failed to check existing invites");
-    }
-
-    // Filter out users who are already invited
-    const alreadyInvitedIds =
-      existingInvites?.map((invite) => invite.invitee_id) || [];
-    const newInviteeIds = inviteeIds.filter(
-      (id) => !alreadyInvitedIds.includes(id)
+    const { data: rpcRaw, error: rpcError } = await supabase.rpc(
+      "create_invite_thread_with_invites",
+      {
+        p_post_id: postId,
+        p_invitee_ids: inviteeIds,
+        p_note: noteForDb,
+      }
     );
 
-    console.log("Already invited users:", alreadyInvitedIds);
-    console.log("New users to invite:", newInviteeIds);
+    if (rpcError) {
+      console.error("create_invite_thread_with_invites RPC error:", rpcError);
+      return {
+        data: null,
+        error: rpcError,
+      };
+    }
 
-    // If no new users to invite, return success with empty data
-    if (newInviteeIds.length === 0) {
+    const rpc = parseInviteThreadRpcResult(rpcRaw);
+    const alreadyInvitedIds = rpc.already_invited_invitee_ids;
+
+    const insertedInviteIds = rpc.inserted_invite_ids;
+    if (insertedInviteIds.length === 0) {
+      console.log(
+        "RPC invite send: zero new inserts. already_invited:",
+        alreadyInvitedIds.length
+      );
       return {
         data: [],
         error: null,
@@ -163,36 +234,39 @@ export async function sendInvites(
       };
     }
 
-    // Create invites only for new users
-    const invites = newInviteeIds.map((inviteeId) => ({
-      post_id: postId,
-      inviter_id: userId,
-      invitee_id: inviteeId,
-      note: noteForDb,
-    }));
-
-    console.log("Inserting new invites:", invites);
-
-    const { data, error } = await supabase
+    const { data: fetchedInvites, error: fetchError } = await supabase
       .from("invites")
-      .insert(invites)
-      .select("*");
+      .select("*")
+      .in("id", insertedInviteIds);
 
-    if (error) {
-      console.error("Insert error:", error);
+    if (fetchError) {
+      console.error("Failed to fetch invites after RPC:", fetchError);
       return {
         data: null,
-        error,
+        error: fetchError,
         alreadyInvited: alreadyInvitedIds,
       };
     }
 
-    // Invites inserted successfully
-    console.log("Successfully inserted invites:", data);
+    const data = (fetchedInvites || []) as Invite[];
+    console.log("Successfully fetched invites after RPC:", data.length);
+
+    // Preserve row order aligned with RPC inserted_invitee_ids when possible
+    const byInviteeOrder = rpc.inserted_invitee_ids;
+    if (byInviteeOrder.length > 0 && data.length > 1) {
+      data.sort((a, b) => {
+        const ia = byInviteeOrder.indexOf(a.invitee_id);
+        const ib = byInviteeOrder.indexOf(b.invitee_id);
+        if (ia !== -1 && ib !== -1) return ia - ib;
+        if (ia !== -1) return -1;
+        if (ib !== -1) return 1;
+        return 0;
+      });
+    }
 
     // Create notifications for sent invites (for the inviter)
     // This happens even if notification creation fails (don't fail invite creation)
-    if (data && data.length > 0) {
+    if (data.length > 0) {
       let postTypeForPush: "hangout" | "experience" | null = null;
       try {
         // Get post details for notifications
@@ -214,53 +288,30 @@ export async function sendInvites(
           postTypeForPush = postData.type;
         }
 
-        // Get invitee profile IDs for actor info
-        const inviteeUserIds = data.map((invite) => invite.invitee_id);
-
-        // [PHASE 2.3 - OPTIMIZATION] Use getProfilesByUserIds() for caching and deduplication
-        const { getProfilesByUserIds } = await import("./follows");
-        let inviteeProfiles: any[] = [];
-
-        try {
-          const profiles = await getProfilesByUserIds(inviteeUserIds);
-          // Map to expected format: user_id, username, display_name, avatar_url
-          inviteeProfiles = profiles.map((p) => ({
-            user_id: p.user_id,
-            username: p.username,
-            display_name: p.display_name,
-            avatar_url: p.avatar_url,
-          }));
-        } catch (error) {
-          console.error(
-            "Error fetching invitee profiles for notifications:",
-            error
-          );
-        }
-
-        const inviteeMap = new Map(inviteeProfiles.map((p) => [p.user_id, p]));
+        const threadExtras: Record<string, unknown> = {};
+        if (rpc.thread_id) threadExtras.thread_id = rpc.thread_id;
+        if (rpc.thread_kind) threadExtras.thread_kind = rpc.thread_kind;
 
         // Create sent invite notifications for the inviter
-        const sentInviteNotifications = data.map((invite) => {
-          const inviteeProfile = inviteeMap.get(invite.invitee_id);
-          return {
-            user_id: userId, // The inviter (current user)
-            actor_id: invite.invitee_id, // The invitee (person being invited)
-            type: "invite" as const,
-            entity_type: (postData?.type || "hangout") as
-              | "hangout"
-              | "experience",
-            entity_id: postId,
-            additional_data: {
-              post_id: postId,
-              invite_id: invite.id,
-              post_type: postData?.type || "hangout",
-              post_caption: postData?.caption || null,
-              invite_direction: "sent", // Mark as sent invite
-              ...(noteForDb ? { invite_note: noteForDb } : {}),
-            },
-            is_read: false,
-          };
-        });
+        const sentInviteNotifications = data.map((invite) => ({
+          user_id: userId,
+          actor_id: invite.invitee_id,
+          type: "invite" as const,
+          entity_type: (postData?.type || "hangout") as
+            | "hangout"
+            | "experience",
+          entity_id: postId,
+          additional_data: {
+            post_id: postId,
+            invite_id: invite.id,
+            post_type: postData?.type || "hangout",
+            post_caption: postData?.caption || null,
+            invite_direction: "sent",
+            ...(noteForDb ? { invite_note: noteForDb } : {}),
+            ...threadExtras,
+          },
+          is_read: false,
+        }));
 
         console.log(
           "Creating sent invite notifications:",
@@ -305,19 +356,24 @@ export async function sendInvites(
       }
 
       if (postTypeForPush) {
+        const newInviteeIdsForPush = rpc.inserted_invitee_ids;
         void invokeSendInvitePushBestEffort({
           postId,
           postType: postTypeForPush,
           actorId: userId,
-          recipientUserIds: newInviteeIds,
-          inviteId: data.length === 1 ? data[0].id : undefined,
+          recipientUserIds: newInviteeIdsForPush,
+          inviteId:
+            insertedInviteIds.length === 1 ? insertedInviteIds[0] : undefined,
+          threadId: rpc.thread_id ?? undefined,
+          threadKind: rpc.thread_kind ?? undefined,
+          target: rpc.thread_id ? "invite_thread" : "notifications",
         });
       }
     }
 
     return {
       data,
-      error,
+      error: null,
       alreadyInvited: alreadyInvitedIds,
     };
   } catch (error) {

@@ -5,7 +5,7 @@
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { isNativeApp } from "./storage/utils/capacitorDetection";
-import { postDetailPath } from "../router/Paths";
+import { Paths, postDetailPath } from "../router/Paths";
 
 let tapListenerAdded = false;
 let navigateHandler: ((path: string) => void) | null = null;
@@ -56,6 +56,13 @@ function parsePostPushData(
   return { postId, postType: postTypeRaw as "hangout" | "experience" };
 }
 
+function isInvitePushData(
+  data: Record<string, unknown> | null | undefined
+): boolean {
+  const typeRaw = String(data?.type ?? "").trim();
+  return typeRaw === "invite";
+}
+
 /**
  * Call once on native; safe to call from React useEffect. Idempotent.
  */
@@ -81,6 +88,10 @@ export function registerNativePushTapListener(): void {
             data && typeof data === "object" && !Array.isArray(data)
               ? (data as Record<string, unknown>)
               : undefined;
+          if (isInvitePushData(record)) {
+            deliverPath(Paths.notification);
+            return;
+          }
           const parsed = parsePostPushData(record);
           if (!parsed) return;
           const path = postDetailPath(parsed.postType, parsed.postId);

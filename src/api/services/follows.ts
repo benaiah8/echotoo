@@ -7,6 +7,12 @@ import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
 
 // [OPTIMIZATION] Dedupe + cooldown for profiles?select=... to prevent burst calls
 const DEBUG_PROFILE_FETCH = false;
+/** Verbose getViewerId / getViewerAuthUserId tracing ([VIEWERDBG]). Off by default. */
+const DEBUG_VIEWER_AUTH = false;
+const vDbg = (...args: Parameters<typeof console.log>) => {
+  if (!DEBUG_VIEWER_AUTH) return;
+  console.log(...args);
+};
 const PROFILE_COOLDOWN_MS = 30 * 1000; // 30 seconds
 
 type ProfileResult = {
@@ -125,7 +131,7 @@ export function invalidateProfileByUserIdCache(userId: string) {
 
 /** Return the viewer's *profile id* (not auth user id). */
 export async function getViewerId(): Promise<string | null> {
-  console.log("[VIEWERDBG] getViewerId enter", { t: Date.now() });
+  vDbg("[VIEWERDBG] getViewerId enter", { t: Date.now() });
   try {
     // [PHASE 2.3 - FIX] Check localStorage first (fast, synchronous path)
     // Why: Eliminates profiles?select=id requests on page reloads
@@ -138,7 +144,7 @@ export async function getViewerId(): Promise<string | null> {
         // Note: We don't validate it here for speed (validation happens naturally on first use)
         // If invalid, database queries will fail and components will handle it gracefully
         // This eliminates redundant profiles?select=id requests on page reloads
-        console.log("[VIEWERDBG] getViewerId exit", {
+        vDbg("[VIEWERDBG] getViewerId exit", {
           path: "localStorage_my_profile_id",
           usedLocalStorageMyProfileId: true,
           returnedProfileId: storedProfileId,
@@ -165,7 +171,7 @@ export async function getViewerId(): Promise<string | null> {
         } catch (localStorageError) {
           // Ignore localStorage errors - in-memory cache still works
         }
-        console.log("[VIEWERDBG] getViewerId exit", {
+        vDbg("[VIEWERDBG] getViewerId exit", {
           path: "authCache_profileId",
           usedLocalStorageMyProfileId: false,
           cacheHit: "auth_memory_profileId",
@@ -195,7 +201,7 @@ export async function getViewerId(): Promise<string | null> {
           Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
         ) {
           if (authCache.profileId) {
-            console.log("[VIEWERDBG] getViewerId RM inner cache_hit profileId", {
+            vDbg("[VIEWERDBG] getViewerId RM inner cache_hit profileId", {
               returnedProfileId: authCache.profileId,
               t: Date.now(),
             });
@@ -206,7 +212,7 @@ export async function getViewerId(): Promise<string | null> {
 
         // Check if aborted before making requests
         if (signal.aborted) {
-          console.log("[VIEWERDBG] getViewerId RM aborted (pre-session)", {
+          vDbg("[VIEWERDBG] getViewerId RM aborted (pre-session)", {
             t: Date.now(),
           });
           return null;
@@ -220,7 +226,7 @@ export async function getViewerId(): Promise<string | null> {
           const { data: sessionData, error: sessionError } =
             await supabase.auth.getSession();
 
-          console.log("[VIEWERDBG] getViewerId RM getSession", {
+          vDbg("[VIEWERDBG] getViewerId RM getSession", {
             t: Date.now(),
             sessionError: sessionError?.message ?? null,
             sessionUserId: sessionData.session?.user?.id ?? null,
@@ -228,7 +234,7 @@ export async function getViewerId(): Promise<string | null> {
 
           // Check if aborted after async operation
           if (signal.aborted) {
-            console.log("[VIEWERDBG] getViewerId RM aborted (post-session)", {
+            vDbg("[VIEWERDBG] getViewerId RM aborted (post-session)", {
               t: Date.now(),
             });
             return null;
@@ -248,7 +254,7 @@ export async function getViewerId(): Promise<string | null> {
             const { data: userData, error: userError } =
               await supabase.auth.getUser();
 
-            console.log("[VIEWERDBG] getViewerId RM getUser", {
+            vDbg("[VIEWERDBG] getViewerId RM getUser", {
               t: Date.now(),
               userError: userError?.message ?? null,
               userId: userData.user?.id ?? null,
@@ -256,7 +262,7 @@ export async function getViewerId(): Promise<string | null> {
 
             // Check if aborted after async operation
             if (signal.aborted) {
-              console.log("[VIEWERDBG] getViewerId RM aborted (post-getUser)", {
+              vDbg("[VIEWERDBG] getViewerId RM aborted (post-getUser)", {
                 t: Date.now(),
               });
               return null;
@@ -274,7 +280,7 @@ export async function getViewerId(): Promise<string | null> {
         if (!authId) {
           // Do not write authCache { userId: null } — transient session misses must not block
           // real sessions for 30s (shared cache with getViewerAuthUserId).
-          console.log("[VIEWERDBG] getViewerId RM no authId after session+getUser", {
+          vDbg("[VIEWERDBG] getViewerId RM no authId after session+getUser", {
             t: Date.now(),
           });
           return null;
@@ -291,7 +297,7 @@ export async function getViewerId(): Promise<string | null> {
             profileId: cachedViewer.profileId,
             timestamp: Date.now(),
           };
-          console.log("[VIEWERDBG] getViewerId exit", {
+          vDbg("[VIEWERDBG] getViewerId exit", {
             path: "viewerProfileId_ttl_cache",
             returnedProfileId: cachedViewer.profileId,
             authUserId: authId,
@@ -303,7 +309,7 @@ export async function getViewerId(): Promise<string | null> {
 
         // Check if aborted before database query
         if (signal.aborted) {
-          console.log("[VIEWERDBG] getViewerId RM aborted (pre-getProfileByUserId)", {
+          vDbg("[VIEWERDBG] getViewerId RM aborted (pre-getProfileByUserId)", {
             t: Date.now(),
           });
           return null;
@@ -316,7 +322,7 @@ export async function getViewerId(): Promise<string | null> {
 
         // Check if aborted after async operation
         if (signal.aborted) {
-          console.log("[VIEWERDBG] getViewerId RM aborted (post-getProfileByUserId)", {
+          vDbg("[VIEWERDBG] getViewerId RM aborted (post-getProfileByUserId)", {
             t: Date.now(),
           });
           return null;
@@ -330,7 +336,7 @@ export async function getViewerId(): Promise<string | null> {
             profileId: null,
             timestamp: Date.now(),
           };
-          console.log("[VIEWERDBG] getViewerId RM profile missing after fetch", {
+          vDbg("[VIEWERDBG] getViewerId RM profile missing after fetch", {
             t: Date.now(),
             authUserId: authId,
           });
@@ -356,7 +362,7 @@ export async function getViewerId(): Promise<string | null> {
           // Ignore localStorage errors - in-memory cache still works
         }
 
-        console.log("[VIEWERDBG] getViewerId exit", {
+        vDbg("[VIEWERDBG] getViewerId exit", {
           path: "getProfileByUserId",
           returnedProfileId: profile.id,
           authUserId: authId,
@@ -371,7 +377,7 @@ export async function getViewerId(): Promise<string | null> {
     return result.data ?? null;
   } catch (error) {
     console.error("getViewerId error:", error);
-    console.log("[VIEWERDBG] getViewerId exception", {
+    vDbg("[VIEWERDBG] getViewerId exception", {
       t: Date.now(),
       error: error instanceof Error ? error.message : String(error),
     });
@@ -407,13 +413,13 @@ export async function getViewerId(): Promise<string | null> {
  * @returns Auth user ID (string) or null if not authenticated
  */
 export async function getViewerAuthUserId(): Promise<string | null> {
-  console.log("[VIEWERDBG] getViewerAuthUserId enter", { t: Date.now() });
+  vDbg("[VIEWERDBG] getViewerAuthUserId enter", { t: Date.now() });
   try {
     // [OPTIMIZATION] Check in-memory cache first (fastest path)
     // If getViewerId() already ran, userId is already cached - return immediately
     if (authCache && Date.now() - authCache.timestamp < AUTH_CACHE_DURATION) {
       if (authCache.userId) {
-        console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+        vDbg("[VIEWERDBG] getViewerAuthUserId exit", {
           path: "cache_hit_auth_userId",
           cacheHit: true,
           returnedAuthUserId: authCache.userId,
@@ -441,7 +447,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           Date.now() - authCache.timestamp < AUTH_CACHE_DURATION
         ) {
           if (authCache.userId) {
-            console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+            vDbg("[VIEWERDBG] getViewerAuthUserId exit", {
               path: "RM_inner_cache_hit_auth_userId",
               cacheHit: true,
               returnedAuthUserId: authCache.userId,
@@ -454,7 +460,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
 
         // [ABORT CHECK] Check if aborted before making requests
         if (signal.aborted) {
-          console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (pre-session)", {
+          vDbg("[VIEWERDBG] getViewerAuthUserId RM aborted (pre-session)", {
             t: Date.now(),
           });
           return null;
@@ -469,7 +475,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           const { data: sessionData, error: sessionError } =
             await supabase.auth.getSession();
 
-          console.log("[VIEWERDBG] getViewerAuthUserId RM getSession", {
+          vDbg("[VIEWERDBG] getViewerAuthUserId RM getSession", {
             t: Date.now(),
             sessionError: sessionError?.message ?? null,
             sessionUserId: sessionData.session?.user?.id ?? null,
@@ -477,7 +483,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
 
           // [ABORT CHECK] Check if aborted after async operation
           if (signal.aborted) {
-            console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (post-session)", {
+            vDbg("[VIEWERDBG] getViewerAuthUserId RM aborted (post-session)", {
               t: Date.now(),
             });
             return null;
@@ -497,7 +503,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
             const { data: userData, error: userError } =
               await supabase.auth.getUser();
 
-            console.log("[VIEWERDBG] getViewerAuthUserId RM getUser", {
+            vDbg("[VIEWERDBG] getViewerAuthUserId RM getUser", {
               t: Date.now(),
               userError: userError?.message ?? null,
               userId: userData.user?.id ?? null,
@@ -505,7 +511,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
 
             // [ABORT CHECK] Check if aborted after async operation
             if (signal.aborted) {
-              console.log("[VIEWERDBG] getViewerAuthUserId RM aborted (post-getUser)", {
+              vDbg("[VIEWERDBG] getViewerAuthUserId RM aborted (post-getUser)", {
                 t: Date.now(),
               });
               return null;
@@ -522,7 +528,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
         if (!authId) {
           // Never negative-cache: a miss here is often transient (Android WebView OAuth).
           // Genuine sign-out clears auth via clearAuthCache on SIGNED_OUT (App.tsx).
-          console.log("[VIEWERDBG] getViewerAuthUserId RM no authId after session+getUser", {
+          vDbg("[VIEWERDBG] getViewerAuthUserId RM no authId after session+getUser", {
             t: Date.now(),
           });
           return null;
@@ -537,7 +543,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
           timestamp: Date.now(),
         };
 
-        console.log("[VIEWERDBG] getViewerAuthUserId exit", {
+        vDbg("[VIEWERDBG] getViewerAuthUserId exit", {
           path: "session_or_user_resolved",
           cacheHit: false,
           updatedAuthCacheUserId: true,
@@ -554,7 +560,7 @@ export async function getViewerAuthUserId(): Promise<string | null> {
     // [ERROR HANDLING] Log error but don't throw - return null gracefully
     // This prevents breaking the app if auth check fails
     console.error("getViewerAuthUserId error:", error);
-    console.log("[VIEWERDBG] getViewerAuthUserId exception", {
+    vDbg("[VIEWERDBG] getViewerAuthUserId exception", {
       t: Date.now(),
       error: error instanceof Error ? error.message : String(error),
     });

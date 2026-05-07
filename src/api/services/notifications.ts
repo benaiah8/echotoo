@@ -21,6 +21,13 @@ const notificationsResponseCache = new Map<
 >();
 const NOTIFICATIONS_TTL_MS = 4000;
 
+/** Verbose create-post push notification path ([CPN]). Off by default. */
+const DEBUG_CPN = false;
+const cpnDbg = (...a: Parameters<typeof console.log>) => {
+  if (!DEBUG_CPN) return;
+  console.log(...a);
+};
+
 export type NotificationBadgeData = {
   total: number;
   inviteUnread: number;
@@ -485,7 +492,7 @@ export async function createPostNotifications(
   authorId: string
 ): Promise<void> {
   try {
-    console.log("[CPN] entry", { postId, postType, authorId });
+    cpnDbg("[CPN] entry", { postId, postType, authorId });
 
     // follows.following_id and notification_settings.target_user_id use profile id, not auth user id
     const { data: authorProfile, error: authorProfileError } = await supabase
@@ -494,7 +501,7 @@ export async function createPostNotifications(
       .eq("user_id", authorId)
       .maybeSingle();
 
-    console.log("[CPN] authorProfile", {
+    cpnDbg("[CPN] authorProfile", {
       authorProfileId: authorProfile?.id ?? "missing",
     });
 
@@ -522,7 +529,7 @@ export async function createPostNotifications(
 
     if (followersError) {
       console.error("Error fetching followers:", followersError);
-      console.log("[CPN] followers", {
+      cpnDbg("[CPN] followers", {
         count: 0,
         followerIds: [] as string[],
         err: followersError.message,
@@ -532,13 +539,13 @@ export async function createPostNotifications(
 
     const followerRows = followers ?? [];
     const followerIds = followerRows.map((f) => f.follower_id);
-    console.log("[CPN] followers", {
+    cpnDbg("[CPN] followers", {
       count: followerIds.length,
       followerIds,
     });
 
     if (followerRows.length === 0) {
-      console.log("[CPN] skip_no_followers");
+      cpnDbg("[CPN] skip_no_followers");
       return; // No followers to notify
     }
 
@@ -572,13 +579,13 @@ export async function createPostNotifications(
       ),
     ];
 
-    console.log("[CPN] follower_auth_map", {
+    cpnDbg("[CPN] follower_auth_map", {
       followerProfileCount: followerIds.length,
       resolvedAuthCount: followerAuthUserIds.length,
     });
 
     if (followerAuthUserIds.length === 0) {
-      console.log("[CPN] skip_no_follower_auth_resolved");
+      cpnDbg("[CPN] skip_no_follower_auth_resolved");
       return;
     }
 
@@ -590,7 +597,7 @@ export async function createPostNotifications(
       .in("user_id", followerAuthUserIds)
       .eq("enabled", true);
 
-    console.log("[CPN] settings", {
+    cpnDbg("[CPN] settings", {
       count: notificationSettings?.length ?? 0,
       enabledFollowerIds: notificationSettings?.map((s) => s.user_id) ?? [],
       settingsError: settingsError?.message ?? null,
@@ -614,7 +621,7 @@ export async function createPostNotifications(
         })
         .filter((n): n is NonNullable<typeof n> => n !== null);
 
-      console.log("[CPN] insert_attempt", {
+      cpnDbg("[CPN] insert_attempt", {
         count: notifications.length,
       });
 
@@ -625,9 +632,9 @@ export async function createPostNotifications(
       if (insertError) {
         console.error("Error creating post notifications:", insertError);
       } else {
-        console.log("[CPN] insert_success");
+        cpnDbg("[CPN] insert_success");
         const recipientUserIds = notifications.map((n) => n.user_id);
-        console.log("[CPN] push_invoke", {
+        cpnDbg("[CPN] push_invoke", {
           recipientCount: recipientUserIds.length,
           postId,
         });
@@ -663,12 +670,12 @@ export async function createPostNotifications(
       });
 
     if (notificationsToCreate.length === 0) {
-      console.log("[CPN] skip_no_notifications_to_create");
+      cpnDbg("[CPN] skip_no_notifications_to_create");
       return; // No enabled notifications to send
     }
 
     // Insert notifications
-    console.log("[CPN] insert_attempt", {
+    cpnDbg("[CPN] insert_attempt", {
       count: notificationsToCreate.length,
     });
 
@@ -679,8 +686,8 @@ export async function createPostNotifications(
     if (insertError) {
       console.error("Error creating post notifications:", insertError);
     } else {
-      console.log("[CPN] insert_success");
-      console.log("[CPN] push_invoke", {
+      cpnDbg("[CPN] insert_success");
+      cpnDbg("[CPN] push_invoke", {
         recipientCount: notificationsToCreate.length,
         postId,
       });

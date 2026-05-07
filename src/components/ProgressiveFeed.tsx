@@ -18,6 +18,7 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   useMemo,
@@ -72,6 +73,11 @@ function debugRsvpMerged<T extends { id: string }>(
     ctx,
     ...extra,
   });
+}
+
+/** Draft rows prepend on Created offset 0; backend offset excludes them */
+function isDraftLikeFeedRow<T extends { id: string }>(row: T): boolean {
+  return Boolean((row as { isDraft?: boolean }).isDraft);
 }
 
 /** One page fetched: infer whether more backend rows likely exist */
@@ -153,6 +159,20 @@ export interface ProgressiveFeedProps<T> {
     firstPostId: string | null;
   }) => void;
 
+  /** Bump with items to prepend at head (deduped by id); does not call loadItems */
+  externalPrependRevision?: number;
+  externalPrependItems?: T[];
+
+  /** Bump to replace in-place by id (silent reconcile) */
+  externalReplaceRevision?: number;
+  externalReplaceItem?: T | null;
+
+  /**
+   * Own Profile Created publish return: merged cache rows + locally built new post (+ drafts).
+   * Skips immediate `loadItems(0)`, mount cache hydrate, sentinel load-more, and keeps `hasMore` false until remount/manual refresh bumps the feed key / soft refresh epoch.
+   */
+  authoritativeHydratedSeed?: T[];
+
   tabId?: string;
 }
 
@@ -202,6 +222,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
   softRefreshEpoch,
   onSoftRefreshStart,
   onSoftRefreshDone,
+  externalPrependRevision = 0,
+  externalPrependItems,
+  externalReplaceRevision = 0,
+  externalReplaceItem = null,
+  authoritativeHydratedSeed,
 }: ProgressiveFeedProps<T>) {
   // PWA detection: Use centralized utility
   const isPWAValue = (() => {
@@ -224,21 +249,32 @@ export default function ProgressiveFeed<T extends { id: string }>({
     return 15; // Fixed: load 15 items initially for fewer RPCs
   }, []);
 
-  // Calculate initial items - ONLY use initialItems prop during render
-  // Do NOT call getCachedItems() during render - it causes re-render loops
-  // getCachedItems() is created with useCallback and gets new reference on every render
-  // Calling it during render causes component to re-render when cache populates
-  const initialItemsArray = useMemo(() => {
-    if (initialItems && initialItems.length > 0) {
-      // Deduplicate by ID to prevent duplicate keys
-      return Array.from(
+  // Bootstrap: authoritative publish seed wins on first snapshot, then `initialItems`;
+  // ref freezes after first assignment (same intent as the old empty-deps `initialItems` memo).
+  const authoritativeSeedUsedRef = useRef(
+    Boolean(authoritativeHydratedSeed?.length)
+  );
+  const initialBootstrapSnapshotRef = useRef<T[] | null>(null);
+  if (initialBootstrapSnapshotRef.current === null) {
+    let rows: T[] = [];
+    if (authoritativeHydratedSeed?.length) {
+      rows = Array.from(
+        new Map(authoritativeHydratedSeed.map((item) => [item.id, item])).values()
+      );
+    } else if (initialItems?.length) {
+      rows = Array.from(
         new Map(initialItems.map((item) => [item.id, item])).values()
       );
     }
-    return [];
-  }, []); // Empty deps - only run on mount, ignore initialItems changes
+    initialBootstrapSnapshotRef.current = rows;
+  }
+  const initialItemsArray = initialBootstrapSnapshotRef.current!;
 
-  const initialOffset = initialItemsArray.length;
+  const initialPublishedBootstrapOffset = initialItemsArray.filter(
+    (r) => !isDraftLikeFeedRow(r)
+  ).length;
+
+  const initialOffset = initialPublishedBootstrapOffset;
 
   // Internal state
   const [items, setItems] = useState<T[]>(initialItemsArray);
@@ -246,7 +282,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const [exitingPostIds, setExitingPostIds] = useState(() => new Set<string>());
   const deleteExitTimersRef = useRef<Map<string, number>>(new Map());
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(
+    () => !Boolean(authoritativeHydratedSeed?.length)
+  );
   const [error, setError] = useState<string | null>(externalError);
 
   // Refs
@@ -254,7 +292,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const containerRef = externalContainerRef || internalContainerRef;
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
-  const offsetRef = useRef(initialOffset); // Initialize with calculated offset
+  const offsetRef = useRef(initialPublishedBootstrapOffset); // Backend offset excludes drafts on Created tab
   const initialLoadCompleteRef = useRef(false); // Track if initial load has completed
   const initialLoadRunCountRef = useRef(0);
   const initialLoadGuardRef = useRef(false);
@@ -267,7 +305,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // [FIX C] Track in-flight offsets with pageSize to prevent duplicate requests
   const inFlightOffsetsRef = useRef<Set<string>>(new Set());
   // [FIX B] Use refs for stable dependencies in loadMore
-  const hasMoreRef = useRef(true);
+  const hasMoreRef = useRef(!Boolean(authoritativeHydratedSeed?.length));
   const commitHasMore = useCallback((next: boolean) => {
     hasMoreRef.current = next;
     setHasMore(next);
@@ -283,14 +321,17 @@ export default function ProgressiveFeed<T extends { id: string }>({
   const softBaselineCapturedRef = useRef(false);
   const softRefreshInFlightRef = useRef(false);
 
+  const lastExternalPrependRevisionAppliedRef = useRef(0);
+  const lastExternalReplaceRevisionAppliedRef = useRef(0);
+
   const captureSoftBaselineEpoch = () => {
     softBaselineEpochRef.current = softEpochRef.current;
     softBaselineCapturedRef.current = true;
   };
 
-  const isDraftRow = useCallback((row: T) => {
-    return Boolean((row as { isDraft?: boolean }).isDraft);
-  }, []);
+  const isDraftRow = useCallback((row: T) => isDraftLikeFeedRow(row), []);
+
+  const authoritativeHydrationLayoutAppliedRef = useRef(false);
 
   // [CHAIN] Cap chained loads per completion to avoid infinite loops
   const PREFETCH_PX = 600;
@@ -336,6 +377,24 @@ export default function ProgressiveFeed<T extends { id: string }>({
     `PF-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   );
   const logId = logIdRef.current;
+
+  useLayoutEffect(() => {
+    if (!authoritativeSeedUsedRef.current) return;
+    if (authoritativeHydrationLayoutAppliedRef.current) return;
+    authoritativeHydrationLayoutAppliedRef.current = true;
+
+    offsetRef.current = itemsRef.current.filter((r) => !isDraftLikeFeedRow(r))
+      .length;
+    loadingRef.current = false;
+    setIsLoadingMore(false);
+    initialLoadGuardRef.current = false;
+    initialLoadCompleteRef.current = true;
+    captureSoftBaselineEpoch();
+    commitHasMore(false);
+
+    // Publish-return hydrate: sync refs/state once — seed props may clear on parent re-render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // [DEBUG] Toggle for console noise - [STEP 1] TEMP: Enable for repro
   const DEBUG_PF = false;
@@ -416,6 +475,71 @@ export default function ProgressiveFeed<T extends { id: string }>({
     });
     return cleanup;
   }, [setCachedItems, scheduleTimeout]);
+
+  // Local prepend after publish (no loadItems); keeps existing rows, dedupes by id
+  useEffect(() => {
+    const rev = externalPrependRevision ?? 0;
+    const rows = externalPrependItems;
+    if (!rows?.length) return;
+    if (rev <= 0 || rev <= lastExternalPrependRevisionAppliedRef.current) return;
+    lastExternalPrependRevisionAppliedRef.current = rev;
+
+    const headUnique = Array.from(
+      new Map(rows.map((item) => [item.id, item])).values()
+    );
+    const prependIds = new Set(headUnique.map((h) => h.id));
+
+    setItems((prev) => {
+      const rest = prev.filter((p) => !prependIds.has(p.id));
+      const merged = [...headUnique, ...rest];
+      debugRsvpMerged(merged, "external-prepend");
+      if (setCachedItems) {
+        scheduleTimeout(() => {
+          if (!mountedRef.current) return;
+          setCachedItems(merged);
+        }, 0);
+      }
+      return merged;
+    });
+  }, [
+    externalPrependRevision,
+    externalPrependItems,
+    setCachedItems,
+    scheduleTimeout,
+  ]);
+
+  /** Replace in place by id (silent canonical reconcile) */
+  useEffect(() => {
+    const rev = externalReplaceRevision ?? 0;
+    const row = externalReplaceItem;
+    if (
+      !row ||
+      rev <= 0 ||
+      rev <= lastExternalReplaceRevisionAppliedRef.current
+    ) {
+      return;
+    }
+    lastExternalReplaceRevisionAppliedRef.current = rev;
+
+    setItems((prev) => {
+      const ix = prev.findIndex((p) => p.id === row.id);
+      if (ix === -1) return prev;
+      const next = [...prev];
+      next[ix] = row as T;
+      if (setCachedItems) {
+        scheduleTimeout(() => {
+          if (!mountedRef.current) return;
+          setCachedItems(next);
+        }, 0);
+      }
+      return next;
+    });
+  }, [
+    externalReplaceRevision,
+    externalReplaceItem,
+    setCachedItems,
+    scheduleTimeout,
+  ]);
 
   // [STEP 1] Keep refs in sync with state for stable dependencies
   useEffect(() => {
@@ -895,6 +1019,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // [FIX] Check cache in useEffect, not during render
   // This prevents re-render loops when getCachedItems reference changes
   useEffect(() => {
+    // Parent already merged cache + prepend + drafts into `authoritativeHydratedSeed`
+    if (authoritativeSeedUsedRef.current) return;
+
     if (items.length > 0) {
       if (DEBUG_RSVP_POST_ID) {
         const row = items.find((i) => i.id === DEBUG_RSVP_POST_ID);
@@ -1096,7 +1223,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
               if (setCachedItems) {
                 scheduleTimeout(() => {
                   if (!mountedRef.current || !isVisibleRef.current) return;
-                  setCachedItems(fetchedItems);
+                  setCachedItems(itemsRef.current);
                 }, 0);
               }
               initialLoadGuardRef.current = false;

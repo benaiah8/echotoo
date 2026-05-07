@@ -3,6 +3,13 @@ import { type FeedItem } from "./getPublicFeed";
 
 const TTL_MS = 120_000; // 2 minutes
 
+/** Verbose post-detail cache + query logs. Off by default. */
+const DEBUG_POST_DETAIL_QUERY = false;
+const postDetailDbg = (...a: Parameters<typeof console.log>) => {
+  if (!DEBUG_POST_DETAIL_QUERY) return;
+  console.log(...a);
+};
+
 // In-flight deduplication: concurrent identical requests share one RPC call
 const postDetailInFlight = new Map<
   string,
@@ -34,19 +41,19 @@ export async function getPostByIdOptimized(
   // Cache hit (within TTL)
   const cached = postDetailCache.get(key);
   if (cached && Date.now() - cached.ts < TTL_MS) {
-    console.log("[detail-cache] hit", key);
+    postDetailDbg("[detail-cache] hit", key);
     return cached.value;
   }
 
   // In-flight: return existing promise
   let promise = postDetailInFlight.get(key);
   if (promise) {
-    console.log("[detail-cache] in-flight", key);
+    postDetailDbg("[detail-cache] in-flight", key);
     return promise;
   }
 
   // Miss: fetch and store
-  console.log("[detail-cache] miss -> fetch", key);
+  postDetailDbg("[detail-cache] miss -> fetch", key);
   promise = getPostByIdOptimizedImpl(postId, viewerUserId)
     .then((result) => {
       postDetailCache.set(key, { ts: Date.now(), value: result });
@@ -88,7 +95,7 @@ async function getPostByIdOptimizedImpl(
   viewerUserId: string | null
 ): Promise<{ data: FeedItem | null; error: any }> {
   try {
-    console.log("[getPostByIdOptimized] Starting query with params:", {
+    postDetailDbg("[getPostByIdOptimized] Starting query with params:", {
       postId,
       viewerUserId: viewerUserId ? "[REDACTED]" : null,
     });
@@ -162,7 +169,7 @@ async function getPostByIdOptimizedImpl(
       activities: post.activities || [],
     };
 
-    console.log("[getPostByIdOptimized] Query result:", {
+    postDetailDbg("[getPostByIdOptimized] Query result:", {
       postId: feedItem.id,
       hasActivities: feedItem.activities?.length || 0,
       error: null,

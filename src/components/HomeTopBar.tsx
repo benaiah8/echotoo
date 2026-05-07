@@ -6,7 +6,6 @@ import {
   PiX,
 } from "react-icons/pi";
 import Logo from "./ui/Logo";
-import ThemeSwitch from "./ui/ThemeSwitch";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
 import HomeViewToggleSection from "../sections/home/HomeViewToggleSection";
 
@@ -290,7 +289,6 @@ export default function HomeTopBar({
                     </button>
                   );
                 })}
-                <ThemeSwitch className="shrink-0" />
               </div>
             </div>
           </div>

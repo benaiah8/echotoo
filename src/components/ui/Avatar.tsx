@@ -1,6 +1,6 @@
 // src/components/ui/Avatar.tsx
 import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   getCachedAvatar,
   setCachedAvatar,
@@ -41,30 +41,30 @@ export default function Avatar({
   const s = `${size}px`;
   const [showAnonymousMessage, setShowAnonymousMessage] = useState(false);
 
-  // [OPTIMIZATION: Phase 3.2] Check cache for avatar URL if userId is provided
-  const [cachedUrl, setCachedUrl] = useState<string | null>(null);
+  /**
+   * Display precedence: anonymous → pass through; no userId → `url`; with userId →
+   * non-empty prop `url` always wins over localStorage avatar cache (stale CDN / owl preset migrations).
+   * Only when prop is absent/empty do we fall back to getCachedAvatar.
+   */
+  const displayUrl = useMemo(() => {
+    if (variant === "anon") return url ?? undefined;
+    if (!userId) return url ?? undefined;
+    const trimmed = typeof url === "string" ? url.trim() : "";
+    if (trimmed !== "") return url ?? undefined;
+    return getCachedAvatar(userId) ?? undefined;
+  }, [variant, userId, url]);
 
   useEffect(() => {
-    // Only check cache if userId is provided and not anonymous
-    if (userId && variant !== "anon") {
-      const cached = getCachedAvatar(userId);
-      if (cached) {
-        setCachedUrl(cached);
-        // Preload cached avatar for instant display
-        preloadAvatar(cached);
-      } else if (url) {
-        // Cache the URL for future use
-        setCachedAvatar(userId, url);
-        preloadAvatar(url);
-        setCachedUrl(null); // Use provided URL
-      }
-    } else {
-      setCachedUrl(null);
+    if (!userId || variant === "anon") return;
+    const trimmed = typeof url === "string" ? url.trim() : "";
+    if (trimmed === "") return;
+    const cached = getCachedAvatar(userId);
+    if (cached !== url) {
+      setCachedAvatar(userId, url as string);
+      preloadAvatar(url as string);
     }
-  }, [userId, url, variant]);
+  }, [userId, variant, url]);
 
-  // [OPTIMIZATION: Phase 3.2] Use cached URL if available, otherwise use provided URL
-  const displayUrl = cachedUrl || url;
   const resolvedAvatarSrc = avatarDisplayUrl(displayUrl);
 
   const handleClick = () => {
@@ -148,12 +148,6 @@ export default function Avatar({
                 // [OPTIMIZATION: Phase 3.2] Cache the URL when it loads successfully (if userId provided)
                 if (userId && variant !== "anon" && displayUrl) {
                   setCachedAvatar(userId, displayUrl);
-                }
-              }}
-              onError={() => {
-                // [OPTIMIZATION: Phase 3.2] If cached URL fails, try provided URL
-                if (cachedUrl && url && cachedUrl !== url) {
-                  setCachedUrl(null); // Fallback to provided URL
                 }
               }}
             />

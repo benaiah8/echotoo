@@ -14,6 +14,7 @@ import {
 import Logo from "../ui/Logo";
 import ShareProfileModal from "./ShareProfileModal";
 import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplainerModal";
+import ThemeSwitch from "../ui/ThemeSwitch";
 import { getPublicShareBaseUrl } from "../../lib/publicSiteUrl";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import {
@@ -361,6 +362,26 @@ export default function ProfileTopBar({
                 </span>
               </button>
             )}
+            <div
+              role="group"
+              style={glassMenuSurface}
+              className={`${profileActionPillClass} py-1.5`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 pl-0.5 text-left">
+                <span className="whitespace-nowrap text-[11px] font-medium leading-none tracking-tight">
+                  Switch theme
+                </span>
+              </span>
+              <ThemeSwitch
+                className="shrink-0"
+                width={56}
+                knobW={22}
+                knobH={20}
+                padX={4}
+                padY={4}
+              />
+            </div>
             {showReport && (
               <button
                 type="button"

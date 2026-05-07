@@ -8,6 +8,16 @@ import { getStorageManager } from './storage/StorageManager';
 import { cacheValidator, CACHE_SCHEMA_VERSION, type CacheEntry } from './cacheValidation';
 import { getCacheDurationMultiplier } from './connectionAware';
 
+const DEBUG_DATACACHE = false;
+const dcDbg = (...a: Parameters<typeof console.log>) => {
+  if (!DEBUG_DATACACHE) return;
+  console.log(...a);
+};
+const dcDbgVerbose = (...a: Parameters<typeof console.debug>) => {
+  if (!DEBUG_DATACACHE) return;
+  console.debug(...a);
+};
+
 // [PHASE 2.2] Use CacheEntry from cacheValidation for consistency
 // CacheEntry interface is now defined in cacheValidation.ts
 
@@ -39,7 +49,7 @@ class DataCache {
       this.migrateLegacyCacheToStorageManager(),
       this.loadFromStorageManager(),
     ]).then(() => {
-      console.log('[DataCache] ✅ DataCache is now ready after preload');
+      dcDbg('[DataCache] ✅ DataCache is now ready after preload');
     }).catch((error) => {
       console.warn('[DataCache] Preload completed with errors (cache will still work):', error);
       // Don't throw - cache will work, just might miss on first access
@@ -51,7 +61,7 @@ class DataCache {
     try {
       this.storageManager = getStorageManager();
       this.useStorageManager = true;
-      console.log('[DataCache] Using unified storage layer');
+      dcDbg('[DataCache] Using unified storage layer');
     } catch {
       // Storage manager not initialized yet, use legacy mode
       this.useStorageManager = false;
@@ -91,7 +101,7 @@ class DataCache {
         return; // No feed data to migrate
       }
 
-      console.log(`[DataCache] Migrating ${feedKeys.length} feed cache entries to StorageManager`);
+      dcDbg(`[DataCache] Migrating ${feedKeys.length} feed cache entries to StorageManager`);
 
       // Migrate each feed entry to StorageManager
       let migratedCount = 0;
@@ -116,7 +126,7 @@ class DataCache {
       // Mark migration as complete
       if (migratedCount > 0) {
         localStorage.setItem('echotoo_cache_migrated_to_storage_manager', 'true');
-        console.log(`[DataCache] Successfully migrated ${migratedCount} feed cache entries to StorageManager`);
+        dcDbg(`[DataCache] Successfully migrated ${migratedCount} feed cache entries to StorageManager`);
       }
     } catch (error) {
       console.warn('[DataCache] Cache migration failed:', error);
@@ -142,7 +152,7 @@ class DataCache {
         return; // No feed data to load
       }
 
-      console.log(`[DataCache] Preloading ${feedKeys.length} feed cache entries from StorageManager`);
+      dcDbg(`[DataCache] Preloading ${feedKeys.length} feed cache entries from StorageManager`);
 
       // Load each feed entry into memory cache
       let loadedCount = 0;
@@ -157,12 +167,12 @@ class DataCache {
           }
         } catch (error) {
           // Continue with other keys - don't fail entire preload for one key
-          console.debug(`[DataCache] Failed to load key ${key} from StorageManager:`, error);
+          dcDbgVerbose(`[DataCache] Failed to load key ${key} from StorageManager:`, error);
         }
       }
 
       if (loadedCount > 0) {
-        console.log(`[DataCache] Successfully preloaded ${loadedCount} feed cache entries into memory`);
+        dcDbg(`[DataCache] Successfully preloaded ${loadedCount} feed cache entries into memory`);
       }
     } catch (error) {
       // Don't throw - preload failure shouldn't break the app
@@ -206,7 +216,7 @@ class DataCache {
         // StorageManager not available - this is expected if not initialized
         // Use debug log instead of warning to reduce console noise
         // Data will be fetched from API on next get() call
-        console.debug('[DataCache] StorageManager not available, will fetch from API on next access');
+        dcDbgVerbose('[DataCache] StorageManager not available, will fetch from API on next access');
       }
     }
   }
@@ -240,7 +250,7 @@ class DataCache {
           }
         }).catch((error) => {
           // Silently fail - will fetch from API on next access
-          console.debug('[DataCache] StorageManager load failed, will fetch from API:', error);
+          dcDbgVerbose('[DataCache] StorageManager load failed, will fetch from API:', error);
         });
       }
       // No localStorage fallback - returns null to trigger API call
@@ -289,7 +299,7 @@ class DataCache {
       try {
         const feedKeys = await this.storageManager.keys("feed:");
         await Promise.all(feedKeys.map((key) => this.storageManager!.delete(key)));
-        console.log(
+        dcDbg(
           `[DataCache] Cleared ${feedKeys.length} feed cache entries from unified storage`
         );
       } catch (error) {
@@ -297,7 +307,7 @@ class DataCache {
       }
     }
 
-    console.log(
+    dcDbg(
       `[DataCache] Cleared ${keysToDelete.length} feed cache entries from memory`
     );
   }
@@ -354,7 +364,7 @@ class DataCache {
     const newPostsDetected = cacheValidator.detectNewPosts(cachedData, newPosts);
 
     if (newPostsDetected.length > 0) {
-      console.log(
+      dcDbg(
         `[DataCache] Found ${newPostsDetected.length} new posts (Twitter-style detection), updating cache`
       );
 
@@ -368,7 +378,7 @@ class DataCache {
     }
 
     // No new posts, return cached data for faster loading
-    console.log("[DataCache] Using cached data, no new posts found");
+    dcDbg("[DataCache] Using cached data, no new posts found");
     return cachedData;
   }
 
@@ -391,7 +401,7 @@ class DataCache {
 
     // Only prefetch if not already cached
     if (!this.cache.has(nextPageKey)) {
-      console.log("[DataCache] Prefetching next page:", nextPageOpts);
+      dcDbg("[DataCache] Prefetching next page:", nextPageOpts);
 
       // Import getPublicFeed dynamically to avoid circular dependency
       try {
@@ -400,9 +410,9 @@ class DataCache {
 
         // Cache the prefetched data
         this.set(nextPageKey, nextPageData, 2 * 60 * 1000); // 2 minutes TTL
-        console.log("[DataCache] Successfully prefetched and cached next page");
+        dcDbg("[DataCache] Successfully prefetched and cached next page");
       } catch (error) {
-        console.log("[DataCache] Failed to prefetch next page:", error);
+        dcDbg("[DataCache] Failed to prefetch next page:", error);
       }
     }
   }
@@ -410,7 +420,7 @@ class DataCache {
   // Prefetch user profiles for posts being displayed
   async prefetchUserProfiles(userIds: string[]): Promise<void> {
     // This would integrate with your user profile fetching system
-    console.log("[DataCache] Prefetching user profiles for:", userIds);
+    dcDbg("[DataCache] Prefetching user profiles for:", userIds);
     // Implementation would depend on your profile fetching endpoint
   }
 }

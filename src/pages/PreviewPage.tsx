@@ -336,15 +336,9 @@ export default function PreviewPage() {
     } catch {
       /* ignore */
     }
-    // Try to route to /u/:username; fallback to /u/me
     const userId = await getViewerAuthUserId();
     if (!userId) return nav(Paths.profile);
-
-    // [PHASE 2.3 - OPTIMIZATION] Use getProfileByUserId() for caching and deduplication
-    const { getProfileByUserId } = await import("../api/services/follows");
-    const profile = await getProfileByUserId(userId);
-    if (profile?.username) return nav(`/u/${profile.username}`);
-    return nav("/u/me");
+    return nav(Paths.profileMe);
   };
 
   // measure sheet width with the column

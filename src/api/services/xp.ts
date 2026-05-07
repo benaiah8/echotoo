@@ -69,11 +69,12 @@ export async function incrementMyXp(
               ...cached,
               xp: newXp,
             });
-            console.log("[XP] Updated cached profile XP:", {
-              profileId: profile.id,
-              oldXp: cached.xp,
-              newXp,
-            });
+            if (DEBUG_XP)
+              console.log("[XP] Updated cached profile XP:", {
+                profileId: profile.id,
+                oldXp: cached.xp,
+                newXp,
+              });
           } else {
             // Cache doesn't exist, update full profile
             setCachedProfile({

@@ -821,10 +821,7 @@ export default function CreateFinalizePage() {
     }
     const userId = await getViewerAuthUserId();
     if (!userId) return nav(Paths.profile);
-    const { getProfileByUserId } = await import("../api/services/follows");
-    const profile = await getProfileByUserId(userId);
-    if (profile?.username) return nav(`/u/${profile.username}`);
-    return nav("/u/me");
+    return nav(Paths.profileMe);
   };
 
   const handleLeaveCreateFlow = useCallback(() => {

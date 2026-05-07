@@ -1,10 +1,10 @@
 import {
   useEffect,
   useState,
+  useMemo,
   useTransition,
   useCallback,
   useRef,
-  useMemo,
 } from "react";
 import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreatedOptimized } from "../../api/queries/getUserPostsCreated";
@@ -27,7 +27,11 @@ import {
   convertSavedToFeedItem,
 } from "../../lib/profilePostsConverters";
 import { LOCAL_DRAFT_DISCARDED_EVENT } from "../../lib/drafts";
-import { publishProfileTrace } from "../../lib/debugProfileFeed";
+import {
+  buildLocalPrependedFeedItem,
+  consumeOwnCreatedPrependPending,
+  peekOwnCreatedPrependPending,
+} from "../../lib/ownCreatedPendingPrepend";
 // [PHASE 4.1.3] Complete refactor: Single ProgressiveFeed pattern for all tabs
 
 /**
@@ -41,8 +45,6 @@ interface OwnProfilePostsSectionProps {
   visible?: boolean; // [OPTIMIZATION] Only load data when tab is visible
   /** Bumps when user taps profile tab again — remount feeds + drop tab caches */
   feedRefreshEpoch?: number;
-  /** Publish marker consumed → soft-refetch Created first page (`ProgressiveFeed`); PTR / tab refresh does not bump this. */
-  createdFeedRefreshEpoch?: number;
 }
 
 // [DEBUG] Toggle for console logs
@@ -51,12 +53,14 @@ const DEBUG_OWN_PROFILE = false;
 export default function OwnProfilePostsSection({
   visible = true, // Default to true for backward compatibility
   feedRefreshEpoch = 0,
-  createdFeedRefreshEpoch = 0,
 }: OwnProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
   /** Bumps when local draft keys are cleared so the Created feed drops the draft card without a full refresh. */
   const [localDraftEpoch, setLocalDraftEpoch] = useState(0);
+
+  /** Bumped after consuming publish prepend marker so peek-based hydrate memo clears without remounting the feed */
+  const [prependHydrateNonce, setPrependHydrateNonce] = useState(0);
 
   // React 19: useTransition for non-urgent tab switching
   const [isPending, startTransition] = useTransition();
@@ -146,37 +150,6 @@ export default function OwnProfilePostsSection({
       setTabsInitialized((prev) => ({ ...prev, saved: true }));
     }
   }, [tab, userId]); // Only depend on tab and userId - refs prevent re-running
-
-  const createdSoftTelemetry = useMemo(
-    () => ({
-      onSoftRefreshStart: () =>
-        publishProfileTrace("CREATED_SOFT_REFRESH_START", {}),
-      onSoftRefreshDone: (args: {
-        returnedCount: number;
-        firstPostId: string | null;
-      }) =>
-        publishProfileTrace("CREATED_SOFT_REFRESH_DONE", {
-          returnedCount: args.returnedCount,
-          firstPostId: args.firstPostId,
-        }),
-    }),
-    []
-  );
-
-  const createdFeedKey = userId
-    ? `created-${userId}-r${feedRefreshEpoch}-ld${localDraftEpoch}`
-    : "";
-  const prevCreatedFeedKeyRef = useRef<string>("");
-
-  useEffect(() => {
-    if (!userId || !createdFeedKey) return;
-    if (prevCreatedFeedKeyRef.current === createdFeedKey) return;
-    publishProfileTrace("CREATED_FEED_KEY_CHANGED", {
-      previousKey: prevCreatedFeedKeyRef.current || "(none)",
-      nextKey: createdFeedKey,
-    });
-    prevCreatedFeedKeyRef.current = createdFeedKey;
-  }, [createdFeedKey, userId]);
 
   // [PHASE 4.1.3 REFACTOR] Single ProgressiveFeed pattern - no manual state needed for any tab
   // All tabs now use ProgressiveFeed for consistent loading, caching, and pagination
@@ -325,13 +298,74 @@ export default function OwnProfilePostsSection({
       const itemsToCache = items.filter((item: any) => !item.isDraft);
       const persisted = itemsToCache.slice(0, 20);
       dataCache.set(cacheKey, persisted, 10 * 60 * 1000); // 10min TTL, cache 20 items
-      publishProfileTrace("CREATED_CACHE_WRITE", {
-        itemCount: persisted.length,
-        firstPostId: persisted[0]?.id ?? null,
-      });
     },
     [userId]
   );
+
+  /**
+   * First paint merge: prepend marker (peek-only) + `profile_created_${userId}` + drafts parity with load offset 0.
+   * Consume runs in an effect afterward so ProgressiveFeed mounts with seeded rows synchronously on the publish return.
+   */
+  const publishHydratedCreatedRows = useMemo(() => {
+    if (!visible || !profile?.user_id || !profile) return null;
+
+    const peek = peekOwnCreatedPrependPending(profile.user_id);
+    if (peek.kind !== "pending") return null;
+
+    const localItem = buildLocalPrependedFeedItem(profile, peek.payload);
+    const cacheKey = `profile_created_${userId}`;
+    const cachedBare = dataCache.get<FeedItem[]>(cacheKey) ?? [];
+
+    const drafts = getDraftsFromStorage();
+
+    const tail = cachedBare.filter((r) => r.id !== localItem.id);
+
+    const merged = [...drafts, localItem, ...tail];
+
+    const seen = new Set<string>();
+    const deduped = merged.filter((row) => {
+      if (seen.has(row.id)) return false;
+      seen.add(row.id);
+      return true;
+    });
+
+    return deduped;
+  }, [
+    visible,
+    userId,
+    profile?.user_id,
+    profile?.id,
+    profile?.username,
+    profile?.display_name,
+    profile?.avatar_url,
+    profile,
+    getDraftsFromStorage,
+    prependHydrateNonce,
+  ]);
+
+  useEffect(() => {
+    if (!visible || !profile?.user_id) return;
+
+    const pPeek = peekOwnCreatedPrependPending(profile.user_id);
+    if (pPeek.kind === "mismatch_should_clear") {
+      consumeOwnCreatedPrependPending(profile.user_id);
+      return;
+    }
+
+    if (!publishHydratedCreatedRows?.length) return;
+
+    const r = consumeOwnCreatedPrependPending(profile.user_id);
+    if (r.kind !== "consumed") return;
+
+    setCachedCreated(publishHydratedCreatedRows);
+
+    setPrependHydrateNonce((n) => n + 1);
+  }, [
+    visible,
+    profile?.user_id,
+    publishHydratedCreatedRows,
+    setCachedCreated,
+  ]);
 
   // Interacted tab cache
   const getCachedInteracted = useCallback(() => {
@@ -603,6 +637,23 @@ export default function OwnProfilePostsSection({
     }
   }, [tab, userId]);
 
+  const authorForProfilePostCard = useCallback(
+    (post: FeedItem) => {
+      if (post.is_anonymous || !post.author || !profile?.user_id) {
+        return post.author ?? null;
+      }
+      const belongsToPageProfile =
+        post.author_id === profile.user_id ||
+        (profile.id != null && post.author.id === profile.id);
+      if (!belongsToPageProfile) return post.author;
+      return {
+        ...post.author,
+        avatar_url: profile.avatar_url ?? post.author.avatar_url ?? null,
+      };
+    },
+    [profile?.user_id, profile?.id, profile?.avatar_url]
+  );
+
   // [FIX] Memoize renderItem functions to prevent ProgressiveFeed re-renders
   // These functions are passed as props to ProgressiveFeed, so they must be stable
   const renderCreatedItem = useCallback(
@@ -613,7 +664,7 @@ export default function OwnProfilePostsSection({
         caption={post.caption}
         createdAt={post.created_at}
         authorId={post.author_id}
-        author={post.author}
+        author={authorForProfilePostCard(post)}
         type={post.type}
         isOwner={true} // Created tab is always owner
         status={(post as any).status || "published"}
@@ -632,7 +683,7 @@ export default function OwnProfilePostsSection({
         slideshowHostVisible={visible && tab === "created"}
       />
     ),
-    [visible, tab]
+    [visible, tab, authorForProfilePostCard]
   );
 
   const renderInteractedItem = useCallback(
@@ -643,7 +694,7 @@ export default function OwnProfilePostsSection({
         caption={post.caption}
         createdAt={post.created_at}
         authorId={post.author_id}
-        author={post.author}
+        author={authorForProfilePostCard(post)}
         type={post.type}
         isOwner={false} // Not owner for interacted tab
         status="published"
@@ -662,7 +713,7 @@ export default function OwnProfilePostsSection({
         slideshowHostVisible={visible && tab === "interacted"}
       />
     ),
-    [visible, tab]
+    [visible, tab, authorForProfilePostCard]
   );
 
   const renderSavedItem = useCallback(
@@ -673,7 +724,7 @@ export default function OwnProfilePostsSection({
         caption={post.caption}
         createdAt={post.created_at}
         authorId={post.author_id}
-        author={post.author}
+        author={authorForProfilePostCard(post)}
         type={post.type}
         isOwner={false} // Not owner for saved tab
         status="published"
@@ -692,7 +743,7 @@ export default function OwnProfilePostsSection({
         slideshowHostVisible={visible && tab === "saved"}
       />
     ),
-    [visible, tab]
+    [visible, tab, authorForProfilePostCard]
   );
 
   // Theme-aware tab styling
@@ -751,10 +802,10 @@ export default function OwnProfilePostsSection({
               renderItem={renderCreatedItem} // [FIX] Use memoized function
               getCachedItems={getCachedCreated}
               setCachedItems={setCachedCreated}
+              authoritativeHydratedSeed={
+                publishHydratedCreatedRows ?? undefined
+              }
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
-              softRefreshEpoch={createdFeedRefreshEpoch}
-              onSoftRefreshStart={createdSoftTelemetry.onSoftRefreshStart}
-              onSoftRefreshDone={createdSoftTelemetry.onSoftRefreshDone}
               enableScrollStopDetection={true}
               enableLazyLoading={true}
               loading={false}

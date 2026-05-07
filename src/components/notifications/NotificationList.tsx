@@ -323,12 +323,6 @@ export default function NotificationList({
     );
   };
 
-  const handleInviteAccepted = (postId: string) => {
-    // Dispatch custom event to refresh interacted posts
-    const event = new CustomEvent("invite:accepted", { detail: { postId } });
-    window.dispatchEvent(event);
-  };
-
   const handleClearUnreadInView = async () => {
     if (notifications.some((n) => !n.is_read)) {
       try {
@@ -506,6 +500,10 @@ export default function NotificationList({
     paddingTop: "calc(62px + env(safe-area-inset-top, 0px))",
   };
 
+  /** Invites tab: slightly wider list; activity unchanged. */
+  const listPanelHorizontalClass =
+    listView === "invites" ? "px-1.5 sm:px-2" : "px-3";
+
   if (loading) {
     return (
       <div className={`w-full min-h-0 ${className}`}>
@@ -525,7 +523,7 @@ export default function NotificationList({
               ? "notifications-tab-invites"
               : "notifications-tab-activity"
           }
-          className="px-3"
+          className={listPanelHorizontalClass}
           style={listScrollPadding}
         >
           <div className="space-y-2">
@@ -601,7 +599,7 @@ export default function NotificationList({
               ? "notifications-tab-invites"
               : "notifications-tab-activity"
           }
-          className="px-3"
+          className={listPanelHorizontalClass}
           style={listScrollPadding}
         >
           <div className="text-center py-10 text-[var(--text)]/60 text-sm">
@@ -633,7 +631,7 @@ export default function NotificationList({
             ? "notifications-tab-invites"
             : "notifications-tab-activity"
         }
-        className="px-3"
+        className={listPanelHorizontalClass}
         style={listScrollPadding}
       >
         <div className="pt-1">
@@ -672,7 +670,6 @@ export default function NotificationList({
                     notification={notification}
                     onMarkAsRead={handleMarkAsRead}
                     showGoToPostButton
-                    onInviteAccepted={handleInviteAccepted}
                     activityCalm
                     batchedFollowStatus={
                       notification.type === "follow" &&
@@ -687,18 +684,17 @@ export default function NotificationList({
             return (
               <div
                 key={notification.id}
-                className="ui-card border-l-3 border-l-blue-500/90"
+                className="border-b border-[var(--border)]/45 last:border-b-0"
               >
                 <NotificationItem
                   notification={notification}
                   onMarkAsRead={handleMarkAsRead}
                   showGoToPostButton
-                  onInviteAccepted={handleInviteAccepted}
                   batchedFollowStatus={
                     notification.type === "follow" &&
                     notification.additional_data?.follow_request_status
                       ? batchedFollowStatuses[notification.id]
-                      : undefined
+                        : undefined
                   }
                 />
               </div>

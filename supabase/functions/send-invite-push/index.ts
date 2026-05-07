@@ -4,8 +4,9 @@
  * Sends one FCM message per Android device token for the given invitee auth user ids.
  * Tap payload: postId + postType (same contract as send-post-push); optional inviteId when
  * a single invite row is implied (from request body only).
- * Notification body: title "New invite"; first line is the hangout/experience sentence; optional
- * second block (after newline) is invite `note` from DB, trimmed and capped at 200 chars.
+ * Notification: title "{displayName} invited you"; DM-style body — note-first when present,
+ * optional caption preview line (server-fetched, capped); fallback "Tap to view invite".
+ * No `android.notification.image` (avoids large expanded image; sender avatar needs native later).
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import {
@@ -15,6 +16,9 @@ import {
 
 /** Keep in sync with `INVITE_NOTE_MAX_LENGTH` in `src/api/services/invites.ts`. */
 const INVITE_NOTE_MAX_LENGTH = 200;
+
+/** Post caption preview for push when invite note is absent (or second line when note exists). */
+const CAPTION_PREVIEW_MAX_LENGTH = 200;
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +42,9 @@ type InvitePushBody = {
   actor_id?: string;
   recipient_user_ids?: string[];
   invite_id?: string;
+  thread_id?: string;
+  thread_kind?: string;
+  target?: string;
 };
 
 function trimAndCapNote(note: string | null | undefined): string {
@@ -46,6 +53,34 @@ function trimAndCapNote(note: string | null | undefined): string {
   return t.length > INVITE_NOTE_MAX_LENGTH
     ? t.slice(0, INVITE_NOTE_MAX_LENGTH)
     : t;
+}
+
+function trimAndCapCaptionPreview(caption: string | null | undefined): string {
+  const t = (caption ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "";
+  return t.length > CAPTION_PREVIEW_MAX_LENGTH
+    ? t.slice(0, CAPTION_PREVIEW_MAX_LENGTH)
+    : t;
+}
+
+/**
+ * DM-style notification body:
+ * - note first when present
+ * - blank line + "Post: {caption}" in expanded text when both note and caption exist
+ * - caption only when note is absent
+ * - fallback when both missing
+ */
+function buildInvitePushBody(noteLine: string, captionPreview: string): string {
+  const hasNote = noteLine.length > 0;
+  const hasCaption = captionPreview.length > 0;
+  if (hasNote && hasCaption) {
+    return `${noteLine}\n\n────────\nPost: ${captionPreview}`;
+  }
+  if (hasNote) return noteLine;
+  if (hasCaption) return captionPreview;
+  return "Tap to view invite";
 }
 
 /**
@@ -164,6 +199,15 @@ Deno.serve(async (req) => {
   const postType = body.post_type?.trim();
   const actorId = body.actor_id?.trim();
   const inviteId = body.invite_id?.trim();
+  const threadId = body.thread_id?.trim();
+  const threadKind = body.thread_kind?.trim();
+  const targetRaw = body.target?.trim();
+  const target =
+    targetRaw === "invite_thread" || targetRaw === "notifications"
+      ? targetRaw
+      : threadId
+        ? "invite_thread"
+        : "notifications";
   const recipientUserIds = Array.isArray(body.recipient_user_ids)
     ? body.recipient_user_ids.filter(
         (id) => typeof id === "string" && id.length > 0
@@ -214,7 +258,7 @@ Deno.serve(async (req) => {
 
   const { data: postRow, error: postError } = await supabaseAdmin
     .from("posts")
-    .select("type")
+    .select("type, caption")
     .eq("id", postId)
     .maybeSingle();
 
@@ -226,7 +270,10 @@ Deno.serve(async (req) => {
     );
   }
 
-  const pr = postRow as { type?: string | null } | null;
+  const pr = postRow as {
+    type?: string | null;
+    caption?: string | null;
+  } | null;
   if (!postRow || pr?.type == null) {
     return jsonResponse({ error: "Post not found" }, 404);
   }
@@ -346,22 +393,35 @@ Deno.serve(async (req) => {
     authRecipientIds: authIdList,
   });
 
-  const baseBody =
-    postType === "hangout"
-      ? `${displayName} invited you to a hangout.`
-      : `${displayName} invited you to an experience.`;
-  const bodyText =
-    noteLine.length > 0 ? `${baseBody}\n${noteLine}` : baseBody;
+  const captionPreview = trimAndCapCaptionPreview(pr?.caption ?? null);
+  const bodyText = buildInvitePushBody(noteLine, captionPreview);
 
-  const title = "New invite";
+  const title = `${displayName} invited you`;
 
   const fcmDataPayload: {
+    type: "invite";
     postId: string;
     postType: string;
     inviteId?: string;
-  } = { postId, postType };
+    threadId?: string;
+    threadKind?: string;
+    actorId: string;
+    target: "invite_thread" | "notifications";
+  } = {
+    type: "invite",
+    postId,
+    postType,
+    actorId,
+    target,
+  };
   if (inviteId) {
     fcmDataPayload.inviteId = inviteId;
+  }
+  if (threadId) {
+    fcmDataPayload.threadId = threadId;
+  }
+  if (threadKind) {
+    fcmDataPayload.threadKind = threadKind;
   }
 
   let sent = 0;

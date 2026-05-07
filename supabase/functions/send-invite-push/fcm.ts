@@ -63,10 +63,15 @@ export async function getFcmAccessToken(
 }
 
 export type FcmDataPayload = {
+  type?: string;
   postId: string;
   postType: string;
   /** Optional; included for single-recipient sends (e.g. invite) when the client has one invite row. */
   inviteId?: string;
+  threadId?: string;
+  threadKind?: string;
+  actorId?: string;
+  target?: string;
 };
 
 /**
@@ -84,9 +89,25 @@ export async function sendFcmToDevice(
     postId: data.postId,
     postType: data.postType,
   };
+  if (data.type) {
+    fcmData.type = data.type;
+  }
   if (data.inviteId) {
     fcmData.inviteId = data.inviteId;
   }
+  if (data.threadId) {
+    fcmData.threadId = data.threadId;
+  }
+  if (data.threadKind) {
+    fcmData.threadKind = data.threadKind;
+  }
+  if (data.actorId) {
+    fcmData.actorId = data.actorId;
+  }
+  if (data.target) {
+    fcmData.target = data.target;
+  }
+
   const body = {
     message: {
       token: deviceToken,

@@ -422,6 +422,23 @@ export default function OtherProfilePostsSection({
   // [PHASE C.2] Interacted tab cache loading and useEffect removed - ProgressiveFeed handles it
   // Interacted tab now uses ProgressiveFeed with dataCache (via getCachedInteracted/setCachedInteracted)
 
+  const authorForProfilePostCard = useCallback(
+    (post: FeedItem) => {
+      if (post.is_anonymous || !post.author || !profile?.user_id) {
+        return post.author ?? null;
+      }
+      const belongsToPageProfile =
+        post.author_id === profile.user_id ||
+        (profile.id != null && post.author.id === profile.id);
+      if (!belongsToPageProfile) return post.author;
+      return {
+        ...post.author,
+        avatar_url: profile.avatar_url ?? post.author.avatar_url ?? null,
+      };
+    },
+    [profile?.user_id, profile?.id, profile?.avatar_url]
+  );
+
   // [FIX] Memoize renderItem functions to prevent ProgressiveFeed re-renders
   const renderCreatedItem = useCallback(
     (post: FeedItem) => (
@@ -431,7 +448,7 @@ export default function OtherProfilePostsSection({
         caption={post.caption}
         createdAt={post.created_at}
         authorId={post.author_id}
-        author={post.author}
+        author={authorForProfilePostCard(post)}
         type={post.type}
         isOwner={false} // Other profile, not owner
         isAnonymous={post.is_anonymous || false}
@@ -448,7 +465,7 @@ export default function OtherProfilePostsSection({
         slideshowHostVisible={visible && tab === "created"}
       />
     ),
-    [visible, tab]
+    [visible, tab, authorForProfilePostCard]
   );
 
   const renderInteractedItem = useCallback(
@@ -459,7 +476,7 @@ export default function OtherProfilePostsSection({
         caption={post.caption}
         createdAt={post.created_at}
         authorId={post.author_id}
-        author={post.author}
+        author={authorForProfilePostCard(post)}
         type={post.type}
         isOwner={false} // Other profile, not owner
         isAnonymous={post.is_anonymous || false}
@@ -476,7 +493,7 @@ export default function OtherProfilePostsSection({
         slideshowHostVisible={visible && tab === "interacted"}
       />
     ),
-    [visible, tab]
+    [visible, tab, authorForProfilePostCard]
   );
 
   // Theme-aware tab styling

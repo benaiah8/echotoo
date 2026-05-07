@@ -418,7 +418,7 @@ export default function PostDetailModal() {
   return (
     <PostDetailDismissContext.Provider value={dismissContextValue}>
       <div
-        className="fixed inset-0 z-50 flex flex-col pointer-events-none"
+        className="fixed inset-0 z-[120] flex flex-col pointer-events-none"
         style={{
           bottom: "calc(-1 * var(--safe-area-bottom-layout))",
         }}
