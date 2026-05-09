@@ -17,6 +17,8 @@ interface Props {
   showGoToPostButton?: boolean;
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status for follow request notifications
   batchedFollowStatus?: "none" | "pending" | "following" | "friends";
+  /** Brief highlight from push deep-link (invite rows). */
+  highlighted?: boolean;
 }
 
 const getNotificationText = (notification: NotificationWithActor): string => {
@@ -108,6 +110,7 @@ export default function NotificationItem({
   activityCalm = false,
   showGoToPostButton = true,
   batchedFollowStatus,
+  highlighted = false,
 }: Props) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -120,6 +123,7 @@ export default function NotificationItem({
         onMarkAsRead={onMarkAsRead}
         compact={compact}
         showGoToPostButton={showGoToPostButton}
+        highlighted={highlighted}
       />
     );
   }

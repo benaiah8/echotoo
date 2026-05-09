@@ -28,6 +28,17 @@ interface BottomDrawerProps {
    * @default false
    */
   shrinkSheetToContent?: boolean;
+  /**
+   * Classes for the fixed full-screen portal wrapper (defaults to z-[100]).
+   * Use e.g. `z-[120]` when stacking above another fullscreen overlay (z-[110]).
+   */
+  portalClassName?: string;
+  /**
+   * When true, does not set or clear `document.body` overflow/padding.
+   * Use when a parent layer (e.g. another overlay) already locks body scroll,
+   * so closing this drawer does not unlock the page underneath.
+   */
+  disableBodyScrollLock?: boolean;
 }
 
 /**
@@ -37,7 +48,7 @@ interface BottomDrawerProps {
  * - Renders via portal to document.body (escapes all stacking contexts)
  * - Accounts for bottom tab height dynamically
  * - Frosted glass effect with gradient (solid at bottom, transparent at top)
- * - Locks body scroll when open
+ * - Locks body scroll when open (unless disableBodyScrollLock)
  * - Handles safe area insets
  * - Higher z-index (z-[100]) to ensure it's always on top
  */
@@ -65,6 +76,8 @@ export default function BottomDrawer({
   contentClassName = "p-3",
   footer,
   shrinkSheetToContent = false,
+  portalClassName,
+  disableBodyScrollLock = false,
 }: BottomDrawerProps) {
   const [isMounted, setIsMounted] = useState(false);
 
@@ -74,28 +87,39 @@ export default function BottomDrawer({
       setIsMounted(true);
       /** Native WebViews: re-measure env(safe-area) + iOS/Android fallbacks so fixed bottom sheets clear nav / home. */
       syncAppSafeAreaBottom();
-      const scrollbarWidth =
-        window.innerWidth - document.documentElement.clientWidth;
-      document.body.style.overflow = "hidden";
-      document.body.style.paddingRight = `${scrollbarWidth}px`;
+      if (!disableBodyScrollLock) {
+        const scrollbarWidth =
+          window.innerWidth - document.documentElement.clientWidth;
+        document.body.style.overflow = "hidden";
+        document.body.style.paddingRight = `${scrollbarWidth}px`;
+      }
     } else {
-      document.body.style.overflow = "";
-      document.body.style.paddingRight = "";
+      if (!disableBodyScrollLock) {
+        document.body.style.overflow = "";
+        document.body.style.paddingRight = "";
+      }
       // Delay unmount for smooth close animation
       const timer = setTimeout(() => setIsMounted(false), 300);
       return () => clearTimeout(timer);
     }
 
     return () => {
-      document.body.style.overflow = "";
-      document.body.style.paddingRight = "";
+      if (!disableBodyScrollLock) {
+        document.body.style.overflow = "";
+        document.body.style.paddingRight = "";
+      }
     };
-  }, [open]);
+  }, [open, disableBodyScrollLock]);
 
   if (!isMounted) return null;
 
+  const portalZ =
+    portalClassName != null && portalClassName.trim().length > 0
+      ? portalClassName
+      : "z-[100]";
+
   return createPortal(
-    <div className="fixed inset-0 z-[100]">
+    <div className={`fixed inset-0 ${portalZ}`}>
       {/* Backdrop - very low opacity, no blur */}
       <div
         className="absolute inset-0"

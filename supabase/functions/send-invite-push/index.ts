@@ -47,6 +47,27 @@ type InvitePushBody = {
   target?: string;
 };
 
+function toPublicMediaAvatarUrl(
+  supabaseUrl: string,
+  avatarPath: string | null | undefined
+): string | undefined {
+  const raw = (avatarPath ?? "").trim();
+  if (!raw) return undefined;
+  if (raw.startsWith("preset:")) return undefined;
+  if (/^https:\/\//i.test(raw)) return raw;
+  if (/^http:\/\//i.test(raw)) return undefined;
+  try {
+    const normalizedBase = supabaseUrl.replace(/\/+$/, "");
+    const encodedPath = raw
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+    return `${normalizedBase}/storage/v1/object/public/media/${encodedPath}`;
+  } catch {
+    return undefined;
+  }
+}
+
 function trimAndCapNote(note: string | null | undefined): string {
   const t = (note ?? "").trim();
   if (!t) return "";
@@ -365,9 +386,10 @@ Deno.serve(async (req) => {
   }
 
   let displayName = "Someone";
+  let avatarUrlForPush: string | undefined;
   const { data: inviterRow, error: inviterProfileError } = await supabaseAdmin
     .from("profiles")
-    .select("display_name, username")
+    .select("display_name, username, avatar_url")
     .eq("user_id", actorId)
     .maybeSingle();
   if (inviterProfileError) {
@@ -379,11 +401,13 @@ Deno.serve(async (req) => {
     const ar = inviterRow as {
       display_name?: string | null;
       username?: string | null;
+      avatar_url?: string | null;
     } | null;
     const dn = ar?.display_name?.trim();
     const un = ar?.username?.trim();
     if (dn) displayName = dn;
     else if (un) displayName = un;
+    avatarUrlForPush = toPublicMediaAvatarUrl(supabaseUrl, ar?.avatar_url);
   }
 
   const noteLine = await fetchInviteNoteForPush(supabaseAdmin, {
@@ -400,6 +424,9 @@ Deno.serve(async (req) => {
 
   const fcmDataPayload: {
     type: "invite";
+    title: string;
+    body: string;
+    avatarUrl?: string;
     postId: string;
     postType: string;
     inviteId?: string;
@@ -409,11 +436,16 @@ Deno.serve(async (req) => {
     target: "invite_thread" | "notifications";
   } = {
     type: "invite",
+    title,
+    body: bodyText,
     postId,
     postType,
     actorId,
     target,
   };
+  if (avatarUrlForPush) {
+    fcmDataPayload.avatarUrl = avatarUrlForPush;
+  }
   if (inviteId) {
     fcmDataPayload.inviteId = inviteId;
   }
@@ -432,7 +464,6 @@ Deno.serve(async (req) => {
       accessToken,
       projectId,
       deviceToken,
-      { title, body: bodyText },
       fcmDataPayload
     );
     if (result.ok) {

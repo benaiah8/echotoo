@@ -95,6 +95,18 @@ export type ToggleInviteMessageReactionResult = {
   viewer_has_thumb_up: boolean;
 };
 
+function normalizeThreadMessage(msg: InviteThreadMessage): InviteThreadMessage {
+  const n = Number(msg.thumb_up_count);
+  const thumb_up_count = Number.isFinite(n)
+    ? Math.max(0, Math.floor(n))
+    : 0;
+  return {
+    ...msg,
+    thumb_up_count,
+    viewer_has_thumb_up: msg.viewer_has_thumb_up === true,
+  };
+}
+
 function asBundle(raw: unknown): InviteThreadBundle | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
@@ -113,7 +125,11 @@ function asBundle(raw: unknown): InviteThreadBundle | null {
   ) {
     return null;
   }
-  return raw as InviteThreadBundle;
+  const bundle = raw as InviteThreadBundle;
+  return {
+    ...bundle,
+    messages: bundle.messages.map((m) => normalizeThreadMessage(m)),
+  };
 }
 
 function asPostResult(raw: unknown): PostInviteThreadMessageResult | null {

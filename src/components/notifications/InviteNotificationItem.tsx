@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { PiArrowSquareOut } from "react-icons/pi";
+import { PiArrowSquareOut, PiUsers } from "react-icons/pi";
 import { type NotificationWithActor } from "../../types/notification";
 import { markNotificationAsRead } from "../../api/services/notifications";
 import { getInviteById } from "../../api/services/invites";
@@ -10,6 +10,7 @@ import { PostTypeMetaChip } from "../ui/PostFeedSurfaceMeta";
 import { Paths } from "../../router/Paths";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import PersonalInviteThreadOverlay from "./PersonalInviteThreadOverlay";
+import GroupInviteThreadOverlay from "./GroupInviteThreadOverlay";
 import InviteExpiryPill, { inviteExpiryActive } from "./InviteExpiryPill";
 
 /** Module-level cache for getInviteById results to avoid duplicate fetches per invite row. TTL 3 min. */
@@ -46,6 +47,8 @@ interface Props {
   onMarkAsRead: (id: string) => void;
   compact?: boolean;
   showGoToPostButton?: boolean;
+  /** Brief highlight from push deep-link */
+  highlighted?: boolean;
 }
 
 export default function InviteNotificationItem({
@@ -53,6 +56,7 @@ export default function InviteNotificationItem({
   onMarkAsRead,
   compact = false,
   showGoToPostButton = true,
+  highlighted = false,
 }: Props) {
   const location = useLocation();
   const inviteId = notification.additional_data?.invite_id;
@@ -61,17 +65,20 @@ export default function InviteNotificationItem({
     typeof rawThreadId === "string" && rawThreadId.length > 0
       ? rawThreadId
       : null;
+  const threadKind = notification.additional_data?.thread_kind;
+  const isGroupThreadRow = threadKind === "group";
   const showOpenPersonalThread =
     personalThreadId != null &&
-    notification.additional_data?.thread_kind === "personal";
-
-  const threadKind = notification.additional_data?.thread_kind;
+    threadKind === "personal";
+  const showOpenGroupThread = personalThreadId != null && threadKind === "group";
+  const showOpenThread = showOpenPersonalThread || showOpenGroupThread;
 
   const [inviteDirection, setInviteDirection] = useState<
     "sent" | "received" | null
   >(null);
   const [personalThreadDrawerOpen, setPersonalThreadDrawerOpen] =
     useState(false);
+  const [groupThreadDrawerOpen, setGroupThreadDrawerOpen] = useState(false);
 
   useEffect(() => {
     const additionalData = notification.additional_data;
@@ -121,18 +128,22 @@ export default function InviteNotificationItem({
 
   const openThreadFromRow = () => {
     void handleClick();
+    if (showOpenGroupThread) {
+      setGroupThreadDrawerOpen(true);
+      return;
+    }
     setPersonalThreadDrawerOpen(true);
   };
 
   const handleRowClick = (e: React.MouseEvent) => {
-    if (!showOpenPersonalThread) return;
+    if (!showOpenThread) return;
     const t = e.target as HTMLElement | null;
     if (t?.closest("a[href], button")) return;
     openThreadFromRow();
   };
 
   const handleRowKeyDown = (e: React.KeyboardEvent) => {
-    if (!showOpenPersonalThread) return;
+    if (!showOpenThread) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       openThreadFromRow();
@@ -143,17 +154,125 @@ export default function InviteNotificationItem({
     notification.actor?.display_name ||
     notification.actor?.username ||
     "Someone";
+  const actorUsernameRaw = notification.actor?.username;
+  const actorProfileHref =
+    typeof actorUsernameRaw === "string" && actorUsernameRaw.trim().length > 0
+      ? `/u/${encodeURIComponent(actorUsernameRaw.trim())}`
+      : null;
 
   const rawPostType = notification.additional_data?.post_type || "hangout";
   const metaPostType: "hangout" | "experience" =
     rawPostType === "experience" ? "experience" : "hangout";
+  const avatarSize = compact ? 36 : 42;
+  const rowPad = compact ? "py-2 pl-1 pr-0.5" : "py-2.5 pl-1 pr-1";
 
-  const titleLine =
-    inviteDirection === "sent"
-      ? `You invited ${actorName}`
-      : inviteDirection === "received"
-        ? `${actorName} invited you`
-        : `Invite · ${actorName}`;
+  const titleParts: {
+    prefix: string;
+    actor: string | null;
+    suffix: string;
+  } =
+    threadKind === "personal"
+      ? inviteDirection === "sent"
+        ? { prefix: "You invited", actor: actorName, suffix: "" }
+        : inviteDirection === "received"
+          ? { prefix: "", actor: actorName, suffix: "invited you" }
+          : { prefix: "Invite ·", actor: actorName, suffix: "" }
+      : threadKind === "group"
+        ? inviteDirection === "sent"
+          ? { prefix: "You invited", actor: "a group", suffix: "" }
+          : inviteDirection === "received"
+            ? {
+                prefix: "",
+                actor: actorName,
+                suffix: "invited you to a group",
+              }
+            : { prefix: "Invite ·", actor: actorName, suffix: "" }
+        : threadKind === "announcement"
+          ? inviteDirection === "sent"
+            ? {
+                prefix: "You sent",
+                actor: "an announcement invite",
+                suffix: "",
+              }
+            : inviteDirection === "received"
+              ? {
+                  prefix: "",
+                  actor: actorName,
+                  suffix: "invited you via announcement",
+                }
+              : { prefix: "Invite ·", actor: actorName, suffix: "" }
+          : { prefix: "Invite ·", actor: actorName, suffix: "" };
+
+  const titleHasPrefix = titleParts.prefix.trim().length > 0;
+  const titleHasActor = !!titleParts.actor && titleParts.actor.trim().length > 0;
+  const titleHasSuffix = titleParts.suffix.trim().length > 0;
+
+  const actorLabel =
+    notification.actor?.display_name || notification.actor?.username || "user";
+
+  const rowGroupIcon = (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (showOpenGroupThread) {
+          openThreadFromRow();
+        }
+      }}
+      disabled={!showOpenGroupThread}
+      className={[
+        "group -m-px inline-flex rounded-full outline-none ring-offset-2 ring-offset-[var(--bg)] focus-visible:ring-2 focus-visible:ring-amber-400/40",
+        showOpenGroupThread ? "cursor-pointer" : "cursor-default",
+      ].join(" ")}
+      aria-label={showOpenGroupThread ? "Open group invite chat" : "Group invite"}
+    >
+      <span
+        className="inline-flex items-center justify-center rounded-full border border-neutral-900/38 bg-transparent text-neutral-900 shadow-[inset_0_0_0_0.5px_rgba(23,23,23,0.18)] ring-1 ring-black/5 app-dark:border-amber-300/40 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_68%,#050507)] app-dark:text-amber-300"
+        style={{ width: avatarSize, height: avatarSize }}
+      >
+        <PiUsers className="h-[58%] w-[58%]" aria-hidden />
+      </span>
+    </button>
+  );
+
+  const rowActorAvatar =
+    actorProfileHref != null ? (
+      <Link
+        to={actorProfileHref}
+        onClick={(e) => e.stopPropagation()}
+        className="-m-px rounded-full outline-none ring-offset-2 ring-offset-[var(--bg)] focus-visible:ring-2 focus-visible:ring-primary/40"
+        aria-label={`Profile: ${actorLabel}`}
+      >
+        <Avatar
+          variant="default"
+          url={notification.actor?.avatar_url || undefined}
+          name={
+            notification.actor?.display_name ||
+            notification.actor?.username ||
+            undefined
+          }
+          size={avatarSize}
+          tightLineBox
+        />
+      </Link>
+    ) : (
+      <Avatar
+        variant="default"
+        url={notification.actor?.avatar_url || undefined}
+        name={
+          notification.actor?.display_name ||
+          notification.actor?.username ||
+          undefined
+        }
+        size={avatarSize}
+        tightLineBox
+      />
+    );
+
+  const latestPreview =
+    typeof notification.additional_data?.latest_preview_text === "string"
+      ? notification.additional_data.latest_preview_text.trim()
+      : "";
 
   const inviteNote =
     typeof notification.additional_data?.invite_note === "string"
@@ -166,7 +285,13 @@ export default function InviteNotificationItem({
       : "";
 
   const previewText =
-    inviteNote.length > 0 ? inviteNote : captionRaw.length > 0 ? captionRaw : null;
+    latestPreview.length > 0
+      ? latestPreview
+      : inviteNote.length > 0
+        ? inviteNote
+        : captionRaw.length > 0
+          ? captionRaw
+          : null;
 
   const linkTo = notification.additional_data?.post_id
     ? `${Paths.experience}/${notification.additional_data.post_id}`
@@ -176,7 +301,7 @@ export default function InviteNotificationItem({
     addSuffix: true,
   });
 
-  /** Message-left quota bar belongs here once batched preview data exists — avoid per-row thread fetch (see backlog). */
+  /** latest_preview_text from additional_data is set by backend (message/reaction activity); no per-row thread fetch. */
 
   const nowMs = Date.now();
   const createdMsParsed = Date.parse(notification.created_at);
@@ -198,100 +323,78 @@ export default function InviteNotificationItem({
     createdMsParsed + INVITE_ROW_WINDOW_MS <= nowMs;
 
   /** Actor corresponds to counterpart: received → inviter, sent → invitee */
-  const actorUsernameRaw = notification.actor?.username;
-  const actorProfileHref =
-    typeof actorUsernameRaw === "string" && actorUsernameRaw.trim().length > 0
-      ? `/u/${encodeURIComponent(actorUsernameRaw.trim())}`
-      : null;
-
-  const avatarSize = compact ? 36 : 42;
-  const rowPad = compact ? "py-2 pl-1 pr-0.5" : "py-2.5 pl-1 pr-1";
 
   const rowBody = (
     <>
       <div className="flex w-11 shrink-0 items-center justify-center self-center sm:w-12">
-        {actorProfileHref != null ? (
-          <Link
-            to={actorProfileHref}
-            onClick={(e) => e.stopPropagation()}
-            className="-m-px rounded-full outline-none ring-offset-2 ring-offset-[var(--bg)] focus-visible:ring-2 focus-visible:ring-primary/40"
-            aria-label={`Profile: ${
-              notification.actor?.display_name ||
-              actorUsernameRaw ||
-              "user"
-            }`}
-          >
-            <Avatar
-              variant="default"
-              url={notification.actor?.avatar_url || undefined}
-              name={
-                notification.actor?.display_name ||
-                notification.actor?.username ||
-                undefined
-              }
-              size={avatarSize}
-              tightLineBox
-            />
-          </Link>
-        ) : (
-          <Avatar
-            variant="default"
-            url={notification.actor?.avatar_url || undefined}
-            name={
-              notification.actor?.display_name ||
-              notification.actor?.username ||
-              undefined
-            }
-            size={avatarSize}
-            tightLineBox
-          />
-        )}
+        {isGroupThreadRow ? rowGroupIcon : rowActorAvatar}
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-start gap-x-1.5 gap-y-1 sm:gap-x-2">
           <PostTypeMetaChip type={metaPostType} className="mt-0.5 shrink-0" />
-          <div className="flex min-w-0 flex-[1_1_0] flex-wrap items-baseline gap-x-1 gap-y-0.5">
+          <div className="flex min-w-0 flex-[1_1_0] items-baseline gap-x-1.5">
             <span
-              className={`break-words text-[13px] leading-snug sm:text-sm ${
+              className={`inline-flex min-w-0 items-baseline whitespace-nowrap text-[13px] leading-snug sm:text-sm ${
                 notification.is_read
                   ? "text-[var(--text)]/68"
                   : "text-[var(--text)]/92"
               }`}
             >
-              {titleLine}
-            </span>
-            {showGoToPostButton && linkTo !== "#" ? (
-              <>
-                <span className="text-[var(--text)]/35" aria-hidden>
-                  ·
+              {titleHasPrefix ? <span>{titleParts.prefix}</span> : null}
+              {titleHasActor ? (
+                <>
+                  {titleHasPrefix ? <span>&nbsp;</span> : null}
+                <span className="inline-block max-w-[9.5rem] truncate align-bottom sm:max-w-[14rem]">
+                  {titleParts.actor}
                 </span>
-                <Link
-                  to={linkTo}
-                  state={{ backgroundLocation: location }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleClick();
-                  }}
-                  className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-normal text-[var(--text)]/55 underline decoration-transparent underline-offset-2 transition-colors hover:text-primary/85 hover:decoration-primary/45 hover:underline sm:text-[11px]"
-                  aria-label="See post"
-                >
-                  See post
-                  <PiArrowSquareOut className="h-2.5 w-2.5 shrink-0 sm:h-3 sm:w-3" aria-hidden />
-                </Link>
-              </>
-            ) : null}
+                </>
+              ) : null}
+              {titleHasSuffix ? (
+                <>
+                  {titleHasPrefix || titleHasActor ? <span>&nbsp;</span> : null}
+                  <span>{titleParts.suffix}</span>
+                </>
+              ) : null}
+            </span>
+            <span
+              className={`inline-block h-2 w-2 shrink-0 rounded-full align-[0.15em] ${
+                notification.is_read
+                  ? "invisible"
+                  : "bg-amber-400 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] ring-1 ring-amber-400/35 app-dark:bg-amber-400 app-dark:ring-amber-400/25"
+              }`}
+              aria-hidden={notification.is_read}
+              aria-label={notification.is_read ? undefined : "Unread"}
+            />
           </div>
         </div>
 
         {previewText ? (
-          <p className="mt-1.5 line-clamp-2 break-words text-[11px] leading-snug text-[var(--text)]/52 sm:mt-2 sm:text-xs">
+          <p
+            className={`mt-1.5 line-clamp-2 break-words text-[11px] leading-snug sm:mt-2 sm:text-xs ${
+              notification.is_read
+                ? "font-normal text-[var(--text)]/52"
+                : "font-semibold text-[var(--text)]/88 app-dark:text-[var(--text)]/90"
+            }`}
+          >
             {previewText}
           </p>
         ) : null}
       </div>
 
-      <div className="flex max-w-[4.875rem] shrink-0 flex-col items-end gap-1.5 pl-0.5 pt-[2.25rem] text-right sm:max-w-[5.125rem] sm:pt-[2.5rem]">
+      <div className="flex max-w-[4.875rem] shrink-0 flex-col items-end gap-1 self-start pt-0.5 pl-0.5 text-right sm:max-w-[5.125rem]">
+        {showGoToPostButton && linkTo !== "#" ? (
+          <Link
+            to={linkTo}
+            state={{ backgroundLocation: location }}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-[var(--text)]/65 underline decoration-transparent underline-offset-2 transition-colors hover:text-primary/85 hover:decoration-primary/45 hover:underline sm:text-[11px]"
+            aria-label="See post"
+          >
+            See post
+            <PiArrowSquareOut className="h-2.5 w-2.5 shrink-0 sm:h-3 sm:w-3" aria-hidden />
+          </Link>
+        ) : null}
         {show48hInviteCountdownRow ? (
           expired48hInviteDisplay ? (
             <div className="flex flex-col items-end gap-px">
@@ -317,12 +420,6 @@ export default function InviteNotificationItem({
             {timeAgoRelative}
           </span>
         )}
-        {!notification.is_read ? (
-          <span
-            className="block h-[5px] w-[5px] shrink-0 rounded-full bg-sky-500/60"
-            aria-label="Unread"
-          />
-        ) : null}
       </div>
     </>
   );
@@ -330,22 +427,25 @@ export default function InviteNotificationItem({
   return (
     <>
       <div
-        tabIndex={showOpenPersonalThread ? 0 : undefined}
+        tabIndex={showOpenThread ? 0 : undefined}
         aria-label={
-          showOpenPersonalThread ? "Open invite chat" : undefined
+          showOpenThread ? "Open invite chat" : undefined
         }
         onClick={
-          showOpenPersonalThread ? handleRowClick : undefined
+          showOpenThread ? handleRowClick : undefined
         }
         onKeyDown={
-          showOpenPersonalThread ? handleRowKeyDown : undefined
+          showOpenThread ? handleRowKeyDown : undefined
         }
         className={[
           "flex min-h-[4rem] w-full items-start gap-2 text-left transition-colors sm:min-h-[4.25rem] sm:gap-3",
           rowPad,
           expired48hInviteDisplay ? "opacity-[0.93]" : "",
-          showOpenPersonalThread
+          showOpenThread
             ? "cursor-pointer hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
+            : "",
+          highlighted
+            ? "rounded-xl border border-amber-400/18 app-dark:border-amber-400/22 bg-amber-400/[0.06] app-dark:bg-amber-400/[0.08] shadow-[0_2px_20px_rgba(251,191,36,0.14),0_0_1px_rgba(251,191,36,0.12)] app-dark:shadow-[0_2px_24px_rgba(251,191,36,0.12),0_0_1px_rgba(251,191,36,0.1)] transition-[box-shadow,background-color,border-color] duration-300"
             : "",
         ]
           .filter(Boolean)
@@ -368,6 +468,13 @@ export default function InviteNotificationItem({
               }
             : null
         }
+      />
+      <GroupInviteThreadOverlay
+        open={groupThreadDrawerOpen}
+        onClose={() => setGroupThreadDrawerOpen(false)}
+        threadId={personalThreadId}
+        windowStartAt={notification.created_at}
+        windowMs={INVITE_ROW_WINDOW_MS}
       />
     </>
   );

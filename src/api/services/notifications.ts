@@ -328,6 +328,37 @@ export async function getNotifications(
 }
 
 /**
+ * Attach actor profile to a single notification row (e.g. Supabase Realtime payload).
+ */
+export async function hydrateNotificationWithActor(
+  notification: Notification
+): Promise<NotificationWithActor> {
+  if (!notification.actor_id) {
+    return { ...notification, actor: null };
+  }
+  const { getProfilesByUserIds } = await import("./follows");
+  try {
+    const profiles = await getProfilesByUserIds([notification.actor_id]);
+    const p = profiles[0];
+    if (!p) {
+      return { ...notification, actor: null };
+    }
+    return {
+      ...notification,
+      actor: {
+        id: p.user_id,
+        username: p.username,
+        display_name: p.display_name,
+        avatar_url: p.avatar_url,
+      },
+    };
+  } catch (e) {
+    console.warn("[hydrateNotificationWithActor] failed:", e);
+    return { ...notification, actor: null };
+  }
+}
+
+/**
  * Get unread notification count for the current user
  * [OPTIMIZATION: Phase 2] Shares cache + network fetch with getNotificationBadgeData
  */

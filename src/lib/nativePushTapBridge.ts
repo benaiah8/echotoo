@@ -63,6 +63,24 @@ function isInvitePushData(
   return typeRaw === "invite";
 }
 
+/** Deep-link to notifications tab with optional invite/thread ids from FCM data. */
+function buildInviteNotificationsPath(
+  data: Record<string, unknown> | null | undefined
+): string {
+  const inviteId = String(data?.inviteId ?? "").trim();
+  const threadId = String(data?.threadId ?? "").trim();
+  const threadKind = String(data?.threadKind ?? "").trim();
+  if (!inviteId && !threadId) {
+    return Paths.notification;
+  }
+  const params = new URLSearchParams();
+  params.set("source", "push");
+  if (inviteId) params.set("inviteId", inviteId);
+  if (threadId) params.set("threadId", threadId);
+  if (threadKind) params.set("threadKind", threadKind);
+  return `${Paths.notification}?${params.toString()}`;
+}
+
 /**
  * Call once on native; safe to call from React useEffect. Idempotent.
  */
@@ -89,7 +107,7 @@ export function registerNativePushTapListener(): void {
               ? (data as Record<string, unknown>)
               : undefined;
           if (isInvitePushData(record)) {
-            deliverPath(Paths.notification);
+            deliverPath(buildInviteNotificationsPath(record));
             return;
           }
           const parsed = parsePostPushData(record);

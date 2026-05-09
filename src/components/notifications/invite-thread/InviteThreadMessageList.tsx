@@ -55,23 +55,43 @@ export default function InviteThreadMessageList({
       {messages.map((m, idx) => {
         const mine = viewerUserId != null && m.sender_user_id === viewerUserId;
         const showSep = spacingSeparatorPrevMessage(messages, idx);
+        const thumbUpCount = Number(m.thumb_up_count) || 0;
+        const viewerHasThumbUp = m.viewer_has_thumb_up === true;
         const showReactionCtl =
-          reactionsInteractive ||
-          (typeof m.thumb_up_count === "number" && m.thumb_up_count > 0);
+          reactionsInteractive || thumbUpCount > 0;
         const senderPreview = m.sender_profile ?? counterparty;
         const senderAvatarUrl = senderPreview?.avatar_url || undefined;
         const senderName =
           senderPreview?.display_name || senderPreview?.username || undefined;
 
-        const reactionActive = m.viewer_has_thumb_up === true;
+        const showReactionNumber = thumbUpCount > 1;
         const reactionInnerClass = [
-          "flex shrink-0 items-center justify-center rounded-full border transition-all duration-150",
-          reactionActive
-            ? "h-9 w-9 scale-[1.04] border-amber-400/80 bg-amber-400/28 text-amber-700 shadow-[0_0_16px_rgba(245,158,11,0.46)] app-dark:border-amber-300/78 app-dark:bg-amber-300/30 app-dark:text-amber-100 app-dark:shadow-[0_0_16px_rgba(251,191,36,0.35)]"
-            : "h-8 w-8 border-neutral-900/14 bg-black/[0.04] text-neutral-700/76 hover:border-neutral-900/24 hover:bg-black/[0.08] hover:text-neutral-900/90 app-dark:border-white/16 app-dark:bg-white/[0.06] app-dark:text-white/74 app-dark:hover:bg-white/[0.11] app-dark:hover:text-white/90",
+          "flex shrink-0 items-center justify-center gap-0.5 rounded-full border transition-all duration-150 tabular-nums",
+          showReactionNumber ? "min-h-[28px] px-1.5" : "h-7 w-7",
+          viewerHasThumbUp
+            ? "scale-[1.02] border-amber-400/80 bg-amber-400/28 text-amber-800 shadow-[0_0_12px_rgba(245,158,11,0.4)] app-dark:border-amber-300/78 app-dark:bg-amber-300/30 app-dark:text-amber-100 app-dark:shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+            : thumbUpCount > 0
+              ? "border-neutral-900/22 bg-black/[0.08] text-neutral-800/92 app-dark:border-white/22 app-dark:bg-white/[0.1] app-dark:text-white/88"
+              : "border-neutral-900/14 bg-black/[0.04] text-neutral-700/76 hover:border-neutral-900/24 hover:bg-black/[0.08] hover:text-neutral-900/90 app-dark:border-white/16 app-dark:bg-white/[0.06] app-dark:text-white/74 app-dark:hover:bg-white/[0.11] app-dark:hover:text-white/90",
         ].join(" ");
         const reactionHitClass =
           "mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 disabled:pointer-events-none disabled:opacity-35";
+
+        const reactionAriaLabel =
+          thumbUpCount > 0
+            ? `Thumbs up, ${thumbUpCount}`
+            : "Thumbs up";
+
+        const reactionPillInner = (
+          <>
+            <span className="text-[15px] leading-none select-none">👍</span>
+            {showReactionNumber ? (
+              <span className="text-[10px] font-semibold leading-none tracking-tight">
+                {thumbUpCount}
+              </span>
+            ) : null}
+          </>
+        );
 
         return (
           <Fragment key={m.id}>
@@ -105,29 +125,24 @@ export default function InviteThreadMessageList({
                     <button
                       type="button"
                       disabled={reactingMessageId === m.id}
-                      aria-pressed={m.viewer_has_thumb_up === true}
-                      aria-label={
-                        (m.thumb_up_count ?? 0) > 0
-                          ? `Thumbs up, ${m.thumb_up_count ?? 0}`
-                          : "Thumbs up"
-                      }
+                      aria-pressed={viewerHasThumbUp}
+                      aria-label={reactionAriaLabel}
                       onClick={() => onToggleReaction(m.id)}
                       className={reactionHitClass}
                     >
                       <span className={reactionInnerClass} aria-hidden>
-                        <span className="text-[17px] leading-none select-none">
-                          👍
-                        </span>
+                        {reactionPillInner}
                       </span>
                     </button>
-                  ) : typeof m.thumb_up_count === "number" &&
-                    m.thumb_up_count > 0 ? (
+                  ) : thumbUpCount > 0 ? (
                     <span
                       className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
                       aria-hidden
                     >
-                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-transparent text-[17px] text-neutral-800/78 app-dark:text-white/78">
-                        👍
+                      <span
+                        className={`${reactionInnerClass} pointer-events-none`}
+                      >
+                        {reactionPillInner}
                       </span>
                     </span>
                   ) : null
@@ -148,29 +163,24 @@ export default function InviteThreadMessageList({
                     <button
                       type="button"
                       disabled={reactingMessageId === m.id}
-                      aria-pressed={m.viewer_has_thumb_up === true}
-                      aria-label={
-                        (m.thumb_up_count ?? 0) > 0
-                          ? `Thumbs up, ${m.thumb_up_count ?? 0}`
-                          : "Thumbs up"
-                      }
+                      aria-pressed={viewerHasThumbUp}
+                      aria-label={reactionAriaLabel}
                       onClick={() => onToggleReaction(m.id)}
                       className={reactionHitClass}
                     >
                       <span className={reactionInnerClass} aria-hidden>
-                        <span className="text-[17px] leading-none select-none">
-                          👍
-                        </span>
+                        {reactionPillInner}
                       </span>
                     </button>
-                  ) : typeof m.thumb_up_count === "number" &&
-                    m.thumb_up_count > 0 ? (
+                  ) : thumbUpCount > 0 ? (
                     <span
                       className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
                       aria-hidden
                     >
-                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-transparent text-[17px] text-neutral-800/78 app-dark:text-white/78">
-                        👍
+                      <span
+                        className={`${reactionInnerClass} pointer-events-none`}
+                      >
+                        {reactionPillInner}
                       </span>
                     </span>
                   ) : null

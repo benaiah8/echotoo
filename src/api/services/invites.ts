@@ -292,26 +292,54 @@ export async function sendInvites(
         if (rpc.thread_id) threadExtras.thread_id = rpc.thread_id;
         if (rpc.thread_kind) threadExtras.thread_kind = rpc.thread_kind;
 
-        // Create sent invite notifications for the inviter
-        const sentInviteNotifications = data.map((invite) => ({
-          user_id: userId,
-          actor_id: invite.invitee_id,
-          type: "invite" as const,
-          entity_type: (postData?.type || "hangout") as
-            | "hangout"
-            | "experience",
-          entity_id: postId,
-          additional_data: {
-            post_id: postId,
-            invite_id: invite.id,
-            post_type: postData?.type || "hangout",
-            post_caption: postData?.caption || null,
-            invite_direction: "sent",
-            ...(noteForDb ? { invite_note: noteForDb } : {}),
-            ...threadExtras,
-          },
-          is_read: false,
-        }));
+        const isGroupLikeThread =
+          rpc.thread_kind === "group" || rpc.thread_kind === "announcement";
+        const canCollapseSenderRows = isGroupLikeThread && !!rpc.thread_id;
+
+        // Sender-side sent notifications:
+        // - personal: keep one per invite row
+        // - group/announcement: collapse to one row per thread when thread_id exists
+        // Defensive fallback: if group-like thread has no thread_id, keep per-invite rows.
+        const sentInviteNotifications = canCollapseSenderRows
+          ? [
+              {
+                user_id: userId,
+                actor_id: data[0]?.invitee_id ?? null,
+                type: "invite" as const,
+                entity_type: (postData?.type || "hangout") as
+                  | "hangout"
+                  | "experience",
+                entity_id: postId,
+                additional_data: {
+                  post_id: postId,
+                  post_type: postData?.type || "hangout",
+                  post_caption: postData?.caption || null,
+                  invite_direction: "sent",
+                  ...(noteForDb ? { invite_note: noteForDb } : {}),
+                  ...threadExtras,
+                },
+                is_read: false,
+              },
+            ]
+          : data.map((invite) => ({
+              user_id: userId,
+              actor_id: invite.invitee_id,
+              type: "invite" as const,
+              entity_type: (postData?.type || "hangout") as
+                | "hangout"
+                | "experience",
+              entity_id: postId,
+              additional_data: {
+                post_id: postId,
+                invite_id: invite.id,
+                post_type: postData?.type || "hangout",
+                post_caption: postData?.caption || null,
+                invite_direction: "sent",
+                ...(noteForDb ? { invite_note: noteForDb } : {}),
+                ...threadExtras,
+              },
+              is_read: false,
+            }));
 
         console.log(
           "Creating sent invite notifications:",
@@ -355,7 +383,12 @@ export async function sendInvites(
         );
       }
 
-      if (postTypeForPush) {
+      // Native invite push: personal and group only. Announcement/banner batches stay in-app
+      // only (no FCM) to avoid noisy bulk pushes; Edge Function unchanged.
+      if (
+        postTypeForPush &&
+        (rpc.thread_kind === "personal" || rpc.thread_kind === "group")
+      ) {
         const newInviteeIdsForPush = rpc.inserted_invitee_ids;
         void invokeSendInvitePushBestEffort({
           postId,

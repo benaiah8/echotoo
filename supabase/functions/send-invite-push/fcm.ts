@@ -64,6 +64,9 @@ export async function getFcmAccessToken(
 
 export type FcmDataPayload = {
   type?: string;
+  title?: string;
+  body?: string;
+  avatarUrl?: string;
   postId: string;
   postType: string;
   /** Optional; included for single-recipient sends (e.g. invite) when the client has one invite row. */
@@ -81,7 +84,6 @@ export async function sendFcmToDevice(
   accessToken: string,
   projectId: string,
   deviceToken: string,
-  notification: { title: string; body: string },
   data: FcmDataPayload
 ): Promise<{ ok: boolean; status: number; errorText?: string }> {
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
@@ -91,6 +93,15 @@ export async function sendFcmToDevice(
   };
   if (data.type) {
     fcmData.type = data.type;
+  }
+  if (data.title) {
+    fcmData.title = data.title;
+  }
+  if (data.body) {
+    fcmData.body = data.body;
+  }
+  if (data.avatarUrl) {
+    fcmData.avatarUrl = data.avatarUrl;
   }
   if (data.inviteId) {
     fcmData.inviteId = data.inviteId;
@@ -111,7 +122,9 @@ export async function sendFcmToDevice(
   const body = {
     message: {
       token: deviceToken,
-      notification,
+      android: {
+        priority: "HIGH",
+      },
       data: fcmData,
     },
   };

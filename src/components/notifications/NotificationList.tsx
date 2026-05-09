@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
-import { type NotificationWithActor } from "../../types/notification";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import type { Notification, NotificationWithActor } from "../../types/notification";
 import {
   getNotifications,
   getNotificationBadgeData,
   markViewNotificationsAsRead,
   markNotificationIdsAsRead,
+  hydrateNotificationWithActor,
+  clearNotificationsResponseCache,
 } from "../../api/services/notifications";
+import { supabase } from "../../lib/supabaseClient";
+import { clearCachedNotificationCount } from "../../lib/notificationCountCache";
 import NotificationItem from "./NotificationItem";
 import NotificationPermissionBanner from "./NotificationPermissionBanner";
 import { PiEnvelopeSimple, PiHeart } from "react-icons/pi";
@@ -20,9 +26,101 @@ import { setCachedInviteData } from "../../lib/inviteDataCache";
 import { setCachedInviteStatus } from "../../lib/inviteStatusCache";
 import { logFetchStart } from "../../lib/tabVisibilityDebug";
 import { NOTIFICATIONS_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
+import { Paths } from "../../router/Paths";
+
+/** Dedupe invite push deep-link handling (StrictMode remount resets refs). */
+const processedInvitePushDeepLinks = new Set<string>();
 
 /** First page & each "Load more" batch (server applies typeGroup as today). */
 const NOTIFICATION_PAGE_SIZE = 10;
+
+/** Invites tab only: sort by additional_data.latest_activity_at desc, else created_at desc. */
+function inviteSortTimeMs(n: NotificationWithActor): number {
+  const raw = n.additional_data?.latest_activity_at;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t)) return t;
+  }
+  return Date.parse(n.created_at) || 0;
+}
+
+function sortInviteNotificationsByLatestActivity(
+  list: NotificationWithActor[]
+): NotificationWithActor[] {
+  return [...list].sort((a, b) => {
+    const d = inviteSortTimeMs(b) - inviteSortTimeMs(a);
+    if (d !== 0) return d;
+    return (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0);
+  });
+}
+
+function notificationFromRealtimeRow(
+  row: Record<string, unknown>
+): Notification | null {
+  if (
+    typeof row.id !== "string" ||
+    typeof row.user_id !== "string" ||
+    row.type !== "invite"
+  ) {
+    return null;
+  }
+  const et = row.entity_type;
+  const entityType =
+    et === "post" ||
+    et === "comment" ||
+    et === "hangout" ||
+    et === "experience"
+      ? et
+      : "hangout";
+  const ad = row.additional_data;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    actor_id: typeof row.actor_id === "string" ? row.actor_id : null,
+    type: "invite",
+    entity_type: entityType,
+    entity_id: typeof row.entity_id === "string" ? row.entity_id : "",
+    additional_data:
+      ad && typeof ad === "object" && !Array.isArray(ad)
+        ? (ad as Record<string, unknown>)
+        : {},
+    is_read: Boolean(row.is_read),
+    created_at:
+      typeof row.created_at === "string"
+        ? row.created_at
+        : new Date().toISOString(),
+  };
+}
+
+async function enrichInviteDirectionIfNeeded(
+  n: NotificationWithActor,
+  viewerUserId: string | null
+): Promise<NotificationWithActor> {
+  if (n.type !== "invite") return n;
+  const inviteId = n.additional_data?.invite_id as string | undefined;
+  if (!inviteId || n.additional_data?.invite_direction) return n;
+  try {
+    const batchInvites = await getBatchInvitesByIds([inviteId]);
+    const inv = batchInvites.find((x) => x.id === inviteId);
+    if (!inv) return n;
+    const direction: "sent" | "received" =
+      viewerUserId && inv.inviter_id === viewerUserId ? "sent" : "received";
+    const status: "pending" | "accepted" | "declined" =
+      inv.status === "accepted" || inv.status === "declined"
+        ? inv.status
+        : "pending";
+    return {
+      ...n,
+      additional_data: {
+        ...n.additional_data,
+        invite_direction: direction,
+        invite_status: status,
+      },
+    };
+  } catch {
+    return n;
+  }
+}
 
 interface Props {
   className?: string;
@@ -54,6 +152,18 @@ export default function NotificationList({
   const listViewRef = useRef(listView);
   listViewRef.current = listView;
 
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [pushHighlightNotificationId, setPushHighlightNotificationId] =
+    useState<string | null>(null);
+  const inviteRowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const highlightClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const invitesRealtimeBadgeTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
   /** For switch button dot: other view’s unread (from head counts) */
   const [tabBadgeBreakdown, setTabBadgeBreakdown] = useState({
     invite: 0,
@@ -84,7 +194,7 @@ export default function NotificationList({
       logFetchStart("NotificationList", "notifications", isVisible, undefined);
       const typeGroup =
         listViewRef.current === "invites" ? "invite" : "activity";
-      const data = await getNotifications(
+      let data = await getNotifications(
         NOTIFICATION_PAGE_SIZE,
         offset,
         { typeGroup }
@@ -144,6 +254,10 @@ export default function NotificationList({
             err
           );
         }
+      }
+
+      if (typeGroup === "invite") {
+        data = sortInviteNotificationsByLatestActivity(data);
       }
 
       // [OPTIMIZATION] Batch load follow statuses BEFORE setting notifications
@@ -223,7 +337,11 @@ export default function NotificationList({
       }
 
       if (append) {
-        setNotifications((prev) => [...prev, ...data]);
+        setNotifications((prev) =>
+          typeGroup === "invite"
+            ? sortInviteNotificationsByLatestActivity([...prev, ...data])
+            : [...prev, ...data]
+        );
         setBatchedFollowStatuses((prev) => ({ ...prev, ...statusMap }));
       } else {
         setNotifications(data);
@@ -264,6 +382,123 @@ export default function NotificationList({
       window.removeEventListener(NOTIFICATIONS_TAB_REFRESH_EVENT, onTabRefresh);
   }, [isVisible]);
 
+  /** Supabase Realtime: invite rows only when Invites tab is visible — merges without loading skeleton or scroll reset */
+  useEffect(() => {
+    if (!isVisible || listView !== "invites") return;
+
+    let cancelled = false;
+    const channelRef: {
+      current: ReturnType<typeof supabase.channel> | null;
+    } = { current: null };
+
+    void (async () => {
+      const userId = await getViewerAuthUserId();
+      if (!userId || cancelled) return;
+
+      const scheduleInviteBadgeRefresh = () => {
+        if (invitesRealtimeBadgeTimerRef.current) {
+          clearTimeout(invitesRealtimeBadgeTimerRef.current);
+        }
+        invitesRealtimeBadgeTimerRef.current = setTimeout(() => {
+          invitesRealtimeBadgeTimerRef.current = null;
+          clearCachedNotificationCount(userId);
+          clearNotificationsResponseCache();
+          window.dispatchEvent(new CustomEvent("notifications:updated"));
+        }, 120);
+      };
+
+      const handleInvitePayload = async (
+        payload: RealtimePostgresChangesPayload<Record<string, unknown>>
+      ) => {
+        const raw =
+          (payload.new as Record<string, unknown> | undefined) ??
+          (payload.old as Record<string, unknown> | undefined);
+        if (!raw) return;
+        const parsed = notificationFromRealtimeRow(raw);
+        if (!parsed) return;
+        if (cancelled || listViewRef.current !== "invites") return;
+
+        try {
+          let withActor = await hydrateNotificationWithActor(parsed);
+          withActor = await enrichInviteDirectionIfNeeded(withActor, userId);
+          if (cancelled || listViewRef.current !== "invites") return;
+
+          scheduleInviteBadgeRefresh();
+
+          setNotifications((prev) => {
+            if (listViewRef.current !== "invites") return prev;
+            const id = withActor.id;
+            const idx = prev.findIndex((n) => n.id === id);
+            if (idx >= 0) {
+              const prevRow = prev[idx];
+              const merged: NotificationWithActor = {
+                ...prevRow,
+                ...withActor,
+                additional_data: {
+                  ...prevRow.additional_data,
+                  ...withActor.additional_data,
+                },
+                actor: withActor.actor ?? prevRow.actor,
+              };
+              const next = [...prev];
+              next[idx] = merged;
+              return sortInviteNotificationsByLatestActivity(next);
+            }
+            return sortInviteNotificationsByLatestActivity([
+              withActor,
+              ...prev,
+            ]);
+          });
+        } catch (e) {
+          console.warn("[NotificationList] invite realtime merge failed:", e);
+        }
+      };
+
+      const filter = `user_id=eq.${userId}`;
+      const channel = supabase
+        .channel(`notifications-invites-${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "notifications",
+            filter,
+          },
+          (p) => void handleInvitePayload(p)
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "notifications",
+            filter,
+          },
+          (p) => void handleInvitePayload(p)
+        )
+        .subscribe();
+
+      if (cancelled) {
+        void supabase.removeChannel(channel);
+        return;
+      }
+      channelRef.current = channel;
+    })();
+
+    return () => {
+      cancelled = true;
+      if (invitesRealtimeBadgeTimerRef.current) {
+        clearTimeout(invitesRealtimeBadgeTimerRef.current);
+        invitesRealtimeBadgeTimerRef.current = null;
+      }
+      if (channelRef.current) {
+        void supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
+  }, [isVisible, listView]);
+
   useEffect(() => {
     if (!isVisible) {
       initialLoadInFlightRef.current = false;
@@ -279,6 +514,80 @@ export default function NotificationList({
     initialLoadInFlightRef.current = true;
     loadNotifications(0, false);
   }, [isVisible, listView]);
+
+  useEffect(() => {
+    if (searchParams.get("source") !== "push") {
+      processedInvitePushDeepLinks.clear();
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightClearTimerRef.current != null) {
+        clearTimeout(highlightClearTimerRef.current);
+        highlightClearTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) return;
+    if (searchParams.get("source") !== "push") return;
+
+    if (listView !== "invites") {
+      setListView("invites");
+      return;
+    }
+
+    if (loading) return;
+
+    const dedupeKey = searchParams.toString();
+    if (processedInvitePushDeepLinks.has(dedupeKey)) return;
+
+    const inviteIdQ = searchParams.get("inviteId")?.trim() ?? "";
+    const threadIdQ = searchParams.get("threadId")?.trim() ?? "";
+
+    processedInvitePushDeepLinks.add(dedupeKey);
+
+    if (!inviteIdQ && !threadIdQ) {
+      navigate(Paths.notification, { replace: true });
+      return;
+    }
+
+    const match = notifications.find((n) => {
+      if (n.type !== "invite") return false;
+      const ad = n.additional_data;
+      if (!ad || typeof ad !== "object") return false;
+      const rec = ad as Record<string, unknown>;
+      if (threadIdQ && String(rec.thread_id ?? "") === threadIdQ) {
+        return true;
+      }
+      if (inviteIdQ && String(rec.invite_id ?? "") === inviteIdQ) {
+        return true;
+      }
+      return false;
+    });
+
+    navigate(Paths.notification, { replace: true });
+
+    if (match) {
+      setPushHighlightNotificationId(match.id);
+      if (highlightClearTimerRef.current != null) {
+        clearTimeout(highlightClearTimerRef.current);
+      }
+      highlightClearTimerRef.current = setTimeout(() => {
+        setPushHighlightNotificationId(null);
+        highlightClearTimerRef.current = null;
+      }, 4500);
+      const id = match.id;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const el = inviteRowRefs.current.get(id);
+          el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        });
+      });
+    }
+  }, [isVisible, searchParams, listView, loading, notifications, navigate]);
 
   /** Refresh “other view” unread dots + align with bottom tab (same event/caches) */
   useEffect(() => {
@@ -346,15 +655,16 @@ export default function NotificationList({
   };
 
   /**
-   * When the current list is shown (not refetching), mark loaded rows as read.
-   * Skips while `loading` so we never mark the wrong set during a list view switch.
-   * Uses the same "countable unread" filter as the header (excludes declined follow noise).
+   * Auto-mark visible notifications read when the list is shown (activity tab only for invite rows).
+   * Invite notifications on the Invites tab stay unread until the user opens the thread from the row.
    */
   useEffect(() => {
     if (!isVisible || loading) return;
     const markable = notifications
       .filter((n) => {
         if (n.is_read) return false;
+        /** Invites stay unread until the user opens the thread from the row (InviteNotificationItem). */
+        if (listView === "invites" && n.type === "invite") return false;
         if (
           n.type === "follow" &&
           n.additional_data?.follow_request_status === "declined"
@@ -684,12 +994,16 @@ export default function NotificationList({
             return (
               <div
                 key={notification.id}
+                ref={(el) => {
+                  inviteRowRefs.current.set(notification.id, el);
+                }}
                 className="border-b border-[var(--border)]/45 last:border-b-0"
               >
                 <NotificationItem
                   notification={notification}
                   onMarkAsRead={handleMarkAsRead}
                   showGoToPostButton
+                  highlighted={pushHighlightNotificationId === notification.id}
                   batchedFollowStatus={
                     notification.type === "follow" &&
                     notification.additional_data?.follow_request_status
