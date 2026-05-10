@@ -36,7 +36,16 @@ interface ConfirmDialogProps {
   secondaryLabel?: string;
   onSecondary?: () => void;
   /** danger = solid red; dangerSoft = outline / muted (better text contrast on dark UIs) */
-  secondaryVariant?: "primary" | "danger" | "dangerSoft";
+  secondaryVariant?: "primary" | "danger" | "dangerSoft" | "default";
+  /**
+   * Pill-shaped buttons (rounded-full, slightly smaller type). Default dialogs unchanged.
+   */
+  pillButtons?: boolean;
+  /**
+   * When secondary + confirm exist: top row = cancel + secondary (half/half),
+   * bottom row = primary full width (invite outcome “some already invited”).
+   */
+  stackThreeActionsPrimaryBelow?: boolean;
 }
 
 /**
@@ -52,19 +61,29 @@ export const getConfirmDialogButtonClass = (
     | "warning"
     | "default"
     | "dangerSoft",
-  layout: "equal" | "equalThree" | "intrinsic" = "equal"
+  layout: "equal" | "equalThree" | "intrinsic" | "full" = "equal",
+  shape: "default" | "pill" = "default"
 ) => {
   const widthPad =
     layout === "equal"
       ? "flex-1 min-w-0 px-3"
       : layout === "equalThree"
       ? "flex-1 min-w-0 px-2.5"
+      : layout === "full"
+      ? "w-full min-w-0 px-3"
       : "shrink-0 px-4 min-w-0";
   const wrap =
     layout === "equalThree"
       ? "whitespace-normal leading-tight"
       : "whitespace-nowrap";
-  const base = `${widthPad} py-2 rounded-lg text-xs font-semibold transition disabled:opacity-50 ${wrap} text-center`;
+  const radius = shape === "pill" ? "rounded-full" : "rounded-lg";
+  /** Pill invite outcomes: match InviteDrawer footer (`h-9`, `text-xs`, rounded-full). */
+  const sizing =
+    shape === "pill"
+      ? "flex h-9 min-h-9 items-center justify-center"
+      : "py-2";
+  const textSize = "text-xs";
+  const base = `${widthPad} ${sizing} ${radius} ${textSize} font-semibold transition disabled:opacity-50 ${wrap} text-center`;
   switch (variant) {
     case "danger":
       return `${base} bg-red-500 text-white hover:bg-red-600`;
@@ -98,6 +117,8 @@ export default function ConfirmDialog({
   secondaryLabel,
   onSecondary,
   secondaryVariant = "primary",
+  pillButtons = false,
+  stackThreeActionsPrimaryBelow = false,
 }: ConfirmDialogProps) {
   const handleConfirm = async () => {
     if (isLoading) return;
@@ -110,6 +131,37 @@ export default function ConfirmDialog({
     if (isLoading) return;
     onSecondary?.();
   };
+
+  const shape = pillButtons ? "pill" : "default";
+  const pillCancelBase =
+    "flex h-9 min-h-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80 disabled:opacity-50 text-center";
+  const cancelBtnClass = pillButtons
+    ? hasSecondary && stackThreeActionsPrimaryBelow
+      ? `${pillCancelBase} flex-1 min-w-0 whitespace-nowrap`
+      : hasSecondary
+      ? `${pillCancelBase} flex-1 min-w-[5.5rem] px-2.5 whitespace-normal leading-tight`
+      : `${pillCancelBase} flex-1 min-w-0 whitespace-nowrap`
+    : hasSecondary
+      ? "flex-1 min-w-0 px-2.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface)]/80 transition disabled:opacity-50 whitespace-normal leading-tight text-center"
+      : "flex-1 min-w-0 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface)]/80 transition disabled:opacity-50 whitespace-nowrap";
+
+  const actionsRowClass = [
+    "min-w-0",
+    hasSecondary && !(pillButtons && stackThreeActionsPrimaryBelow)
+      ? `flex w-full flex-wrap gap-2 ${pillButtons ? "sm:flex-nowrap" : ""}`
+      : !hasSecondary
+      ? `flex gap-2 min-w-0 ${pillButtons ? "flex-wrap" : ""}`
+      : "",
+  ].join(" ");
+
+  const secondaryBtnVariant =
+    secondaryVariant === "dangerSoft"
+      ? "dangerSoft"
+      : secondaryVariant === "danger"
+      ? "danger"
+      : secondaryVariant === "default"
+      ? "default"
+      : "primary";
 
   return (
     <FrostedCenterModal
@@ -136,61 +188,91 @@ export default function ConfirmDialog({
             {message}
           </div>
         )}
-        <div
-          className={
-            hasSecondary ? "flex w-full gap-2 min-w-0" : "flex gap-2 min-w-0"
-          }
-        >
-          <button
-            className={
-              hasSecondary
-                ? "flex-1 min-w-0 px-2.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface)]/80 transition disabled:opacity-50 whitespace-normal leading-tight text-center"
-                : "flex-1 min-w-0 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface)]/80 transition disabled:opacity-50 whitespace-nowrap"
-            }
-            onClick={onClose}
-            disabled={isLoading}
-          >
-            {cancelLabel}
-          </button>
-          {secondaryLabel && onSecondary ? (
-            <>
+        {pillButtons && stackThreeActionsPrimaryBelow && hasSecondary ? (
+          <div className="flex w-full min-w-0 flex-col gap-2">
+            <div className="flex min-w-0 gap-2">
+              <button
+                className={cancelBtnClass}
+                onClick={onClose}
+                disabled={isLoading}
+              >
+                {cancelLabel}
+              </button>
               <button
                 className={getConfirmDialogButtonClass(
-                  secondaryVariant === "dangerSoft"
-                    ? "dangerSoft"
-                    : secondaryVariant === "danger"
-                    ? "danger"
-                    : "primary",
-                  "equalThree"
+                  secondaryBtnVariant,
+                  "equal",
+                  shape
                 )}
-                onClick={() => {
-                  if (!isLoading) onSecondary();
-                }}
+                onClick={handleSecondary}
                 disabled={isLoading}
               >
                 {secondaryLabel}
               </button>
+            </div>
+            <button
+              className={getConfirmDialogButtonClass(
+                confirmVariant,
+                "full",
+                shape
+              )}
+              onClick={handleConfirm}
+              disabled={isLoading}
+            >
+              {isLoading ? "Loading..." : confirmLabel}
+            </button>
+          </div>
+        ) : (
+          <div className={actionsRowClass}>
+            <button
+              className={cancelBtnClass}
+              onClick={onClose}
+              disabled={isLoading}
+            >
+              {cancelLabel}
+            </button>
+            {secondaryLabel && onSecondary ? (
+              <>
+                <button
+                  className={getConfirmDialogButtonClass(
+                    secondaryBtnVariant,
+                    "equalThree",
+                    shape
+                  )}
+                  onClick={() => {
+                    if (!isLoading) onSecondary();
+                  }}
+                  disabled={isLoading}
+                >
+                  {secondaryLabel}
+                </button>
+                <button
+                  className={getConfirmDialogButtonClass(
+                    confirmVariant,
+                    "equalThree",
+                    shape
+                  )}
+                  onClick={handleConfirm}
+                  disabled={isLoading}
+                >
+                  {isLoading ? "Loading..." : confirmLabel}
+                </button>
+              </>
+            ) : (
               <button
                 className={getConfirmDialogButtonClass(
                   confirmVariant,
-                  "equalThree"
+                  "equal",
+                  shape
                 )}
                 onClick={handleConfirm}
                 disabled={isLoading}
               >
                 {isLoading ? "Loading..." : confirmLabel}
               </button>
-            </>
-          ) : (
-            <button
-              className={getConfirmDialogButtonClass(confirmVariant)}
-              onClick={handleConfirm}
-              disabled={isLoading}
-            >
-              {isLoading ? "Loading..." : confirmLabel}
-            </button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </FrostedCenterModal>
   );

@@ -144,6 +144,48 @@ export default function HomePage() {
   // Used to show empty card and visual distinction for filtered items
   const railFilteredCountRef = useRef<number | undefined>(undefined);
 
+  /** User just turned on Today — first rail page decides toast + auto-deselect (client-side sample only). */
+  const pendingTodayCheckRef = useRef(false);
+  const hadTodayFilterPrevRef = useRef(false);
+  const selectedFiltersRef = useRef<string[]>(selectedFilters);
+
+  useEffect(() => {
+    selectedFiltersRef.current = selectedFilters;
+  }, [selectedFilters]);
+
+  useEffect(() => {
+    const hasToday = selectedFilters.includes("today");
+    if (!hasToday) {
+      pendingTodayCheckRef.current = false;
+    } else if (!hadTodayFilterPrevRef.current) {
+      pendingTodayCheckRef.current = true;
+    }
+    hadTodayFilterPrevRef.current = hasToday;
+  }, [selectedFilters]);
+
+  /**
+   * After rails apply filters: if Today was just enabled and this batch matched nothing, toast and clear Today.
+   * Not a database-wide guarantee — only the fetched rail slice (see horizontalRailFilters).
+   */
+  const maybeResolvePendingTodayCheck = useCallback(
+    (filteredCount: number, offset: number) => {
+      if (offset !== 0) return;
+      if (!pendingTodayCheckRef.current) return;
+      if (!selectedFiltersRef.current.includes("today")) {
+        pendingTodayCheckRef.current = false;
+        return;
+      }
+      if (filteredCount > 0) {
+        pendingTodayCheckRef.current = false;
+        return;
+      }
+      pendingTodayCheckRef.current = false;
+      toast("No hangouts today", { id: "home-no-hangouts-today" });
+      setSelectedFilters((prev) => prev.filter((f) => f !== "today"));
+    },
+    []
+  );
+
   // auth state and modal state for logo functionality
   const dispatch = useDispatch();
   const authState = useSelector((state: RootState) => state.auth);
@@ -184,9 +226,8 @@ export default function HomePage() {
     };
   }, [isHomeVisible]);
 
-  // tweak these if your actual header/footer heights differ (floating top bar + three-dot + gradient)
-  // Three-dot pill floats over content (fixed position), so content stays at fixed padding
-  const HEADER_HEIGHT = 88;
+  // tweak these if your actual header/footer heights differ (floating top bar + quick chips + gradient)
+  const HEADER_HEIGHT = 96;
   const FOOTER_HEIGHT = 80;
 
   // Track and persist scroll position per feed key to restore when navigating back
@@ -418,6 +459,8 @@ export default function HomePage() {
         // Store filteredCount in ref for passing to components
         railFilteredCountRef.current = result.filteredCount;
 
+        maybeResolvePendingTodayCheck(result.filteredCount, offset);
+
         return result.items;
       }
 
@@ -426,7 +469,7 @@ export default function HomePage() {
       railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(fetchedItems, limit);
     },
-    [search, selectedTags, selectedFilters, viewerProfileId]
+    [search, selectedTags, selectedFilters, viewerProfileId, maybeResolvePendingTodayCheck]
   );
 
   const railGetCachedItems = useCallback(
@@ -464,6 +507,98 @@ export default function HomePage() {
     [search, selectedTags, selectedFilters, viewerProfileId]
   );
 
+  // Top horizontal rail only (viewMode === "all") — must be unconditional hooks; see HomeHangoutSection JSX.
+  const topRailLoadItems = useCallback(
+    async (offset: number, limit: number) => {
+      // 1. Fetch mixed content (both hangouts and experiences)
+      const feedOptions: FeedOptions = {
+        type: undefined, // Get both types
+        q: search || undefined,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        limit: limit * 2, // Fetch more to allow for filtering
+        offset,
+        viewerProfileId: viewerProfileId || undefined,
+      };
+
+      const fetchedItems = USE_OPTIMIZED_FEED
+        ? await getPublicFeedOptimized(feedOptions)
+        : await getPublicFeed(feedOptions);
+
+      // [PHASE 1] Filter rails: exclude unscheduled and expired hangouts (even via fallback)
+      // Why: Rails should only show scheduled, non-expired events
+      // This prevents fallback from reintroducing unscheduled/expired hangouts
+      const railsFilteredItems = filterRailsItems(fetchedItems);
+
+      // 2. Apply filters client-side if any are active
+      if (selectedFilters.length > 0) {
+        // Get mutual friends if needed
+        let mutualFriends: Set<string> | null = null;
+        if (
+          selectedFilters.includes("friends") &&
+          viewerProfileId
+        ) {
+          mutualFriends = await getMutualFriends(viewerProfileId);
+        }
+
+        // Apply filters with fallback (shows unfiltered items if filtered results are sparse)
+        // Note: railsFilteredItems already excludes unscheduled/expired hangouts
+        const result = applyFiltersWithFallback(
+          railsFilteredItems,
+          selectedFilters as FilterType[],
+          mutualFriends,
+          3, // Minimum 3 filtered items before showing fallback
+          true // Always show fallback (even with 1 filtered item)
+        );
+
+        // Store filteredCount in ref for passing to components
+        railFilteredCountRef.current = result.filteredCount;
+
+        maybeResolvePendingTodayCheck(result.filteredCount, offset);
+
+        return result.items;
+      }
+
+      // 3. If no filters, mix hangouts and experiences
+      // Note: railsFilteredItems already excludes unscheduled/expired hangouts
+      return mixHangoutsAndExperiences(railsFilteredItems, limit);
+    },
+    [search, selectedTags, selectedFilters, viewerProfileId, maybeResolvePendingTodayCheck]
+  );
+
+  const topRailGetCachedItems = useCallback(() => {
+    const feedOptions = {
+      type: undefined, // Mixed content
+      q: search || undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      filters:
+        selectedFilters.length > 0 ? selectedFilters : undefined,
+      limit: 20,
+      offset: 0,
+      viewerProfileId: viewerProfileId ?? null,
+    };
+    const cacheKey = dataCache.generateFeedKey(feedOptions);
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    return Array.isArray(cached) ? cached : null;
+  }, [search, selectedTags, selectedFilters, viewerProfileId]);
+
+  const topRailSetCachedItems = useCallback(
+    (items: FeedItem[]) => {
+      const feedOptions = {
+        type: undefined, // Mixed content
+        q: search || undefined,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        filters:
+          selectedFilters.length > 0 ? selectedFilters : undefined,
+        limit: 20,
+        offset: 0,
+        viewerProfileId: viewerProfileId ?? null,
+      };
+      const cacheKey = dataCache.generateFeedKey(feedOptions);
+      dataCache.set(cacheKey, items, 10 * 60 * 1000);
+    },
+    [search, selectedTags, selectedFilters, viewerProfileId]
+  );
+
   return (
     <>
       {isHomeTabActive && (pullPx > 2 || ptrRefreshing) ? (
@@ -475,7 +610,7 @@ export default function HomePage() {
           aria-label={ptrRefreshing ? "Refreshing feed" : "Pull to refresh"}
           className="pointer-events-none fixed left-0 right-0 z-[35] flex justify-center"
           style={{
-            top: "calc(80px + var(--safe-area-top-layout))",
+            top: "calc(88px + var(--safe-area-top-layout))",
             opacity: ptrRefreshing
               ? 1
               : Math.min(1, 0.12 + pullProgress * 0.88),
@@ -491,7 +626,7 @@ export default function HomePage() {
         </div>
       ) : null}
       <PrimaryPageContainer hideUI={effectiveHomeTopHidden} capacitorNotchScrim>
-        {/* Top bar: floating pill + gradient + three-dot menu */}
+        {/* Top bar: floating pill + gradient + quick chips */}
         <HomeTopBar
           isHidden={effectiveHomeTopHidden}
           atTop={effectiveHomeAtTop}
@@ -514,7 +649,7 @@ export default function HomePage() {
         {/* MAIN CONTENT */}
         <div
           style={{
-            paddingTop: "calc(72px + var(--safe-area-top-layout))",
+            paddingTop: "calc(90px + var(--safe-area-top-layout))",
             paddingBottom: FOOTER_HEIGHT,
           }}
         >
@@ -534,94 +669,9 @@ export default function HomePage() {
                 tabId="home"
                 filteredCount={railFilteredCountRef.current}
                 hasActiveFilters={selectedFilters.length > 0}
-                loadItems={useCallback(
-                  async (offset: number, limit: number) => {
-                    // 1. Fetch mixed content (both hangouts and experiences)
-                    const feedOptions: FeedOptions = {
-                      type: undefined, // Get both types
-                      q: search || undefined,
-                      tags: selectedTags.length > 0 ? selectedTags : undefined,
-                      limit: limit * 2, // Fetch more to allow for filtering
-                      offset,
-                      viewerProfileId: viewerProfileId || undefined,
-                    };
-
-                    const fetchedItems = USE_OPTIMIZED_FEED
-                      ? await getPublicFeedOptimized(feedOptions)
-                      : await getPublicFeed(feedOptions);
-
-                    // [PHASE 1] Filter rails: exclude unscheduled and expired hangouts (even via fallback)
-                    // Why: Rails should only show scheduled, non-expired events
-                    // This prevents fallback from reintroducing unscheduled/expired hangouts
-                    const railsFilteredItems = filterRailsItems(fetchedItems);
-
-                    // 2. Apply filters client-side if any are active
-                    if (selectedFilters.length > 0) {
-                      // Get mutual friends if needed
-                      let mutualFriends: Set<string> | null = null;
-                      if (
-                        selectedFilters.includes("friends") &&
-                        viewerProfileId
-                      ) {
-                        mutualFriends = await getMutualFriends(viewerProfileId);
-                      }
-
-                      // Apply filters with fallback (shows unfiltered items if filtered results are sparse)
-                      // Note: railsFilteredItems already excludes unscheduled/expired hangouts
-                      const result = applyFiltersWithFallback(
-                        railsFilteredItems,
-                        selectedFilters as FilterType[],
-                        mutualFriends,
-                        3, // Minimum 3 filtered items before showing fallback
-                        true // Always show fallback (even with 1 filtered item)
-                      );
-
-                      // Store filteredCount in ref for passing to components
-                      railFilteredCountRef.current = result.filteredCount;
-
-                      return result.items;
-                    }
-
-                    // 3. If no filters, mix hangouts and experiences
-                    // Note: railsFilteredItems already excludes unscheduled/expired hangouts
-                    return mixHangoutsAndExperiences(railsFilteredItems, limit);
-                  },
-                  [search, selectedTags, selectedFilters, viewerProfileId]
-                )}
-                getCachedItems={useCallback(() => {
-                  const feedOptions = {
-                    type: undefined, // Mixed content
-                    q: search || undefined,
-                    tags: selectedTags.length > 0 ? selectedTags : undefined,
-                    filters:
-                      selectedFilters.length > 0 ? selectedFilters : undefined,
-                    limit: 20,
-                    offset: 0,
-                    viewerProfileId: viewerProfileId ?? null,
-                  };
-                  const cacheKey = dataCache.generateFeedKey(feedOptions);
-                  const cached = dataCache.get<FeedItem[]>(cacheKey);
-                  return Array.isArray(cached) ? cached : null;
-                }, [search, selectedTags, selectedFilters, viewerProfileId])}
-                setCachedItems={useCallback(
-                  (items: FeedItem[]) => {
-                    const feedOptions = {
-                      type: undefined, // Mixed content
-                      q: search || undefined,
-                      tags: selectedTags.length > 0 ? selectedTags : undefined,
-                      filters:
-                        selectedFilters.length > 0
-                          ? selectedFilters
-                          : undefined,
-                      limit: 20,
-                      offset: 0,
-                      viewerProfileId: viewerProfileId ?? null,
-                    };
-                    const cacheKey = dataCache.generateFeedKey(feedOptions);
-                    dataCache.set(cacheKey, items, 10 * 60 * 1000);
-                  },
-                  [search, selectedTags, selectedFilters, viewerProfileId]
-                )}
+                loadItems={topRailLoadItems}
+                getCachedItems={topRailGetCachedItems}
+                setCachedItems={topRailSetCachedItems}
               />
             </div>
           )}

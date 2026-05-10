@@ -3,11 +3,13 @@
  * Does not run on startup — {@link PushRegistrationMount} remains disabled via TEMP_DISABLE_PUSH_REGISTRATION.
  *
  * Web: no-op (returns immediately).
- * iOS / Android: Capacitor PushNotifications permission + register() when granted.
+ * Android: Capacitor PushNotifications permission + register(); `registration` upserts FCM token.
+ * iOS: Same permission + PushNotifications.register() for APNs; FCM token via FirebaseMessaging only.
  * Does not automatically open system Settings when permission is denied (isolation: avoid extra leave-app / resume).
  */
 
 import { Capacitor } from "@capacitor/core";
+import { FirebaseMessaging } from "@capacitor-firebase/messaging";
 import { PushNotifications, type Token } from "@capacitor/push-notifications";
 import { supabase } from "./supabaseClient";
 import { isNativeApp } from "./storage/utils/capacitorDetection";
@@ -22,8 +24,16 @@ function nativePlatform(): PushDevicePlatform | null {
   return null;
 }
 
+function tokenPreview(len: number): string {
+  if (!Number.isFinite(len) || len <= 0) return "(empty)";
+  return `length=${len}`;
+}
+
 /** Single init: duplicate registration listeners would double-upsert tokens. */
 let listenersInit: Promise<void> | null = null;
+
+/** iOS-only: FirebaseMessaging token refresh listener (registered once). */
+let iosFcmListenerInit: Promise<void> | null = null;
 
 function ensurePushListeners(): Promise<void> {
   if (!listenersInit) {
@@ -33,6 +43,13 @@ function ensurePushListeners(): Promise<void> {
         async (token: Token) => {
           const platform = nativePlatform();
           if (!platform) return;
+          if (platform === "ios") {
+            console.log(
+              "[explicitNativePush] registration event ignored on iOS",
+              { tokenPreview: tokenPreview(token?.value?.length ?? 0) }
+            );
+            return;
+          }
           const value = token?.value?.trim?.() ?? "";
           if (!value) {
             console.warn(
@@ -61,6 +78,76 @@ function ensurePushListeners(): Promise<void> {
     })();
   }
   return listenersInit;
+}
+
+/**
+ * Registers `tokenReceived` once on iOS so FCM token rotation updates Supabase.
+ */
+function ensureIosFcmTokenRefreshListener(): Promise<void> {
+  if (Capacitor.getPlatform() !== "ios") {
+    return Promise.resolve();
+  }
+  if (!iosFcmListenerInit) {
+    iosFcmListenerInit = (async () => {
+      await FirebaseMessaging.addListener("tokenReceived", async (event) => {
+        const raw = typeof event?.token === "string" ? event.token.trim() : "";
+        if (!raw) {
+          console.warn("[explicitNativePush] tokenReceived empty on iOS");
+          return;
+        }
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.user) return;
+        const { error } = await upsertPushDevice(raw, "ios");
+        if (error) {
+          console.warn(
+            "[explicitNativePush] Failed to save refreshed iOS FCM token:",
+            error.message,
+            { tokenPreview: tokenPreview(raw.length) }
+          );
+        } else {
+          console.log("[explicitNativePush] iOS FCM token refreshed", {
+            tokenPreview: tokenPreview(raw.length),
+          });
+        }
+      });
+    })();
+  }
+  return iosFcmListenerInit;
+}
+
+async function fetchAndUpsertIosFcmToken(): Promise<void> {
+  if (Capacitor.getPlatform() !== "ios") return;
+  try {
+    const result = await FirebaseMessaging.getToken();
+    const token =
+      typeof result?.token === "string" ? result.token.trim() : "";
+    if (!token) {
+      console.warn(
+        "[explicitNativePush] FirebaseMessaging.getToken returned empty token",
+        { tokenPreview: tokenPreview(0) }
+      );
+      return;
+    }
+    const { error } = await upsertPushDevice(token, "ios");
+    if (error) {
+      console.warn(
+        "[explicitNativePush] Failed to save iOS FCM token:",
+        error.message,
+        { tokenPreview: tokenPreview(token.length) }
+      );
+    } else {
+      console.log("[explicitNativePush] iOS FCM token saved", {
+        tokenPreview: tokenPreview(token.length),
+      });
+    }
+  } catch (e) {
+    console.warn(
+      "[explicitNativePush] FirebaseMessaging.getToken failed:",
+      e instanceof Error ? e.message : String(e)
+    );
+  }
 }
 
 export type ExplicitNativePushResult = {
@@ -167,12 +254,18 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     }
 
     await ensurePushListeners();
+    await ensureIosFcmTokenRefreshListener();
     console.log("[DBG:PUSH] register_before", {
       t: Date.now(),
       platform,
       receive: perm.receive,
     });
     await PushNotifications.register();
+
+    if (platform === "ios") {
+      await fetchAndUpsertIosFcmToken();
+    }
+
     const r = {
       granted: true,
       skipped: false,

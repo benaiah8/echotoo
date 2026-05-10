@@ -106,6 +106,104 @@ function coerceUuidArray(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === "string" && Boolean(x));
 }
 
+/** Loose UUID v4-shaped check (matches Postgres uuid text form). */
+function isUuidShaped(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    id.trim(),
+  );
+}
+
+const PROFILE_USER_ID_LOOKUP_CHUNK = 100;
+
+/** Chunk size for `.in("invitee_id", …)` pre-send already-invited checks. */
+const INVITE_ALREADY_CHECK_CHUNK = 100;
+
+/**
+ * Returns auth `user_id`s (invitees) who already have an `invites` row for this post from the
+ * current viewer as inviter. Batched `.in` queries only — no per-user round trips.
+ */
+export async function getInviteeIdsAlreadyInvitedForPost(
+  postId: string,
+  inviteeAuthUserIds: string[]
+): Promise<Set<string>> {
+  const userId = await getViewerAuthUserId();
+  if (!userId) throw new Error("Not authenticated");
+
+  const trimmedUnique = [
+    ...new Set(inviteeAuthUserIds.map((x) => (x ?? "").trim())),
+  ].filter(Boolean);
+  const uuidCandidates = trimmedUnique.filter(isUuidShaped);
+  if (uuidCandidates.length === 0) {
+    return new Set();
+  }
+
+  const found = new Set<string>();
+  for (
+    let i = 0;
+    i < uuidCandidates.length;
+    i += INVITE_ALREADY_CHECK_CHUNK
+  ) {
+    const chunk = uuidCandidates.slice(i, i + INVITE_ALREADY_CHECK_CHUNK);
+    const { data: rows, error } = await supabase
+      .from("invites")
+      .select("invitee_id")
+      .eq("post_id", postId)
+      .eq("inviter_id", userId)
+      .in("invitee_id", chunk);
+
+    if (error) throw error;
+    for (const r of rows ?? []) {
+      if (typeof r.invitee_id === "string" && r.invitee_id.trim()) {
+        found.add(r.invitee_id.trim());
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Returns auth user ids that exist on `profiles.user_id` (batched `.in` queries).
+ */
+async function filterInviteeIdsAgainstProfiles(
+  rawIds: string[],
+): Promise<{ validIds: string[]; skippedIds: string[] }> {
+  const trimmedOrdered = [...new Set(rawIds.map((x) => (x ?? "").trim()))].filter(
+    Boolean,
+  );
+  const skippedMalformed = trimmedOrdered.filter((id) => !isUuidShaped(id));
+  const uuidCandidates = trimmedOrdered.filter(isUuidShaped);
+
+  if (uuidCandidates.length === 0) {
+    return { validIds: [], skippedIds: trimmedOrdered };
+  }
+
+  const existing = new Set<string>();
+  for (let i = 0; i < uuidCandidates.length; i += PROFILE_USER_ID_LOOKUP_CHUNK) {
+    const chunk = uuidCandidates.slice(i, i + PROFILE_USER_ID_LOOKUP_CHUNK);
+    const { data: rows, error } = await supabase
+      .from("profiles")
+      .select("user_id")
+      .in("user_id", chunk);
+
+    if (error) {
+      throw error;
+    }
+    for (const r of rows ?? []) {
+      if (typeof r.user_id === "string" && r.user_id.trim()) {
+        existing.add(r.user_id.trim());
+      }
+    }
+  }
+
+  const validIds = uuidCandidates.filter((id) => existing.has(id.trim()));
+  const skippedMissingProfile = uuidCandidates.filter(
+    (id) => !existing.has(id.trim()),
+  );
+  const skippedIds = [...skippedMalformed, ...skippedMissingProfile];
+
+  return { validIds, skippedIds };
+}
+
 /** jsonb payload from create_invite_thread_with_invites */
 type InviteThreadRpcResult = {
   thread_id: string | null;
@@ -163,6 +261,14 @@ function parseInviteThreadRpcResult(raw: unknown): InviteThreadRpcResult {
   };
 }
 
+export type SendInvitesResult = {
+  data: Invite[] | null;
+  error: any;
+  alreadyInvited?: string[];
+  /** Original invitee ids removed before RPC (bad shape or no matching `profiles.user_id`). */
+  skippedInvalidInviteeIds?: string[];
+};
+
 /**
  * Send invites to multiple users for a post
  */
@@ -170,7 +276,7 @@ export async function sendInvites(
   postId: string,
   inviteeIds: string[],
   note?: string | null
-): Promise<{ data: Invite[] | null; error: any; alreadyInvited?: string[] }> {
+): Promise<SendInvitesResult> {
   try {
     const noteForDb = normalizeInviteNote(note);
     console.log("Sending invites for post:", postId, "to users:", inviteeIds);
@@ -201,11 +307,35 @@ export async function sendInvites(
       throw new Error("Post not found");
     }
 
+    let skippedPreflight: string[] = [];
+    let idsForRpc: string[] = inviteeIds;
+    try {
+      const { validIds, skippedIds } =
+        await filterInviteeIdsAgainstProfiles(inviteeIds);
+      skippedPreflight = skippedIds;
+      idsForRpc = validIds;
+    } catch (preflightErr) {
+      console.error("Invite preflight (profiles) failed:", preflightErr);
+      return {
+        data: null,
+        error: preflightErr,
+        skippedInvalidInviteeIds: skippedPreflight,
+      };
+    }
+
+    if (idsForRpc.length === 0) {
+      return {
+        data: null,
+        error: null,
+        skippedInvalidInviteeIds: skippedPreflight,
+      };
+    }
+
     const { data: rpcRaw, error: rpcError } = await supabase.rpc(
       "create_invite_thread_with_invites",
       {
         p_post_id: postId,
-        p_invitee_ids: inviteeIds,
+        p_invitee_ids: idsForRpc,
         p_note: noteForDb,
       }
     );
@@ -215,6 +345,8 @@ export async function sendInvites(
       return {
         data: null,
         error: rpcError,
+        skippedInvalidInviteeIds:
+          skippedPreflight.length > 0 ? skippedPreflight : undefined,
       };
     }
 
@@ -231,6 +363,8 @@ export async function sendInvites(
         data: [],
         error: null,
         alreadyInvited: alreadyInvitedIds,
+        skippedInvalidInviteeIds:
+          skippedPreflight.length > 0 ? skippedPreflight : undefined,
       };
     }
 
@@ -245,6 +379,8 @@ export async function sendInvites(
         data: null,
         error: fetchError,
         alreadyInvited: alreadyInvitedIds,
+        skippedInvalidInviteeIds:
+          skippedPreflight.length > 0 ? skippedPreflight : undefined,
       };
     }
 
@@ -408,6 +544,8 @@ export async function sendInvites(
       data,
       error: null,
       alreadyInvited: alreadyInvitedIds,
+      skippedInvalidInviteeIds:
+        skippedPreflight.length > 0 ? skippedPreflight : undefined,
     };
   } catch (error) {
     console.error("Send invites error:", error);

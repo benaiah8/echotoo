@@ -23,7 +23,6 @@ import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
 import { supabase } from "../../lib/supabaseClient";
 import Avatar from "../ui/Avatar";
-import BottomDrawer from "../ui/BottomDrawer";
 import InviteThreadMessageList from "./invite-thread/InviteThreadMessageList";
 import InviteExpiryPill from "./InviteExpiryPill";
 
@@ -46,7 +45,11 @@ const QUICK_REPLY_CHIPS = [
   "Convince me",
 ] as const;
 const MAX_VISIBLE_STACK = 3;
-const QUOTA_SEGMENTS = 5;
+/** Viewer quota bars in group chat UI; total slots follow bundle cap up to this max. */
+const GROUP_QUOTA_SEGMENTS_MAX = 5;
+/** ~5 participant rows visible before scrolling (~48px row × 5 + header padding). */
+const PARTICIPANTS_PANEL_SCROLL_MAX_CLASS =
+  "max-h-[min(248px,calc(100dvh-14rem))]";
 
 type Props = {
   open: boolean;
@@ -63,16 +66,26 @@ function rpcLikeMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function quotaActiveSegmentsCount(bundle: InviteThreadBundle): number {
+/** Total pill segments for group viewer quota (matches message cap when ≤ max). */
+function groupQuotaSegmentTotal(bundle: InviteThreadBundle): number {
   const cap = bundle.my_messages_used + bundle.my_messages_remaining;
-  if (cap <= QUOTA_SEGMENTS) {
-    return Math.min(QUOTA_SEGMENTS, Math.max(0, bundle.my_messages_remaining));
+  return Math.min(GROUP_QUOTA_SEGMENTS_MAX, Math.max(1, cap));
+}
+
+/** Lit segments (remaining quota); proportional only when cap exceeds segment count. */
+function groupQuotaActiveSegmentsCount(
+  bundle: InviteThreadBundle,
+  totalSegments: number,
+): number {
+  const cap = bundle.my_messages_used + bundle.my_messages_remaining;
+  if (cap <= totalSegments) {
+    return Math.min(totalSegments, Math.max(0, bundle.my_messages_remaining));
   }
   return Math.min(
-    QUOTA_SEGMENTS,
+    totalSegments,
     Math.max(
       0,
-      Math.round((bundle.my_messages_remaining / cap) * QUOTA_SEGMENTS),
+      Math.round((bundle.my_messages_remaining / cap) * totalSegments),
     ),
   );
 }
@@ -87,7 +100,7 @@ function participantPrimaryLine(p: InviteThreadParticipant): string {
   return d || u || "EchoToo user";
 }
 
-/** Secondary line: show @username when display name is present so we don't duplicate primary. */
+/** @username line when both display name and handle exist (avoids duplicate single-field rows). */
 function participantSecondaryLine(p: InviteThreadParticipant): string | null {
   const d = (p.display_name ?? "").trim();
   const u = (p.username ?? "").trim();
@@ -487,10 +500,8 @@ export default function GroupInviteThreadOverlay({
 
   const sheetParticipants = bundle?.participants ?? [];
 
-  return (
-    <>
-      {createPortal(
-        <div className="fixed inset-0 z-[110] isolate overflow-hidden">
+  return createPortal(
+    <div className="fixed inset-0 z-[110] isolate overflow-hidden">
       <div
         className="absolute inset-0 bg-[color-mix(in_oklab,var(--bg)_28%,transparent)] backdrop-blur-[28px] backdrop-saturate-[1.35] app-dark:bg-black/22 app-dark:backdrop-blur-[30px]"
         aria-hidden
@@ -564,8 +575,19 @@ export default function GroupInviteThreadOverlay({
         ) : null}
       </div>
 
+      {participantsOpen ? (
+        <button
+          type="button"
+          aria-label="Close member list"
+          className="absolute inset-0 z-[25] cursor-default bg-[color-mix(in_oklab,var(--bg)_18%,transparent)]"
+          onClick={() => setParticipantsOpen(false)}
+        />
+      ) : null}
+
       <div
-        className={`pointer-events-none absolute left-0 right-0 z-20 flex flex-col items-center ${safeHorizontalPad}`}
+        className={`pointer-events-none absolute left-0 right-0 flex flex-col items-center ${safeHorizontalPad} ${
+          participantsOpen ? "z-[40]" : "z-20"
+        }`}
         style={{ top: "env(safe-area-inset-top, 0px)", paddingTop: "0.5rem" }}
       >
         <div
@@ -614,7 +636,7 @@ export default function GroupInviteThreadOverlay({
               onClick={(e) => {
                 e.stopPropagation();
                 if (!bundle) return;
-                setParticipantsOpen(true);
+                setParticipantsOpen((prev) => !prev);
               }}
               className="relative flex h-11 w-[4.5rem] cursor-pointer items-center justify-center rounded-full border border-neutral-900/16 bg-[color-mix(in_oklab,var(--surface-2)_32%,transparent)] px-1 shadow-sm backdrop-blur-xl transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-50 app-dark:border-white/24 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)]"
               aria-label="Group members"
@@ -650,49 +672,141 @@ export default function GroupInviteThreadOverlay({
           </div>
         </div>
 
-        {bundle ? (
-          <>
+        {participantsOpen && bundle ? (
+          <div
+            className="pointer-events-auto mt-1.5 w-full max-w-lg"
+            role="dialog"
+            aria-label="Group members"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div
-              className={`pointer-events-none mx-auto mt-2 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
-              role="img"
-              aria-label={`${bundle.my_messages_remaining} messages remaining in your quota`}
+              className="w-full overflow-hidden rounded-2xl border-2 border-neutral-900/26 bg-[color-mix(in_oklab,var(--surface-2)_34%,transparent)] shadow-sm backdrop-blur-xl app-dark:border-white/34 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)]"
             >
-              <div className="w-11 shrink-0" aria-hidden />
-              <div className="flex min-w-0 justify-center">
+              {sheetParticipants.length === 0 ? (
+                <p className="px-5 py-6 text-center text-sm text-[var(--text)]/55">
+                  No members listed.
+                </p>
+              ) : (
                 <div
-                  className={`flex min-h-[7px] w-full ${QUOTA_STRIP_MAX_W_CLASS} gap-1`}
+                  className={`space-y-2 overflow-y-auto overscroll-contain px-4 pb-4 pt-3.5 [-webkit-overflow-scrolling:touch] ${PARTICIPANTS_PANEL_SCROLL_MAX_CLASS}`}
                 >
-                  {Array.from({ length: QUOTA_SEGMENTS }, (_, i) => {
-                    const activeLeft = quotaActiveSegmentsCount(bundle);
-                    const isInactive = i >= activeLeft;
+                  {sheetParticipants.map((p, idx) => {
+                    const uname = (p.username ?? "").trim();
+                    const canNavigate = uname.length > 0;
+                    const rowKey = `${p.user_id ?? (uname || `p-${idx}`)}`;
+                    const primary = participantPrimaryLine(p);
+                    const secondary = participantSecondaryLine(p);
+
+                    const rowInner = (
+                      <>
+                        <Avatar
+                          variant="default"
+                          url={p.avatar_url || undefined}
+                          name={participantLabel(p)}
+                          size={34}
+                          tightLineBox
+                          className="shrink-0 rounded-full"
+                          userId={p.user_id ?? undefined}
+                        />
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="truncate text-sm font-medium leading-snug text-[var(--text)]">
+                            {primary}
+                          </p>
+                          {secondary ? (
+                            <p className="mt-0.5 truncate text-xs leading-none text-[var(--text)]/58">
+                              {secondary}
+                            </p>
+                          ) : null}
+                        </div>
+                      </>
+                    );
+
+                    const rowShell =
+                      "flex w-full min-w-0 items-center gap-2.5 rounded-full border-2 border-neutral-900/18 bg-[color-mix(in_oklab,var(--surface-2)_22%,transparent)] py-1.5 pl-1.5 pr-3 backdrop-blur-md transition-colors app-dark:border-white/22 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_14%,transparent)]";
+
+                    if (canNavigate) {
+                      return (
+                        <button
+                          key={rowKey}
+                          type="button"
+                          className={`${rowShell} cursor-pointer hover:bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/35 app-dark:hover:bg-[color-mix(in_oklab,var(--surface-2)_22%,transparent)]`}
+                          onClick={() => {
+                            setParticipantsOpen(false);
+                            navigate(`/u/${encodeURIComponent(uname)}`);
+                          }}
+                        >
+                          {rowInner}
+                        </button>
+                      );
+                    }
+
                     return (
                       <div
-                        key={i}
-                        className={`h-1.5 min-h-1.5 min-w-[6px] flex-1 rounded-full transition-colors ${
-                          isInactive
-                            ? "bg-amber-900/[0.13] ring-1 ring-amber-900/[0.08] app-dark:bg-amber-100/[0.14] app-dark:ring-amber-100/[0.1]"
-                            : "bg-gradient-to-r from-amber-300/95 to-amber-200/88 shadow-[0_0_0_1px_rgba(253,224,138,0.55)] app-dark:from-amber-400/82 app-dark:to-amber-400/62 app-dark:shadow-[0_0_0_1px_rgba(251,191,36,0.38)]"
-                        }`}
-                      />
+                        key={rowKey}
+                        className={`${rowShell} opacity-95`}
+                        aria-disabled="true"
+                      >
+                        {rowInner}
+                      </div>
                     );
                   })}
                 </div>
-              </div>
-              <div className="w-11 shrink-0" aria-hidden />
+              )}
             </div>
-            <div
-              className={`pointer-events-none mx-auto mt-1 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
-            >
-              <div className="w-11 shrink-0" aria-hidden />
-              <p className="text-center text-[10px] leading-none text-[var(--text)]/44 app-dark:text-[var(--text)]/52">
-                {bundle.my_messages_remaining === 1
-                  ? "1 message left"
-                  : `${bundle.my_messages_remaining} messages left`}
-              </p>
-              <div className="w-11 shrink-0" aria-hidden />
-            </div>
-          </>
+          </div>
         ) : null}
+
+        {bundle
+          ? (() => {
+              const groupQuotaTotal = groupQuotaSegmentTotal(bundle);
+              const groupQuotaActive = groupQuotaActiveSegmentsCount(
+                bundle,
+                groupQuotaTotal,
+              );
+              return (
+                <>
+                  <div
+                    className={`pointer-events-none mx-auto mt-2 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_4.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
+                    role="img"
+                    aria-label={`${bundle.my_messages_remaining} messages remaining in your quota`}
+                  >
+                    <div aria-hidden />
+                    <div className="flex min-w-0 justify-center">
+                      <div
+                        className={`flex min-h-[7px] w-full ${QUOTA_STRIP_MAX_W_CLASS} gap-1`}
+                      >
+                        {Array.from({ length: groupQuotaTotal }, (_, i) => {
+                          const isInactive = i >= groupQuotaActive;
+                          return (
+                            <div
+                              key={i}
+                              className={`h-1.5 min-h-1.5 min-w-[6px] flex-1 rounded-full transition-colors ${
+                                isInactive
+                                  ? "bg-amber-900/[0.13] ring-1 ring-amber-900/[0.08] app-dark:bg-amber-100/[0.14] app-dark:ring-amber-100/[0.1]"
+                                  : "bg-gradient-to-r from-amber-300/95 to-amber-200/88 shadow-[0_0_0_1px_rgba(253,224,138,0.55)] app-dark:from-amber-400/82 app-dark:to-amber-400/62 app-dark:shadow-[0_0_0_1px_rgba(251,191,36,0.38)]"
+                              }`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div aria-hidden />
+                  </div>
+                  <div
+                    className={`pointer-events-none mx-auto mt-1 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_4.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
+                  >
+                    <div aria-hidden />
+                    <p className="text-center text-[10px] leading-none text-[var(--text)]/44 app-dark:text-[var(--text)]/52">
+                      {bundle.my_messages_remaining === 1
+                        ? "1 message left"
+                        : `${bundle.my_messages_remaining} messages left`}
+                    </p>
+                    <div aria-hidden />
+                  </div>
+                </>
+              );
+            })()
+          : null}
       </div>
 
       {open && threadId && bundle ? (
@@ -920,88 +1034,7 @@ export default function GroupInviteThreadOverlay({
           }}
         />
       ) : null}
-        </div>,
-        document.body,
-      )}
-      <BottomDrawer
-        open={participantsOpen}
-        onClose={() => setParticipantsOpen(false)}
-        title="Group members"
-        maxHeight="72vh"
-        portalClassName="z-[120]"
-        disableBodyScrollLock
-        contentClassName="p-3 pb-4"
-      >
-        {sheetParticipants.length === 0 ? (
-          <p className="py-6 text-center text-sm text-[var(--text)]/55">
-            No members listed.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {sheetParticipants.map((p, idx) => {
-              const primary = participantPrimaryLine(p);
-              const secondary = participantSecondaryLine(p);
-              const uname = (p.username ?? "").trim();
-              const canNavigate = uname.length > 0;
-              const rowKey = `${p.user_id ?? (uname || `p-${idx}`)}`;
-
-              const inner = (
-                <>
-                  <Avatar
-                    variant="default"
-                    url={p.avatar_url || undefined}
-                    name={participantLabel(p)}
-                    size={36}
-                    tightLineBox
-                    className="shrink-0 rounded-full"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium leading-tight text-[var(--text)]/92">
-                      {primary}
-                    </p>
-                    {secondary ? (
-                      <p className="mt-0.5 truncate text-[11px] leading-none text-[var(--text)]/52">
-                        {secondary}
-                      </p>
-                    ) : null}
-                  </div>
-                </>
-              );
-
-              const rowClass =
-                "flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors";
-
-              if (canNavigate) {
-                return (
-                  <li key={rowKey}>
-                    <button
-                      type="button"
-                      className={`${rowClass} cursor-pointer hover:bg-[color-mix(in_oklab,var(--text)_6%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/35`}
-                      onClick={() => {
-                        setParticipantsOpen(false);
-                        navigate(`/u/${encodeURIComponent(uname)}`);
-                      }}
-                    >
-                      {inner}
-                    </button>
-                  </li>
-                );
-              }
-
-              return (
-                <li key={rowKey}>
-                  <div
-                    className={`${rowClass} opacity-95`}
-                    aria-disabled="true"
-                  >
-                    {inner}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </BottomDrawer>
-    </>
+    </div>,
+    document.body,
   );
 }

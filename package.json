@@ -12,6 +12,7 @@
     "generate:icons": "capacitor-assets generate --android --ios --iconBackgroundColor \"#EDBD00\" --iconBackgroundColorDark \"#0b0b0b\" --splashBackgroundColor \"#EDBD00\" --splashBackgroundColorDark \"#0b0b0b\""
   },
   "dependencies": {
+    "@capacitor-firebase/messaging": "^8.2.0",
     "@capacitor/android": "^8.1.0",
     "@capacitor/app": "^8.0.1",
     "@capacitor/browser": "^8.0.1",
@@ -32,6 +33,7 @@
     "@tailwindcss/vite": "^4.0.17",
     "axios": "^1.8.4",
     "capacitor-native-settings": "^8.1.0",
+    "firebase": "^12.13.0",
     "html2canvas": "^1.4.1",
     "leaflet": "^1.9.4",
     "leaflet-geosearch": "^4.2.0",

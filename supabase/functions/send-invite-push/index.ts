@@ -4,7 +4,8 @@
  * Sends one FCM message per Android device token for the given invitee auth user ids.
  * Tap payload: postId + postType (same contract as send-post-push); optional inviteId when
  * a single invite row is implied (from request body only).
- * Notification: title "{displayName} invited you"; DM-style body — note-first when present,
+ * Notification: title "{displayName} invited you" (personal / unknown thread_kind) or
+ * "{displayName} invited you to a group" when thread_kind is group; DM-style body — note-first when present,
  * optional caption preview line (server-fetched, capped); fallback "Tap to view invite".
  * No `android.notification.image` (avoids large expanded image; sender avatar needs native later).
  */
@@ -420,7 +421,10 @@ Deno.serve(async (req) => {
   const captionPreview = trimAndCapCaptionPreview(pr?.caption ?? null);
   const bodyText = buildInvitePushBody(noteLine, captionPreview);
 
-  const title = `${displayName} invited you`;
+  const title =
+    threadKind === "group"
+      ? `${displayName} invited you to a group`
+      : `${displayName} invited you`;
 
   const fcmDataPayload: {
     type: "invite";

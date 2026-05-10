@@ -2,13 +2,16 @@ import {
   useState,
   useEffect,
   useRef,
+  useCallback,
   type CSSProperties,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   INVITE_MAX_PER_SEND,
   INVITE_NOTE_MAX_LENGTH,
+  getInviteeIdsAlreadyInvitedForPost,
   sendInvites,
 } from "../../api/services/invites";
 import {
@@ -19,6 +22,7 @@ import {
 } from "../../api/services/follows";
 import Avatar from "./Avatar";
 import BottomDrawer from "./BottomDrawer";
+import ConfirmDialog from "./ConfirmDialog";
 import DrawerProfileCard from "./DrawerProfileCard";
 import {
   frostedModalPanelClassName,
@@ -44,6 +48,20 @@ const glassInputStyle: CSSProperties = {
 };
 
 const INVITE_SEARCH_PAGE_SIZE = 10;
+
+function isInviteeFkError(err: unknown): boolean {
+  const msg =
+    typeof err === "object" &&
+    err !== null &&
+    "message" in err &&
+    typeof (err as { message: unknown }).message === "string"
+      ? (err as { message: string }).message
+      : String(err ?? "");
+  return (
+    msg.includes("invites_invitee_id_fkey") ||
+    msg.includes("not present in table users")
+  );
+}
 
 /** Room for the character counter in the bottom-right; text may pass underneath. */
 const messageBoxClass =
@@ -73,6 +91,72 @@ type User = {
   avatar_url: string | null;
   is_following?: boolean;
 };
+
+type InviteOutcomeSheetState = {
+  variant: string;
+  title: string;
+  message: ReactNode;
+  cancelLabel: string;
+  confirmLabel: string;
+  confirmClosesDrawer: boolean;
+  snapshot: User[];
+  secondaryLabel?: string;
+  secondaryVariant?: "primary" | "danger" | "dangerSoft" | "default";
+  alreadyUserIds?: string[];
+  remainingUserIds?: string[];
+};
+
+/** Cached profile rows for invite outcome modals (no profile fetch). */
+function InviteOutcomeUserCards({
+  userIds,
+  snapshot,
+  batchedFollowStatuses,
+  viewerProfileId,
+  className = "",
+}: {
+  userIds: string[];
+  snapshot: User[];
+  batchedFollowStatuses?: Record<
+    string,
+    "none" | "pending" | "following" | "friends"
+  >;
+  viewerProfileId?: string | null;
+  className?: string;
+}) {
+  const seen = new Set<string>();
+  const rows: User[] = [];
+  for (const rawId of userIds) {
+    const uid = (rawId ?? "").trim();
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    const u = snapshot.find((x) => (x.user_id ?? "").trim() === uid);
+    if (u) rows.push(u);
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div
+      className={`max-h-[min(40vh,280px)] overflow-y-auto overscroll-contain space-y-2 pr-0.5 ${className}`.trim()}
+    >
+      {rows.map((u) => {
+        const cachedStatus = batchedFollowStatuses?.[u.id];
+        const showFollow =
+          cachedStatus !== undefined && u.id !== viewerProfileId;
+        return (
+          <DrawerProfileCard
+            key={u.user_id}
+            id={u.id}
+            username={u.username || null}
+            display_name={u.display_name || null}
+            avatar_url={u.avatar_url || null}
+            rowShape="pill"
+            showFollowButton={showFollow}
+            followStatus={showFollow ? cachedStatus : undefined}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 export default function InviteDrawer({
   isOpen,
@@ -104,6 +188,13 @@ export default function InviteDrawer({
   const [listCursor, setListCursor] = useState(0);
   const [hasMoreList, setHasMoreList] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  /** Centered outcome modal (pre-send already-invited + post-send / errors). */
+  const [inviteOutcomeSheet, setInviteOutcomeSheet] =
+    useState<InviteOutcomeSheetState | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) setInviteOutcomeSheet(null);
+  }, [isOpen]);
 
   // Load followers when component mounts
   const loadFollowers = async () => {
@@ -337,13 +428,18 @@ export default function InviteDrawer({
   }, [isClosing, onClosingChange, isOpen]);
 
   const handleUserSelect = (userId: string) => {
+    const uid = (userId ?? "").trim();
+    if (!uid) {
+      toast.error("This account can't be invited right now.");
+      return;
+    }
+
     setSelectedUsers((prev) => {
       const newSet = new Set(prev);
-      if (newSet.has(userId)) {
-        newSet.delete(userId);
-        // Remove from selectedUsersData
+      if (newSet.has(uid)) {
+        newSet.delete(uid);
         setSelectedUsersData((prevData) =>
-          prevData.filter((u) => u.user_id !== userId)
+          prevData.filter((u) => (u.user_id ?? "").trim() !== uid)
         );
       } else if (prev.size >= INVITE_MAX_PER_SEND) {
         toast.error(
@@ -351,19 +447,20 @@ export default function InviteDrawer({
         );
         return prev;
       } else {
-        newSet.add(userId);
-        // Add to selectedUsersData (avoid duplicates)
         const allUsers = [...users, ...followers];
-        const user = allUsers.find((u) => u.user_id === userId);
-        if (user) {
-          setSelectedUsersData((prevData) => {
-            // Check if user already exists to avoid duplicates
-            if (prevData.some((u) => u.user_id === userId)) {
-              return prevData;
-            }
-            return [...prevData, user];
-          });
+        const user = allUsers.find((u) => (u.user_id ?? "").trim() === uid);
+        if (!user || !(user.user_id ?? "").trim()) {
+          toast.error("This account can't be invited right now.");
+          return prev;
         }
+        const canonical = user.user_id.trim();
+        newSet.add(canonical);
+        setSelectedUsersData((prevData) => {
+          if (prevData.some((u) => (u.user_id ?? "").trim() === canonical)) {
+            return prevData;
+          }
+          return [...prevData, user];
+        });
       }
       return newSet;
     });
@@ -378,76 +475,328 @@ export default function InviteDrawer({
 
   const handleSelectAllFollowers = () => {
     if (showFollowersOnly && followers.length > 0) {
-      const allFollowerIds = new Set(followers.map((f) => f.user_id));
+      const validFollowers = followers.filter((f) => (f.user_id ?? "").trim());
+      if (validFollowers.length === 0) {
+        toast.error("None of these followers can be invited right now.");
+        return;
+      }
+
       const currentlySelected = new Set(selectedUsers);
 
-      // If all followers are selected, deselect all
-      if (followers.every((f) => currentlySelected.has(f.user_id))) {
+      if (
+        validFollowers.every((f) =>
+          currentlySelected.has(f.user_id.trim())
+        )
+      ) {
         setSelectedUsers(new Set());
         setSelectedUsersData([]);
       } else {
         const capped =
-          followers.length > INVITE_MAX_PER_SEND
-            ? followers.slice(0, INVITE_MAX_PER_SEND)
-            : followers;
-        if (followers.length > INVITE_MAX_PER_SEND) {
+          validFollowers.length > INVITE_MAX_PER_SEND
+            ? validFollowers.slice(0, INVITE_MAX_PER_SEND)
+            : validFollowers;
+        if (validFollowers.length > INVITE_MAX_PER_SEND) {
           toast(
             `Only the first ${INVITE_MAX_PER_SEND.toLocaleString()} followers are selected.`
           );
         }
-        setSelectedUsers(new Set(capped.map((f) => f.user_id)));
+        setSelectedUsers(new Set(capped.map((f) => f.user_id.trim())));
         setSelectedUsersData(capped);
       }
     }
   };
 
+  const closeInviteDrawerAndReset = useCallback(() => {
+    setInviteOutcomeSheet(null);
+    setIsClosing(true);
+    closingRef.current = true;
+    onClose();
+    setSelectedUsers(new Set());
+    setSelectedUsersData([]);
+    setSearchQuery("");
+    setInviteNote("");
+    setTimeout(() => {
+      setIsClosing(false);
+      closingRef.current = false;
+    }, 1000);
+  }, [onClose]);
+
+  const renderOutcomeCards = useCallback(
+    (userIds: string[], snapshot: User[], className?: string) => (
+      <InviteOutcomeUserCards
+        userIds={userIds}
+        snapshot={snapshot}
+        batchedFollowStatuses={batchedFollowStatuses}
+        viewerProfileId={viewerProfileId}
+        className={className}
+      />
+    ),
+    [batchedFollowStatuses, viewerProfileId]
+  );
+
+  const runSendInvitesFlow = useCallback(
+    async (inviteeIds: string[], snapshotSelectedData: User[]) => {
+      try {
+        const {
+          data,
+          error,
+          alreadyInvited = [],
+          skippedInvalidInviteeIds = [],
+        } = await sendInvites(postId, inviteeIds, inviteNote);
+
+        const skipped = skippedInvalidInviteeIds ?? [];
+        const skippedCount = skipped.length;
+        const newCount = data?.length ?? 0;
+        const already = alreadyInvited ?? [];
+        const alreadyCount = already.length;
+
+        if (error) {
+          throw error;
+        }
+
+        const nothingFromRpc = newCount === 0 && alreadyCount === 0;
+
+        if (skippedCount > 0 && nothingFromRpc) {
+          setInviteOutcomeSheet({
+            variant: "post_invalid",
+            title: "Couldn't invite",
+            snapshot: snapshotSelectedData,
+            message: (
+              <>
+                <p>Some selected accounts could not be invited.</p>
+                {renderOutcomeCards(skipped, snapshotSelectedData, "mt-3")}
+              </>
+            ),
+            cancelLabel: "Edit selection",
+            confirmLabel: "Got it",
+            confirmClosesDrawer: true,
+          });
+          return;
+        }
+
+        if (skippedCount > 0 && newCount === 0 && alreadyCount > 0) {
+          setInviteOutcomeSheet({
+            variant: "post_skipped_all_already",
+            title: "Already invited to this post",
+            snapshot: snapshotSelectedData,
+            message: (
+              <>
+                <p>Some selected accounts could not be invited.</p>
+                {renderOutcomeCards(skipped, snapshotSelectedData, "mt-3")}
+                <p className="mt-3">
+                  Everyone else you selected has already been invited to this
+                  post. You can edit your selection or invite them to a
+                  different post.
+                </p>
+                {renderOutcomeCards(already, snapshotSelectedData, "mt-3")}
+              </>
+            ),
+            cancelLabel: "Edit selection",
+            confirmLabel: "Got it",
+            confirmClosesDrawer: true,
+          });
+          return;
+        }
+
+        if (newCount === 0 && alreadyCount > 0 && skippedCount === 0) {
+          const single = snapshotSelectedData.length === 1;
+          setInviteOutcomeSheet({
+            variant: "post_all_already",
+            title: "Already invited to this post",
+            snapshot: snapshotSelectedData,
+            message: (
+              <>
+                <p>
+                  {single ? (
+                    <>
+                      This person has already been invited to this post. You can
+                      invite them to a{" "}
+                      <strong className="font-semibold text-[var(--text)]/90">
+                        different post
+                      </strong>
+                      , or choose someone else for this one.
+                    </>
+                  ) : (
+                    <>
+                      Everyone selected has already been invited to this post.
+                      You can edit your selection or invite different people.
+                    </>
+                  )}
+                </p>
+                {renderOutcomeCards(already, snapshotSelectedData, "mt-3")}
+              </>
+            ),
+            cancelLabel: single ? "Choose someone else" : "Edit selection",
+            confirmLabel: "Got it",
+            confirmClosesDrawer: true,
+          });
+          return;
+        }
+
+        if (newCount > 0 && alreadyCount > 0) {
+          setInviteOutcomeSheet({
+            variant: "post_mixed_sent",
+            title: "Invites sent",
+            snapshot: snapshotSelectedData,
+            message: (
+              <>
+                <p>
+                  Invites were sent to the new people. The people below were
+                  already invited to this post.
+                </p>
+                {skippedCount > 0 ? (
+                  <>
+                    <p className="mt-3">
+                      Some selected accounts could not be invited.
+                    </p>
+                    {renderOutcomeCards(skipped, snapshotSelectedData, "mt-3")}
+                  </>
+                ) : null}
+                {renderOutcomeCards(already, snapshotSelectedData, "mt-3")}
+              </>
+            ),
+            cancelLabel: "Edit selection",
+            confirmLabel: "Done",
+            confirmClosesDrawer: true,
+          });
+          return;
+        }
+
+        if (skippedCount > 0 && newCount > 0) {
+          toast.success(
+            "Invites sent. Some selected accounts could not be invited."
+          );
+        } else if (newCount > 0) {
+          toast.success(
+            `Invites sent to ${newCount} ${newCount === 1 ? "person" : "people"}!`
+          );
+        } else {
+          toast.success("Invites sent!");
+        }
+
+        closeInviteDrawerAndReset();
+      } catch (error) {
+        console.error("Failed to send invites:", error);
+        if (isInviteeFkError(error)) {
+          setInviteOutcomeSheet({
+            variant: "fk",
+            title: "Couldn't invite",
+            snapshot: snapshotSelectedData,
+            message: (
+              <p>
+                Some selected accounts could not be invited. Please adjust your
+                selection and try again.
+              </p>
+            ),
+            cancelLabel: "Edit selection",
+            confirmLabel: "Got it",
+            confirmClosesDrawer: false,
+          });
+        } else {
+          toast.error("Failed to send invites");
+        }
+      }
+    },
+    [postId, inviteNote, renderOutcomeCards, closeInviteDrawerAndReset]
+  );
+
   const handleSendInvites = async () => {
     if (selectedUsers.size === 0) return;
 
+    const snapshot = [...selectedUsersData];
+    const selectedIds = Array.from(selectedUsers)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     setSendingInvites(true);
     try {
-      const { data, error, alreadyInvited } = await sendInvites(
-        postId,
-        Array.from(selectedUsers),
-        inviteNote
-      );
-
-      if (error) {
-        throw error;
-      }
-
-      // Show success message with details about already invited users
-      const newInvitesCount = data?.length || 0;
-      const alreadyInvitedCount = alreadyInvited?.length || 0;
-
-      if (newInvitesCount > 0 && alreadyInvitedCount > 0) {
-        toast.success(
-          `Invites sent to ${newInvitesCount} users. ${alreadyInvitedCount} users were already invited.`
+      let alreadySet: Set<string>;
+      try {
+        alreadySet = await getInviteeIdsAlreadyInvitedForPost(
+          postId,
+          selectedIds
         );
-      } else if (newInvitesCount > 0) {
-        toast.success(`Invites sent to ${newInvitesCount} users!`);
-      } else if (alreadyInvitedCount > 0) {
-        toast.success(`All selected users were already invited to this post.`);
-      } else {
-        toast.success("Invites sent!");
+      } catch (preErr) {
+        console.error("Pre-send already-invited check failed:", preErr);
+        toast.error("Could not check existing invites. Try again.");
+        return;
       }
 
-      // Close drawer and reset state
-      setIsClosing(true);
-      closingRef.current = true;
-      onClose();
-      setSelectedUsers(new Set());
-      setSelectedUsersData([]);
-      setSearchQuery("");
-      setInviteNote("");
-      // Keep isClosing true for a longer period to prevent navigation
-      setTimeout(() => {
-        setIsClosing(false);
-        closingRef.current = false;
-      }, 1000);
-    } catch (error) {
-      console.error("Failed to send invites:", error);
-      toast.error("Failed to send invites");
+      const selectedAlready = selectedIds.filter((id) => alreadySet.has(id));
+
+      if (selectedAlready.length === 0) {
+        await runSendInvitesFlow(selectedIds, snapshot);
+        return;
+      }
+
+      if (selectedIds.length === 1) {
+        setInviteOutcomeSheet({
+          variant: "pre_personal",
+          title: "Already invited to this post",
+          snapshot,
+          message: (
+            <>
+              <p>
+                This person has already been invited to this post. You can
+                invite them to a{" "}
+                <strong className="font-semibold text-[var(--text)]/90">
+                  different post
+                </strong>
+                , or choose someone else for this one.
+              </p>
+              {renderOutcomeCards(selectedAlready, snapshot, "mt-3")}
+            </>
+          ),
+          cancelLabel: "Choose someone else",
+          confirmLabel: "Got it",
+          confirmClosesDrawer: true,
+        });
+        return;
+      }
+
+      if (selectedAlready.length === selectedIds.length) {
+        setInviteOutcomeSheet({
+          variant: "pre_all",
+          title: "Already invited to this post",
+          snapshot,
+          message: (
+            <>
+              <p>
+                Everyone selected has already been invited to this post. You can
+                edit your selection or invite different people.
+              </p>
+              {renderOutcomeCards(selectedAlready, snapshot, "mt-3")}
+            </>
+          ),
+          cancelLabel: "Edit selection",
+          confirmLabel: "Got it",
+          confirmClosesDrawer: true,
+        });
+        return;
+      }
+
+      setInviteOutcomeSheet({
+        variant: "pre_some",
+        title: "Some people are already invited",
+        snapshot,
+        message: (
+          <>
+            <p>
+              The people below can&apos;t be invited again to this post. You can
+              send the invite to the remaining people, edit your selection, or
+              cancel.
+            </p>
+            {renderOutcomeCards(selectedAlready, snapshot, "mt-3")}
+          </>
+        ),
+        cancelLabel: "Cancel",
+        secondaryLabel: "Edit selection",
+        secondaryVariant: "default",
+        confirmLabel: "Send to remaining people",
+        confirmClosesDrawer: false,
+        alreadyUserIds: selectedAlready,
+        remainingUserIds: selectedIds.filter((id) => !alreadySet.has(id)),
+      });
     } finally {
       setSendingInvites(false);
     }
@@ -467,7 +816,8 @@ export default function InviteDrawer({
   const headerOverlapCount = 5;
 
   return (
-    <BottomDrawer
+    <>
+      <BottomDrawer
       open={isOpen}
       onClose={handleClose}
       maxHeight="80vh"
@@ -744,7 +1094,13 @@ export default function InviteDrawer({
                   }}
                   className="h-5 min-h-5 shrink-0 rounded-full border border-transparent bg-[var(--text)] px-2 text-[10px] font-semibold leading-none text-[var(--bg)] shadow-sm transition hover:opacity-90"
                 >
-                  {followers.every((f) => selectedUsers.has(f.user_id))
+                  {followers.filter((f) => (f.user_id ?? "").trim()).length >
+                    0 &&
+                  followers
+                    .filter((f) => (f.user_id ?? "").trim())
+                    .every((f) =>
+                      selectedUsers.has((f.user_id ?? "").trim())
+                    )
                     ? "Deselect all"
                     : "Select all"}
                 </button>
@@ -822,5 +1178,72 @@ export default function InviteDrawer({
         </div>
       </div>
     </BottomDrawer>
+      <ConfirmDialog
+        open={inviteOutcomeSheet !== null}
+        higherZIndex
+        pillButtons
+        stackThreeActionsPrimaryBelow={
+          inviteOutcomeSheet?.variant === "pre_some"
+        }
+        isLoading={sendingInvites}
+        title={inviteOutcomeSheet?.title ?? ""}
+        message={inviteOutcomeSheet?.message ?? ""}
+        cancelLabel={inviteOutcomeSheet?.cancelLabel ?? "Edit selection"}
+        confirmLabel={inviteOutcomeSheet?.confirmLabel ?? "Got it"}
+        confirmVariant="primary"
+        secondaryLabel={
+          inviteOutcomeSheet?.variant === "pre_some"
+            ? inviteOutcomeSheet.secondaryLabel
+            : undefined
+        }
+        secondaryVariant={
+          inviteOutcomeSheet?.variant === "pre_some"
+            ? inviteOutcomeSheet.secondaryVariant ?? "default"
+            : undefined
+        }
+        onSecondary={
+          inviteOutcomeSheet?.variant === "pre_some"
+            ? () => {
+                const sheet = inviteOutcomeSheet;
+                const remove = new Set(sheet?.alreadyUserIds ?? []);
+                if (remove.size === 0) return;
+                setSelectedUsers((prev) => {
+                  const next = new Set(prev);
+                  remove.forEach((id) => next.delete(id));
+                  return next;
+                });
+                setSelectedUsersData((prev) =>
+                  prev.filter((u) => !remove.has(u.user_id))
+                );
+                setInviteOutcomeSheet(null);
+              }
+            : undefined
+        }
+        onClose={() => setInviteOutcomeSheet(null)}
+        onConfirm={async () => {
+          const sheet = inviteOutcomeSheet;
+          if (
+            sheet?.variant === "pre_some" &&
+            sheet.remainingUserIds &&
+            sheet.remainingUserIds.length > 0
+          ) {
+            const ids = sheet.remainingUserIds;
+            const snap = sheet.snapshot;
+            setInviteOutcomeSheet(null);
+            setSendingInvites(true);
+            try {
+              await runSendInvitesFlow(ids, snap);
+            } finally {
+              setSendingInvites(false);
+            }
+            return;
+          }
+          setInviteOutcomeSheet(null);
+          if (sheet?.confirmClosesDrawer !== false) {
+            closeInviteDrawerAndReset();
+          }
+        }}
+      />
+    </>
   );
 }

@@ -1,6 +1,5 @@
-import React, { useEffect } from "react";
+import React from "react";
 import {
-  PiDotsThree,
   PiFunnelSimple,
   PiMagnifyingGlass,
   PiX,
@@ -10,6 +9,30 @@ import HomeCategorySection from "../sections/home/HomeCategorySection";
 import HomeViewToggleSection from "../sections/home/HomeViewToggleSection";
 
 const TOP_BAR_MAX_WIDTH = 640;
+
+/**
+ * Solid chip pills for readability over feed imagery.
+ * Inactive: dark (light theme) / near-white (dark theme). Selected: brand yellow + ink text.
+ */
+const chipButtonClass = (isSelected: boolean) =>
+  [
+    "shrink-0 inline-flex items-center justify-center whitespace-nowrap rounded-full border-0",
+    "text-[9px] font-medium leading-none tracking-tight",
+    "h-[18px] min-h-[18px] px-3 py-0 transition-[transform,background-color,color,box-shadow] duration-200",
+    "active:scale-[0.96]",
+    isSelected
+      ? [
+          "bg-[var(--brand)] text-[var(--brand-ink)]",
+          "shadow-[0_2px_12px_rgba(0,0,0,0.35)]",
+          "border border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)]",
+        ].join(" ")
+      : [
+          "bg-neutral-800 text-white shadow-sm",
+          "hover:bg-neutral-900",
+          "app-dark:bg-white/[0.88] app-dark:text-neutral-900 app-dark:shadow-[0_1px_6px_rgba(0,0,0,0.25)]",
+          "app-dark:hover:bg-white",
+        ].join(" "),
+  ].join(" ");
 
 export interface HomeTopBarProps {
   /** When true, hide the top bar (scroll down) */
@@ -51,24 +74,12 @@ export default function HomeTopBar({
   onFilterChange,
   onSearchFocusChange,
 }: HomeTopBarProps) {
-  const [threeDotOpen, setThreeDotOpen] = React.useState(false);
-
-  // Close three-dot when scroll hides the bar
-  useEffect(() => {
-    if (isHidden) setThreeDotOpen(false);
-  }, [isHidden]);
-
   const toggleFilterChip = (value: string) => {
     const newSelected = selectedFilters.includes(value)
       ? selectedFilters.filter((v) => v !== value)
       : [...selectedFilters, value];
     onFilterChange(newSelected);
   };
-
-  const filterItems = [
-    { label: "Friends", value: "friends" },
-    { label: "Today", value: "today" },
-  ];
 
   const hidden = isHidden;
   const transitionClass = hidden
@@ -96,7 +107,7 @@ export default function HomeTopBar({
         }}
       />
 
-      {/* Wrapper: floating top bar + filter popout + three-dot menu */}
+      {/* Wrapper: floating top bar + quick chips + filter popout */}
       <div
         className={[
           "fixed left-0 right-0 top-0 z-[31] pointer-events-none flex flex-col items-center",
@@ -202,8 +213,49 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {/* Filter popout: appears below main pill, pushes three-dot down when open */}
-        {/* When closed: 2px gap. When open: 8px gap from main pill. */}
+        {/* Quick chips: compact shrink-to-content pill under search row (not full bar width) */}
+        <div
+          className={[
+            "pointer-events-auto mt-1 w-fit max-w-[calc(100vw-1.25rem)]",
+            "inline-flex flex-nowrap items-stretch justify-center self-center",
+            "rounded-full",
+            "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+            "border border-[var(--bottom-tab-border)]",
+            "shadow-[0_2px_12px_rgba(0,0,0,0.10)]",
+            "app-dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)]",
+          ].join(" ")}
+        >
+          <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
+            <button
+              type="button"
+              onClick={() => toggleFilterChip("today")}
+              className={chipButtonClass(selectedFilters.includes("today"))}
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setViewMode(viewMode === "hangouts" ? "all" : "hangouts")
+              }
+              className={chipButtonClass(viewMode === "hangouts")}
+            >
+              Hangouts
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setViewMode(viewMode === "experiences" ? "all" : "experiences")
+              }
+              className={chipButtonClass(viewMode === "experiences")}
+            >
+              Experiences
+            </button>
+          </div>
+        </div>
+
+        {/* Filter popout: appears below quick chips */}
+        {/* When closed: no extra gap. When open: 8px gap from chips. */}
         <div
           className={[
             "w-[80%] pointer-events-auto overflow-hidden transition-all duration-300",
@@ -228,68 +280,6 @@ export default function HomeTopBar({
                 viewMode={viewMode}
                 setViewMode={setViewMode}
               />
-            </div>
-          </div>
-        </div>
-
-        {/* Three-dot: below filter popout; dots stay visible (z-10), pill opens below */}
-        {/* When filter closed: 2px gap from main pill. When filter open: 8px from filter. */}
-        <div
-          className={[
-            "pointer-events-auto flex flex-col items-center w-full relative",
-            threeDotOpen ? "z-[50]" : "",
-          ].join(" ")}
-          style={{ marginTop: 0 }}
-        >
-          <button
-            type="button"
-            onClick={() => setThreeDotOpen((v) => !v)}
-            aria-label={threeDotOpen ? "Close more options" : "More options"}
-            style={{ WebkitTapHighlightColor: "transparent" }}
-            className={[
-              "relative z-10 flex items-center justify-center h-4 px-1.5 py-0 text-[var(--text)] shrink-0 align-bottom",
-              "focus:outline-none focus:ring-0 active:bg-transparent hover:bg-transparent",
-            ].join(" ")}
-          >
-            <PiDotsThree size={22} />
-          </button>
-          {/* Pill: absolute, floats over content; scaleY animation (no overflow-hidden = no clip) */}
-          <div
-            className={[
-              "absolute left-1/2 -translate-x-1/2 top-full -translate-y-[28px] w-fit",
-              "origin-top transition-all duration-200 ease-out",
-              threeDotOpen
-                ? "scale-y-100 opacity-100"
-                : "scale-y-0 opacity-0 pointer-events-none",
-            ].join(" ")}
-            style={{ top: "35px" }}
-          >
-            <div
-              className={[
-                "rounded-full",
-                "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-                "border border-[var(--bottom-tab-border)]",
-              ].join(" ")}
-            >
-              <div className="flex flex-nowrap items-center justify-center gap-2 px-[9px] py-[7px]">
-                {filterItems.map((item) => {
-                  const isSelected = selectedFilters.includes(item.value);
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      onClick={() => toggleFilterChip(item.value)}
-                      className={`shrink-0 text-[10px] font-medium whitespace-nowrap rounded-full px-2 py-1 transition-all duration-200 ${
-                        isSelected
-                          ? "text-black bg-yellow-400"
-                          : "text-[var(--text)] border border-yellow-400 bg-transparent"
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           </div>
         </div>

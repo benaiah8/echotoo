@@ -125,44 +125,44 @@ export default function HomePostsSection({
   // [OPTIMIZATION: Phase 2 - Progressive] Client-side filtering removed
   // PostgreSQL now handles type filtering server-side, so no need for offsetAwareLoader wrapper
 
-  // [FIX: Phase 1.2 - Horizontal Rail] Use railLoadItems prop if provided, otherwise fallback to old logic
-  const railLoadItems =
-    railLoadItemsProp ||
-    useCallback(
-      async (offset: number, limit: number) => {
-        if (!loadItems) return [];
-        // Use the vertical feed's loadItems which already handles viewMode filtering
-        // The offset ensures we get different items than the top rail
-        const result = await loadItems(offset, limit * 2);
-        // Extract items from result (handles both array and OffsetAwareLoadResult formats)
-        const allItems = Array.isArray(result) ? result : result.items;
+  // [FIX: Phase 1.2 - Horizontal Rail] Fallback must use an unconditional hook; pick prop vs fallback after.
+  const fallbackRailLoadItems = useCallback(
+    async (offset: number, limit: number) => {
+      if (!loadItems) return [];
+      // Use the vertical feed's loadItems which already handles viewMode filtering
+      // The offset ensures we get different items than the top rail
+      const result = await loadItems(offset, limit * 2);
+      // Extract items from result (handles both array and OffsetAwareLoadResult formats)
+      const allItems = Array.isArray(result) ? result : result.items;
 
-        // For injected rails: when viewMode is "all", show mixed content (like top rail)
-        // When viewMode is "hangouts" or "experiences", the loadItems already filtered by type
-        if (viewMode === "all") {
-          // Mix hangouts and experiences for injected rails (same as top rail)
-          const hangoutPosts = allItems.filter((p) => p.type === "hangout");
-          const experiencePosts = allItems.filter(
-            (p) => p.type === "experience"
-          );
-          const mixedPosts: FeedItem[] = [];
-          const maxLength = Math.max(
-            hangoutPosts.length,
-            experiencePosts.length
-          );
-          for (let i = 0; i < maxLength && mixedPosts.length < limit; i++) {
-            if (hangoutPosts[i]) mixedPosts.push(hangoutPosts[i]);
-            if (experiencePosts[i] && mixedPosts.length < limit)
-              mixedPosts.push(experiencePosts[i]);
-          }
-          return mixedPosts;
+      // For injected rails: when viewMode is "all", show mixed content (like top rail)
+      // When viewMode is "hangouts" or "experiences", the loadItems already filtered by type
+      if (viewMode === "all") {
+        // Mix hangouts and experiences for injected rails (same as top rail)
+        const hangoutPosts = allItems.filter((p) => p.type === "hangout");
+        const experiencePosts = allItems.filter(
+          (p) => p.type === "experience"
+        );
+        const mixedPosts: FeedItem[] = [];
+        const maxLength = Math.max(
+          hangoutPosts.length,
+          experiencePosts.length
+        );
+        for (let i = 0; i < maxLength && mixedPosts.length < limit; i++) {
+          if (hangoutPosts[i]) mixedPosts.push(hangoutPosts[i]);
+          if (experiencePosts[i] && mixedPosts.length < limit)
+            mixedPosts.push(experiencePosts[i]);
         }
+        return mixedPosts;
+      }
 
-        // For hangouts/experiences viewMode, return items as-is (already filtered by loadItems)
-        return allItems;
-      },
-      [loadItems, viewMode]
-    );
+      // For hangouts/experiences viewMode, return items as-is (already filtered by loadItems)
+      return allItems;
+    },
+    [loadItems, viewMode]
+  );
+
+  const railLoadItems = railLoadItemsProp ?? fallbackRailLoadItems;
 
   // Render function with rail injection
   const renderItemWithRail = useCallback(

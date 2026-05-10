@@ -1,5 +1,19 @@
 import UIKit
 import Capacitor
+import FirebaseCore
+
+private extension Notification.Name {
+    static let capacitorDidRegisterForRemoteNotifications = Notification.Name(
+        rawValue: "capacitorDidRegisterForRemoteNotifications"
+    )
+    static let capacitorDidFailToRegisterForRemoteNotifications = Notification.Name(
+        rawValue: "capacitorDidFailToRegisterForRemoteNotifications"
+    )
+    /// Name observed by `@capacitor-firebase/messaging` (see Capawesome iOS setup).
+    static let firebaseMessagingDidReceiveRemoteNotification = Notification.Name(
+        rawValue: "didReceiveRemoteNotification"
+    )
+}
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -7,7 +21,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+        }
         return true
     }
 
@@ -31,6 +47,33 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationWillTerminate(_ application: UIApplication) {
         // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        NotificationCenter.default.post(
+            name: .capacitorDidRegisterForRemoteNotifications,
+            object: deviceToken
+        )
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NotificationCenter.default.post(
+            name: .capacitorDidFailToRegisterForRemoteNotifications,
+            object: error
+        )
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        NotificationCenter.default.post(
+            name: .firebaseMessagingDidReceiveRemoteNotification,
+            object: completionHandler,
+            userInfo: userInfo
+        )
+        completionHandler(.newData)
     }
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {

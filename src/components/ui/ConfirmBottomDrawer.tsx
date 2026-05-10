@@ -1,7 +1,11 @@
+import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+
 /**
  * Reusable Confirmation Bottom Drawer
  *
  * Features:
+ * - Portaled to `document.body` (avoids clipping inside transformed / overflow-hidden ancestors)
  * - Consistent frosted glass styling
  * - Configurable z-index for nested scenarios
  * - Customizable title, message, and button labels
@@ -10,7 +14,8 @@
  *
  * Z-index Strategy:
  * - Normal (z-[100]): For confirmations from main page
- * - Higher (z-[110]): For confirmations FROM within another drawer
+ * - Higher (z-[110]): For confirmations FROM within another drawer (e.g. over BottomDrawer z-[100])
+ * - Optional `portalClassName`: overrides the wrapper z-index (e.g. z-[130] above PostDetailModal z-[120])
  */
 
 interface ConfirmBottomDrawerProps {
@@ -18,12 +23,14 @@ interface ConfirmBottomDrawerProps {
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
   title: string;
-  message: string;
+  message: string | ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: "danger" | "primary" | "warning";
   isLoading?: boolean;
   higherZIndex?: boolean; // Use z-[110] when opened from another drawer
+  /** When set, applied on the portaled root (`fixed inset-0 …`). Overrides `higherZIndex` z-tier. */
+  portalClassName?: string;
 }
 
 export default function ConfirmBottomDrawer({
@@ -37,6 +44,7 @@ export default function ConfirmBottomDrawer({
   confirmVariant = "danger",
   isLoading = false,
   higherZIndex = false,
+  portalClassName,
 }: ConfirmBottomDrawerProps) {
   if (!open) return null;
 
@@ -51,8 +59,12 @@ export default function ConfirmBottomDrawer({
     await onConfirm();
   };
 
-  // Determine z-index based on context
-  const zIndex = higherZIndex ? "z-[110]" : "z-[100]";
+  const rootZClass =
+    portalClassName != null && portalClassName.trim().length > 0
+      ? portalClassName.trim()
+      : higherZIndex
+        ? "z-[110]"
+        : "z-[100]";
 
   // Determine button styling based on variant
   const getConfirmButtonClass = () => {
@@ -70,8 +82,11 @@ export default function ConfirmBottomDrawer({
     }
   };
 
-  return (
-    <div className={`fixed inset-0 ${zIndex}`} onClick={handleBackdropClick}>
+  return createPortal(
+    <div
+      className={`fixed inset-0 ${rootZClass}`}
+      onClick={handleBackdropClick}
+    >
       {/* Backdrop with frosted glass effect */}
       <div
         className="absolute inset-0"
@@ -99,7 +114,15 @@ export default function ConfirmBottomDrawer({
         </div>
 
         {/* Message */}
-        <p className="text-xs text-[var(--text)]/70 mb-3">{message}</p>
+        {typeof message === "string" ? (
+          <p className="text-xs text-[var(--text)]/70 mb-3 whitespace-pre-line">
+            {message}
+          </p>
+        ) : (
+          <div className="text-xs text-[var(--text)]/70 mb-3 space-y-2 [&_p]:leading-relaxed [&_ul]:mt-1.5">
+            {message}
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex gap-2">
@@ -119,6 +142,7 @@ export default function ConfirmBottomDrawer({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
