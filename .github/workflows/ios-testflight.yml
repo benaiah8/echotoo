@@ -249,6 +249,46 @@ jobs:
 
           rm -f "$P12_PATH"
 
+      # Target-scoped manual signing for the App Release config only (mutates project on runner).
+      # Avoids global PROVISIONING_PROFILE_SPECIFIER on xcodebuild, which breaks SPM (Firebase, etc.).
+      - name: Patch App target Release signing (CI only)
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          PROVISION_PROFILE_NAME: ${{ secrets.PROVISION_PROFILE_NAME }}
+        run: |
+          set -eo pipefail
+          TEAM_ID="$(printf '%s' "$APPLE_TEAM_ID" | tr -d '\r\n')"
+          PROFILE_NAME="$(printf '%s' "$PROVISION_PROFILE_NAME" | tr -d '\r\n')"
+          export APPLE_TEAM_ID="$TEAM_ID"
+          export PROVISION_PROFILE_NAME="$PROFILE_NAME"
+          gem install xcodeproj -N
+          ruby <<'RUBY'
+          require "xcodeproj"
+
+          team_id = ENV.fetch("APPLE_TEAM_ID").strip
+          profile_name = ENV.fetch("PROVISION_PROFILE_NAME").strip
+          if team_id.empty? || profile_name.empty?
+            abort "APPLE_TEAM_ID and PROVISION_PROFILE_NAME must be non-empty"
+          end
+
+          project_path = "ios/App/App.xcodeproj"
+          project = Xcodeproj::Project.open(project_path)
+          target = project.targets.find { |t| t.name == "App" }
+          abort "Native target App not found in #{project_path}" unless target
+
+          release = target.build_configurations.find { |c| c.name == "Release" }
+          abort "App Release configuration not found" unless release
+
+          bs = release.build_settings
+          bs["CODE_SIGN_STYLE"] = "Manual"
+          bs["DEVELOPMENT_TEAM"] = team_id
+          bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
+          bs["PROVISIONING_PROFILE_SPECIFIER"] = profile_name
+
+          project.save
+          puts "Patched App / Release: Manual, DEVELOPMENT_TEAM, Apple Distribution, PROVISIONING_PROFILE_SPECIFIER (profile name not logged)."
+          RUBY
+
       - name: Archive (Release)
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -257,6 +297,7 @@ jobs:
           set -eo pipefail
           # Do not pass PROVISIONING_PROFILE_SPECIFIER here: it applies to every target,
           # including Swift Package products (Firebase, etc.), which cannot use app profiles.
+          # App Release signing/profile is set by the prior xcodeproj patch step.
           # Profile is installed under ~/Library/MobileDevice/Provisioning Profiles/<UUID>.mobileprovision;
           # export still uses ExportOptions.plist provisioningProfiles for com.echotoo.app.
           xcodebuild archive \
