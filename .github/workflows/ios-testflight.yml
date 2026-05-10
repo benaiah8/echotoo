@@ -255,6 +255,10 @@ jobs:
           PROVISION_PROFILE_NAME: ${{ secrets.PROVISION_PROFILE_NAME }}
         run: |
           set -eo pipefail
+          # Do not pass PROVISIONING_PROFILE_SPECIFIER here: it applies to every target,
+          # including Swift Package products (Firebase, etc.), which cannot use app profiles.
+          # Profile is installed under ~/Library/MobileDevice/Provisioning Profiles/<UUID>.mobileprovision;
+          # export still uses ExportOptions.plist provisioningProfiles for com.echotoo.app.
           xcodebuild archive \
             -project ios/App/App.xcodeproj \
             -scheme App \
@@ -265,7 +269,6 @@ jobs:
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISION_PROFILE_NAME" \
             CODE_SIGN_IDENTITY="Apple Distribution"
 
       - name: Write ExportOptions.plist
