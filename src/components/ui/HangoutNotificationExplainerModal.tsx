@@ -9,9 +9,11 @@ import {
   applyHangoutExplainerLater,
   applyHangoutExplainerNeverAskAgain,
 } from "../../lib/hangoutNotificationExplainerPrefs";
+import toast from "react-hot-toast";
 import {
   getNativePushReceiveState,
   getNativePushStatusLabel,
+  getPushRegistrationUserFeedback,
   requestNotificationPermissionAndRegister,
 } from "../../lib/explicitNativePushRegistration";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
@@ -75,6 +77,17 @@ export default function HangoutNotificationExplainerModal({
     void refreshNativeStatus();
   }, [open, refreshNativeStatus]);
 
+  const notifyRegistrationOutcome = useCallback(
+    (result: Awaited<
+      ReturnType<typeof requestNotificationPermissionAndRegister>
+    >) => {
+      const fb = getPushRegistrationUserFeedback(result);
+      if (fb.kind === "success") toast.success(fb.message);
+      else if (fb.kind === "error") toast.error(fb.message);
+    },
+    []
+  );
+
   useEffect(() => {
     if (!open || !isNativeApp()) return;
     let handle: { remove: () => Promise<void> } | undefined;
@@ -136,7 +149,9 @@ export default function HangoutNotificationExplainerModal({
                 applyHangoutExplainerAllowNotifications();
                 close();
                 void (async () => {
-                  await requestNotificationPermissionAndRegister();
+                  const result =
+                    await requestNotificationPermissionAndRegister();
+                  notifyRegistrationOutcome(result);
                   void refreshNativeStatus();
                 })();
               }}
@@ -164,7 +179,9 @@ export default function HangoutNotificationExplainerModal({
                   applyHangoutExplainerAllowNotifications();
                   close();
                   void (async () => {
-                    await requestNotificationPermissionAndRegister();
+                    const result =
+                      await requestNotificationPermissionAndRegister();
+                    notifyRegistrationOutcome(result);
                     void refreshNativeStatus();
                   })();
                 }}

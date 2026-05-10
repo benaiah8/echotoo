@@ -29,11 +29,78 @@ function tokenPreview(len: number): string {
   return `length=${len}`;
 }
 
+/** Safe for logs / structured results — never the full token. */
+export function safePushTokenPreview(token: string): string {
+  const t = token.trim();
+  if (!t) return "(empty)";
+  const prefix = t.slice(0, 6);
+  return `${prefix}… len=${t.length}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Single init: duplicate registration listeners would double-upsert tokens. */
 let listenersInit: Promise<void> | null = null;
 
 /** iOS-only: FirebaseMessaging token refresh listener (registered once). */
 let iosFcmListenerInit: Promise<void> | null = null;
+
+/** iOS: waiters for next APNs `registration` event (readiness only — token not stored). */
+type IosApnsWaitEntry = {
+  timeoutId: ReturnType<typeof setTimeout>;
+  finish: (outcome: { seen: boolean; error?: string }) => void;
+};
+
+const iosApnsWaitEntries: IosApnsWaitEntry[] = [];
+
+const IOS_APNS_REGISTRATION_WAIT_MS = 20_000;
+
+/** Delays before 2nd–4th `getToken` attempts (after prior attempt fails or returns empty). */
+const IOS_FCM_GET_TOKEN_RETRY_DELAYS_MS = [500, 1000, 1500] as const;
+
+function flushIosApnsWaitersSuccess(): void {
+  const pending = iosApnsWaitEntries.splice(0);
+  for (const e of pending) {
+    clearTimeout(e.timeoutId);
+    e.finish({ seen: true });
+  }
+}
+
+function flushIosApnsWaitersError(message: string): void {
+  const pending = iosApnsWaitEntries.splice(0);
+  for (const e of pending) {
+    clearTimeout(e.timeoutId);
+    e.finish({ seen: false, error: message });
+  }
+}
+
+/**
+ * Resolve when the next iOS `PushNotifications.registration` fires, or timeout/error.
+ * Does not add a second plugin listener — uses the shared `registration` listener.
+ */
+function waitForNextIosApnsRegistrationSignal(
+  timeoutMs: number
+): Promise<{ seen: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      const idx = iosApnsWaitEntries.findIndex((e) => e.timeoutId === timeoutId);
+      if (idx >= 0) iosApnsWaitEntries.splice(idx, 1);
+      resolve({ seen: false });
+    }, timeoutMs);
+
+    iosApnsWaitEntries.push({
+      timeoutId,
+      finish: (outcome) => {
+        clearTimeout(timeoutId);
+        const idx = iosApnsWaitEntries.findIndex((e) => e.timeoutId === timeoutId);
+        if (idx >= 0) iosApnsWaitEntries.splice(idx, 1);
+        resolve(outcome);
+      },
+    });
+  });
+}
 
 function ensurePushListeners(): Promise<void> {
   if (!listenersInit) {
@@ -44,8 +111,9 @@ function ensurePushListeners(): Promise<void> {
           const platform = nativePlatform();
           if (!platform) return;
           if (platform === "ios") {
+            flushIosApnsWaitersSuccess();
             console.log(
-              "[explicitNativePush] registration event ignored on iOS",
+              "[explicitNativePush] registration event ignored on iOS (APNs not stored)",
               { tokenPreview: tokenPreview(token?.value?.length ?? 0) }
             );
             return;
@@ -73,6 +141,11 @@ function ensurePushListeners(): Promise<void> {
             "[explicitNativePush] registrationError:",
             err != null ? JSON.stringify(err) : String(err)
           );
+          if (Capacitor.getPlatform() === "ios") {
+            flushIosApnsWaitersError(
+              err != null ? JSON.stringify(err) : "registration error"
+            );
+          }
         }
       );
     })();
@@ -104,11 +177,11 @@ function ensureIosFcmTokenRefreshListener(): Promise<void> {
           console.warn(
             "[explicitNativePush] Failed to save refreshed iOS FCM token:",
             error.message,
-            { tokenPreview: tokenPreview(raw.length) }
+            { tokenPreview: safePushTokenPreview(raw) }
           );
         } else {
           console.log("[explicitNativePush] iOS FCM token refreshed", {
-            tokenPreview: tokenPreview(raw.length),
+            tokenPreview: safePushTokenPreview(raw),
           });
         }
       });
@@ -117,49 +190,164 @@ function ensureIosFcmTokenRefreshListener(): Promise<void> {
   return iosFcmListenerInit;
 }
 
-async function fetchAndUpsertIosFcmToken(): Promise<void> {
-  if (Capacitor.getPlatform() !== "ios") return;
-  try {
-    const result = await FirebaseMessaging.getToken();
-    const token =
-      typeof result?.token === "string" ? result.token.trim() : "";
+type IosFcmFetchOutcome = {
+  fcmTokenStatus: "ok" | "empty" | "error";
+  fcmErrorMessage: string | null;
+  dbUpsertStatus: "ok" | "error" | "skipped";
+  dbUpsertError: string | null;
+  tokenPreviewSafe: string | null;
+};
+
+async function fetchUpsertIosFcmWithRetries(): Promise<IosFcmFetchOutcome> {
+  let lastFcmError: string | null = null;
+
+  const maxAttempts = IOS_FCM_GET_TOKEN_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await delay(IOS_FCM_GET_TOKEN_RETRY_DELAYS_MS[attempt - 1] ?? 500);
+    }
+
+    let token: string = "";
+    try {
+      const result = await FirebaseMessaging.getToken();
+      token =
+        typeof result?.token === "string" ? result.token.trim() : "";
+    } catch (e) {
+      lastFcmError = e instanceof Error ? e.message : String(e);
+      console.warn(
+        "[explicitNativePush] FirebaseMessaging.getToken failed:",
+        lastFcmError,
+        { attempt: attempt + 1 }
+      );
+      continue;
+    }
+
     if (!token) {
       console.warn(
         "[explicitNativePush] FirebaseMessaging.getToken returned empty token",
-        { tokenPreview: tokenPreview(0) }
+        { attempt: attempt + 1, tokenPreview: tokenPreview(0) }
       );
-      return;
+      continue;
     }
+
     const { error } = await upsertPushDevice(token, "ios");
     if (error) {
       console.warn(
         "[explicitNativePush] Failed to save iOS FCM token:",
         error.message,
-        { tokenPreview: tokenPreview(token.length) }
+        { tokenPreview: safePushTokenPreview(token) }
       );
-    } else {
-      console.log("[explicitNativePush] iOS FCM token saved", {
-        tokenPreview: tokenPreview(token.length),
-      });
+      return {
+        fcmTokenStatus: "ok",
+        fcmErrorMessage: null,
+        dbUpsertStatus: "error",
+        dbUpsertError: error.message,
+        tokenPreviewSafe: safePushTokenPreview(token),
+      };
     }
-  } catch (e) {
-    console.warn(
-      "[explicitNativePush] FirebaseMessaging.getToken failed:",
-      e instanceof Error ? e.message : String(e)
-    );
+
+    console.log("[explicitNativePush] iOS FCM token saved", {
+      tokenPreview: safePushTokenPreview(token),
+    });
+    return {
+      fcmTokenStatus: "ok",
+      fcmErrorMessage: null,
+      dbUpsertStatus: "ok",
+      dbUpsertError: null,
+      tokenPreviewSafe: safePushTokenPreview(token),
+    };
   }
+
+  const fcmTokenStatus: "empty" | "error" = lastFcmError ? "error" : "empty";
+  return {
+    fcmTokenStatus,
+    fcmErrorMessage: lastFcmError,
+    dbUpsertStatus: "skipped",
+    dbUpsertError: null,
+    tokenPreviewSafe: null,
+  };
 }
+
+export type PushPermissionReceiveState =
+  | "granted"
+  | "denied"
+  | "prompt"
+  | "prompt-with-rfc"
+  | string;
 
 export type ExplicitNativePushResult = {
   /** Native-only: true if OS permission is `granted`. */
   granted: boolean;
   /** True when not running on iOS/Android native (e.g. web) — no plugin calls. */
   skipped: boolean;
-  /** True when `register()` was invoked after grant (requires signed-in user). */
+  /**
+   * Android: true after `PushNotifications.register()` is invoked (upsert still happens async in listener).
+   * iOS: true only when FCM token was saved to Supabase (`dbUpsertStatus === 'ok'`).
+   */
   registered: boolean;
   /** Always false; reserved if a future explicit “Open Settings” action is added. */
   openedSettings: boolean;
+  /** Last known `receive` permission from the plugin (when checked). */
+  permissionReceive?: PushPermissionReceiveState;
+  /** Whether a Supabase session user was present when registration was attempted. */
+  sessionOk?: boolean;
+  /** iOS: APNs delivered `registration` before timeout (readiness only). */
+  iosApnsRegistrationSeen?: boolean;
+  iosApnsRegistrationError?: string | null;
+  /** iOS: outcome of FCM `getToken` after retries. */
+  fcmTokenStatus?: "ok" | "empty" | "error";
+  fcmErrorMessage?: string | null;
+  /** iOS: Supabase upsert outcome. Android omitted (async listener). */
+  dbUpsertStatus?: "ok" | "error" | "skipped";
+  dbUpsertError?: string | null;
+  /** Safe preview when a token was obtained (`first6… len=n`). */
+  tokenPreviewSafe?: string | null;
 };
+
+/**
+ * Maps registration outcome to short UI copy for toasts (no secrets).
+ */
+export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult): {
+  kind: "success" | "error" | "none";
+  message: string;
+} {
+  if (result.skipped) {
+    return { kind: "success", message: "Notifications enabled" };
+  }
+  if (!result.granted) {
+    return { kind: "none", message: "" };
+  }
+  if (result.sessionOk === false) {
+    return {
+      kind: "error",
+      message: "Please sign in to enable notifications.",
+    };
+  }
+
+  const platform = Capacitor.getPlatform();
+
+  if (platform === "ios" && result.sessionOk === true) {
+    if (result.dbUpsertStatus === "ok") {
+      return { kind: "success", message: "Notification token saved" };
+    }
+    if (
+      result.dbUpsertStatus === "error" ||
+      result.fcmTokenStatus === "empty" ||
+      result.fcmTokenStatus === "error"
+    ) {
+      return {
+        kind: "error",
+        message: "Could not save notification token. Please try again.",
+      };
+    }
+  }
+
+  if (platform === "android" && result.registered) {
+    return { kind: "success", message: "Notifications enabled" };
+  }
+
+  return { kind: "none", message: "" };
+}
 
 /**
  * Request notification permission and register for push — call only from a direct user gesture
@@ -173,7 +361,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
   });
 
   if (!isNativeApp() || !Capacitor.isNativePlatform()) {
-    const r = {
+    const r: ExplicitNativePushResult = {
       granted: false,
       skipped: true,
       registered: false,
@@ -188,7 +376,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
   }
 
   if (!nativePlatform()) {
-    const r = {
+    const r: ExplicitNativePushResult = {
       granted: false,
       skipped: true,
       registered: false,
@@ -218,12 +406,15 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       });
     }
 
+    const permissionReceive = perm.receive as PushPermissionReceiveState;
+
     if (perm.receive !== "granted") {
-      const r = {
+      const r: ExplicitNativePushResult = {
         granted: false,
         skipped: false,
         registered: false,
         openedSettings: false,
+        permissionReceive,
       };
       console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
         t: Date.now(),
@@ -237,12 +428,16 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session?.user) {
-      const r = {
+    const sessionOk = Boolean(session?.user);
+
+    if (!sessionOk) {
+      const r: ExplicitNativePushResult = {
         granted: true,
         skipped: false,
         registered: false,
         openedSettings: false,
+        permissionReceive,
+        sessionOk: false,
       };
       console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
         t: Date.now(),
@@ -255,6 +450,47 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
 
     await ensurePushListeners();
     await ensureIosFcmTokenRefreshListener();
+
+    if (platform === "ios") {
+      const apnsWait = waitForNextIosApnsRegistrationSignal(
+        IOS_APNS_REGISTRATION_WAIT_MS
+      );
+      console.log("[DBG:PUSH] register_before", {
+        t: Date.now(),
+        platform,
+        receive: perm.receive,
+      });
+      await PushNotifications.register();
+      const apnsOutcome = await apnsWait;
+
+      const fcmOutcome = await fetchUpsertIosFcmWithRetries();
+
+      const iosRegistered = fcmOutcome.dbUpsertStatus === "ok";
+
+      const r: ExplicitNativePushResult = {
+        granted: true,
+        skipped: false,
+        registered: iosRegistered,
+        openedSettings: false,
+        permissionReceive,
+        sessionOk: true,
+        iosApnsRegistrationSeen: apnsOutcome.seen,
+        iosApnsRegistrationError: apnsOutcome.error ?? null,
+        fcmTokenStatus: fcmOutcome.fcmTokenStatus,
+        fcmErrorMessage: fcmOutcome.fcmErrorMessage,
+        dbUpsertStatus: fcmOutcome.dbUpsertStatus,
+        dbUpsertError: fcmOutcome.dbUpsertError,
+        tokenPreviewSafe: fcmOutcome.tokenPreviewSafe,
+      };
+      console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
+        t: Date.now(),
+        platform,
+        receive: perm.receive,
+        ...r,
+      });
+      return r;
+    }
+
     console.log("[DBG:PUSH] register_before", {
       t: Date.now(),
       platform,
@@ -262,15 +498,13 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     });
     await PushNotifications.register();
 
-    if (platform === "ios") {
-      await fetchAndUpsertIosFcmToken();
-    }
-
-    const r = {
+    const r: ExplicitNativePushResult = {
       granted: true,
       skipped: false,
       registered: true,
       openedSettings: false,
+      permissionReceive,
+      sessionOk: true,
     };
     console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
       t: Date.now(),
@@ -284,7 +518,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       "[explicitNativePush] request/register failed:",
       e instanceof Error ? e.message : String(e)
     );
-    const r = {
+    const r: ExplicitNativePushResult = {
       granted: false,
       skipped: false,
       registered: false,
