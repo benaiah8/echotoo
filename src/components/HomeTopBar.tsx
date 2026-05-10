@@ -54,6 +54,8 @@ export interface HomeTopBarProps {
   onFilterChange: (filters: string[]) => void;
   /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
   onSearchFocusChange?: (focused: boolean) => void;
+  /** Inline notice below quick chips when Today filter matches nothing on the current rail slice (client-side). */
+  noTodayInlineBannerVisible?: boolean;
 }
 
 export default function HomeTopBar({
@@ -73,6 +75,7 @@ export default function HomeTopBar({
   selectedFilters,
   onFilterChange,
   onSearchFocusChange,
+  noTodayInlineBannerVisible = false,
 }: HomeTopBarProps) {
   const toggleFilterChip = (value: string) => {
     const newSelected = selectedFilters.includes(value)
@@ -213,45 +216,66 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {/* Quick chips: compact shrink-to-content pill under search row (not full bar width) */}
+        {/* Quick chips + optional Today-empty banner: one centered shrink-to-content column */}
         <div
           className={[
-            "pointer-events-auto mt-1 w-fit max-w-[calc(100vw-1.25rem)]",
-            "inline-flex flex-nowrap items-stretch justify-center self-center",
-            "rounded-full",
-            "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-            "border border-[var(--bottom-tab-border)]",
-            "shadow-[0_2px_12px_rgba(0,0,0,0.10)]",
-            "app-dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)]",
+            "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
+            "self-center",
           ].join(" ")}
         >
-          <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
-            <button
-              type="button"
-              onClick={() => toggleFilterChip("today")}
-              className={chipButtonClass(selectedFilters.includes("today"))}
-            >
-              Today
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setViewMode(viewMode === "hangouts" ? "all" : "hangouts")
-              }
-              className={chipButtonClass(viewMode === "hangouts")}
-            >
-              Hangouts
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setViewMode(viewMode === "experiences" ? "all" : "experiences")
-              }
-              className={chipButtonClass(viewMode === "experiences")}
-            >
-              Experiences
-            </button>
+          <div
+            className={[
+              "inline-flex w-fit flex-nowrap items-stretch justify-center",
+              "rounded-full",
+              "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+              "border border-[var(--bottom-tab-border)]",
+              "shadow-[0_2px_12px_rgba(0,0,0,0.10)]",
+              "app-dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)]",
+            ].join(" ")}
+          >
+            <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => toggleFilterChip("today")}
+                className={chipButtonClass(selectedFilters.includes("today"))}
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setViewMode(viewMode === "hangouts" ? "all" : "hangouts")
+                }
+                className={chipButtonClass(viewMode === "hangouts")}
+              >
+                Hangouts
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setViewMode(viewMode === "experiences" ? "all" : "experiences")
+                }
+                className={chipButtonClass(viewMode === "experiences")}
+              >
+                Experiences
+              </button>
+            </div>
           </div>
+
+          {noTodayInlineBannerVisible ? (
+            <div
+              className={[
+                "w-full rounded-xl px-3 py-1.5",
+                "bg-[var(--brand)] text-[var(--brand-ink)]",
+                "text-[10px] font-medium leading-snug text-center tracking-tight",
+                "shadow-[0_2px_10px_rgba(0,0,0,0.18)]",
+                "border border-[color-mix(in_oklab,var(--brand-ink)_18%,transparent)]",
+              ].join(" ")}
+              role="status"
+            >
+              Nothing happening today
+            </div>
+          ) : null}
         </div>
 
         {/* Filter popout: appears below quick chips */}

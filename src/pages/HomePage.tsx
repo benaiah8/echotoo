@@ -40,8 +40,6 @@ import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
 import Modal from "../components/modal/Modal";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
-import toast from "react-hot-toast";
-import EmptyRailCard from "../components/EmptyRailCard";
 import {
   HOME_TAB_REFRESH_EVENT,
   type HomeTabRefreshDetail,
@@ -50,6 +48,9 @@ import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 
 const PAGE_SIZE = 6;
+
+/** After Today-empty rail check: show inline banner then remove Today (client-side rail slice only). */
+const NO_TODAY_BANNER_DISMISS_MS = 2600;
 
 // Feature flag: Enable optimized PostgreSQL function
 // Set to false to use the original getPublicFeed function
@@ -144,28 +145,52 @@ export default function HomePage() {
   // Used to show empty card and visual distinction for filtered items
   const railFilteredCountRef = useRef<number | undefined>(undefined);
 
-  /** User just turned on Today — first rail page decides toast + auto-deselect (client-side sample only). */
+  /** Inline banner when Today matches nothing on the current rail fetch (not a full DB guarantee). */
+  const [noTodayInlineBannerVisible, setNoTodayInlineBannerVisible] =
+    useState(false);
+  const noTodayBannerTimerRef = useRef<number | null>(null);
+
+  /** User just turned on Today — first rail page decides banner + delayed auto-deselect (client-side rail only). */
   const pendingTodayCheckRef = useRef(false);
-  const hadTodayFilterPrevRef = useRef(false);
   const selectedFiltersRef = useRef<string[]>(selectedFilters);
 
   useEffect(() => {
     selectedFiltersRef.current = selectedFilters;
   }, [selectedFilters]);
 
+  /** Chips only: arm pending synchronously on off→on Today before paint/effects so rail cache can bypass. */
+  const handleHomeFilterChange = useCallback((next: string[]) => {
+    setSelectedFilters((prev) => {
+      if (!prev.includes("today") && next.includes("today")) {
+        pendingTodayCheckRef.current = true;
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const hasToday = selectedFilters.includes("today");
     if (!hasToday) {
       pendingTodayCheckRef.current = false;
-    } else if (!hadTodayFilterPrevRef.current) {
-      pendingTodayCheckRef.current = true;
+      setNoTodayInlineBannerVisible(false);
+      if (noTodayBannerTimerRef.current !== null) {
+        clearTimeout(noTodayBannerTimerRef.current);
+        noTodayBannerTimerRef.current = null;
+      }
     }
-    hadTodayFilterPrevRef.current = hasToday;
   }, [selectedFilters]);
 
+  useEffect(() => {
+    return () => {
+      if (noTodayBannerTimerRef.current !== null) {
+        clearTimeout(noTodayBannerTimerRef.current);
+      }
+    };
+  }, []);
+
   /**
-   * After rails apply filters: if Today was just enabled and this batch matched nothing, toast and clear Today.
-   * Not a database-wide guarantee — only the fetched rail slice (see horizontalRailFilters).
+   * After rails apply filters: if Today was just enabled and this batch matched nothing, show inline banner
+   * then remove Today after a delay. Client-side rail slice only — see horizontalRailFilters.
    */
   const maybeResolvePendingTodayCheck = useCallback(
     (filteredCount: number, offset: number) => {
@@ -180,8 +205,16 @@ export default function HomePage() {
         return;
       }
       pendingTodayCheckRef.current = false;
-      toast("No hangouts today", { id: "home-no-hangouts-today" });
-      setSelectedFilters((prev) => prev.filter((f) => f !== "today"));
+      if (noTodayBannerTimerRef.current !== null) {
+        clearTimeout(noTodayBannerTimerRef.current);
+        noTodayBannerTimerRef.current = null;
+      }
+      setNoTodayInlineBannerVisible(true);
+      noTodayBannerTimerRef.current = window.setTimeout(() => {
+        noTodayBannerTimerRef.current = null;
+        setNoTodayInlineBannerVisible(false);
+        setSelectedFilters((prev) => prev.filter((f) => f !== "today"));
+      }, NO_TODAY_BANNER_DISMISS_MS);
     },
     []
   );
@@ -566,6 +599,13 @@ export default function HomePage() {
   );
 
   const topRailGetCachedItems = useCallback(() => {
+    // Pending Today check must run loadItems(0) so maybeResolvePendingTodayCheck runs; cache would skip it.
+    if (
+      selectedFilters.includes("today") &&
+      pendingTodayCheckRef.current
+    ) {
+      return null;
+    }
     const feedOptions = {
       type: undefined, // Mixed content
       q: search || undefined,
@@ -643,7 +683,8 @@ export default function HomePage() {
           viewMode={viewMode}
           setViewMode={setViewMode}
           selectedFilters={selectedFilters}
-          onFilterChange={setSelectedFilters}
+          onFilterChange={handleHomeFilterChange}
+          noTodayInlineBannerVisible={noTodayInlineBannerVisible}
         />
 
         {/* MAIN CONTENT */}
@@ -672,6 +713,7 @@ export default function HomePage() {
                 loadItems={topRailLoadItems}
                 getCachedItems={topRailGetCachedItems}
                 setCachedItems={topRailSetCachedItems}
+                suppressFilteredEmptyCard={noTodayInlineBannerVisible}
               />
             </div>
           )}

@@ -36,6 +36,8 @@ type Props = {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
+  /** Hide filtered empty rail card while an inline notice covers that case (e.g. no Today matches). */
+  suppressFilteredEmptyCard?: boolean;
 };
 
 export default function HomeHangoutSection({
@@ -53,6 +55,7 @@ export default function HomeHangoutSection({
   hasActiveFilters = false,
   isVisible = true,
   tabId = "unknown",
+  suppressFilteredEmptyCard = false,
 }: Props) {
   // Skeleton while loading (horizontal cards)
   // Don't return early when progressive loading is enabled - let ProgressiveHorizontalRail handle its own loading state
@@ -185,6 +188,7 @@ export default function HomeHangoutSection({
         isVisible={isVisible}
         tabId={tabId}
         emptyComponent={<EmptyRailCard />}
+        suppressFilteredEmptyCard={suppressFilteredEmptyCard}
         filteredCount={filteredCount}
         hasActiveFilters={hasActiveFilters}
         visibleItems={3}

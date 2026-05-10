@@ -95,6 +95,13 @@ export type ToggleInviteMessageReactionResult = {
   viewer_has_thumb_up: boolean;
 };
 
+/** Payload from `toggle_invite_interest` RPC. */
+export type ToggleInviteInterestResult = {
+  thread_id: string;
+  viewer_interested: boolean;
+  interest_count: number;
+};
+
 function normalizeThreadMessage(msg: InviteThreadMessage): InviteThreadMessage {
   const n = Number(msg.thumb_up_count);
   const thumb_up_count = Number.isFinite(n)
@@ -142,6 +149,24 @@ function asPostResult(raw: unknown): PostInviteThreadMessageResult | null {
 function asToggleResult(raw: unknown): ToggleInviteMessageReactionResult | null {
   if (!raw || typeof raw !== "object") return null;
   return raw as ToggleInviteMessageReactionResult;
+}
+
+function asToggleInterestResult(raw: unknown): ToggleInviteInterestResult | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const thread_id =
+    typeof o.thread_id === "string"
+      ? o.thread_id
+      : typeof o.p_thread_id === "string"
+        ? o.p_thread_id
+        : null;
+  if (!thread_id) return null;
+  const viewer_interested = o.viewer_interested === true;
+  const n = Number(o.interest_count);
+  const interest_count = Number.isFinite(n)
+    ? Math.max(0, Math.floor(n))
+    : 0;
+  return { thread_id, viewer_interested, interest_count };
 }
 
 /**
@@ -215,6 +240,42 @@ export async function postInviteThreadMessage(
 /**
  * Toggle thumb_up on a thread message (RPC).
  */
+
+/** Toggle or set invite-thread interest (announcement flows). RPC updates notification rows. */
+export async function toggleInviteInterest(
+  threadId: string,
+  interested?: boolean
+): Promise<{ data: ToggleInviteInterestResult | null; error: any }> {
+  try {
+    const args: Record<string, unknown> = { p_thread_id: threadId };
+    if (interested !== undefined) {
+      args.p_interested = interested;
+    }
+
+    const { data, error } = await supabase.rpc("toggle_invite_interest", args);
+
+    if (error) {
+      console.error("[toggleInviteInterest] RPC error:", error);
+      return { data: null, error };
+    }
+
+    if (data == null) {
+      return { data: null, error: { message: "No data returned" } };
+    }
+
+    const parsed = asToggleInterestResult(data);
+    if (!parsed) {
+      console.warn("[toggleInviteInterest] Unexpected RPC shape");
+      return { data: null, error: { message: "Unexpected RPC response shape" } };
+    }
+
+    return { data: parsed, error: null };
+  } catch (err) {
+    console.error("[toggleInviteInterest] Unexpected error:", err);
+    return { data: null, error: err };
+  }
+}
+
 export async function toggleInviteMessageReaction(
   messageId: string,
   reactionType: "thumb_up" = "thumb_up"

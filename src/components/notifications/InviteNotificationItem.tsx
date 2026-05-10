@@ -1,17 +1,50 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { PiArrowSquareOut, PiUsers } from "react-icons/pi";
+import { PiArrowSquareOut, PiMegaphone, PiUsers } from "react-icons/pi";
 import { type NotificationWithActor } from "../../types/notification";
 import { markNotificationAsRead } from "../../api/services/notifications";
 import { getInviteById } from "../../api/services/invites";
+import { toggleInviteInterest } from "../../api/services/inviteThreads";
 import { formatDistanceToNow } from "date-fns";
 import Avatar from "../ui/Avatar";
+import BottomDrawer from "../ui/BottomDrawer";
 import { PostTypeMetaChip } from "../ui/PostFeedSurfaceMeta";
 import { Paths } from "../../router/Paths";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import PersonalInviteThreadOverlay from "./PersonalInviteThreadOverlay";
 import GroupInviteThreadOverlay from "./GroupInviteThreadOverlay";
 import InviteExpiryPill, { inviteExpiryActive } from "./InviteExpiryPill";
+
+function parseInterestCount(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  }
+  return 0;
+}
+
+function parseInterestUi(ad: Record<string, unknown> | undefined): {
+  viewerInterested: boolean;
+  interestCount: number;
+} {
+  return {
+    viewerInterested: ad?.viewer_interested === true,
+    interestCount: parseInterestCount(ad?.interest_count),
+  };
+}
+
+function formatInterestedRecipientLabel(interested: boolean): string {
+  return interested ? "Interested" : "I'm interested";
+}
+
+function formatSenderInterestedLine(count: number): string {
+  if (count === 0) return "0 interested";
+  if (count === 1) return "1 interested";
+  return `${count} interested`;
+}
 
 /** Module-level cache for getInviteById results to avoid duplicate fetches per invite row. TTL 3 min. */
 const INVITE_BY_ID_TTL_MS = 3 * 60 * 1000;
@@ -66,6 +99,7 @@ export default function InviteNotificationItem({
       ? rawThreadId
       : null;
   const threadKind = notification.additional_data?.thread_kind;
+  const isAnnouncementRow = threadKind === "announcement";
   const isGroupThreadRow = threadKind === "group";
   const showOpenPersonalThread =
     personalThreadId != null &&
@@ -79,6 +113,18 @@ export default function InviteNotificationItem({
   const [personalThreadDrawerOpen, setPersonalThreadDrawerOpen] =
     useState(false);
   const [groupThreadDrawerOpen, setGroupThreadDrawerOpen] = useState(false);
+  const [announcementDrawerOpen, setAnnouncementDrawerOpen] = useState(false);
+  const [announcementInterestUi, setAnnouncementInterestUi] = useState(() =>
+    parseInterestUi(notification.additional_data)
+  );
+  const [interestTogglePending, setInterestTogglePending] = useState(false);
+
+  /** Sync interest fields when this drawer opens or the row targets a different notification. */
+  useEffect(() => {
+    if (!announcementDrawerOpen || threadKind !== "announcement") return;
+    setAnnouncementInterestUi(parseInterestUi(notification.additional_data));
+    /* Omit notification.additional_data from deps so parent re-renders do not reset optimistic interest UI. */
+  }, [announcementDrawerOpen, notification.id, threadKind]); // eslint-disable-line react-hooks/exhaustive-deps -- seed on open / id change only
 
   useEffect(() => {
     const additionalData = notification.additional_data;
@@ -135,19 +181,63 @@ export default function InviteNotificationItem({
     setPersonalThreadDrawerOpen(true);
   };
 
+  const openAnnouncementFromRow = () => {
+    void handleClick();
+    setAnnouncementDrawerOpen(true);
+  };
+
+  const handleAnnouncementInterestToggle = async () => {
+    if (
+      !personalThreadId ||
+      inviteDirection !== "received" ||
+      interestTogglePending
+    ) {
+      return;
+    }
+    const prev = announcementInterestUi;
+    const nextInterested = !prev.viewerInterested;
+    const delta = nextInterested ? 1 : -1;
+    setInterestTogglePending(true);
+    setAnnouncementInterestUi({
+      viewerInterested: nextInterested,
+      interestCount: Math.max(0, prev.interestCount + delta),
+    });
+    const { data, error } = await toggleInviteInterest(
+      personalThreadId,
+      nextInterested
+    );
+    setInterestTogglePending(false);
+    if (error || !data) {
+      setAnnouncementInterestUi(prev);
+      return;
+    }
+    setAnnouncementInterestUi({
+      viewerInterested: data.viewer_interested,
+      interestCount: data.interest_count,
+    });
+  };
+
   const handleRowClick = (e: React.MouseEvent) => {
-    if (!showOpenThread) return;
     const t = e.target as HTMLElement | null;
     if (t?.closest("a[href], button")) return;
+    if (isAnnouncementRow) {
+      openAnnouncementFromRow();
+      return;
+    }
+    if (!showOpenThread) return;
     openThreadFromRow();
   };
 
   const handleRowKeyDown = (e: React.KeyboardEvent) => {
-    if (!showOpenThread) return;
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    if (isAnnouncementRow) {
       e.preventDefault();
-      openThreadFromRow();
+      openAnnouncementFromRow();
+      return;
     }
+    if (!showOpenThread) return;
+    e.preventDefault();
+    openThreadFromRow();
   };
 
   const actorName =
@@ -165,6 +255,13 @@ export default function InviteNotificationItem({
     rawPostType === "experience" ? "experience" : "hangout";
   const avatarSize = compact ? 36 : 42;
   const rowPad = compact ? "py-2 pl-1 pr-0.5" : "py-2.5 pl-1 pr-1";
+
+  const announcementTitleText =
+    inviteDirection === "sent"
+      ? "You sent an announcement"
+      : inviteDirection === "received"
+        ? `${actorName} sent an announcement`
+        : "Announcement invite";
 
   const titleParts: {
     prefix: string;
@@ -187,21 +284,7 @@ export default function InviteNotificationItem({
                 suffix: "invited you to a group",
               }
             : { prefix: "Invite ·", actor: actorName, suffix: "" }
-        : threadKind === "announcement"
-          ? inviteDirection === "sent"
-            ? {
-                prefix: "You sent",
-                actor: "an announcement invite",
-                suffix: "",
-              }
-            : inviteDirection === "received"
-              ? {
-                  prefix: "",
-                  actor: actorName,
-                  suffix: "invited you via announcement",
-                }
-              : { prefix: "Invite ·", actor: actorName, suffix: "" }
-          : { prefix: "Invite ·", actor: actorName, suffix: "" };
+        : { prefix: "Invite ·", actor: actorName, suffix: "" };
 
   const titleHasPrefix = titleParts.prefix.trim().length > 0;
   const titleHasActor = !!titleParts.actor && titleParts.actor.trim().length > 0;
@@ -209,6 +292,16 @@ export default function InviteNotificationItem({
 
   const actorLabel =
     notification.actor?.display_name || notification.actor?.username || "user";
+
+  const rowAnnouncementIcon = (
+    <span
+      className="inline-flex items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72 shadow-[inset_0_0_0_0.5px_rgba(23,23,23,0.12)] app-dark:border-white/26 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:text-amber-200/85"
+      style={{ width: avatarSize, height: avatarSize }}
+      aria-label="Announcement invite"
+    >
+      <PiMegaphone className="h-[52%] w-[52%]" aria-hidden />
+    </span>
+  );
 
   const rowGroupIcon = (
     <button
@@ -301,6 +394,9 @@ export default function InviteNotificationItem({
     addSuffix: true,
   });
 
+  const seePostLinkClass =
+    "inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-[var(--text)]/65 underline decoration-transparent underline-offset-2 transition-colors hover:text-primary/85 hover:decoration-primary/45 hover:underline sm:text-[11px]";
+
   /** latest_preview_text from additional_data is set by backend (message/reaction activity); no per-row thread fetch. */
 
   const nowMs = Date.now();
@@ -324,6 +420,97 @@ export default function InviteNotificationItem({
 
   /** Actor corresponds to counterpart: received → inviter, sent → invitee */
 
+  const rowInteractive = showOpenThread || isAnnouncementRow;
+
+  const drawerInviteNoteFull =
+    typeof notification.additional_data?.invite_note === "string"
+      ? notification.additional_data.invite_note.trim()
+      : "";
+  const drawerPostCaptionFull =
+    typeof notification.additional_data?.post_caption === "string"
+      ? notification.additional_data.post_caption.trim()
+      : "";
+
+  const announcementDrawerFooter =
+    showGoToPostButton && linkTo !== "#" ? (
+      <div className="border-t border-[var(--border)]/55 bg-[color-mix(in_oklab,var(--surface-2)_35%,transparent)] px-4 pt-3 pb-1">
+        <Link
+          to={linkTo}
+          state={{ backgroundLocation: location }}
+          onClick={(e) => e.stopPropagation()}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-center text-sm font-semibold text-[var(--brand-ink)] shadow-sm transition-opacity hover:opacity-95"
+          aria-label="See post"
+        >
+          See post
+          <PiArrowSquareOut className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+        </Link>
+      </div>
+    ) : null;
+
+  const announcementRowBody = (
+    <>
+      <div className="flex w-11 shrink-0 items-center justify-center self-start pt-0.5 sm:w-12">
+        {rowAnnouncementIcon}
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+        {/* Title row */}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <PostTypeMetaChip type={metaPostType} className="shrink-0" />
+          <span
+            className={`min-w-0 flex-1 truncate text-[13px] leading-snug sm:text-sm ${
+              notification.is_read
+                ? "text-[var(--text)]/68"
+                : "text-[var(--text)]/92"
+            }`}
+          >
+            {announcementTitleText}
+          </span>
+          <span
+            className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+              notification.is_read
+                ? "invisible"
+                : "bg-amber-400 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] ring-1 ring-amber-400/35 app-dark:bg-amber-400 app-dark:ring-amber-400/25"
+            }`}
+            aria-hidden={notification.is_read}
+            aria-label={notification.is_read ? undefined : "Unread"}
+          />
+        </div>
+        {/* Preview */}
+        {previewText ? (
+          <p
+            className={`line-clamp-2 break-words text-[11px] leading-snug sm:text-xs ${
+              notification.is_read
+                ? "font-normal text-[var(--text)]/52"
+                : "font-semibold text-[var(--text)]/88 app-dark:text-[var(--text)]/90"
+            }`}
+          >
+            {previewText}
+          </p>
+        ) : null}
+        {/* Footer: See post + time */}
+        <div className="flex min-w-0 items-center justify-between gap-2 pt-0.5">
+          {showGoToPostButton && linkTo !== "#" ? (
+            <Link
+              to={linkTo}
+              state={{ backgroundLocation: location }}
+              onClick={(e) => e.stopPropagation()}
+              className={seePostLinkClass}
+              aria-label="See post"
+            >
+              See post
+              <PiArrowSquareOut className="h-2.5 w-2.5 shrink-0 sm:h-3 sm:w-3" aria-hidden />
+            </Link>
+          ) : (
+            <span />
+          )}
+          <span className="shrink-0 text-right text-[10px] tabular-nums leading-snug text-[var(--text)]/38 sm:text-[11px]">
+            {timeAgoRelative}
+          </span>
+        </div>
+      </div>
+    </>
+  );
+
   const rowBody = (
     <>
       <div className="flex w-11 shrink-0 items-center justify-center self-center sm:w-12">
@@ -345,9 +532,9 @@ export default function InviteNotificationItem({
               {titleHasActor ? (
                 <>
                   {titleHasPrefix ? <span>&nbsp;</span> : null}
-                <span className="inline-block max-w-[9.5rem] truncate align-bottom sm:max-w-[14rem]">
-                  {titleParts.actor}
-                </span>
+                  <span className="inline-block max-w-[9.5rem] truncate align-bottom sm:max-w-[14rem]">
+                    {titleParts.actor}
+                  </span>
                 </>
               ) : null}
               {titleHasSuffix ? (
@@ -388,7 +575,7 @@ export default function InviteNotificationItem({
             to={linkTo}
             state={{ backgroundLocation: location }}
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-[var(--text)]/65 underline decoration-transparent underline-offset-2 transition-colors hover:text-primary/85 hover:decoration-primary/45 hover:underline sm:text-[11px]"
+            className={seePostLinkClass}
             aria-label="See post"
           >
             See post
@@ -427,21 +614,21 @@ export default function InviteNotificationItem({
   return (
     <>
       <div
-        tabIndex={showOpenThread ? 0 : undefined}
+        tabIndex={rowInteractive ? 0 : undefined}
         aria-label={
-          showOpenThread ? "Open invite chat" : undefined
+          isAnnouncementRow
+            ? "Open announcement details"
+            : showOpenThread
+              ? "Open invite chat"
+              : undefined
         }
-        onClick={
-          showOpenThread ? handleRowClick : undefined
-        }
-        onKeyDown={
-          showOpenThread ? handleRowKeyDown : undefined
-        }
+        onClick={rowInteractive ? handleRowClick : undefined}
+        onKeyDown={rowInteractive ? handleRowKeyDown : undefined}
         className={[
           "flex min-h-[4rem] w-full items-start gap-2 text-left transition-colors sm:min-h-[4.25rem] sm:gap-3",
           rowPad,
           expired48hInviteDisplay ? "opacity-[0.93]" : "",
-          showOpenThread
+          rowInteractive
             ? "cursor-pointer hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
             : "",
           highlighted
@@ -451,8 +638,124 @@ export default function InviteNotificationItem({
           .filter(Boolean)
           .join(" ")}
       >
-        {rowBody}
+        {isAnnouncementRow ? announcementRowBody : rowBody}
       </div>
+      <BottomDrawer
+        open={announcementDrawerOpen && isAnnouncementRow}
+        onClose={() => setAnnouncementDrawerOpen(false)}
+        title="Invite announcement"
+        maxHeight="85vh"
+        shrinkSheetToContent
+        footer={announcementDrawerFooter ?? undefined}
+        contentClassName="px-4 pb-4 pt-2"
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            {inviteDirection === "sent" ? (
+              <>
+                <span
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72 app-dark:border-white/26 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:text-amber-200/85"
+                  aria-hidden
+                >
+                  <PiMegaphone className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold leading-snug text-[var(--text)]">
+                    You
+                  </div>
+                  <div className="text-xs leading-snug text-[var(--text)]/52">
+                    Sent this announcement
+                  </div>
+                </div>
+              </>
+            ) : notification.actor ? (
+              <>
+                <Avatar
+                  variant="default"
+                  url={notification.actor.avatar_url || undefined}
+                  name={
+                    notification.actor.display_name ||
+                    notification.actor.username ||
+                    undefined
+                  }
+                  size={44}
+                  tightLineBox
+                />
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold leading-snug text-[var(--text)]">
+                    {actorName}
+                  </div>
+                  {actorUsernameRaw != null &&
+                  String(actorUsernameRaw).trim().length > 0 ? (
+                    <div className="truncate text-xs leading-snug text-[var(--text)]/52">
+                      @{String(actorUsernameRaw).trim()}
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <>
+                <span
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72"
+                  aria-hidden
+                >
+                  <PiMegaphone className="h-5 w-5" />
+                </span>
+                <div className="text-[15px] font-semibold text-[var(--text)]">
+                  Someone
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <PostTypeMetaChip type={metaPostType} />
+          </div>
+
+          {drawerInviteNoteFull.length > 0 ? (
+            <div className="min-w-0">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
+                Announcement
+              </div>
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/88">
+                {drawerInviteNoteFull}
+              </p>
+            </div>
+          ) : null}
+
+          {drawerPostCaptionFull.length > 0 ? (
+            <div className="min-w-0">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
+                Post caption
+              </div>
+              <p className="line-clamp-6 whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/72">
+                {drawerPostCaptionFull}
+              </p>
+            </div>
+          ) : null}
+
+          {inviteDirection === "received" && personalThreadId ? (
+            <button
+              type="button"
+              onClick={() => void handleAnnouncementInterestToggle()}
+              disabled={interestTogglePending}
+              className="w-full rounded-xl border border-primary/40 bg-primary/12 px-4 py-2.5 text-sm font-semibold text-[var(--text)] transition-colors hover:bg-primary/18 disabled:pointer-events-none disabled:opacity-55"
+            >
+              {formatInterestedRecipientLabel(
+                announcementInterestUi.viewerInterested
+              )}
+            </button>
+          ) : inviteDirection === "sent" ? (
+            <p className="text-sm font-medium text-[var(--text)]/72">
+              {formatSenderInterestedLine(announcementInterestUi.interestCount)}
+            </p>
+          ) : null}
+
+          <p className="text-[11px] tabular-nums leading-snug text-[var(--text)]/42">
+            {timeAgoRelative}
+          </p>
+        </div>
+      </BottomDrawer>
       <PersonalInviteThreadOverlay
         open={personalThreadDrawerOpen}
         onClose={() => setPersonalThreadDrawerOpen(false)}

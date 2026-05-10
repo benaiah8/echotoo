@@ -66,6 +66,8 @@ export interface ProgressiveHorizontalRailProps<T> {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
+  /** When true, skip prepending emptyComponent for filteredCount === 0 (e.g. transient inline banner elsewhere). */
+  suppressFilteredEmptyCard?: boolean;
 }
 
 /**
@@ -103,6 +105,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   loadMoreThreshold = 200,
   isVisible = true,
   tabId = "unknown",
+  suppressFilteredEmptyCard = false,
 }: ProgressiveHorizontalRailProps<T>) {
   // [FIX] Only use initialItems prop for initial state
   // Do NOT call getCachedItems() during render - it causes re-render loops
@@ -564,9 +567,11 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
     >
       <div className="flex gap-3 w-max rail-pad">
         {/* [ENHANCEMENT: Empty State] Show empty card as first item when filteredCount === 0 */}
-        {filteredCount === 0 && emptyComponent && (
-          <div className="shrink-0">{emptyComponent}</div>
-        )}
+        {filteredCount === 0 &&
+          emptyComponent &&
+          !suppressFilteredEmptyCard && (
+            <div className="shrink-0">{emptyComponent}</div>
+          )}
 
         {/* Render all items - renderItem should return elements with keys */}
         {items.map((item, index) => {
