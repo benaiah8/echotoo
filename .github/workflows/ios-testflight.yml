@@ -190,6 +190,7 @@ jobs:
           APP_ID_FROM_PLIST="$("$PB" -c "Print :Entitlements:application-identifier" "$PROFILE_PLIST")"
           TEAM_ID_FROM_PLIST="$("$PB" -c "Print :Entitlements:com.apple.developer.team-identifier" "$PROFILE_PLIST")"
           GET_TASK_ALLOW="$("$PB" -c "Print :Entitlements:get-task-allow" "$PROFILE_PLIST")"
+          APNS_ENV_FROM_PLIST="$("$PB" -c "Print :Entitlements:aps-environment" "$PROFILE_PLIST" 2>/dev/null || true)"
 
           echo "Provisioning profile validation (non-secret fields):"
           echo "  UUID: ${PROFILE_UUID_FROM_PLIST}"
@@ -197,6 +198,7 @@ jobs:
           echo "  application-identifier: ${APP_ID_FROM_PLIST}"
           echo "  team-identifier: ${TEAM_ID_FROM_PLIST}"
           echo "  get-task-allow: ${GET_TASK_ALLOW}"
+          echo "  aps-environment: ${APNS_ENV_FROM_PLIST:-<missing>}"
 
           EXPECTED_APP_ID="${APPLE_TEAM_ID}.com.echotoo.app"
           if [ "$PROFILE_UUID_FROM_PLIST" != "$PROVISION_PROFILE_UUID" ]; then
@@ -217,6 +219,10 @@ jobs:
           fi
           if [ "$GET_TASK_ALLOW" != "false" ]; then
             echo "get-task-allow must be false for App Store distribution (got: ${GET_TASK_ALLOW})." >&2
+            exit 1
+          fi
+          if [ "$APNS_ENV_FROM_PLIST" != "production" ]; then
+            echo "aps-environment must be production for TestFlight/App Store distribution (got: ${APNS_ENV_FROM_PLIST:-<missing>})." >&2
             exit 1
           fi
 
