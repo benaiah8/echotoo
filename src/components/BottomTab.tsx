@@ -747,7 +747,8 @@ function BottomTab() {
             "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
           ].join(" ")}
           style={{
-            bottom: "calc(5px + var(--safe-area-bottom-layout))",
+            bottom:
+              "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))",
           }}
         >
           <div className="py-[5px] px-[5px] flex items-center justify-center gap-2">
