@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
+import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
+import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
 
 interface BottomDrawerProps {
   open: boolean;
@@ -80,6 +82,13 @@ export default function BottomDrawer({
   disableBodyScrollLock = false,
 }: BottomDrawerProps) {
   const [isMounted, setIsMounted] = useState(false);
+  const blurBackdropClickRef = useRef(false);
+  const { keyboardInsetPx } = useCreateKeyboardInset();
+  const keyboardOffsetPx = Math.round(keyboardInsetPx);
+  const resolvedMaxHeight =
+    keyboardOffsetPx > 0
+      ? `min(${maxHeight}, calc(100dvh - ${keyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
+      : maxHeight;
 
   // Mount/unmount and body scroll lock
   useEffect(() => {
@@ -129,9 +138,19 @@ export default function BottomDrawer({
           backdropFilter: "blur(var(--glass-blur))",
           WebkitBackdropFilter: "blur(var(--glass-blur))",
         }}
+        onPointerDown={(e) => {
+          if (!blurActiveEditableFirst()) return;
+          blurBackdropClickRef.current = true;
+          e.stopPropagation();
+          e.preventDefault();
+        }}
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
+          if (blurBackdropClickRef.current) {
+            blurBackdropClickRef.current = false;
+            return;
+          }
           onClose();
         }}
       />
@@ -140,14 +159,15 @@ export default function BottomDrawer({
       <div
         className={`absolute inset-x-0 rounded-t-2xl overflow-hidden ${className}`}
         style={{
-          bottom: 0, // Flush with bottom
-          maxHeight: maxHeight,
+          bottom: keyboardOffsetPx,
+          maxHeight: resolvedMaxHeight,
+          transition: "bottom 220ms ease-out, max-height 220ms ease-out",
           // With `footer` and full-height mode: fixed height so flex-1 middle works.
           // With `shrinkSheetToContent`, height comes from content (capped by maxHeight).
           ...(footer != null
             ? shrinkSheetToContent
               ? { minHeight: 0 as number }
-              : { height: maxHeight, minHeight: 0 as number }
+              : { height: resolvedMaxHeight, minHeight: 0 as number }
             : {}),
           // Apply top/left/right border on the container so the curve isn't clipped
           borderTop:
@@ -178,7 +198,7 @@ export default function BottomDrawer({
                 ? "flex min-h-0 w-full max-w-full flex-col overflow-hidden"
                 : "flex h-full min-h-0 max-h-full flex-col overflow-hidden"
             }
-            style={{ maxHeight: maxHeight }}
+            style={{ maxHeight: resolvedMaxHeight }}
           >
             {header != null ? (
               <div className="z-10 shrink-0 p-3 pb-2" style={defaultHeaderStyle}>
@@ -223,7 +243,7 @@ export default function BottomDrawer({
           /* Original: one scrollable column (header can stick). */
           <div
             className="h-full max-h-full overflow-y-auto"
-            style={{ maxHeight: maxHeight }}
+            style={{ maxHeight: resolvedMaxHeight }}
           >
             {header != null ? (
               <div

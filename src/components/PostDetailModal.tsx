@@ -18,6 +18,7 @@ import { hapticImpactLight } from "../lib/hapticsLight";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
 import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
+import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 
 /** Thumb-sized gesture: small movement arms; short drag commits */
@@ -87,6 +88,7 @@ export default function PostDetailModal() {
   const playExitAnimationRef = useRef<() => void>(() => {});
   const isExitingRef = useRef(false);
   const composerFocusedRef = useRef(false);
+  const blurBackdropClickRef = useRef(false);
   /** One scroll-to-comments per modal open when arriving from feed comment control. */
   const focusCommentsScrollDoneRef = useRef(false);
 
@@ -434,9 +436,20 @@ export default function PostDetailModal() {
             backdropFilter: `blur(${Math.round(visualT * 10)}px)`,
             WebkitBackdropFilter: `blur(${Math.round(visualT * 10)}px)`,
           }}
+          onPointerDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (isPointerDragging || isExiting) return;
+            if (!blurActiveEditableFirst()) return;
+            blurBackdropClickRef.current = true;
+            e.preventDefault();
+          }}
           onClick={(e) => {
             if (e.target !== e.currentTarget) return;
             if (isPointerDragging || isExiting) return;
+            if (blurBackdropClickRef.current) {
+              blurBackdropClickRef.current = false;
+              return;
+            }
             playExitAnimation();
           }}
           aria-hidden

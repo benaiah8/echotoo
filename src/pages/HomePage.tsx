@@ -49,6 +49,7 @@ import {
 } from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
+import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 
 const PAGE_SIZE = 6;
 
@@ -220,6 +221,10 @@ export default function HomePage() {
     setSearchMode("posts");
     setHomeSearchFocused(false);
   }, []);
+  const handleHomeUserSearchBackdropPointerDown = useCallback(() => {
+    if (blurActiveEditableFirst()) return;
+    dismissHomeUserSearch();
+  }, [dismissHomeUserSearch]);
 
   const scrollDir = useScrollDirection(HOME_SCROLL_CHROME_OPTS);
   const isHidden = scrollDir === "down";
@@ -905,7 +910,7 @@ export default function HomePage() {
               ].join(" ")}
               style={{ top: userSearchOverlayTopPx }}
               aria-hidden
-              onPointerDown={dismissHomeUserSearch}
+              onPointerDown={handleHomeUserSearchBackdropPointerDown}
             />
             <div
               className="fixed inset-x-0 bottom-0 z-[30] flex justify-center pointer-events-none"

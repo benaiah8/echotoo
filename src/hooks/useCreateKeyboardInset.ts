@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const OPEN_THRESHOLD_PX = 48;
 /** If layout viewport shrank by at least this vs peak (px), assume WebView already resized for IME. */
-const ANDROID_LAYOUT_SHRUNK_PX = 80;
+const LAYOUT_SHRUNK_PX = 80;
 
 /**
  * Keyboard inset for the create flow (px). Uses visualViewport when available,
@@ -89,26 +89,29 @@ export function useCreateKeyboardInset(): {
     }
   }, [vvInset, capInset]);
 
-  // iOS + resize:"body": layout height already shrinks; visualViewport gap is often ~0.
-  // Prefer vv; use Capacitor height as Android fallback when vv under-reports — unless
+  // Prefer vv; use Capacitor height as native fallback when vv under-reports — unless
   // innerHeight already dropped (WebView resize), then extra bottom padding would double-count.
   const platform = Capacitor.getPlatform();
   const keyboardInsetPx = (() => {
     if (vvInset > OPEN_THRESHOLD_PX) return vvInset;
 
-    if (
-      platform === "android" &&
-      capInset > OPEN_THRESHOLD_PX &&
-      vvInset < OPEN_THRESHOLD_PX &&
-      typeof window !== "undefined"
-    ) {
-      const shrunk =
-        peakInnerHeightRef.current - window.innerHeight >
-        ANDROID_LAYOUT_SHRUNK_PX;
-      if (shrunk) return Math.max(0, vvInset);
+    if (capInset > OPEN_THRESHOLD_PX && typeof window !== "undefined") {
+      const layoutShrinkPx = Math.max(
+        0,
+        peakInnerHeightRef.current - window.innerHeight
+      );
+      const shrunk = layoutShrinkPx > LAYOUT_SHRUNK_PX;
+
+      if (platform === "android" && shrunk) return Math.max(0, vvInset);
+
+      if (platform === "ios" && shrunk) {
+        return Math.max(0, vvInset, capInset - layoutShrinkPx);
+      }
     }
 
-    if (platform === "android") return Math.max(vvInset, capInset);
+    if (platform === "android" || platform === "ios") {
+      return Math.max(vvInset, capInset);
+    }
     return vvInset;
   })();
 
