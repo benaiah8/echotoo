@@ -19,6 +19,11 @@ import {
 } from "../../api/services/inviteThreads";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { postDetailPath } from "../../router/Paths";
+import { subscribeAndroidHardwareBack } from "../../lib/androidPostDetailModalBack";
+import {
+  INVITE_OVERLAY_HISTORY,
+  isPostDetailRoutePath,
+} from "../../lib/inviteOverlayHistory";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
 import { supabase } from "../../lib/supabaseClient";
@@ -116,6 +121,8 @@ export default function GroupInviteThreadOverlay({
   windowMs,
 }: Props) {
   const location = useLocation();
+  const pathname = location.pathname;
+  const engageInviteBack = open && !isPostDetailRoutePath(pathname);
   const navigate = useNavigate();
   const { keyboardInsetPx } = useCreateKeyboardInset();
 
@@ -137,6 +144,15 @@ export default function GroupInviteThreadOverlay({
     "pill" | "multiline"
   >("pill");
   const [participantsOpen, setParticipantsOpen] = useState(false);
+
+  const skipPopstateRef = useRef(false);
+  const pushedGroupRef = useRef(false);
+  const pushedParticipantsRef = useRef(false);
+  const participantsOpenRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  const prevParticipantsOpenForHist = useRef(false);
+  participantsOpenRef.current = participantsOpen;
+  onCloseRef.current = onClose;
 
   const bottomChromeRef = useRef<HTMLDivElement>(null);
   const draftTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -178,13 +194,133 @@ export default function GroupInviteThreadOverlay({
     syncAppSafeAreaBottom();
     const scrollbarWidth =
       window.innerWidth - document.documentElement.clientWidth;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
     document.body.style.overflow = "hidden";
     document.body.style.paddingRight = `${scrollbarWidth}px`;
     return () => {
-      document.body.style.overflow = "";
-      document.body.style.paddingRight = "";
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
     };
   }, [open]);
+
+  /** Synthetic history: group chat layer */
+  useEffect(() => {
+    if (!open || !engageInviteBack) return;
+    if (pushedGroupRef.current) return;
+    window.history.pushState(
+      { [INVITE_OVERLAY_HISTORY.groupChat]: true } as Record<string, boolean>,
+      "",
+      window.location.href
+    );
+    pushedGroupRef.current = true;
+  }, [open, engageInviteBack]);
+
+  /** Synthetic history: participants sheet above chat */
+  useEffect(() => {
+    if (!participantsOpen || !open || !engageInviteBack) return;
+    if (pushedParticipantsRef.current) return;
+    window.history.pushState(
+      {
+        [INVITE_OVERLAY_HISTORY.groupParticipants]: true,
+      } as Record<string, boolean>,
+      "",
+      window.location.href
+    );
+    pushedParticipantsRef.current = true;
+  }, [participantsOpen, open, engageInviteBack]);
+
+  /** Browser Back: participants first, then whole overlay */
+  useEffect(() => {
+    if (!open || !engageInviteBack) return;
+    const onPopState = () => {
+      if (skipPopstateRef.current) {
+        skipPopstateRef.current = false;
+        return;
+      }
+      if (participantsOpenRef.current) {
+        setParticipantsOpen(false);
+        pushedParticipantsRef.current = false;
+        return;
+      }
+      onCloseRef.current();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [open, engageInviteBack]);
+
+  /** Android Back + Escape: same ordering as popstate */
+  useEffect(() => {
+    if (!open || !engageInviteBack) return;
+    const dismissParticipantsIfNeeded = () => {
+      if (!participantsOpenRef.current) return false;
+      setParticipantsOpen(false);
+      if (pushedParticipantsRef.current) {
+        const st = window.history.state as Record<string, boolean> | null;
+        if (st && st[INVITE_OVERLAY_HISTORY.groupParticipants] === true) {
+          skipPopstateRef.current = true;
+          window.history.back();
+        }
+        pushedParticipantsRef.current = false;
+      }
+      return true;
+    };
+    const unsub = subscribeAndroidHardwareBack(() => {
+      if (dismissParticipantsIfNeeded()) return;
+      onCloseRef.current();
+    });
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (dismissParticipantsIfNeeded()) return;
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      unsub();
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, engageInviteBack]);
+
+  /** Backdrop / UI closed participants only — drop synthetic participants entry */
+  useEffect(() => {
+    const was = prevParticipantsOpenForHist.current;
+    prevParticipantsOpenForHist.current = participantsOpen;
+    if (!open) return;
+    if (!was || participantsOpen || !pushedParticipantsRef.current) return;
+    const st = window.history.state as Record<string, boolean> | null;
+    if (st && st[INVITE_OVERLAY_HISTORY.groupParticipants] === true) {
+      skipPopstateRef.current = true;
+      window.history.back();
+    }
+    pushedParticipantsRef.current = false;
+  }, [participantsOpen, open]);
+
+  /** Post detail route active: strip synthetic markers without relying on overlay unmount */
+  useEffect(() => {
+    if (engageInviteBack) return;
+    if (!pushedGroupRef.current && !pushedParticipantsRef.current) return;
+    const st = window.history.state as Record<string, boolean> | null;
+    if (st && st[INVITE_OVERLAY_HISTORY.groupParticipants] === true) {
+      skipPopstateRef.current = true;
+      window.history.back();
+      queueMicrotask(() => {
+        const st2 = window.history.state as Record<string, boolean> | null;
+        if (st2 && st2[INVITE_OVERLAY_HISTORY.groupChat] === true) {
+          skipPopstateRef.current = true;
+          window.history.back();
+        }
+        pushedGroupRef.current = false;
+        pushedParticipantsRef.current = false;
+      });
+      return;
+    }
+    if (st && st[INVITE_OVERLAY_HISTORY.groupChat] === true) {
+      skipPopstateRef.current = true;
+      window.history.back();
+    }
+    pushedGroupRef.current = false;
+    pushedParticipantsRef.current = false;
+  }, [engageInviteBack]);
 
   useEffect(() => {
     if (!open) {

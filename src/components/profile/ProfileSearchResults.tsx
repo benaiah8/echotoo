@@ -43,7 +43,13 @@ const ProfileSearchResultItem = React.memo(
 
     return (
       <div
-        className="flex items-center gap-3 p-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer select-none"
+        className={[
+          "flex items-center gap-3 p-2 rounded-xl cursor-pointer select-none",
+          "border border-[var(--bottom-tab-border)]",
+          "bg-[color-mix(in_oklab,var(--glass-bg)_80%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
+          "shadow-[0_1px_6px_rgba(0,0,0,0.10),0_0_0_1px_color-mix(in_oklab,var(--text)_6%,transparent)]",
+          "app-dark:shadow-[0_2px_10px_rgba(0,0,0,0.34),0_0_0_1px_color-mix(in_oklab,var(--text)_10%,transparent)]",
+        ].join(" ")}
         onMouseDown={(e) => {
           startY.current = e.clientY;
           moved.current = false;
@@ -128,10 +134,13 @@ export default function ProfileSearchResults({
   query,
   viewerId,
   onClose,
+  panelVariant = "default",
 }: {
   query: string;
   viewerId?: string | null;
   onClose?: () => void;
+  /** `"glass"`: frosted shell for embedded contexts (e.g. Home). Default matches profile overlay. */
+  panelVariant?: "default" | "glass";
 }) {
   const [rows, setRows] = useState<ProfileSearchRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -236,11 +245,30 @@ export default function ProfileSearchResults({
     return () => window.removeEventListener("follow:changed", handler);
   }, []);
 
+  const panelShellClass =
+    panelVariant === "glass"
+      ? [
+          "rounded-2xl border border-[var(--bottom-tab-border)] overflow-hidden",
+          "bg-[color-mix(in_oklab,var(--glass-bg)_84%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
+          "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
+        ].join(" ")
+      : "rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl overflow-hidden";
+
+  const headerBorderClass =
+    panelVariant === "glass"
+      ? "border-b border-[var(--bottom-tab-border)]"
+      : "border-b border-[var(--border)]";
+
   return (
     <div className="mx-3">
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl overflow-hidden">
+      <div className={panelShellClass}>
         {/* header */}
-        <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)]">
+        <div
+          className={[
+            "flex items-center justify-between px-3 py-2",
+            headerBorderClass,
+          ].join(" ")}
+        >
           <div className="text-xs text-[var(--text)]/70">
             Results for “{query}”
           </div>

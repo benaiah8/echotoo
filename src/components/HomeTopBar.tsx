@@ -6,9 +6,14 @@ import {
 } from "react-icons/pi";
 import Logo from "./ui/Logo";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
-import HomeViewToggleSection from "../sections/home/HomeViewToggleSection";
 
 const TOP_BAR_MAX_WIDTH = 640;
+
+/** Chrome slide: slower hide (slide off), quicker show (settle in). */
+const CHROME_HIDE_MS = 620;
+const CHROME_SHOW_MS = 340;
+const CHROME_HIDE_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
+const CHROME_SHOW_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 /**
  * Solid chip pills for readability over feed imagery.
@@ -35,6 +40,8 @@ const chipButtonClass = (isSelected: boolean) =>
   ].join(" ");
 
 export interface HomeTopBarProps {
+  /** Root wrapper ref for outside-press detection handled by parent. */
+  containerRef?: React.RefObject<HTMLDivElement | null>;
   /** When true, hide the top bar (scroll down) */
   isHidden: boolean;
   /** When true (scrollY &lt; 5), main bar is full-width flush; when false, floating pill */
@@ -43,6 +50,11 @@ export interface HomeTopBarProps {
   onLogoClick: () => void;
   onSearch: (q: string) => void;
   search: string;
+  searchMode: "posts" | "users";
+  onSearchModeChange: (mode: "posts" | "users") => void;
+  /** When true, show Posts / Users toggle under the search field. */
+  showSearchKindToggle: boolean;
+  searchFieldPlaceholder: string;
   hasActiveFilters: boolean;
   filtersOpen: boolean;
   selectedTags: string[];
@@ -56,15 +68,30 @@ export interface HomeTopBarProps {
   onSearchFocusChange?: (focused: boolean) => void;
   /** Inline notice below quick chips when Today filter matches nothing on the current rail slice (client-side). */
   noTodayInlineBannerVisible?: boolean;
+  /** Preflight before activating Today (inactive chip only). Active Today still uses onFilterChange to remove. */
+  onTodayChipClick?: () => void;
+  /** Dim/disable Today while preflight fetch runs */
+  todayPreflightPending?: boolean;
+  /** Inline notice below quick chips when Friends preflight finds no matches (client-side). */
+  noFriendsInlineBannerVisible?: boolean;
+  /** Preflight before activating Friends (inactive chip only). Active Friends still uses onFilterChange to remove. */
+  onFriendsChipClick?: () => void;
+  /** Dim/disable Friends while preflight fetch runs */
+  friendsPreflightPending?: boolean;
 }
 
 export default function HomeTopBar({
+  containerRef,
   isHidden,
   atTop = false,
   onToggleFilters,
   onLogoClick,
   onSearch,
   search,
+  searchMode,
+  onSearchModeChange,
+  showSearchKindToggle,
+  searchFieldPlaceholder,
   hasActiveFilters,
   filtersOpen,
   selectedTags,
@@ -76,21 +103,52 @@ export default function HomeTopBar({
   onFilterChange,
   onSearchFocusChange,
   noTodayInlineBannerVisible = false,
+  onTodayChipClick,
+  todayPreflightPending = false,
+  noFriendsInlineBannerVisible = false,
+  onFriendsChipClick,
+  friendsPreflightPending = false,
 }: HomeTopBarProps) {
-  const toggleFilterChip = (value: string) => {
-    const newSelected = selectedFilters.includes(value)
-      ? selectedFilters.filter((v) => v !== value)
-      : [...selectedFilters, value];
-    onFilterChange(newSelected);
+  const handleTodayChipClick = () => {
+    if (selectedFilters.includes("today")) {
+      onFilterChange(selectedFilters.filter((v) => v !== "today"));
+      return;
+    }
+    if (todayPreflightPending) return;
+    onTodayChipClick?.();
+  };
+
+  /** Visual only: match banner during empty preflight without putting "today" in selectedFilters. */
+  const todayIsVisuallyActive =
+    selectedFilters.includes("today") || noTodayInlineBannerVisible;
+
+  const friendsFilterActive = selectedFilters.includes("friends");
+  /** Visual only: match banner during empty Friends preflight without putting "friends" in selectedFilters. */
+  const friendsIsVisuallyActive =
+    friendsFilterActive || noFriendsInlineBannerVisible;
+
+  const handleFriendsFilterClick = () => {
+    if (friendsFilterActive) {
+      onFilterChange(selectedFilters.filter((f) => f !== "friends"));
+      return;
+    }
+    if (friendsPreflightPending) return;
+    onFriendsChipClick?.();
   };
 
   const hidden = isHidden;
-  const transitionClass = hidden
-    ? "duration-75 ease-out"
-    : "duration-300 ease-[cubic-bezier(0.33,1,0.68,1)]";
+  /** Duration/easing follow `hidden` so hiding uses a longer window than showing. */
+  const chromeMs = hidden ? CHROME_HIDE_MS : CHROME_SHOW_MS;
+  const chromeEase = hidden ? CHROME_HIDE_EASING : CHROME_SHOW_EASING;
   const transformClass = hidden
-    ? "-translate-y-full scale-95 origin-top"
+    ? "-translate-y-[110%] scale-[0.98] origin-top"
     : "translate-y-0 scale-100 origin-top";
+
+  const chromeTransformTransition = {
+    transitionProperty: "transform" as const,
+    transitionDuration: `${chromeMs}ms`,
+    transitionTimingFunction: chromeEase,
+  };
 
   return (
     <>
@@ -98,7 +156,6 @@ export default function HomeTopBar({
       <div
         className={[
           "fixed left-0 right-0 top-0 z-[30] pointer-events-none",
-          `transition-all ${transitionClass}`,
           transformClass,
         ].join(" ")}
         style={{
@@ -107,25 +164,24 @@ export default function HomeTopBar({
           height: "calc(66px + var(--safe-area-top-layout))",
           width: "100%",
           background: "var(--gradient-from-top)",
+          ...chromeTransformTransition,
         }}
       />
 
       {/* Wrapper: floating top bar + quick chips + filter popout */}
       <div
+        ref={containerRef}
         className={[
           "fixed left-0 right-0 top-0 z-[31] pointer-events-none flex flex-col items-center",
-          `transition-all ${transitionClass}`,
           transformClass,
         ].join(" ")}
         style={{
           paddingTop: atTop
             ? "var(--safe-area-top-layout)"
             : "calc(8px + var(--safe-area-top-layout))",
-          transitionProperty: hidden ? undefined : "transform, padding-top",
-          transitionDuration: hidden ? undefined : "300ms",
-          transitionTimingFunction: hidden
-            ? undefined
-            : "cubic-bezier(0.33, 1, 0.68, 1)",
+          transitionProperty: "transform, padding-top",
+          transitionDuration: `${chromeMs}ms`,
+          transitionTimingFunction: chromeEase,
         }}
       >
         {/* Main bar: at top = full-width flush; scrolled = pill (80%, rounded) */}
@@ -161,9 +217,10 @@ export default function HomeTopBar({
                 <PiMagnifyingGlass size={18} className="shrink-0" />
                 <input
                   type="text"
+                  data-home-search-input=""
                   enterKeyHint="search"
                   autoComplete="off"
-                  placeholder="Where To?"
+                  placeholder={searchFieldPlaceholder}
                   className={`w-full pl-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0 ${
                     search.trim() ? "pr-[2.125rem]" : "pr-2"
                   }`}
@@ -213,6 +270,44 @@ export default function HomeTopBar({
                 )}
               </button>
             </div>
+            {showSearchKindToggle ? (
+              <div className="flex justify-center px-[9px] pb-[6px] pt-0.5">
+                <div
+                  className="inline-flex items-center rounded-full border border-[var(--border)] p-[2px] gap-0.5 bg-[color-mix(in_oklab,var(--surface)_35%,transparent)]"
+                  role="group"
+                  aria-label="Search type"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={searchMode === "posts"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onSearchModeChange("posts")}
+                    className={[
+                      "rounded-full px-2.5 py-0.5 text-[9px] font-medium leading-none transition-colors",
+                      searchMode === "posts"
+                        ? "bg-[var(--brand)] text-[var(--brand-ink)] shadow-sm"
+                        : "text-[var(--text)]/65 hover:text-[var(--text)]",
+                    ].join(" ")}
+                  >
+                    Posts
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={searchMode === "users"}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onSearchModeChange("users")}
+                    className={[
+                      "rounded-full px-2.5 py-0.5 text-[9px] font-medium leading-none transition-colors",
+                      searchMode === "users"
+                        ? "bg-[var(--brand)] text-[var(--brand-ink)] shadow-sm"
+                        : "text-[var(--text)]/65 hover:text-[var(--text)]",
+                    ].join(" ")}
+                  >
+                    Users
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -236,8 +331,15 @@ export default function HomeTopBar({
             <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
               <button
                 type="button"
-                onClick={() => toggleFilterChip("today")}
-                className={chipButtonClass(selectedFilters.includes("today"))}
+                onClick={handleTodayChipClick}
+                disabled={todayPreflightPending}
+                aria-busy={todayPreflightPending || undefined}
+                className={[
+                  chipButtonClass(todayIsVisuallyActive),
+                  todayPreflightPending
+                    ? "opacity-60 pointer-events-none"
+                    : "",
+                ].join(" ")}
               >
                 Today
               </button>
@@ -276,6 +378,20 @@ export default function HomeTopBar({
               Nothing happening today
             </div>
           ) : null}
+          {noFriendsInlineBannerVisible ? (
+            <div
+              className={[
+                "w-full rounded-xl px-3 py-1.5",
+                "bg-[var(--brand)] text-[var(--brand-ink)]",
+                "text-[10px] font-medium leading-snug text-center tracking-tight",
+                "shadow-[0_2px_10px_rgba(0,0,0,0.18)]",
+                "border border-[color-mix(in_oklab,var(--brand-ink)_18%,transparent)]",
+              ].join(" ")}
+              role="status"
+            >
+              No friends posts yet
+            </div>
+          ) : null}
         </div>
 
         {/* Filter popout: appears below quick chips */}
@@ -283,27 +399,49 @@ export default function HomeTopBar({
         <div
           className={[
             "w-[80%] pointer-events-auto overflow-hidden transition-all duration-300",
-            "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+            "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
             "border border-[var(--bottom-tab-border)]",
+            "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
             "rounded-2xl",
-            filtersOpen ? "max-h-[240px] opacity-100" : "max-h-0 opacity-0",
+            filtersOpen
+              ? "max-h-[240px] opacity-100 flex flex-col"
+              : "max-h-0 opacity-0",
           ].join(" ")}
           style={{
             maxWidth: TOP_BAR_MAX_WIDTH,
             marginTop: filtersOpen ? 8 : 0,
           }}
         >
-          <div className="p-3">
-            <HomeCategorySection
-              selected={selectedTags}
-              onTagsChange={onTagsChange}
-              onClear={onClearFilters}
-            />
-            <div className="pt-2">
-              <HomeViewToggleSection
-                viewMode={viewMode}
-                setViewMode={setViewMode}
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <div>
+              <p className="mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65">
+                Popular tags
+              </p>
+              <HomeCategorySection
+                selected={selectedTags}
+                onTagsChange={onTagsChange}
+                onClear={onClearFilters}
               />
+            </div>
+            <div>
+              <p className="mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65">
+                Social
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleFriendsFilterClick}
+                  disabled={friendsPreflightPending}
+                  aria-busy={friendsPreflightPending || undefined}
+                  className={`py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap border ${
+                    friendsIsVisuallyActive
+                      ? "bg-[var(--brand)] text-[var(--brand-ink)] border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)] shadow-[var(--glass-active-shadow)]"
+                      : "text-[var(--text)] bg-transparent border-white/25 hover:bg-[rgba(255,255,255,0.08)]"
+                  } ${friendsPreflightPending ? "opacity-60 pointer-events-none" : ""}`}
+                >
+                  Friends
+                </button>
+              </div>
             </div>
           </div>
         </div>

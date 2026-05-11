@@ -14,7 +14,13 @@ import { supabase } from "../../lib/supabaseClient";
 import { clearCachedNotificationCount } from "../../lib/notificationCountCache";
 import NotificationItem from "./NotificationItem";
 import NotificationPermissionBanner from "./NotificationPermissionBanner";
-import { PiEnvelopeSimple, PiHeart } from "react-icons/pi";
+import {
+  PiEnvelopeSimple,
+  PiHeart,
+  PiMegaphone,
+  PiUser,
+  PiUsers,
+} from "react-icons/pi";
 import { toast } from "react-hot-toast";
 import {
   getBatchFollowStatuses,
@@ -52,6 +58,18 @@ function sortInviteNotificationsByLatestActivity(
     if (d !== 0) return d;
     return (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0);
   });
+}
+
+/** Invites tab quick filter: matches additional_data.thread_kind only. */
+type InviteSubFilterKind = "personal" | "group" | "announcement";
+
+function inviteRowMatchesSubFilter(
+  n: NotificationWithActor,
+  filter: InviteSubFilterKind
+): boolean {
+  if (n.type !== "invite") return false;
+  const k = n.additional_data?.thread_kind;
+  return k === filter;
 }
 
 function notificationFromRealtimeRow(
@@ -151,6 +169,11 @@ export default function NotificationList({
   const [listView, setListView] = useState<"invites" | "activity">("invites");
   const listViewRef = useRef(listView);
   listViewRef.current = listView;
+
+  /** Invites tab: client-side row filter only (null = all loaded rows). */
+  const [inviteSubFilter, setInviteSubFilter] = useState<
+    InviteSubFilterKind | null
+  >(null);
 
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -714,6 +737,19 @@ export default function NotificationList({
     return false;
   }).length;
 
+  const visibleNotifications =
+    listView === "invites" && inviteSubFilter != null
+      ? notifications.filter((n) =>
+          inviteRowMatchesSubFilter(n, inviteSubFilter)
+        )
+      : notifications;
+
+  const showInviteFilteredEmpty =
+    listView === "invites" &&
+    inviteSubFilter != null &&
+    notifications.length > 0 &&
+    visibleNotifications.length === 0;
+
   const inviteUnreadBadge = tabBadgeBreakdown.invite;
   const activityUnreadBadge = tabBadgeBreakdown.activity;
 
@@ -948,18 +984,112 @@ export default function NotificationList({
           <NotificationPermissionBanner />
         </div>
 
-        {unreadInView > 0 && (
-          <div className="flex justify-between items-center py-2 border-b border-[var(--border)]/60 mb-1">
-            <span className="text-xs text-[var(--text)]/65">
+        {listView === "activity" && unreadInView > 0 && (
+          <div className="mb-1 flex items-center justify-between gap-2 border-b border-[var(--border)]/60 py-2">
+            <span className="min-w-0 shrink text-xs text-[var(--text)]/65">
               {unreadInView} unread
             </span>
             <button
               type="button"
               onClick={handleClearUnreadInView}
-              className="text-xs text-[var(--text)]/50 hover:text-[var(--text)]/75 underline-offset-2 hover:underline"
+              className="shrink-0 text-xs text-[var(--text)]/50 underline-offset-2 hover:text-[var(--text)]/75 hover:underline"
             >
               Clear unread
             </button>
+          </div>
+        )}
+
+        {listView === "invites" && (
+          <div
+            className={[
+              "mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-[var(--border)]/60 py-2 sm:flex-nowrap sm:gap-x-3",
+              unreadInView > 0 ? "justify-between" : "justify-end",
+            ].join(" ")}
+          >
+            {unreadInView > 0 ? (
+              <span className="min-w-0 shrink-0 text-[11px] leading-tight text-[var(--text)]/65 sm:text-xs">
+                {unreadInView} unread
+              </span>
+            ) : null}
+            <div
+              className={[
+                "flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-2",
+                unreadInView > 0 ? "ml-auto sm:ml-0" : "",
+              ].join(" ")}
+            >
+              {unreadInView > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleClearUnreadInView}
+                  className="shrink-0 whitespace-nowrap pr-0.5 text-[11px] leading-tight text-[var(--text)]/50 underline-offset-2 hover:text-[var(--text)]/75 hover:underline sm:text-xs"
+                >
+                  Clear unread
+                </button>
+              ) : null}
+              <div
+                className="flex items-center gap-1 sm:gap-1.5"
+                role="toolbar"
+                aria-label="Filter invites by type"
+              >
+                <button
+                  type="button"
+                  onClick={() =>
+                    setInviteSubFilter((prev) =>
+                      prev === "personal" ? null : "personal"
+                    )
+                  }
+                  aria-pressed={inviteSubFilter === "personal"}
+                  aria-label="Show personal invites only"
+                  className={[
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-[color,background-color,border-color,box-shadow] outline-none",
+                    "focus-visible:ring-2 focus-visible:ring-amber-400/55 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
+                    inviteSubFilter === "personal"
+                      ? "border-2 border-white/95 bg-white text-zinc-950 shadow-[0_1px_6px_rgba(0,0,0,0.35)] ring-2 ring-amber-400/55 app-light:border-neutral-950 app-light:bg-neutral-950 app-light:text-white app-light:shadow-[0_1px_6px_rgba(0,0,0,0.2)] app-light:ring-amber-500/45"
+                      : "border-amber-500/45 bg-amber-500/[0.12] text-amber-200/85 hover:border-amber-400/60 hover:bg-amber-500/[0.18] hover:text-amber-50 app-light:border-amber-600/40 app-light:bg-amber-400/14 app-light:text-amber-900/80 app-light:hover:border-amber-600/55 app-light:hover:bg-amber-400/22 app-light:hover:text-amber-950",
+                  ].join(" ")}
+                >
+                  <PiUser size={11} aria-hidden className="opacity-95" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setInviteSubFilter((prev) =>
+                      prev === "group" ? null : "group"
+                    )
+                  }
+                  aria-pressed={inviteSubFilter === "group"}
+                  aria-label="Show group invites only"
+                  className={[
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-[color,background-color,border-color,box-shadow] outline-none",
+                    "focus-visible:ring-2 focus-visible:ring-amber-400/55 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
+                    inviteSubFilter === "group"
+                      ? "border-2 border-white/95 bg-white text-zinc-950 shadow-[0_1px_6px_rgba(0,0,0,0.35)] ring-2 ring-amber-400/55 app-light:border-neutral-950 app-light:bg-neutral-950 app-light:text-white app-light:shadow-[0_1px_6px_rgba(0,0,0,0.2)] app-light:ring-amber-500/45"
+                      : "border-amber-500/45 bg-amber-500/[0.12] text-amber-200/85 hover:border-amber-400/60 hover:bg-amber-500/[0.18] hover:text-amber-50 app-light:border-amber-600/40 app-light:bg-amber-400/14 app-light:text-amber-900/80 app-light:hover:border-amber-600/55 app-light:hover:bg-amber-400/22 app-light:hover:text-amber-950",
+                  ].join(" ")}
+                >
+                  <PiUsers size={11} aria-hidden className="opacity-95" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setInviteSubFilter((prev) =>
+                      prev === "announcement" ? null : "announcement"
+                    )
+                  }
+                  aria-pressed={inviteSubFilter === "announcement"}
+                  aria-label="Show Echo invites only"
+                  className={[
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-[color,background-color,border-color,box-shadow] outline-none",
+                    "focus-visible:ring-2 focus-visible:ring-amber-400/55 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
+                    inviteSubFilter === "announcement"
+                      ? "border-2 border-white/95 bg-white text-zinc-950 shadow-[0_1px_6px_rgba(0,0,0,0.35)] ring-2 ring-amber-400/55 app-light:border-neutral-950 app-light:bg-neutral-950 app-light:text-white app-light:shadow-[0_1px_6px_rgba(0,0,0,0.2)] app-light:ring-amber-500/45"
+                      : "border-amber-500/45 bg-amber-500/[0.12] text-amber-200/85 hover:border-amber-400/60 hover:bg-amber-500/[0.18] hover:text-amber-50 app-light:border-amber-600/40 app-light:bg-amber-400/14 app-light:text-amber-900/80 app-light:hover:border-amber-600/55 app-light:hover:bg-amber-400/22 app-light:hover:text-amber-950",
+                  ].join(" ")}
+                >
+                  <PiMegaphone size={11} aria-hidden className="opacity-95" />
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -968,30 +1098,32 @@ export default function NotificationList({
             listView === "invites" ? "flex flex-col gap-2 py-1" : "py-1"
           }
         >
-          {notifications.map((notification) => {
-            const isActivity = listView === "activity";
-            if (isActivity) {
-              return (
-                <div
-                  key={notification.id}
-                  className="border-b border-[var(--border)]/50 last:border-b-0"
-                >
-                  <NotificationItem
-                    notification={notification}
-                    onMarkAsRead={handleMarkAsRead}
-                    showGoToPostButton
-                    activityCalm
-                    batchedFollowStatus={
-                      notification.type === "follow" &&
-                      notification.additional_data?.follow_request_status
-                        ? batchedFollowStatuses[notification.id]
-                        : undefined
-                    }
-                  />
-                </div>
-              );
-            }
-            return (
+          {showInviteFilteredEmpty ? (
+            <p className="py-6 text-center text-sm text-[var(--text)]/55">
+              No matching invites.
+            </p>
+          ) : listView === "activity" ? (
+            visibleNotifications.map((notification) => (
+              <div
+                key={notification.id}
+                className="border-b border-[var(--border)]/50 last:border-b-0"
+              >
+                <NotificationItem
+                  notification={notification}
+                  onMarkAsRead={handleMarkAsRead}
+                  showGoToPostButton
+                  activityCalm
+                  batchedFollowStatus={
+                    notification.type === "follow" &&
+                    notification.additional_data?.follow_request_status
+                      ? batchedFollowStatuses[notification.id]
+                      : undefined
+                  }
+                />
+              </div>
+            ))
+          ) : (
+            visibleNotifications.map((notification) => (
               <div
                 key={notification.id}
                 ref={(el) => {
@@ -1008,12 +1140,12 @@ export default function NotificationList({
                     notification.type === "follow" &&
                     notification.additional_data?.follow_request_status
                       ? batchedFollowStatuses[notification.id]
-                        : undefined
+                      : undefined
                   }
                 />
               </div>
-            );
-          })}
+            ))
+          )}
         </div>
 
         {hasMore && (

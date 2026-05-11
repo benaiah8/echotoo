@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -7,9 +8,12 @@ import React, {
 } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { useLocation } from "react-router-dom";
-import useScrollDirection from "../hooks/useScrollDirection";
+import useScrollDirection, {
+  type UseScrollDirectionOptions,
+} from "../hooks/useScrollDirection";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import HomeTopBar from "../components/HomeTopBar";
+import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import HomeHangoutSection from "../sections/home/HomeHangoutSection";
 import HomePostsSection from "../sections/home/HomePostsSection";
 import {
@@ -31,7 +35,6 @@ import {
   applyFiltersWithFallback,
   mixHangoutsAndExperiences,
   type FilterType,
-  type FilteredItemsResult,
 } from "../lib/horizontalRailFilters";
 import { filterRailsItems } from "../lib/feedExpiryFilters";
 import { preloadImages } from "../lib/imageOptimization";
@@ -49,8 +52,21 @@ import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 
 const PAGE_SIZE = 6;
 
-/** After Today-empty rail check: show inline banner then remove Today (client-side rail slice only). */
+/** After Today-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_TODAY_BANNER_DISMISS_MS = 2600;
+/** After Friends-empty preflight: same dismiss cadence as Today. */
+const NO_FRIENDS_BANNER_DISMISS_MS = NO_TODAY_BANNER_DISMISS_MS;
+/** Bounded fetch size aligned with top rail first load (~visible+buffer). */
+const TODAY_PREFLIGHT_LOAD_LIMIT = 6;
+
+/** Cumulative scroll intent for Home chrome (stricter than default `useScrollDirection`). */
+const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
+  hideAfterDownPx: 80,
+  showAfterUpPx: 18,
+  minScrollYToHide: 100,
+  noisePx: 2,
+  maxDeltaPerEvent: 22,
+};
 
 // Feature flag: Enable optimized PostgreSQL function
 // Set to false to use the original getPublicFeed function
@@ -72,9 +88,6 @@ export default function HomePage() {
   // Stops background fetches when Home tab is display:none (e.g. on Notifications)
   const isHomeTabActive = useTabActive("home");
   const isHomeVisible = isHomeTabActive;
-
-  const scrollDir = useScrollDirection();
-  const isHidden = scrollDir === "down";
 
   // At top: main bar is full-width flush; scrolled: pill shape. Hysteresis prevents flicker at boundary.
   const [isAtTop, setIsAtTop] = useState(true);
@@ -102,27 +115,16 @@ export default function HomePage() {
 
   // filters
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"posts" | "users">("posts");
+  const [debouncedUserSearchQuery, setDebouncedUserSearchQuery] =
+    useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const homeTopBarRef = useRef<HTMLDivElement>(null);
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
   /** While search is focused (keyboard), keep top chrome pinned — scroll/IME must not slide it away. */
   const [homeSearchFocused, setHomeSearchFocused] = useState(false);
-
-  const pinHomeTopBar =
-    homeSearchFocused || (filtersOpen && forceRevealHeader);
-  const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
-  /** Bar width/pill shape follows scroll only. Do not OR `homeSearchFocused` — that forced full-width on focus and broke pill + safe-area on native keyboards. Visibility while typing uses `pinHomeTopBar` above. */
-  const effectiveHomeAtTop = isAtTop;
-
-  useEffect(() => {
-    if (effectiveHomeTopHidden && !forceRevealHeader) setFiltersOpen(false);
-  }, [effectiveHomeTopHidden, forceRevealHeader]);
-
-  useEffect(() => {
-    if (!isHomeTabActive) return;
-    dispatchBottomTabPeek("home", effectiveHomeTopHidden);
-  }, [effectiveHomeTopHidden, isHomeTabActive]);
 
   // [REFACTOR] Removed items/loading state - ProgressiveFeed is now the single source of truth
   // This eliminates race conditions between HomePage's SWR and ProgressiveFeed's loading
@@ -145,79 +147,101 @@ export default function HomePage() {
   // Used to show empty card and visual distinction for filtered items
   const railFilteredCountRef = useRef<number | undefined>(undefined);
 
-  /** Inline banner when Today matches nothing on the current rail fetch (not a full DB guarantee). */
+  /** Inline banner when Today preflight finds zero matches (client-side slice; not DB-wide). */
   const [noTodayInlineBannerVisible, setNoTodayInlineBannerVisible] =
     useState(false);
   const noTodayBannerTimerRef = useRef<number | null>(null);
+  const todayPreflightInFlightRef = useRef(false);
+  const [todayPreflightPending, setTodayPreflightPending] = useState(false);
+  const hadTodayInFiltersRef = useRef(false);
 
-  /** User just turned on Today — first rail page decides banner + delayed auto-deselect (client-side rail only). */
-  const pendingTodayCheckRef = useRef(false);
-  const selectedFiltersRef = useRef<string[]>(selectedFilters);
+  /** Inline banner when Friends preflight finds zero matches (client-side slice; not DB-wide). */
+  const [noFriendsInlineBannerVisible, setNoFriendsInlineBannerVisible] =
+    useState(false);
+  const noFriendsBannerTimerRef = useRef<number | null>(null);
+  const friendsPreflightInFlightRef = useRef(false);
+  const [friendsPreflightPending, setFriendsPreflightPending] = useState(false);
+  const hadFriendsInFiltersRef = useRef(false);
 
-  useEffect(() => {
-    selectedFiltersRef.current = selectedFilters;
-  }, [selectedFilters]);
-
-  /** Chips only: arm pending synchronously on off→on Today before paint/effects so rail cache can bypass. */
-  const handleHomeFilterChange = useCallback((next: string[]) => {
-    setSelectedFilters((prev) => {
-      if (!prev.includes("today") && next.includes("today")) {
-        pendingTodayCheckRef.current = true;
-      }
-      return next;
-    });
-  }, []);
-
-  useEffect(() => {
-    const hasToday = selectedFilters.includes("today");
-    if (!hasToday) {
-      pendingTodayCheckRef.current = false;
-      setNoTodayInlineBannerVisible(false);
-      if (noTodayBannerTimerRef.current !== null) {
-        clearTimeout(noTodayBannerTimerRef.current);
-        noTodayBannerTimerRef.current = null;
-      }
-    }
-  }, [selectedFilters]);
-
-  useEffect(() => {
-    return () => {
-      if (noTodayBannerTimerRef.current !== null) {
-        clearTimeout(noTodayBannerTimerRef.current);
-      }
-    };
-  }, []);
-
-  /**
-   * After rails apply filters: if Today was just enabled and this batch matched nothing, show inline banner
-   * then remove Today after a delay. Client-side rail slice only — see horizontalRailFilters.
-   */
-  const maybeResolvePendingTodayCheck = useCallback(
-    (filteredCount: number, offset: number) => {
-      if (offset !== 0) return;
-      if (!pendingTodayCheckRef.current) return;
-      if (!selectedFiltersRef.current.includes("today")) {
-        pendingTodayCheckRef.current = false;
-        return;
-      }
-      if (filteredCount > 0) {
-        pendingTodayCheckRef.current = false;
-        return;
-      }
-      pendingTodayCheckRef.current = false;
-      if (noTodayBannerTimerRef.current !== null) {
-        clearTimeout(noTodayBannerTimerRef.current);
-        noTodayBannerTimerRef.current = null;
-      }
-      setNoTodayInlineBannerVisible(true);
-      noTodayBannerTimerRef.current = window.setTimeout(() => {
-        noTodayBannerTimerRef.current = null;
-        setNoTodayInlineBannerVisible(false);
-        setSelectedFilters((prev) => prev.filter((f) => f !== "today"));
-      }, NO_TODAY_BANNER_DISMISS_MS);
-    },
-    []
+  /** Post/hangout/experience feed `q` only in posts mode; never send home search text as post `q` in users mode. */
+  const feedSearchQ = useMemo(
+    () => (searchMode === "posts" ? search || undefined : undefined),
+    [searchMode, search]
   );
+
+  const userSearchOverlayOpen =
+    searchMode === "users" &&
+    (homeSearchFocused || search.trim().length > 0);
+
+  const [userSearchOverlayTopPx, setUserSearchOverlayTopPx] = useState(140);
+
+  useEffect(() => {
+    if (searchMode !== "users") {
+      setDebouncedUserSearchQuery("");
+      return;
+    }
+    const id = window.setTimeout(() => {
+      setDebouncedUserSearchQuery(search);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [search, searchMode]);
+
+  useLayoutEffect(() => {
+    if (!userSearchOverlayOpen) return;
+    const root = homeTopBarRef.current;
+    if (!root) return;
+    const update = () => {
+      const bottom = root.getBoundingClientRect().bottom;
+      setUserSearchOverlayTopPx(Math.round(bottom + 4));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(root);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [
+    userSearchOverlayOpen,
+    filtersOpen,
+    noTodayInlineBannerVisible,
+    noFriendsInlineBannerVisible,
+    search,
+    searchMode,
+  ]);
+
+  const dismissHomeUserSearch = useCallback(() => {
+    const input = homeTopBarRef.current?.querySelector<HTMLInputElement>(
+      "[data-home-search-input]"
+    );
+    input?.blur();
+    setSearch("");
+    setSearchMode("posts");
+    setHomeSearchFocused(false);
+  }, []);
+
+  const scrollDir = useScrollDirection(HOME_SCROLL_CHROME_OPTS);
+  const isHidden = scrollDir === "down";
+
+  const pinHomeTopBar =
+    homeSearchFocused ||
+    filtersOpen ||
+    noTodayInlineBannerVisible ||
+    noFriendsInlineBannerVisible ||
+    userSearchOverlayOpen;
+  const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
+  /** Bar width/pill shape follows scroll only. Do not OR `homeSearchFocused` — that forced full-width on focus and broke pill + safe-area on native keyboards. Visibility while typing uses `pinHomeTopBar` above. */
+  const effectiveHomeAtTop = isAtTop;
+
+  useEffect(() => {
+    if (effectiveHomeTopHidden && !forceRevealHeader) setFiltersOpen(false);
+  }, [effectiveHomeTopHidden, forceRevealHeader]);
+
+  useEffect(() => {
+    if (!isHomeTabActive) return;
+    dispatchBottomTabPeek("home", effectiveHomeTopHidden);
+  }, [effectiveHomeTopHidden, isHomeTabActive]);
 
   // auth state and modal state for logo functionality
   const dispatch = useDispatch();
@@ -259,6 +283,168 @@ export default function HomePage() {
     };
   }, [isHomeVisible]);
 
+  /**
+   * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Today added.
+   * Bounded slice only — not a guarantee against deeper feed pages.
+   */
+  const runTodayPreflight = useCallback(async (): Promise<boolean> => {
+    const filtersWithToday = (
+      selectedFilters.includes("today")
+        ? selectedFilters
+        : [...selectedFilters, "today"]
+    ) as FilterType[];
+    const feedOptions: FeedOptions = {
+      type: undefined,
+      q: feedSearchQ,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
+      offset: 0,
+      viewerProfileId: viewerProfileId || undefined,
+    };
+    const fetchedItems = USE_OPTIMIZED_FEED
+      ? await getPublicFeedOptimized(feedOptions)
+      : await getPublicFeed(feedOptions);
+    const railsFilteredItems = filterRailsItems(fetchedItems);
+    let mutualFriends: Set<string> | null = null;
+    if (filtersWithToday.includes("friends") && viewerProfileId) {
+      mutualFriends = await getMutualFriends(viewerProfileId);
+    }
+    const result = applyFiltersWithFallback(
+      railsFilteredItems,
+      filtersWithToday,
+      mutualFriends,
+      3,
+      true
+    );
+    return result.filteredCount > 0;
+  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+
+  const handleTodayChipClick = useCallback(async () => {
+    if (todayPreflightInFlightRef.current) return;
+    todayPreflightInFlightRef.current = true;
+    setTodayPreflightPending(true);
+    try {
+      const hasMatches = await runTodayPreflight();
+      if (hasMatches) {
+        setSelectedFilters((prev) =>
+          prev.includes("today") ? prev : [...prev, "today"]
+        );
+      } else {
+        setNoTodayInlineBannerVisible(true);
+        if (noTodayBannerTimerRef.current !== null) {
+          clearTimeout(noTodayBannerTimerRef.current);
+          noTodayBannerTimerRef.current = null;
+        }
+        noTodayBannerTimerRef.current = window.setTimeout(() => {
+          noTodayBannerTimerRef.current = null;
+          setNoTodayInlineBannerVisible(false);
+        }, NO_TODAY_BANNER_DISMISS_MS);
+      }
+    } finally {
+      todayPreflightInFlightRef.current = false;
+      setTodayPreflightPending(false);
+    }
+  }, [runTodayPreflight]);
+
+  /**
+   * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Friends added.
+   * Bounded slice only — not a guarantee against deeper feed pages.
+   */
+  const runFriendsPreflight = useCallback(async (): Promise<boolean> => {
+    if (!viewerProfileId) return false;
+    const mutualFriends = await getMutualFriends(viewerProfileId);
+    if (mutualFriends.size === 0) return false;
+
+    const filtersWithFriends = (
+      selectedFilters.includes("friends")
+        ? selectedFilters
+        : [...selectedFilters, "friends"]
+    ) as FilterType[];
+
+    const feedOptions: FeedOptions = {
+      type: undefined,
+      q: feedSearchQ,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
+      offset: 0,
+      viewerProfileId: viewerProfileId || undefined,
+    };
+    const fetchedItems = USE_OPTIMIZED_FEED
+      ? await getPublicFeedOptimized(feedOptions)
+      : await getPublicFeed(feedOptions);
+    const railsFilteredItems = filterRailsItems(fetchedItems);
+    const result = applyFiltersWithFallback(
+      railsFilteredItems,
+      filtersWithFriends,
+      mutualFriends,
+      3,
+      true
+    );
+    return result.filteredCount > 0;
+  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+
+  const handleFriendsChipClick = useCallback(async () => {
+    if (friendsPreflightInFlightRef.current) return;
+    friendsPreflightInFlightRef.current = true;
+    setFriendsPreflightPending(true);
+    try {
+      const hasMatches = await runFriendsPreflight();
+      if (hasMatches) {
+        setSelectedFilters((prev) =>
+          prev.includes("friends") ? prev : [...prev, "friends"]
+        );
+      } else {
+        setNoFriendsInlineBannerVisible(true);
+        if (noFriendsBannerTimerRef.current !== null) {
+          clearTimeout(noFriendsBannerTimerRef.current);
+          noFriendsBannerTimerRef.current = null;
+        }
+        noFriendsBannerTimerRef.current = window.setTimeout(() => {
+          noFriendsBannerTimerRef.current = null;
+          setNoFriendsInlineBannerVisible(false);
+        }, NO_FRIENDS_BANNER_DISMISS_MS);
+      }
+    } finally {
+      friendsPreflightInFlightRef.current = false;
+      setFriendsPreflightPending(false);
+    }
+  }, [runFriendsPreflight]);
+
+  useEffect(() => {
+    const hasToday = selectedFilters.includes("today");
+    if (hadTodayInFiltersRef.current && !hasToday) {
+      setNoTodayInlineBannerVisible(false);
+      if (noTodayBannerTimerRef.current !== null) {
+        clearTimeout(noTodayBannerTimerRef.current);
+        noTodayBannerTimerRef.current = null;
+      }
+    }
+    hadTodayInFiltersRef.current = hasToday;
+  }, [selectedFilters]);
+
+  useEffect(() => {
+    const hasFriends = selectedFilters.includes("friends");
+    if (hadFriendsInFiltersRef.current && !hasFriends) {
+      setNoFriendsInlineBannerVisible(false);
+      if (noFriendsBannerTimerRef.current !== null) {
+        clearTimeout(noFriendsBannerTimerRef.current);
+        noFriendsBannerTimerRef.current = null;
+      }
+    }
+    hadFriendsInFiltersRef.current = hasFriends;
+  }, [selectedFilters]);
+
+  useEffect(() => {
+    return () => {
+      if (noTodayBannerTimerRef.current !== null) {
+        clearTimeout(noTodayBannerTimerRef.current);
+      }
+      if (noFriendsBannerTimerRef.current !== null) {
+        clearTimeout(noFriendsBannerTimerRef.current);
+      }
+    };
+  }, []);
+
   // tweak these if your actual header/footer heights differ (floating top bar + quick chips + gradient)
   const HEADER_HEIGHT = 96;
   const FOOTER_HEIGHT = 80;
@@ -276,13 +462,13 @@ export default function HomePage() {
           : viewMode === "experiences"
           ? "experience"
           : undefined,
-      q: search || undefined,
+      q: feedSearchQ,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       limit: PAGE_SIZE,
       offset: 0,
       viewerProfileId: viewerProfileId ?? null, // Use state, not ref
     });
-  }, [viewMode, search, selectedTags, viewerProfileId]); // Added viewerProfileId to deps
+  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]); // Added viewerProfileId to deps
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
@@ -293,7 +479,7 @@ export default function HomePage() {
       dataCache.delete(feedCacheKey);
       const railKey = dataCache.generateFeedKey({
         type: undefined,
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         filters: selectedFilters.length > 0 ? selectedFilters : undefined,
         limit: 20,
@@ -304,7 +490,7 @@ export default function HomePage() {
     } catch (e) {
       console.warn("[HomePage] purgeHomePrimaryCaches failed", e);
     }
-  }, [feedCacheKey, search, selectedTags, selectedFilters, viewerProfileId]);
+  }, [feedCacheKey, feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
 
   useEffect(() => {
     const onRefreshRequest = (e: Event) => {
@@ -319,6 +505,7 @@ export default function HomePage() {
       const detail = (e as CustomEvent<HomeTabRefreshDetail>).detail;
       if (detail?.source === "home-tab") {
         setSearch("");
+        setSearchMode("posts");
       }
       if (import.meta.env.DEV) {
         console.debug(`[${HOME_TAB_REFRESH_EVENT}] remount + cache purge`);
@@ -417,6 +604,23 @@ export default function HomePage() {
     if (!filtersOpen) setForceRevealHeader(false);
   }, [filtersOpen]);
 
+  useEffect(() => {
+    if (!filtersOpen) return;
+
+    const handleOutsidePress = (event: PointerEvent) => {
+      const root = homeTopBarRef.current;
+      if (!root) return;
+      const target = event.target as Node | null;
+      if (target && root.contains(target)) return;
+      setFiltersOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handleOutsidePress);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePress);
+    };
+  }, [filtersOpen]);
+
   // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
   // Why: These callbacks are passed as props, memoization prevents child re-renders
   const handleFilterClick = useCallback(() => {
@@ -461,7 +665,7 @@ export default function HomePage() {
       // 1. Fetch mixed content (both hangouts and experiences)
       const feedOptions: FeedOptions = {
         type: undefined, // Get both types
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         limit: limit * 2, // Fetch more to allow for filtering
         offset,
@@ -492,8 +696,6 @@ export default function HomePage() {
         // Store filteredCount in ref for passing to components
         railFilteredCountRef.current = result.filteredCount;
 
-        maybeResolvePendingTodayCheck(result.filteredCount, offset);
-
         return result.items;
       }
 
@@ -502,14 +704,14 @@ export default function HomePage() {
       railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(fetchedItems, limit);
     },
-    [search, selectedTags, selectedFilters, viewerProfileId, maybeResolvePendingTodayCheck]
+    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
   );
 
   const railGetCachedItems = useCallback(
     (offset: number = 0) => {
       const feedOptions = {
         type: undefined,
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         filters: selectedFilters.length > 0 ? selectedFilters : undefined,
         limit: 20,
@@ -520,14 +722,14 @@ export default function HomePage() {
       const cached = dataCache.get<FeedItem[]>(cacheKey);
       return Array.isArray(cached) ? cached : null;
     },
-    [search, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
   );
 
   const railSetCachedItems = useCallback(
     (items: FeedItem[], offset: number = 0) => {
       const feedOptions = {
         type: undefined,
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         filters: selectedFilters.length > 0 ? selectedFilters : undefined,
         limit: 20,
@@ -537,7 +739,7 @@ export default function HomePage() {
       const cacheKey = dataCache.generateFeedKey(feedOptions);
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [search, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
   );
 
   // Top horizontal rail only (viewMode === "all") — must be unconditional hooks; see HomeHangoutSection JSX.
@@ -546,7 +748,7 @@ export default function HomePage() {
       // 1. Fetch mixed content (both hangouts and experiences)
       const feedOptions: FeedOptions = {
         type: undefined, // Get both types
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         limit: limit * 2, // Fetch more to allow for filtering
         offset,
@@ -586,8 +788,6 @@ export default function HomePage() {
         // Store filteredCount in ref for passing to components
         railFilteredCountRef.current = result.filteredCount;
 
-        maybeResolvePendingTodayCheck(result.filteredCount, offset);
-
         return result.items;
       }
 
@@ -595,20 +795,13 @@ export default function HomePage() {
       // Note: railsFilteredItems already excludes unscheduled/expired hangouts
       return mixHangoutsAndExperiences(railsFilteredItems, limit);
     },
-    [search, selectedTags, selectedFilters, viewerProfileId, maybeResolvePendingTodayCheck]
+    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
   );
 
   const topRailGetCachedItems = useCallback(() => {
-    // Pending Today check must run loadItems(0) so maybeResolvePendingTodayCheck runs; cache would skip it.
-    if (
-      selectedFilters.includes("today") &&
-      pendingTodayCheckRef.current
-    ) {
-      return null;
-    }
     const feedOptions = {
       type: undefined, // Mixed content
-      q: search || undefined,
+      q: feedSearchQ,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       filters:
         selectedFilters.length > 0 ? selectedFilters : undefined,
@@ -619,13 +812,13 @@ export default function HomePage() {
     const cacheKey = dataCache.generateFeedKey(feedOptions);
     const cached = dataCache.get<FeedItem[]>(cacheKey);
     return Array.isArray(cached) ? cached : null;
-  }, [search, selectedTags, selectedFilters, viewerProfileId]);
+  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
 
   const topRailSetCachedItems = useCallback(
     (items: FeedItem[]) => {
       const feedOptions = {
         type: undefined, // Mixed content
-        q: search || undefined,
+        q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         filters:
           selectedFilters.length > 0 ? selectedFilters : undefined,
@@ -636,8 +829,13 @@ export default function HomePage() {
       const cacheKey = dataCache.generateFeedKey(feedOptions);
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [search, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
   );
+
+  const showSearchKindToggle =
+    homeSearchFocused || search.trim().length > 0;
+  const searchFieldPlaceholder =
+    searchMode === "users" ? "Search users" : "Where To?";
 
   return (
     <>
@@ -668,12 +866,17 @@ export default function HomePage() {
       <PrimaryPageContainer hideUI={effectiveHomeTopHidden} capacitorNotchScrim>
         {/* Top bar: floating pill + gradient + quick chips */}
         <HomeTopBar
+          containerRef={homeTopBarRef}
           isHidden={effectiveHomeTopHidden}
           atTop={effectiveHomeAtTop}
           onToggleFilters={handleFilterClick}
           onLogoClick={handleLogoClick}
           onSearch={setSearch}
           search={search}
+          searchMode={searchMode}
+          onSearchModeChange={setSearchMode}
+          showSearchKindToggle={showSearchKindToggle}
+          searchFieldPlaceholder={searchFieldPlaceholder}
           onSearchFocusChange={setHomeSearchFocused}
           hasActiveFilters={hasActiveFilters}
           filtersOpen={filtersOpen}
@@ -683,9 +886,67 @@ export default function HomePage() {
           viewMode={viewMode}
           setViewMode={setViewMode}
           selectedFilters={selectedFilters}
-          onFilterChange={handleHomeFilterChange}
+          onFilterChange={setSelectedFilters}
+          onTodayChipClick={handleTodayChipClick}
+          todayPreflightPending={todayPreflightPending}
           noTodayInlineBannerVisible={noTodayInlineBannerVisible}
+          onFriendsChipClick={handleFriendsChipClick}
+          friendsPreflightPending={friendsPreflightPending}
+          noFriendsInlineBannerVisible={noFriendsInlineBannerVisible}
         />
+
+        {userSearchOverlayOpen ? (
+          <>
+            <div
+              className={[
+                "fixed inset-x-0 bottom-0 z-[29] pointer-events-auto touch-manipulation",
+                "bg-[color-mix(in_oklab,var(--bg)_34%,transparent)]",
+                "backdrop-blur-sm supports-[backdrop-filter]:bg-[color-mix(in_oklab,var(--bg)_26%,transparent)]",
+              ].join(" ")}
+              style={{ top: userSearchOverlayTopPx }}
+              aria-hidden
+              onPointerDown={dismissHomeUserSearch}
+            />
+            <div
+              className="fixed inset-x-0 bottom-0 z-[30] flex justify-center pointer-events-none"
+              style={{ top: userSearchOverlayTopPx }}
+            >
+              <div className="w-full max-w-[640px] mx-auto pt-1 pointer-events-none">
+                {debouncedUserSearchQuery.trim().length < 2 ? (
+                  <div
+                    className="pointer-events-auto mx-3"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <div
+                      className={[
+                        "rounded-2xl border border-[var(--bottom-tab-border)] overflow-hidden",
+                        "bg-[color-mix(in_oklab,var(--glass-bg)_84%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
+                        "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
+                        "px-3 py-3",
+                      ].join(" ")}
+                    >
+                      <p className="text-[11px] text-[var(--text)]/75 leading-snug">
+                        Type at least 2 characters to search users.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="pointer-events-auto"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <ProfileSearchResults
+                      query={debouncedUserSearchQuery}
+                      viewerId={viewerProfileId}
+                      onClose={dismissHomeUserSearch}
+                      panelVariant="glass"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        ) : null}
 
         {/* MAIN CONTENT */}
         <div
@@ -700,7 +961,7 @@ export default function HomePage() {
               <HomeHangoutSection
                 key={`rail-top-${selectedFilters.join(",")}-${selectedTags.join(
                   ","
-                )}-${search || ""}-e${homeRefreshEpoch}`}
+                )}-${feedSearchQ ?? ""}-e${homeRefreshEpoch}`}
                 items={[]}
                 loading={false}
                 batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
@@ -713,7 +974,6 @@ export default function HomePage() {
                 loadItems={topRailLoadItems}
                 getCachedItems={topRailGetCachedItems}
                 setCachedItems={topRailSetCachedItems}
-                suppressFilteredEmptyCard={noTodayInlineBannerVisible}
               />
             </div>
           )}
@@ -753,7 +1013,7 @@ export default function HomePage() {
                         : viewMode === "experiences"
                         ? ("experience" as const)
                         : undefined,
-                    q: search || undefined,
+                    q: feedSearchQ,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit,
                     offset,
@@ -765,7 +1025,7 @@ export default function HomePage() {
 
                     // [PHASE 4] Apply personalization to vertical feed (only when no filters active)
                     const shouldPersonalize =
-                      !search &&
+                      !feedSearchQ &&
                       selectedTags.length === 0 &&
                       viewMode === "all";
 
@@ -804,7 +1064,7 @@ export default function HomePage() {
 
                     // [PHASE 4] Apply personalization to vertical feed (only when no filters active)
                     const shouldPersonalize =
-                      !search &&
+                      !feedSearchQ &&
                       selectedTags.length === 0 &&
                       viewMode === "all";
 
@@ -825,7 +1085,7 @@ export default function HomePage() {
                     };
                   }
                 },
-                [search, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
+                [feedSearchQ, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
               )}
               getCachedItems={useCallback(() => {
                 const feedOptions = {
@@ -835,7 +1095,7 @@ export default function HomePage() {
                       : viewMode === "experiences"
                       ? "experience"
                       : undefined,
-                  q: search || undefined,
+                  q: feedSearchQ,
                   tags: selectedTags.length > 0 ? selectedTags : undefined,
                   limit: PAGE_SIZE,
                   offset: 0,
@@ -844,7 +1104,7 @@ export default function HomePage() {
                 const cacheKey = dataCache.generateFeedKey(feedOptions);
                 const cached = dataCache.get<FeedItem[]>(cacheKey);
                 return Array.isArray(cached) ? cached : null;
-              }, [search, selectedTags, viewMode, viewerProfileId])} // Added viewerProfileId
+              }, [feedSearchQ, selectedTags, viewMode, viewerProfileId])} // Added viewerProfileId
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
                   const feedOptions = {
@@ -854,7 +1114,7 @@ export default function HomePage() {
                         : viewMode === "experiences"
                         ? "experience"
                         : undefined,
-                    q: search || undefined,
+                    q: feedSearchQ,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
                     limit: PAGE_SIZE,
                     offset: 0,
@@ -863,7 +1123,7 @@ export default function HomePage() {
                   const cacheKey = dataCache.generateFeedKey(feedOptions);
                   dataCache.set(cacheKey, items, 10 * 60 * 1000);
                 },
-                [search, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
+                [feedSearchQ, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
               )}
               feedOptions={{
                 type:
@@ -872,7 +1132,7 @@ export default function HomePage() {
                     : viewMode === "experiences"
                     ? "experience"
                     : undefined,
-                q: search || undefined,
+                q: feedSearchQ,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
                 currentUserId: viewerProfileId ?? null, // Use state for feedKey
               }}

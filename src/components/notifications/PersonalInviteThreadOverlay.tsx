@@ -11,6 +11,11 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router-dom";
+import { useInviteOverlaySyntheticHistory } from "../../hooks/useInviteOverlaySyntheticHistory";
+import {
+  INVITE_OVERLAY_HISTORY,
+  isPostDetailRoutePath,
+} from "../../lib/inviteOverlayHistory";
 import { PiArrowLeft, PiPaperPlaneRight } from "react-icons/pi";
 import {
   getInviteThreadForViewer,
@@ -130,6 +135,13 @@ export default function PersonalInviteThreadOverlay({
   counterparty,
 }: Props) {
   const location = useLocation();
+  const pathname = location.pathname;
+  const engageInviteBack = open && !isPostDetailRoutePath(pathname);
+  useInviteOverlaySyntheticHistory({
+    engage: engageInviteBack,
+    marker: INVITE_OVERLAY_HISTORY.personalChat,
+    onDismiss: onClose,
+  });
   const { keyboardInsetPx } = useCreateKeyboardInset();
 
   const [loading, setLoading] = useState(false);
@@ -227,11 +239,13 @@ export default function PersonalInviteThreadOverlay({
     syncAppSafeAreaBottom();
     const scrollbarWidth =
       window.innerWidth - document.documentElement.clientWidth;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
     document.body.style.overflow = "hidden";
     document.body.style.paddingRight = `${scrollbarWidth}px`;
     return () => {
-      document.body.style.overflow = "";
-      document.body.style.paddingRight = "";
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
     };
   }, [open]);
 

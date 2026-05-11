@@ -1,19 +1,34 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { PiArrowSquareOut, PiMegaphone, PiUsers } from "react-icons/pi";
+import {
+  PiArrowSquareOut,
+  PiHeart,
+  PiHeartFill,
+  PiMegaphone,
+  PiUsers,
+  PiX,
+} from "react-icons/pi";
 import { type NotificationWithActor } from "../../types/notification";
 import { markNotificationAsRead } from "../../api/services/notifications";
 import { getInviteById } from "../../api/services/invites";
 import { toggleInviteInterest } from "../../api/services/inviteThreads";
 import { formatDistanceToNow } from "date-fns";
 import Avatar from "../ui/Avatar";
-import BottomDrawer from "../ui/BottomDrawer";
+import FrostedCenterModal, {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "../ui/FrostedCenterModal";
 import { PostTypeMetaChip } from "../ui/PostFeedSurfaceMeta";
 import { Paths } from "../../router/Paths";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import PersonalInviteThreadOverlay from "./PersonalInviteThreadOverlay";
 import GroupInviteThreadOverlay from "./GroupInviteThreadOverlay";
 import InviteExpiryPill, { inviteExpiryActive } from "./InviteExpiryPill";
+import { useInviteOverlaySyntheticHistory } from "../../hooks/useInviteOverlaySyntheticHistory";
+import {
+  INVITE_OVERLAY_HISTORY,
+  isPostDetailRoutePath,
+} from "../../lib/inviteOverlayHistory";
 
 function parseInterestCount(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -36,16 +51,13 @@ function parseInterestUi(ad: Record<string, unknown> | undefined): {
   };
 }
 
-function formatInterestedRecipientLabel(interested: boolean): string {
-  return interested ? "Interested" : "I'm interested";
+function formatSenderLikesLine(count: number): string {
+  if (count === 0) return "0 likes";
+  if (count === 1) return "1 like";
+  return `${count} likes`;
 }
 
-function formatSenderInterestedLine(count: number): string {
-  if (count === 0) return "0 interested";
-  if (count === 1) return "1 interested";
-  return `${count} interested`;
-}
-
+/** Optional post author username from notification payload only — no fetch. */
 /** Module-level cache for getInviteById results to avoid duplicate fetches per invite row. TTL 3 min. */
 const INVITE_BY_ID_TTL_MS = 3 * 60 * 1000;
 const inviteByIdCache = new Map<string, { data: any; ts: number }>();
@@ -113,18 +125,30 @@ export default function InviteNotificationItem({
   const [personalThreadDrawerOpen, setPersonalThreadDrawerOpen] =
     useState(false);
   const [groupThreadDrawerOpen, setGroupThreadDrawerOpen] = useState(false);
-  const [announcementDrawerOpen, setAnnouncementDrawerOpen] = useState(false);
+  const [echoModalOpen, setEchoModalOpen] = useState(false);
+  const dismissEchoModal = useCallback(() => {
+    setEchoModalOpen(false);
+  }, []);
+  const echoBackEngaged =
+    echoModalOpen &&
+    isAnnouncementRow &&
+    !isPostDetailRoutePath(location.pathname);
+  useInviteOverlaySyntheticHistory({
+    engage: echoBackEngaged,
+    marker: INVITE_OVERLAY_HISTORY.echoModal,
+    onDismiss: dismissEchoModal,
+  });
   const [announcementInterestUi, setAnnouncementInterestUi] = useState(() =>
     parseInterestUi(notification.additional_data)
   );
   const [interestTogglePending, setInterestTogglePending] = useState(false);
 
-  /** Sync interest fields when this drawer opens or the row targets a different notification. */
+  /** Sync interest fields when this Echo modal opens or the row targets a different notification. */
   useEffect(() => {
-    if (!announcementDrawerOpen || threadKind !== "announcement") return;
+    if (!echoModalOpen || threadKind !== "announcement") return;
     setAnnouncementInterestUi(parseInterestUi(notification.additional_data));
     /* Omit notification.additional_data from deps so parent re-renders do not reset optimistic interest UI. */
-  }, [announcementDrawerOpen, notification.id, threadKind]); // eslint-disable-line react-hooks/exhaustive-deps -- seed on open / id change only
+  }, [echoModalOpen, notification.id, threadKind]); // eslint-disable-line react-hooks/exhaustive-deps -- seed on open / id change only
 
   useEffect(() => {
     const additionalData = notification.additional_data;
@@ -181,9 +205,9 @@ export default function InviteNotificationItem({
     setPersonalThreadDrawerOpen(true);
   };
 
-  const openAnnouncementFromRow = () => {
+  const openEchoModalFromRow = () => {
     void handleClick();
-    setAnnouncementDrawerOpen(true);
+    setEchoModalOpen(true);
   };
 
   const handleAnnouncementInterestToggle = async () => {
@@ -221,7 +245,7 @@ export default function InviteNotificationItem({
     const t = e.target as HTMLElement | null;
     if (t?.closest("a[href], button")) return;
     if (isAnnouncementRow) {
-      openAnnouncementFromRow();
+      openEchoModalFromRow();
       return;
     }
     if (!showOpenThread) return;
@@ -232,7 +256,7 @@ export default function InviteNotificationItem({
     if (e.key !== "Enter" && e.key !== " ") return;
     if (isAnnouncementRow) {
       e.preventDefault();
-      openAnnouncementFromRow();
+      openEchoModalFromRow();
       return;
     }
     if (!showOpenThread) return;
@@ -258,10 +282,10 @@ export default function InviteNotificationItem({
 
   const announcementTitleText =
     inviteDirection === "sent"
-      ? "You sent an announcement"
+      ? "You sent an Echo"
       : inviteDirection === "received"
-        ? `${actorName} sent an announcement`
-        : "Announcement invite";
+        ? `${actorName} sent an Echo`
+        : "Echo invite";
 
   const titleParts: {
     prefix: string;
@@ -295,11 +319,14 @@ export default function InviteNotificationItem({
 
   const rowAnnouncementIcon = (
     <span
-      className="inline-flex items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72 shadow-[inset_0_0_0_0.5px_rgba(23,23,23,0.12)] app-dark:border-white/26 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:text-amber-200/85"
+      className="inline-flex items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] shadow-[inset_0_0_0_0.5px_rgba(23,23,23,0.12)] app-dark:border-white/26 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)]"
       style={{ width: avatarSize, height: avatarSize }}
-      aria-label="Announcement invite"
+      aria-label="Echo invite"
     >
-      <PiMegaphone className="h-[52%] w-[52%]" aria-hidden />
+      <PiMegaphone
+        className="h-5 w-5 shrink-0 text-neutral-950 app-dark:text-amber-300"
+        aria-hidden
+      />
     </span>
   );
 
@@ -431,21 +458,29 @@ export default function InviteNotificationItem({
       ? notification.additional_data.post_caption.trim()
       : "";
 
-  const announcementDrawerFooter =
-    showGoToPostButton && linkTo !== "#" ? (
-      <div className="border-t border-[var(--border)]/55 bg-[color-mix(in_oklab,var(--surface-2)_35%,transparent)] px-4 pt-3 pb-1">
-        <Link
-          to={linkTo}
-          state={{ backgroundLocation: location }}
-          onClick={(e) => e.stopPropagation()}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-center text-sm font-semibold text-[var(--brand-ink)] shadow-sm transition-opacity hover:opacity-95"
-          aria-label="See post"
-        >
-          See post
-          <PiArrowSquareOut className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
-        </Link>
-      </div>
-    ) : null;
+  const echoNoteDisplay =
+    drawerInviteNoteFull.length > 0
+      ? drawerInviteNoteFull
+      : "No note with this Echo.";
+
+  const echoModalSeePostHref =
+    showGoToPostButton && linkTo !== "#" ? linkTo : null;
+  const echoModalRecipientLike =
+    inviteDirection === "received" && personalThreadId != null;
+  const echoModalSenderCount = inviteDirection === "sent";
+  const modalSenderName = inviteDirection === "sent" ? "You" : actorName;
+  const cachedViewerAvatarUrl =
+    typeof window !== "undefined" ? localStorage.getItem("my_avatar_url") : null;
+  const cachedViewerDisplayName =
+    typeof window !== "undefined"
+      ? localStorage.getItem("my_display_name")
+      : null;
+  const cachedViewerUsername =
+    typeof window !== "undefined" ? localStorage.getItem("my_username") : null;
+  const hasCachedViewerIdentity =
+    (cachedViewerDisplayName != null && cachedViewerDisplayName.trim().length > 0) ||
+    (cachedViewerUsername != null && cachedViewerUsername.trim().length > 0) ||
+    (cachedViewerAvatarUrl != null && cachedViewerAvatarUrl.trim().length > 0);
 
   const announcementRowBody = (
     <>
@@ -617,7 +652,7 @@ export default function InviteNotificationItem({
         tabIndex={rowInteractive ? 0 : undefined}
         aria-label={
           isAnnouncementRow
-            ? "Open announcement details"
+            ? "Open Echo details"
             : showOpenThread
               ? "Open invite chat"
               : undefined
@@ -640,122 +675,218 @@ export default function InviteNotificationItem({
       >
         {isAnnouncementRow ? announcementRowBody : rowBody}
       </div>
-      <BottomDrawer
-        open={announcementDrawerOpen && isAnnouncementRow}
-        onClose={() => setAnnouncementDrawerOpen(false)}
-        title="Invite announcement"
-        maxHeight="85vh"
-        shrinkSheetToContent
-        footer={announcementDrawerFooter ?? undefined}
-        contentClassName="px-4 pb-4 pt-2"
+      <FrostedCenterModal
+        open={echoModalOpen && isAnnouncementRow}
+        onBackdropClick={() => setEchoModalOpen(false)}
+        aria-label="Echo details"
+        containerClassName="max-h-[100dvh] items-center justify-center overflow-visible p-4"
       >
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            {inviteDirection === "sent" ? (
-              <>
-                <span
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72 app-dark:border-white/26 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:text-amber-200/85"
-                  aria-hidden
-                >
-                  <PiMegaphone className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <div className="text-[15px] font-semibold leading-snug text-[var(--text)]">
-                    You
-                  </div>
-                  <div className="text-xs leading-snug text-[var(--text)]/52">
-                    Sent this announcement
-                  </div>
-                </div>
-              </>
-            ) : notification.actor ? (
-              <>
-                <Avatar
-                  variant="default"
-                  url={notification.actor.avatar_url || undefined}
-                  name={
-                    notification.actor.display_name ||
-                    notification.actor.username ||
-                    undefined
-                  }
-                  size={44}
-                  tightLineBox
-                />
-                <div className="min-w-0">
-                  <div className="truncate text-[15px] font-semibold leading-snug text-[var(--text)]">
-                    {actorName}
-                  </div>
-                  {actorUsernameRaw != null &&
-                  String(actorUsernameRaw).trim().length > 0 ? (
-                    <div className="truncate text-xs leading-snug text-[var(--text)]/52">
-                      @{String(actorUsernameRaw).trim()}
-                    </div>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <>
-                <span
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72"
-                  aria-hidden
-                >
-                  <PiMegaphone className="h-5 w-5" />
-                </span>
-                <div className="text-[15px] font-semibold text-[var(--text)]">
-                  Someone
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <PostTypeMetaChip type={metaPostType} />
-          </div>
-
-          {drawerInviteNoteFull.length > 0 ? (
-            <div className="min-w-0">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
-                Announcement
-              </div>
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/88">
-                {drawerInviteNoteFull}
-              </p>
-            </div>
-          ) : null}
-
-          {drawerPostCaptionFull.length > 0 ? (
-            <div className="min-w-0">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
-                Post caption
-              </div>
-              <p className="line-clamp-6 whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/72">
-                {drawerPostCaptionFull}
-              </p>
-            </div>
-          ) : null}
-
-          {inviteDirection === "received" && personalThreadId ? (
-            <button
-              type="button"
-              onClick={() => void handleAnnouncementInterestToggle()}
-              disabled={interestTogglePending}
-              className="w-full rounded-xl border border-primary/40 bg-primary/12 px-4 py-2.5 text-sm font-semibold text-[var(--text)] transition-colors hover:bg-primary/18 disabled:pointer-events-none disabled:opacity-55"
+        <div
+          className={`${frostedModalPanelClassName} relative z-0 max-w-[min(380px,92vw)] overflow-visible`}
+          style={frostedModalPanelStyle}
+        >
+          {/* Float above the card — parent overflow-visible so half the badge is not clipped */}
+          <div className="pointer-events-none absolute left-1/2 top-0 z-20 -translate-x-1/2 -translate-y-1/2">
+            <span
+              className="pointer-events-none inline-flex h-14 w-14 items-center justify-center rounded-full border border-[var(--border)] bg-white text-[var(--text)]/85 shadow-[0_8px_28px_rgba(0,0,0,0.12)] ring-1 ring-black/5 app-dark:border-white/20 app-dark:bg-[#09090b] app-dark:ring-white/10 app-dark:shadow-[0_10px_36px_rgba(0,0,0,0.45)]"
+              aria-hidden
             >
-              {formatInterestedRecipientLabel(
-                announcementInterestUi.viewerInterested
-              )}
-            </button>
-          ) : inviteDirection === "sent" ? (
-            <p className="text-sm font-medium text-[var(--text)]/72">
-              {formatSenderInterestedLine(announcementInterestUi.interestCount)}
-            </p>
-          ) : null}
+              <PiMegaphone className="h-7 w-7 opacity-90" />
+            </span>
+          </div>
 
-          <p className="text-[11px] tabular-nums leading-snug text-[var(--text)]/42">
-            {timeAgoRelative}
-          </p>
+          <div className="max-h-[min(78dvh,560px)] min-h-0 overflow-y-auto overscroll-contain px-1 pb-1 pt-10">
+            <div className="flex flex-col gap-4">
+              {/* Inner frosted: sender + close + Echo note */}
+              <div className="rounded-xl border border-amber-300/20 bg-white/[0.04] p-3.5 shadow-[0_10px_24px_rgba(251,191,36,0.08),inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-xl app-dark:border-amber-300/18 app-dark:bg-black/20 app-dark:shadow-[0_14px_30px_rgba(251,191,36,0.07),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    {inviteDirection === "sent" ? (
+                      <>
+                        <Avatar
+                          variant="default"
+                          url={
+                            cachedViewerAvatarUrl != null &&
+                            cachedViewerAvatarUrl.trim().length > 0
+                              ? cachedViewerAvatarUrl
+                              : undefined
+                          }
+                          name={
+                            hasCachedViewerIdentity
+                              ? cachedViewerDisplayName ||
+                                cachedViewerUsername ||
+                                "You"
+                              : "You"
+                          }
+                          size={48}
+                          tightLineBox
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-[15px] font-semibold leading-snug text-[var(--text)]">
+                            You
+                          </div>
+                          <p className="text-[11px] tabular-nums leading-snug text-[var(--text)]/48">
+                            {timeAgoRelative}
+                          </p>
+                        </div>
+                      </>
+                    ) : notification.actor ? (
+                      <>
+                        <Avatar
+                          variant="default"
+                          url={notification.actor.avatar_url || undefined}
+                          name={
+                            notification.actor.display_name ||
+                            notification.actor.username ||
+                            undefined
+                          }
+                          size={48}
+                          tightLineBox
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-[15px] font-semibold leading-snug text-[var(--text)]">
+                            {actorName}
+                          </div>
+                          <p className="text-[11px] tabular-nums leading-snug text-[var(--text)]/48">
+                            {timeAgoRelative}
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_42%,transparent)] text-[var(--text)]/72"
+                          aria-hidden
+                        >
+                          <PiMegaphone className="h-6 w-6" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[15px] font-semibold text-[var(--text)]">
+                            Someone
+                          </div>
+                          <p className="text-[11px] tabular-nums leading-snug text-[var(--text)]/48">
+                            {timeAgoRelative}
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEchoModalOpen(false)}
+                    className="-mr-1 -mt-0.5 shrink-0 rounded-full p-2 text-[var(--text)]/50 outline-none transition-colors hover:bg-[color-mix(in_oklab,var(--text)_10%,transparent)] hover:text-[var(--text)]/88 focus-visible:ring-2 focus-visible:ring-primary/40"
+                    aria-label="Close"
+                  >
+                    <PiX className="h-5 w-5" aria-hidden />
+                  </button>
+                </div>
+
+                <div className="mt-3">
+                  <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/48">
+                    Echo note
+                  </div>
+                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/88">
+                    {echoNoteDisplay}
+                  </p>
+                </div>
+              </div>
+
+              {/* Post: caption + bottom action row (See post | Like / sender count) */}
+              <section className="min-w-0 space-y-3 border-t border-[var(--border)]/35 pb-1 pt-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text)]/48">
+                  Post
+                </div>
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text)]/78">
+                  {drawerPostCaptionFull.length > 0
+                    ? drawerPostCaptionFull
+                    : "No caption preview."}
+                </p>
+
+                {(echoModalSeePostHref != null ||
+                  echoModalRecipientLike ||
+                  echoModalSenderCount) && (
+                  <div
+                    className={
+                      echoModalSeePostHref != null &&
+                      (echoModalRecipientLike || echoModalSenderCount)
+                        ? "flex min-h-[40px] gap-2.5"
+                        : "flex min-h-[40px]"
+                    }
+                  >
+                    {echoModalSeePostHref != null ? (
+                      <Link
+                        to={echoModalSeePostHref}
+                        state={{ backgroundLocation: location }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEchoModalOpen(false);
+                        }}
+                        className={`inline-flex min-h-[40px] min-w-0 items-center justify-center gap-1.5 rounded-full border border-[var(--border)]/80 bg-[color-mix(in_oklab,var(--bg)_78%,var(--surface-2))] px-3 py-1.5 text-center text-[13px] font-semibold text-[var(--text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] ring-1 ring-black/5 transition-colors hover:bg-[color-mix(in_oklab,var(--bg)_70%,var(--text)_8%)] app-dark:border-white/28 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_55%,#0f0f10)] app-dark:text-[var(--text)] app-dark:ring-white/12 app-dark:hover:bg-[color-mix(in_oklab,var(--surface-2)_62%,#161619)] ${
+                          echoModalRecipientLike || echoModalSenderCount
+                            ? "flex-1 basis-0"
+                            : "w-full"
+                        }`}
+                        aria-label="See post"
+                      >
+                        <span className="min-w-0 truncate">See post</span>
+                        <PiArrowSquareOut
+                          className="h-4 w-4 shrink-0 opacity-95"
+                          aria-hidden
+                        />
+                      </Link>
+                    ) : null}
+
+                    {echoModalRecipientLike ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleAnnouncementInterestToggle()}
+                        disabled={interestTogglePending}
+                        className={[
+                          "inline-flex min-h-[40px] min-w-0 flex-1 basis-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-semibold transition-colors disabled:pointer-events-none disabled:opacity-55",
+                          announcementInterestUi.viewerInterested
+                            ? "border border-rose-400/45 bg-rose-500/20 text-[var(--text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] hover:bg-rose-500/25 app-dark:border-rose-400/40 app-dark:bg-rose-500/24 app-dark:hover:bg-rose-500/28"
+                            : "border border-rose-400/35 bg-rose-500/[0.08] text-[var(--text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] hover:bg-rose-500/[0.13] app-dark:border-rose-400/30 app-dark:bg-rose-500/12 app-dark:hover:bg-rose-500/16",
+                        ].join(" ")}
+                      >
+                        {announcementInterestUi.viewerInterested ? (
+                          <PiHeartFill
+                            className="h-5 w-5 shrink-0 text-rose-500 app-dark:text-rose-400"
+                            aria-hidden
+                          />
+                        ) : (
+                          <PiHeart
+                            className="h-5 w-5 shrink-0 text-rose-400/75 app-dark:text-rose-400/65"
+                            aria-hidden
+                          />
+                        )}
+                        {announcementInterestUi.viewerInterested
+                          ? "Liked"
+                          : "Like"}
+                      </button>
+                    ) : echoModalSenderCount ? (
+                      <span
+                        className={`inline-flex min-h-[40px] min-w-0 items-center justify-center whitespace-nowrap rounded-full border border-rose-400/30 bg-rose-500/[0.08] px-3 py-1.5 text-[13px] font-medium text-[var(--text)]/86 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] app-dark:border-rose-400/28 app-dark:bg-rose-500/12 app-dark:text-[var(--text)]/90 ${
+                          echoModalSeePostHref != null
+                            ? "flex-1 basis-0"
+                            : "mx-auto justify-center px-4"
+                        }`}
+                      >
+                        <PiHeart
+                          className="mr-1.5 h-4 w-4 shrink-0 text-rose-400/75 app-dark:text-rose-400/70"
+                          aria-hidden
+                        />
+                        {formatSenderLikesLine(
+                          announcementInterestUi.interestCount
+                        )}
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+              </section>
+            </div>
+          </div>
         </div>
-      </BottomDrawer>
+      </FrostedCenterModal>
       <PersonalInviteThreadOverlay
         open={personalThreadDrawerOpen}
         onClose={() => setPersonalThreadDrawerOpen(false)}
