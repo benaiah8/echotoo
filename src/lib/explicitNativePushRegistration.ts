@@ -330,14 +330,26 @@ export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult
     if (result.dbUpsertStatus === "ok") {
       return { kind: "success", message: "Notification token saved" };
     }
-    if (
-      result.dbUpsertStatus === "error" ||
-      result.fcmTokenStatus === "empty" ||
-      result.fcmTokenStatus === "error"
-    ) {
+    if (result.dbUpsertStatus === "error") {
       return {
         kind: "error",
-        message: "Could not save notification token. Please try again.",
+        message: "Notification token received, but save failed. Please try again.",
+      };
+    }
+    if (result.fcmTokenStatus === "empty") {
+      return {
+        kind: "error",
+        message: result.iosApnsRegistrationSeen === false
+          ? "APNs registration timed out; FCM token was empty. Please try again."
+          : "FCM token was empty. Please try again.",
+      };
+    }
+    if (result.fcmTokenStatus === "error") {
+      return {
+        kind: "error",
+        message: result.iosApnsRegistrationSeen === false
+          ? "APNs registration timed out; FCM token failed. Please try again."
+          : "FCM token failed. Please try again.",
       };
     }
   }

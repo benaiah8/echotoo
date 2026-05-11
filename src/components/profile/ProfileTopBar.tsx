@@ -11,15 +11,19 @@ import {
   PiShareFat,
   PiSignOut,
 } from "react-icons/pi";
+import { Capacitor } from "@capacitor/core";
 import Logo from "../ui/Logo";
 import ShareProfileModal from "./ShareProfileModal";
 import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplainerModal";
 import ThemeSwitch from "../ui/ThemeSwitch";
 import { getPublicShareBaseUrl } from "../../lib/publicSiteUrl";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import toast from "react-hot-toast";
 import {
+  getPushRegistrationUserFeedback,
   getNativePushReceiveState,
   getNativePushStatusLabel,
+  requestNotificationPermissionAndRegister,
   type NativePushReceiveUiState,
 } from "../../lib/explicitNativePushRegistration";
 import { App } from "@capacitor/app";
@@ -49,7 +53,6 @@ export default function ProfileTopBar({
   profile,
   /** When provided, shows Report user button (Play Store compliance) */
   reportUserId,
-  reportUsername: _reportUsername,
   onRequestReport,
   onSearchFocusChange,
   /** Other profile: show Block / Unblock (auth user id of profile owner). */
@@ -94,6 +97,7 @@ export default function ProfileTopBar({
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
   const [nativePushUi, setNativePushUi] =
     useState<NativePushReceiveUiState | null>(null);
+  const [nativePushRegisterBusy, setNativePushRegisterBusy] = useState(false);
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const profileMenuDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -116,6 +120,11 @@ export default function ProfileTopBar({
     isNativeApp() && nativePushUi != null
       ? getNativePushStatusLabel(nativePushUi)
       : null;
+  const shouldDirectlyRefreshIosPush =
+    nativePushUi === "granted" && Capacitor.getPlatform() === "ios";
+  const nativePushMenuLabel = shouldDirectlyRefreshIosPush
+    ? "Refresh notifications"
+    : "Allow notifications";
 
   const closeProfileMenu = useCallback(() => {
     setProfileMenuOpen(false);
@@ -174,6 +183,33 @@ export default function ProfileTopBar({
       document.removeEventListener("keydown", onKey);
     };
   }, [profileMenuOpen, closeProfileMenu]);
+
+  const notifyRegistrationOutcome = useCallback(
+    (result: Awaited<
+      ReturnType<typeof requestNotificationPermissionAndRegister>
+    >) => {
+      const fb = getPushRegistrationUserFeedback(result);
+      if (fb.kind === "success") toast.success(fb.message);
+      else if (fb.kind === "error") toast.error(fb.message);
+    },
+    []
+  );
+
+  const refreshNativePushRegistration = useCallback(async () => {
+    if (nativePushRegisterBusy) return;
+    setNativePushRegisterBusy(true);
+    try {
+      const result = await requestNotificationPermissionAndRegister();
+      notifyRegistrationOutcome(result);
+    } finally {
+      await refreshNativePushStatus();
+      setNativePushRegisterBusy(false);
+    }
+  }, [
+    nativePushRegisterBusy,
+    notifyRegistrationOutcome,
+    refreshNativePushStatus,
+  ]);
 
   // Close on scroll/resize so fixed position does not drift from trigger
   useEffect(() => {
@@ -337,16 +373,21 @@ export default function ProfileTopBar({
               <button
                 type="button"
                 role="menuitem"
+                disabled={nativePushRegisterBusy}
                 style={glassMenuSurface}
                 className={`${profileActionPillClass} py-1.5`}
                 onClick={() => {
-                  setShowHangoutReminderModal(true);
                   closeProfileMenu();
+                  if (shouldDirectlyRefreshIosPush) {
+                    void refreshNativePushRegistration();
+                    return;
+                  }
+                  setShowHangoutReminderModal(true);
                 }}
               >
                 <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 pl-0.5 text-left">
                   <span className="whitespace-nowrap text-[11px] font-medium leading-none tracking-tight">
-                    Allow notifications
+                    {nativePushMenuLabel}
                   </span>
                   {nativePushSubline ? (
                     <span
