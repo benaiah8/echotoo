@@ -26,6 +26,7 @@ import {
 } from "../../lib/inviteOverlayHistory";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { isIOS } from "../../lib/storage/utils/capacitorDetection";
 import { supabase } from "../../lib/supabaseClient";
 import Avatar from "../ui/Avatar";
 import InviteThreadMessageList from "./invite-thread/InviteThreadMessageList";
@@ -618,10 +619,14 @@ export default function GroupInviteThreadOverlay({
     "pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))]";
   const scrollPadTop = `calc(env(safe-area-inset-top, 0px) + ${SCROLL_PAD_TOP_PX}px)`;
   const keyboardInsetRoundedPx = Math.max(0, Math.round(keyboardInsetPx));
-  const composerBottomGap =
-    keyboardInsetRoundedPx > 0
-      ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
-      : "max(0.5rem, var(--safe-area-bottom-layout))";
+  const isIOSDevice = isIOS();
+  const composerBottomGap = isIOSDevice
+    ? keyboardInsetRoundedPx > 0
+      ? `max(0.375rem, calc(${keyboardInsetRoundedPx}px - min(24px, var(--safe-area-bottom-layout)) + 0.25rem))`
+      : "max(0.5rem, calc(var(--safe-area-bottom-layout) - 20px))"
+    : keyboardInsetRoundedPx > 0
+    ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
+    : "max(0.5rem, var(--safe-area-bottom-layout))";
 
   if (!open) return null;
 
@@ -1161,7 +1166,7 @@ export default function GroupInviteThreadOverlay({
                     </span>
                   ) : (
                     <PiPaperPlaneRight
-                      className="h-[1.05rem] w-[1.05rem]"
+                      className="h-[1.2rem] w-[1.2rem]"
                       aria-hidden
                     />
                   )}

@@ -194,7 +194,8 @@ export default function PostActions({
       <div className="flex items-center gap-4">
         <SaveButton
           postId={postId}
-          size={16}
+          size={20}
+          className="min-h-9"
           isSaved={post?.is_saved ?? batchedData?.saveStatuses?.get(postId)}
           saveCount={displaySaveCount}
           showCount={true}
@@ -202,18 +203,19 @@ export default function PostActions({
         />
         <LikeButton
           postId={postId}
-          size={16}
+          size={20}
+          className="min-h-9"
           isLiked={post?.is_liked ?? batchedData?.likeStatuses?.get(postId)}
           likeCount={displayLikeCount}
           showCount={true}
           post={post} // [PHASE 3] Pass post for personalization
         />
         <button
-          className="flex items-center gap-1"
+          className="flex min-h-9 items-center gap-1"
           aria-label="Share"
           onClick={handleShareClick}
         >
-          <PiShareFat size={16} />
+          <PiShareFat size={20} />
           {(post?.share_count ?? 0) > 0 && (
             <span className="text-xs font-medium">
               {post?.share_count ?? 0}
@@ -222,11 +224,11 @@ export default function PostActions({
         </button>
         <button
           ref={commentButtonRef}
-          className="flex items-center gap-1"
+          className="flex min-h-9 items-center gap-1"
           aria-label="Comment"
           onClick={handleCommentClick}
         >
-          <PiChatCircleDots size={16} />
+          <PiChatCircleDots size={20} />
           {commentCount > 0 && (
             <span className="text-xs font-medium">{commentCount}</span>
           )}

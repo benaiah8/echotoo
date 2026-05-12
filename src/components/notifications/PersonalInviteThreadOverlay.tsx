@@ -28,6 +28,7 @@ import { getViewerAuthUserId } from "../../api/services/follows";
 import { postDetailPath, profileByUsername } from "../../router/Paths";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { isIOS } from "../../lib/storage/utils/capacitorDetection";
 import { supabase } from "../../lib/supabaseClient";
 import InviteExpiryPill from "./InviteExpiryPill";
 import Avatar from "../ui/Avatar";
@@ -548,10 +549,14 @@ export default function PersonalInviteThreadOverlay({
   };
 
   const keyboardInsetRoundedPx = Math.max(0, Math.round(keyboardInsetPx));
-  const composerBottomGap =
-    keyboardInsetRoundedPx > 0
-      ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
-      : "max(0.5rem, var(--safe-area-bottom-layout))";
+  const isIOSDevice = isIOS();
+  const composerBottomGap = isIOSDevice
+    ? keyboardInsetRoundedPx > 0
+      ? `max(0.375rem, calc(${keyboardInsetRoundedPx}px - min(24px, var(--safe-area-bottom-layout)) + 0.25rem))`
+      : "max(0.5rem, calc(var(--safe-area-bottom-layout) - 20px))"
+    : keyboardInsetRoundedPx > 0
+    ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
+    : "max(0.5rem, var(--safe-area-bottom-layout))";
   const scrollPadBottom =
     keyboardInsetRoundedPx > 0
       ? `max(0px, calc(${bottomChromeHeightPx}px - ${keyboardInsetRoundedPx}px))`
@@ -980,7 +985,7 @@ export default function PersonalInviteThreadOverlay({
                     </span>
                   ) : (
                     <PiPaperPlaneRight
-                      className="h-[1.05rem] w-[1.05rem]"
+                      className="h-[1.2rem] w-[1.2rem]"
                       aria-hidden
                     />
                   )}

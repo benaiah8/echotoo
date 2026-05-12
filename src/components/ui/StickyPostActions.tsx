@@ -140,8 +140,8 @@ export default function StickyPostActions({
 
   const storyCreator = storyCreatorFromPost(post, postAuthor);
 
-  const iconSm = barVariant === "floatingGlass" ? 14 : 20;
-  const iconMd = barVariant === "floatingGlass" ? 15 : 22;
+  const iconSm = barVariant === "floatingGlass" ? 18 : 20;
+  const iconMd = barVariant === "floatingGlass" ? 20 : 22;
   const actionGap = barVariant === "floatingGlass" ? "gap-3.5" : "gap-6";
   const sideGap = barVariant === "floatingGlass" ? "gap-0.5" : "gap-3";
 
@@ -162,9 +162,9 @@ export default function StickyPostActions({
           type="button"
           onClick={onClose}
           aria-label="Back"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-black/20 bg-neutral-950 text-white shadow-sm transition hover:bg-neutral-900 active:scale-[0.97] dark:border-black/10 dark:bg-white dark:text-neutral-950 dark:shadow-sm dark:hover:bg-neutral-100"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-black/20 bg-neutral-950 text-white shadow-sm transition hover:bg-neutral-900 active:scale-[0.97] dark:border-black/10 dark:bg-white dark:text-neutral-950 dark:shadow-sm dark:hover:bg-neutral-100"
         >
-          <PiArrowLeft className="h-3.5 w-3.5" aria-hidden />
+          <PiArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         </button>
       ) : null}
       <div

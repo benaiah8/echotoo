@@ -8,7 +8,24 @@ import { store } from "./app/store";
 // [PHASE 1.1] Initialize storage manager before app starts
 // Why: Enables unified storage layer for all caches, better performance, Capacitor-ready
 import { initializeDefaultStorage } from "./lib/storage/initializeDefaultStorage";
-import { isCapacitor } from "./lib/storage/utils/capacitorDetection";
+import {
+  isCapacitor,
+  isIOS,
+  isNativeApp,
+} from "./lib/storage/utils/capacitorDetection";
+
+function applyNativeIOSViewportLock() {
+  if (!isNativeApp() || !isIOS()) return;
+  const viewport = document.querySelector<HTMLMetaElement>(
+    'meta[name="viewport"]'
+  );
+  viewport?.setAttribute(
+    "content",
+    "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  );
+}
+
+applyNativeIOSViewportLock();
 
 // Initialize storage manager before app starts
 initializeDefaultStorage();

@@ -495,12 +495,12 @@ export default function FloatingCommentInput({
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploadingImage}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-[var(--border)] text-[var(--text)] transition-colors hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[var(--border)] text-[var(--text)] transition-colors hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isUploadingImage ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--text)]/30 border-t-[var(--text)]" />
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--text)]/30 border-t-[var(--text)]" />
                     ) : (
-                      <PiImage size={12} className="block" />
+                      <PiImage size={18} className="block" />
                     )}
                   </button>
                   <button
@@ -508,11 +508,11 @@ export default function FloatingCommentInput({
                     disabled={
                       (!content.trim() && !uploadedImage) || isSubmitting
                     }
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--brand)] text-[var(--brand-ink)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--brand)] text-[var(--brand-ink)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Send comment"
                   >
                     <PiPaperPlaneRight
-                      size={16}
+                      size={20}
                       className="block shrink-0"
                       aria-hidden
                     />
@@ -571,23 +571,23 @@ export default function FloatingCommentInput({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploadingImage}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] transition-colors hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] transition-colors hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isUploadingImage ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--text)]/30 border-t-[var(--text)]" />
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--text)]/30 border-t-[var(--text)]" />
             ) : (
-              <PiImage size={14} />
+              <PiImage size={18} />
             )}
           </button>
           {hiddenFileInput}
           <button
             type="submit"
             disabled={(!content.trim() && !uploadedImage) || isSubmitting}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-500 text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-500 text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg
-              width="16"
-              height="16"
+              width="20"
+              height="20"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"

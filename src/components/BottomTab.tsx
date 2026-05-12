@@ -37,6 +37,10 @@ import {
 import { EDIT_POST_DATA_KEY } from "../lib/editPostBootstrap";
 import { isCreateFlowResumedLocalDraft } from "../lib/draftEntryGate";
 import BottomTabPeekOwl from "./BottomTabPeekOwl";
+import {
+  isAndroid,
+  isIOS,
+} from "../lib/storage/utils/capacitorDetection";
 
 /**
  * When true, the bottom tab follows window scroll: hides on scroll-down, shows on scroll-up.
@@ -655,7 +659,7 @@ function BottomTab() {
         <Avatar
           url={avatarUrl || undefined}
           name={displayName || " "}
-          size={32}
+          size={34}
           userId={authedId || null}
         />
       ) : (
@@ -689,6 +693,11 @@ function BottomTab() {
   ];
 
   const avatarTabDisplayUrl = avatarDisplayUrl(avatarUrl);
+  const bottomTabBottomOffset = isAndroid()
+    ? "max(14px, min(32px, var(--safe-area-bottom-layout, 0px)))"
+    : isIOS()
+    ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
+    : "8px";
 
   return (
     <>
@@ -747,8 +756,7 @@ function BottomTab() {
             "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
           ].join(" ")}
           style={{
-            bottom:
-              "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))",
+            bottom: bottomTabBottomOffset,
           }}
         >
           <div className="py-[5px] px-[5px] flex items-center justify-center gap-2">
@@ -815,7 +823,7 @@ function BottomTab() {
                       ) : index === 1 ? (
                         /* Create: route /create = inverted pill + bold plus; overlay open = same frosted pill as Home + bold plus */
                         <div
-                          className={`flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0 [&_svg]:origin-center transition-transform duration-200 ease-out ${
+                          className={`flex items-center justify-center [&_svg]:w-[28px] [&_svg]:h-[28px] [&_svg]:shrink-0 [&_svg]:origin-center transition-transform duration-200 ease-out ${
                             isActive && createRouteActive
                               ? "text-[var(--bottom-tab-create-active-fg)] scale-[1.07]"
                               : isActive
@@ -828,7 +836,7 @@ function BottomTab() {
                       ) : (
                         <div
                           className={[
-                            "flex items-center justify-center [&_svg]:w-[26px] [&_svg]:h-[26px] [&_svg]:shrink-0",
+                            "flex items-center justify-center [&_svg]:w-[28px] [&_svg]:h-[28px] [&_svg]:shrink-0",
                             isActive && (index === 0 || index === 2)
                               ? "text-[var(--bottom-tab-feed-notif-active-fg)]"
                               : "",
