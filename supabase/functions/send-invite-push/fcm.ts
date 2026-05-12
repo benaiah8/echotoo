@@ -1,6 +1,6 @@
 /**
- * FCM HTTP v1 — isolated helpers (Android only for v1).
- * Copy kept in sync with send-post-push/fcm.ts (self-contained deploy bundle).
+ * FCM HTTP v1 — isolated helpers for invite pushes.
+ * Android stays data-only for native custom rendering; iOS uses a visible alert.
  * Note: `import { SignJWT }` — not `import * as jose` + `jose.SignJWT` — some Deno/edge
  * bundles break class construction on namespace imports (SignJWT must be used with `new`).
  */
@@ -77,13 +77,16 @@ export type FcmDataPayload = {
   target?: string;
 };
 
+export type PushDevicePlatform = "android" | "ios";
+
 /**
- * Send one FCM v1 message to a single device token (Android).
+ * Send one FCM v1 message to a single device token.
  */
 export async function sendFcmToDevice(
   accessToken: string,
   projectId: string,
   deviceToken: string,
+  platform: PushDevicePlatform,
   data: FcmDataPayload
 ): Promise<{ ok: boolean; status: number; errorText?: string }> {
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
@@ -119,13 +122,37 @@ export async function sendFcmToDevice(
     fcmData.target = data.target;
   }
 
+  const notification = {
+    title: data.title ?? "New invite",
+    body: data.body ?? "Tap to view invite",
+  };
+
+  const message =
+    platform === "ios"
+      ? {
+          token: deviceToken,
+          notification,
+          apns: {
+            payload: {
+              aps: {
+                alert: notification,
+                sound: "default",
+              },
+            },
+          },
+          data: fcmData,
+        }
+      : {
+          token: deviceToken,
+          android: {
+            priority: "HIGH",
+          },
+          data: fcmData,
+        };
+
   const body = {
     message: {
-      token: deviceToken,
-      android: {
-        priority: "HIGH",
-      },
-      data: fcmData,
+      ...message,
     },
   };
 

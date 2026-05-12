@@ -1,7 +1,7 @@
 /**
  * send-invite-push — v1
  * Authenticated: caller must be the inviter (actor_id). Post must exist; post_type must match.
- * Sends one FCM message per Android device token for the given invitee auth user ids.
+ * Sends one FCM message per Android/iOS device token for the given invitee auth user ids.
  * Tap payload: postId + postType (same contract as send-post-push); optional inviteId when
  * a single invite row is implied (from request body only).
  * Notification: title "{displayName} invited you" (personal / unknown thread_kind) or
@@ -13,6 +13,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import {
   getFcmAccessToken,
   sendFcmToDevice,
+  type PushDevicePlatform,
 } from "./fcm.ts";
 
 /** Keep in sync with `INVITE_NOTE_MAX_LENGTH` in `src/api/services/invites.ts`. */
@@ -47,6 +48,15 @@ type InvitePushBody = {
   thread_kind?: string;
   target?: string;
 };
+
+type PushDeviceTarget = {
+  token: string;
+  platform: PushDevicePlatform;
+};
+
+function isPushDevicePlatform(value: unknown): value is PushDevicePlatform {
+  return value === "android" || value === "ios";
+}
 
 function toPublicMediaAvatarUrl(
   supabaseUrl: string,
@@ -340,7 +350,7 @@ Deno.serve(async (req) => {
     .from("push_devices")
     .select("token, user_id, platform")
     .in("user_id", authIdList)
-    .eq("platform", "android");
+    .in("platform", ["android", "ios"]);
 
   if (devicesError) {
     console.error("[send-invite-push] push_devices:", devicesError.message);
@@ -355,21 +365,22 @@ Deno.serve(async (req) => {
     );
   }
 
-  const tokens = [
-    ...new Set(
-      (deviceRows ?? [])
-        .map((r) => (r.token ?? "").trim())
-        .filter((t) => t.length > 0)
-    ),
-  ];
+  const targetByPlatformAndToken = new Map<string, PushDeviceTarget>();
+  for (const row of deviceRows ?? []) {
+    const token = ((row as { token?: string | null }).token ?? "").trim();
+    const platform = (row as { platform?: unknown }).platform;
+    if (!token || !isPushDevicePlatform(platform)) continue;
+    targetByPlatformAndToken.set(`${platform}:${token}`, { token, platform });
+  }
+  const pushTargets = [...targetByPlatformAndToken.values()];
 
-  if (tokens.length === 0) {
+  if (pushTargets.length === 0) {
     return jsonResponse(
       {
         ok: true,
         sent: 0,
-        skipped: "no_android_tokens",
-        message: "No Android device tokens for recipients",
+        skipped: "no_push_tokens",
+        message: "No push device tokens for recipients",
       },
       200
     );
@@ -463,11 +474,12 @@ Deno.serve(async (req) => {
   let sent = 0;
   const failures: { status: number; detail?: string }[] = [];
 
-  for (const deviceToken of tokens) {
+  for (const targetDevice of pushTargets) {
     const result = await sendFcmToDevice(
       accessToken,
       projectId,
-      deviceToken,
+      targetDevice.token,
+      targetDevice.platform,
       fcmDataPayload
     );
     if (result.ok) {
@@ -481,7 +493,7 @@ Deno.serve(async (req) => {
     {
       ok: true,
       sent,
-      attempted: tokens.length,
+      attempted: pushTargets.length,
       failures: failures.length > 0 ? failures.slice(0, 5) : undefined,
     },
     200

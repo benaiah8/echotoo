@@ -15,37 +15,34 @@ export function useCreateKeyboardInset(): {
 } {
   const [vvInset, setVvInset] = useState(0);
   const [capInset, setCapInset] = useState(0);
+  const [layoutShrinkPx, setLayoutShrinkPx] = useState(0);
   /** Max innerHeight seen while keyboard was closed — used to detect Android WebView resize vs gap under-reporting. */
   const peakInnerHeightRef = useRef(
     typeof window !== "undefined" ? window.innerHeight : 0
   );
 
-  const updateFromVisualViewport = useCallback(() => {
-    const vv = window.visualViewport;
-    if (!vv) {
-      setVvInset(0);
-      return;
-    }
+  const updateViewportMetrics = useCallback(() => {
     const ih = window.innerHeight;
-    const gap = Math.max(0, ih - vv.height - vv.offsetTop);
+    const vv = window.visualViewport;
+    const gap = vv ? Math.max(0, ih - vv.height - vv.offsetTop) : 0;
     setVvInset(gap);
+    setLayoutShrinkPx(Math.max(0, peakInnerHeightRef.current - ih));
   }, []);
 
   useEffect(() => {
     const vv = window.visualViewport;
-    if (!vv) return;
 
-    updateFromVisualViewport();
-    vv.addEventListener("resize", updateFromVisualViewport);
-    vv.addEventListener("scroll", updateFromVisualViewport);
-    window.addEventListener("resize", updateFromVisualViewport);
+    updateViewportMetrics();
+    vv?.addEventListener("resize", updateViewportMetrics);
+    vv?.addEventListener("scroll", updateViewportMetrics);
+    window.addEventListener("resize", updateViewportMetrics);
 
     return () => {
-      vv.removeEventListener("resize", updateFromVisualViewport);
-      vv.removeEventListener("scroll", updateFromVisualViewport);
-      window.removeEventListener("resize", updateFromVisualViewport);
+      vv?.removeEventListener("resize", updateViewportMetrics);
+      vv?.removeEventListener("scroll", updateViewportMetrics);
+      window.removeEventListener("resize", updateViewportMetrics);
     };
-  }, [updateFromVisualViewport]);
+  }, [updateViewportMetrics]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -86,6 +83,9 @@ export function useCreateKeyboardInset(): {
         peakInnerHeightRef.current,
         window.innerHeight
       );
+      setLayoutShrinkPx(
+        Math.max(0, peakInnerHeightRef.current - window.innerHeight)
+      );
     }
   }, [vvInset, capInset]);
 
@@ -95,11 +95,7 @@ export function useCreateKeyboardInset(): {
   const keyboardInsetPx = (() => {
     if (vvInset > OPEN_THRESHOLD_PX) return vvInset;
 
-    if (capInset > OPEN_THRESHOLD_PX && typeof window !== "undefined") {
-      const layoutShrinkPx = Math.max(
-        0,
-        peakInnerHeightRef.current - window.innerHeight
-      );
+    if (capInset > OPEN_THRESHOLD_PX) {
       const shrunk = layoutShrinkPx > LAYOUT_SHRUNK_PX;
 
       if (platform === "android" && shrunk) return Math.max(0, vvInset);

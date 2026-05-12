@@ -289,6 +289,8 @@ export type ExplicitNativePushResult = {
   openedSettings: boolean;
   /** Last known `receive` permission from the plugin (when checked). */
   permissionReceive?: PushPermissionReceiveState;
+  /** True when the OS permission was already granted before this user action. */
+  permissionAlreadyGranted?: boolean;
   /** Whether a Supabase session user was present when registration was attempted. */
   sessionOk?: boolean;
   /** iOS: APNs delivered `registration` before timeout (readiness only). */
@@ -312,10 +314,19 @@ export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult
   message: string;
 } {
   if (result.skipped) {
-    return { kind: "success", message: "Notifications enabled" };
+    return { kind: "none", message: "" };
   }
   if (!result.granted) {
-    return { kind: "none", message: "" };
+    if (result.permissionReceive) {
+      return {
+        kind: "error",
+        message: "Notifications are off. You can enable them in Settings.",
+      };
+    }
+    return {
+      kind: "error",
+      message: "Couldn’t enable notifications. Please try again.",
+    };
   }
   if (result.sessionOk === false) {
     return {
@@ -328,34 +339,32 @@ export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult
 
   if (platform === "ios" && result.sessionOk === true) {
     if (result.dbUpsertStatus === "ok") {
-      return { kind: "success", message: "Notification token saved" };
-    }
-    if (result.dbUpsertStatus === "error") {
       return {
-        kind: "error",
-        message: "Notification token received, but save failed. Please try again.",
+        kind: "success",
+        message: result.permissionAlreadyGranted
+          ? "Notifications are up to date"
+          : "Notifications enabled",
       };
     }
-    if (result.fcmTokenStatus === "empty") {
+    if (
+      result.dbUpsertStatus === "error" ||
+      result.fcmTokenStatus === "empty" ||
+      result.fcmTokenStatus === "error"
+    ) {
       return {
         kind: "error",
-        message: result.iosApnsRegistrationSeen === false
-          ? "APNs registration timed out; FCM token was empty. Please try again."
-          : "FCM token was empty. Please try again.",
-      };
-    }
-    if (result.fcmTokenStatus === "error") {
-      return {
-        kind: "error",
-        message: result.iosApnsRegistrationSeen === false
-          ? "APNs registration timed out; FCM token failed. Please try again."
-          : "FCM token failed. Please try again.",
+        message: "Couldn’t enable notifications. Please try again.",
       };
     }
   }
 
   if (platform === "android" && result.registered) {
-    return { kind: "success", message: "Notifications enabled" };
+    return {
+      kind: "success",
+      message: result.permissionAlreadyGranted
+        ? "Notifications are up to date"
+        : "Notifications enabled",
+    };
   }
 
   return { kind: "none", message: "" };
@@ -404,6 +413,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
 
   try {
     let perm = await PushNotifications.checkPermissions();
+    const permissionAlreadyGranted = perm.receive === "granted";
     console.log("[DBG:PUSH] checkPermissions", {
       t: Date.now(),
       platform,
@@ -427,6 +437,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
         registered: false,
         openedSettings: false,
         permissionReceive,
+        permissionAlreadyGranted,
       };
       console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
         t: Date.now(),
@@ -449,6 +460,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
         registered: false,
         openedSettings: false,
         permissionReceive,
+        permissionAlreadyGranted,
         sessionOk: false,
       };
       console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
@@ -485,6 +497,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
         registered: iosRegistered,
         openedSettings: false,
         permissionReceive,
+        permissionAlreadyGranted,
         sessionOk: true,
         iosApnsRegistrationSeen: apnsOutcome.seen,
         iosApnsRegistrationError: apnsOutcome.error ?? null,
@@ -516,6 +529,7 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       registered: true,
       openedSettings: false,
       permissionReceive,
+      permissionAlreadyGranted,
       sessionOk: true,
     };
     console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {

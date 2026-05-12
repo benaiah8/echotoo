@@ -617,6 +617,11 @@ export default function GroupInviteThreadOverlay({
   const safeHorizontalPad =
     "pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))]";
   const scrollPadTop = `calc(env(safe-area-inset-top, 0px) + ${SCROLL_PAD_TOP_PX}px)`;
+  const keyboardInsetRoundedPx = Math.max(0, Math.round(keyboardInsetPx));
+  const composerBottomGap =
+    keyboardInsetRoundedPx > 0
+      ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
+      : "max(0.5rem, var(--safe-area-bottom-layout))";
 
   if (!open) return null;
 
@@ -632,7 +637,10 @@ export default function GroupInviteThreadOverlay({
     return Array.from(new Set(bits));
   };
 
-  const scrollPadBottom = `${bottomChromeHeightPx}px`;
+  const scrollPadBottom =
+    keyboardInsetRoundedPx > 0
+      ? `max(0px, calc(${bottomChromeHeightPx}px - ${keyboardInsetRoundedPx}px))`
+      : `${bottomChromeHeightPx}px`;
 
   const sheetParticipants = bundle?.participants ?? [];
 
@@ -950,7 +958,7 @@ export default function GroupInviteThreadOverlay({
           ref={bottomChromeRef}
           className={`pointer-events-none absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center gap-1.5 pb-1 ${safeHorizontalPad}`}
           style={{
-            paddingBottom: `calc(var(--safe-area-bottom-layout) + ${keyboardInsetPx}px + max(0.5rem, env(safe-area-inset-bottom, 0px)))`,
+            paddingBottom: composerBottomGap,
           }}
         >
           <div className="space-y-1.5">
@@ -1166,7 +1174,7 @@ export default function GroupInviteThreadOverlay({
         <div
           className="absolute bottom-0 left-0 right-0 z-20 px-4"
           style={{
-            paddingBottom: `calc(var(--safe-area-bottom-layout) + ${keyboardInsetPx}px + 0.75rem)`,
+            paddingBottom: composerBottomGap,
           }}
         />
       ) : null}
