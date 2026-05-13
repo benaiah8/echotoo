@@ -574,18 +574,28 @@ export default function NotificationList({
     }
 
     if (loading) return;
+    if (loadingMore) return;
 
-    const dedupeKey = searchParams.toString();
-    if (processedInvitePushDeepLinks.has(dedupeKey)) return;
+    const pushIntentKey = searchParams.toString();
+    if (pushInviteIntentKeyRef.current !== pushIntentKey) {
+      pushInviteIntentKeyRef.current = pushIntentKey;
+      pushInviteAutoLoadsRef.current = 0;
+      pushInviteLastTriggeredLoadAtLenRef.current = null;
+      invitePushSubFilterClearedForIntentRef.current = null;
+      pushHighlightAppliedForIntentRef.current = null;
+    }
 
     const inviteIdQ = searchParams.get("inviteId")?.trim() ?? "";
     const threadIdQ = searchParams.get("threadId")?.trim() ?? "";
 
-    processedInvitePushDeepLinks.add(dedupeKey);
-
     if (!inviteIdQ && !threadIdQ) {
       navigate(Paths.notification, { replace: true });
       return;
+    }
+
+    if (invitePushSubFilterClearedForIntentRef.current !== pushIntentKey) {
+      invitePushSubFilterClearedForIntentRef.current = pushIntentKey;
+      setInviteSubFilter(null);
     }
 
     const match = notifications.find((n) => {
@@ -602,26 +612,51 @@ export default function NotificationList({
       return false;
     });
 
-    navigate(Paths.notification, { replace: true });
-
     if (match) {
-      setPushHighlightNotificationId(match.id);
-      if (highlightClearTimerRef.current != null) {
-        clearTimeout(highlightClearTimerRef.current);
-      }
-      highlightClearTimerRef.current = setTimeout(() => {
-        setPushHighlightNotificationId(null);
-        highlightClearTimerRef.current = null;
-      }, 4500);
-      const id = match.id;
-      requestAnimationFrame(() => {
+      if (pushHighlightAppliedForIntentRef.current !== pushIntentKey) {
+        pushHighlightAppliedForIntentRef.current = pushIntentKey;
+        setPushHighlightNotificationId(match.id);
+        if (highlightClearTimerRef.current != null) {
+          clearTimeout(highlightClearTimerRef.current);
+        }
+        highlightClearTimerRef.current = setTimeout(() => {
+          setPushHighlightNotificationId(null);
+          highlightClearTimerRef.current = null;
+        }, 4500);
+        const id = match.id;
         requestAnimationFrame(() => {
-          const el = inviteRowRefs.current.get(id);
-          el?.scrollIntoView({ block: "center", behavior: "smooth" });
+          requestAnimationFrame(() => {
+            const el = inviteRowRefs.current.get(id);
+            el?.scrollIntoView({ block: "center", behavior: "smooth" });
+          });
         });
-      });
+      }
+      navigate(Paths.notification, { replace: true });
+      return;
     }
-  }, [isVisible, searchParams, listView, loading, notifications, navigate]);
+
+    if (
+      hasMore &&
+      pushInviteAutoLoadsRef.current < MAX_PUSH_INVITE_AUTO_LOADS &&
+      pushInviteLastTriggeredLoadAtLenRef.current !== notifications.length
+    ) {
+      pushInviteLastTriggeredLoadAtLenRef.current = notifications.length;
+      pushInviteAutoLoadsRef.current += 1;
+      void loadNotificationsRef.current(notifications.length, true);
+      return;
+    }
+
+    navigate(Paths.notification, { replace: true });
+  }, [
+    isVisible,
+    searchParams,
+    listView,
+    loading,
+    loadingMore,
+    hasMore,
+    notifications,
+    navigate,
+  ]);
 
   /** Refresh “other view” unread dots + align with bottom tab (same event/caches) */
   useEffect(() => {
