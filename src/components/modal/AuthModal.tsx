@@ -385,6 +385,19 @@ const AuthModal = () => {
           "";
         await persistAppleFullNameAfterNativeSignIn(fullName);
 
+        const {
+          data: { session: postApple },
+        } = await supabase.auth.getSession();
+        const postUid = postApple?.user?.id;
+        if (postUid) {
+          invalidateProfileByUserIdCache(postUid);
+          window.dispatchEvent(
+            new CustomEvent("echotoo:native-apple-signin-complete", {
+              detail: { userId: postUid },
+            })
+          );
+        }
+
         return;
       }
 

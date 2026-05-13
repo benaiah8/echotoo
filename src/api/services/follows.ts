@@ -3,7 +3,33 @@ import { supabase } from "../../lib/supabaseClient";
 import { retry } from "../../lib/retry";
 import { dataCache } from "../../lib/dataCache";
 import { clearAllMutualFriendsCache } from "../../lib/mutualFriendsCache";
-import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
+import {
+  clearCachedProfile,
+  getCachedProfile,
+  setCachedProfile,
+} from "../../lib/profileCache";
+
+const PROFILE_CACHE_LS_KEY = "profile_cache";
+
+/** Remove legacy localStorage profile_cache rows for this auth user (keys are profile ids). */
+function clearLocalStorageProfileCacheRowsForAuthUserId(
+  authUserId: string
+): void {
+  if (!authUserId) return;
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_LS_KEY);
+    if (!raw) return;
+    const cache = JSON.parse(raw) as Record<string, { user_id?: string }>;
+    const profileIds = Object.keys(cache).filter(
+      (pid) => cache[pid]?.user_id === authUserId
+    );
+    for (const profileId of profileIds) {
+      clearCachedProfile(profileId);
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 // [OPTIMIZATION] Dedupe + cooldown for profiles?select=... to prevent burst calls
 const DEBUG_PROFILE_FETCH = false;
@@ -124,9 +150,13 @@ export function clearAuthCache() {
   }
 }
 
-/** Clear profileByUserId dedupe for a user (call after reset so re-check gets fresh data). */
+/**
+ * Clear profileByUserId dedupe and legacy profile_cache entries for this auth user
+ * so getProfileByUserId hits the DB (e.g. after Apple display_name backfill).
+ */
 export function invalidateProfileByUserIdCache(userId: string) {
   profileByUserIdDedupe.delete(userId);
+  clearLocalStorageProfileCacheRowsForAuthUserId(userId);
 }
 
 /** Return the viewer's *profile id* (not auth user id). */

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
 import { supabase } from "../../lib/supabaseClient";
@@ -18,6 +18,9 @@ interface OnboardingCheck {
   profileId: string;
 }
 
+/** Dispatched from AuthModal after native Apple sign-in + profile/metadata writes. */
+const NATIVE_APPLE_SIGNIN_COMPLETE_EVENT = "echotoo:native-apple-signin-complete";
+
 export default function OnboardingWrapper({
   children,
 }: {
@@ -34,33 +37,9 @@ export default function OnboardingWrapper({
   // [OPTIMIZATION] Fetch-once-per-session guard: avoid repeated getProfileByUserId when auth events fire
   const lastCheckedUserIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (authLoading) return;
-
-    if (!user?.id) {
-      lastCheckedUserIdRef.current = null;
-      setLoading(false);
-      return;
-    }
-
-    if (lastCheckedUserIdRef.current === user.id) {
-      setLoading(false);
-      return;
-    }
-
-    // Add timeout protection to prevent getting stuck
-    const timeoutId = setTimeout(() => {
-      console.warn("Onboarding check timed out after 10 seconds");
-      setLoading(false);
-    }, 10000);
-
-    checkOnboardingStatus().finally(() => {
-      clearTimeout(timeoutId);
-    });
-  }, [user?.id, authLoading]);
-
-  const checkOnboardingStatus = async () => {
-    if (!user?.id) {
+  const checkOnboardingStatus = useCallback(async () => {
+    const uid = user?.id;
+    if (!uid) {
       setLoading(false);
       return;
     }
@@ -70,7 +49,7 @@ export default function OnboardingWrapper({
       // Why: Centralizes profile fetching, reduces duplicate profiles?select=id requests
       // getProfileByUserId() now includes onboarding fields (member_no, onboarding_completed, onboarding_step)
       const { getProfileByUserId } = await import("../../api/services/follows");
-      const profile = await getProfileByUserId(user.id);
+      const profile = await getProfileByUserId(uid);
 
       if (!profile) {
         // [POST-DELETE FIX] getProfileByUserId excludes soft-deleted profiles.
@@ -96,7 +75,7 @@ export default function OnboardingWrapper({
               social_media_public: false,
               xp: 0,
             })
-            .eq("user_id", user.id)
+            .eq("user_id", uid)
             .not("deleted_at", "is", null)
             .select(
               "id, display_name, username, member_no, onboarding_completed, onboarding_step"
@@ -117,7 +96,7 @@ export default function OnboardingWrapper({
         // Step 1: Try reset soft-deleted profile first (treat returning user as new)
         let resolvedProfile = await tryResetSoftDeleted();
         if (resolvedProfile) {
-          clearResetCaches(resolvedProfile.id, user.id);
+          clearResetCaches(resolvedProfile.id, uid);
           // Reset always sets display_name/username null → needsProfile = true
           setOnboardingCheck({
             needsProfile: true,
@@ -128,7 +107,7 @@ export default function OnboardingWrapper({
           });
           setShowProfileCreation(true);
           setShowOnboarding(false);
-          lastCheckedUserIdRef.current = user.id;
+          lastCheckedUserIdRef.current = uid;
           setLoading(false);
           return;
         }
@@ -138,7 +117,7 @@ export default function OnboardingWrapper({
           const { data: newProfile, error: createError } = await supabase
             .from("profiles")
             .insert({
-              user_id: user.id,
+              user_id: uid,
               display_name: null,
               username: null,
               onboarding_completed: false,
@@ -160,7 +139,7 @@ export default function OnboardingWrapper({
             if (isDuplicateKey) {
               resolvedProfile = await tryResetSoftDeleted();
               if (resolvedProfile) {
-                clearResetCaches(resolvedProfile.id, user.id);
+                clearResetCaches(resolvedProfile.id, uid);
                 setOnboardingCheck({
                   needsProfile: true,
                   needsOnboarding:
@@ -171,7 +150,7 @@ export default function OnboardingWrapper({
                 });
                 setShowProfileCreation(true);
                 setShowOnboarding(false);
-                lastCheckedUserIdRef.current = user.id;
+                lastCheckedUserIdRef.current = uid;
                 setLoading(false);
                 return;
               }
@@ -194,7 +173,7 @@ export default function OnboardingWrapper({
           setShowOnboarding(false);
           if (needsProfile) setShowProfileCreation(true);
           else if (needsOnboarding) setShowOnboarding(true);
-          lastCheckedUserIdRef.current = user.id;
+          lastCheckedUserIdRef.current = uid;
         } catch (createErr) {
           console.error("Error creating profile:", createErr);
           setLoading(false);
@@ -223,13 +202,60 @@ export default function OnboardingWrapper({
         setShowOnboarding(true);
       }
 
-      lastCheckedUserIdRef.current = user.id;
+      lastCheckedUserIdRef.current = uid;
     } catch (error) {
       console.error("Error checking onboarding status:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (authLoading) return;
+
+    if (!user?.id) {
+      lastCheckedUserIdRef.current = null;
+      setLoading(false);
+      return;
+    }
+
+    if (lastCheckedUserIdRef.current === user.id) {
+      setLoading(false);
+      return;
+    }
+
+    // Add timeout protection to prevent getting stuck
+    const timeoutId = setTimeout(() => {
+      console.warn("Onboarding check timed out after 10 seconds");
+      setLoading(false);
+    }, 10000);
+
+    checkOnboardingStatus().finally(() => {
+      clearTimeout(timeoutId);
+    });
+  }, [user?.id, authLoading, checkOnboardingStatus]);
+
+  /** After native Apple: profile row + localStorage cache may update; re-fetch before gating UX. */
+  useEffect(() => {
+    const onNativeApple = (ev: Event) => {
+      const e = ev as CustomEvent<{ userId: string }>;
+      const id = e.detail?.userId;
+      if (!id || id !== user?.id) return;
+      invalidateProfileByUserIdCache(id);
+      lastCheckedUserIdRef.current = null;
+      setLoading(true);
+      void checkOnboardingStatus();
+    };
+    window.addEventListener(
+      NATIVE_APPLE_SIGNIN_COMPLETE_EVENT,
+      onNativeApple as EventListener
+    );
+    return () =>
+      window.removeEventListener(
+        NATIVE_APPLE_SIGNIN_COMPLETE_EVENT,
+        onNativeApple as EventListener
+      );
+  }, [user?.id, checkOnboardingStatus]);
 
   const handleProfileComplete = async () => {
     setShowProfileCreation(false);

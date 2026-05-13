@@ -326,9 +326,9 @@ export default function FullScreenProfileCreation({
       setError(null);
       const snap = initialProfileDataRef.current;
 
-      /** First-time create: pre-fill display name from Supabase auth if Apple/OAuth stored full_name. */
+      /** Pre-fill display name from auth user_metadata when profile row has no display_name (e.g. Apple). */
       const maybeHydrateDisplayFromAuthMetadata = async () => {
-        if (!isFirstTime || cancelled) return;
+        if (cancelled) return;
         const b = baselineRef.current;
         if (!b || b.displayName.trim()) return;
         const { data: sess } = await supabase.auth.getSession();
