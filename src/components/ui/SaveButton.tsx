@@ -28,6 +28,8 @@ interface SaveButtonProps {
   isSaved?: boolean;
   // [PHASE 3] Optional post data for personalization
   post?: FeedItem;
+  /** When `post` is omitted or lacks `type`, still treat as hangout for notification explainer eligibility. */
+  explainerPostType?: "hangout" | "experience";
 }
 
 export default function SaveButton({
@@ -39,6 +41,7 @@ export default function SaveButton({
   saveCount = 0,
   isSaved: initialIsSaved, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
   post, // [PHASE 3] Optional post data for personalization
+  explainerPostType,
 }: SaveButtonProps) {
   const [isSaved, setIsSaved] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -203,7 +206,10 @@ export default function SaveButton({
             }
           }
           // Contextual explainer (UI only): saved hangout → optional reminders; prefs gate auto frequency
-          if (post?.type === "hangout" && shouldShowHangoutExplainerAuto()) {
+          if (
+            (post?.type ?? explainerPostType) === "hangout" &&
+            shouldShowHangoutExplainerAuto()
+          ) {
             setHangoutReminderExplainerOpen(true);
           }
         }

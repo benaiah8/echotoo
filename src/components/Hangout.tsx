@@ -320,6 +320,7 @@ export default function Hangout({
             size={18}
             isSaved={effectiveIsSaved}
             post={post}
+            explainerPostType={type}
           />
         </div>
 

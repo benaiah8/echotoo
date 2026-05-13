@@ -215,6 +215,7 @@ export default function StickyPostActions({
           saveCount={displaySaveCount}
           showCount={true}
           post={post}
+          explainerPostType={postType}
         />
       </div>
 

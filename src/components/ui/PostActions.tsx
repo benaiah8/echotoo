@@ -200,6 +200,7 @@ export default function PostActions({
           saveCount={displaySaveCount}
           showCount={true}
           post={post} // [PHASE 3] Pass post for personalization
+          explainerPostType={postType}
         />
         <LikeButton
           postId={postId}
