@@ -23,6 +23,72 @@ import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
 import { pickRandomPresetAvatarValue } from "../../lib/avatarPresets";
 
+/**
+ * After Apple DB writes: clear profile fetch dedupe + legacy LS rows, then republish
+ * the latest row to client caches (mirrors FullScreenProfileCreation.save()).
+ */
+async function finalizeAppleProfileClientSync(userId: string): Promise<void> {
+  invalidateProfileByUserIdCache(userId);
+
+  const { data: row, error } = await supabase
+    .from("profiles")
+    .select(
+      "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
+    )
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(
+      "[AuthModal] Apple profile refetch for client sync:",
+      error.message
+    );
+    return;
+  }
+  if (!row?.id) return;
+
+  const profilePayload = {
+    id: row.id,
+    user_id: row.user_id,
+    username: row.username ?? null,
+    display_name: row.display_name ?? null,
+    avatar_url: row.avatar_url ?? null,
+    bio: row.bio ?? null,
+    xp: row.xp ?? 0,
+    member_no: row.member_no ?? null,
+    instagram_url: row.instagram_url ?? null,
+    tiktok_url: row.tiktok_url ?? null,
+    telegram_url: row.telegram_url ?? null,
+    is_private: row.is_private ?? false,
+    social_media_public: row.social_media_public ?? false,
+    user_number: row.user_number ?? null,
+    onboarding_completed: row.onboarding_completed ?? null,
+    onboarding_step: row.onboarding_step ?? null,
+  };
+
+  const { setCachedProfile } = await import("../../lib/profileCache");
+  const { setCachedAvatar, preloadAvatar } = await import(
+    "../../lib/avatarCache"
+  );
+  const { clearCachedFollowCounts } = await import(
+    "../../lib/followCountsCache"
+  );
+
+  setCachedProfile(profilePayload);
+  if (profilePayload.avatar_url) {
+    setCachedAvatar(profilePayload.user_id, profilePayload.avatar_url);
+    preloadAvatar(profilePayload.avatar_url);
+  }
+  clearCachedFollowCounts(row.id);
+
+  window.dispatchEvent(
+    new CustomEvent("profile:updated", {
+      detail: { id: row.id, profile: profilePayload },
+    })
+  );
+}
+
 /** Narrower glass shell (~80% viewport) so auth feels compact on phones */
 const AUTH_MODAL_SHELL_CLASS = "!max-w-[80vw] w-full";
 
@@ -61,13 +127,13 @@ async function persistAppleFullNameAfterNativeSignIn(
 
   if (selErr) {
     console.warn("[AuthModal] Apple profile lookup:", selErr.message);
-    invalidateProfileByUserIdCache(userId);
+    await finalizeAppleProfileClientSync(userId);
     return;
   }
 
   if (!existing) {
     if (!trimmed) {
-      invalidateProfileByUserIdCache(userId);
+      await finalizeAppleProfileClientSync(userId);
       return;
     }
     const { error: insErr } = await supabase.from("profiles").insert({
@@ -125,7 +191,7 @@ async function persistAppleFullNameAfterNativeSignIn(
     }
   }
 
-  invalidateProfileByUserIdCache(userId);
+  await finalizeAppleProfileClientSync(userId);
 }
 
 /** Our local form state (username/fullName optional for login) */

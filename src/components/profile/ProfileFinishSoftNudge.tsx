@@ -102,52 +102,66 @@ export default function ProfileFinishSoftNudge() {
 
   return (
     <div
-      className="pointer-events-none fixed left-3 right-3 z-[34] max-w-lg mx-auto"
+      className="pointer-events-none fixed left-1/2 z-[34] w-[min(360px,calc(100vw-1.5rem))] -translate-x-1/2"
       style={{
         bottom: isDesktop
           ? "calc(16px + env(safe-area-inset-bottom, 0px))"
-          : "calc(72px + env(safe-area-inset-bottom, 0px))",
+          : "calc(88px + env(safe-area-inset-bottom, 0px))",
       }}
       role="region"
       aria-label="Profile setup suggestion"
     >
       <div
-        className="pointer-events-auto rounded-2xl border border-[var(--border)]/80 bg-[var(--glass-bg)] px-3.5 py-3 shadow-lg backdrop-blur-[var(--glass-blur)]"
+        className="pointer-events-auto relative overflow-hidden rounded-2xl border border-[var(--border)] shadow-[0_12px_40px_-10px_rgba(0,0,0,0.38)] dark:shadow-[0_14px_44px_-10px_rgba(0,0,0,0.55)]"
+        style={{
+          WebkitBackdropFilter: "blur(18px) saturate(1.15)",
+          backdropFilter: "blur(18px) saturate(1.15)",
+        }}
       >
-        <div className="flex items-start gap-2.5">
-          <div className="min-w-0 flex-1">
-            <h3 className="text-[13px] font-semibold leading-tight text-[var(--text)]">
-              Finish setting up your profile
-            </h3>
-            <p className="mt-1 text-[11px] leading-snug text-[var(--text)]/70">
-              Add a bio, Instagram, or choose your Echo avatar so people know
-              it&apos;s you.
-            </p>
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={goEdit}
-                className="rounded-full bg-[var(--brand)] px-3 py-1.5 text-[11px] font-medium text-[var(--brand-ink)] transition-opacity hover:opacity-90"
-              >
-                Edit profile
-              </button>
-              <button
-                type="button"
-                onClick={dismiss}
-                className="rounded-full px-3 py-1.5 text-[11px] font-medium text-[var(--text)]/60 hover:text-[var(--text)]/90"
-              >
-                Later
-              </button>
+        <div
+          className="absolute inset-0 bg-[var(--surface-2)]/82 dark:bg-[var(--surface-2)]/72"
+          aria-hidden
+        />
+        <div
+          className="absolute inset-0 bg-[var(--glass-bg)]/95 opacity-95 dark:opacity-90"
+          aria-hidden
+        />
+        <div className="relative z-10 px-3.5 py-3">
+          <div className="flex items-start gap-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-[14px] font-bold leading-tight tracking-tight text-[var(--text)]">
+                Finish setting up your profile
+              </h3>
+              <p className="mt-1.5 text-[12px] leading-snug text-[var(--text)]/88">
+                Add a bio, Instagram, or choose your Echo avatar so people know
+                it&apos;s you.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={goEdit}
+                  className="rounded-full bg-[var(--brand)] px-4 py-2 text-xs font-semibold text-[var(--brand-ink)] shadow-sm transition-opacity hover:opacity-90"
+                >
+                  Edit profile
+                </button>
+                <button
+                  type="button"
+                  onClick={dismiss}
+                  className="rounded-full border border-[var(--border)] bg-[var(--surface)]/55 px-4 py-2 text-xs font-semibold text-[var(--text)]/85 backdrop-blur-sm transition-colors hover:bg-[var(--surface)]/75 hover:text-[var(--text)]"
+                >
+                  Later
+                </button>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={dismiss}
+              className="shrink-0 rounded-md p-0.5 text-[var(--text)]/45 transition-colors hover:bg-[var(--text)]/[0.08] hover:text-[var(--text)]/75"
+              aria-label="Dismiss"
+            >
+              <PiX size={16} aria-hidden />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={dismiss}
-            className="shrink-0 rounded-md p-0.5 text-[var(--text)]/35 transition-colors hover:bg-[var(--text)]/[0.06] hover:text-[var(--text)]/65"
-            aria-label="Dismiss"
-          >
-            <PiX size={16} aria-hidden />
-          </button>
         </div>
       </div>
     </div>

@@ -243,7 +243,7 @@ export default function OnboardingWrapper({
       if (!id || id !== user?.id) return;
       invalidateProfileByUserIdCache(id);
       lastCheckedUserIdRef.current = null;
-      setLoading(true);
+      /** Background re-check: avoid global `loading` so FullScreenProfileCreation is not replaced by the spinner. */
       void checkOnboardingStatus();
     };
     window.addEventListener(
