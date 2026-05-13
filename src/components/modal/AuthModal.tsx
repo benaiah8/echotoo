@@ -4,13 +4,11 @@ import { useDispatch, useSelector } from "react-redux";
 import { PiAppleLogo, PiEye, PiEyeSlash } from "react-icons/pi";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
-import { Capacitor } from "@capacitor/core";
 import { supabase } from "../../lib/supabaseClient";
 import toast from "react-hot-toast";
 import { dbg } from "../../lib/authDebug";
 import {
   isCapacitor,
-  isIOS,
   isNativeApp,
 } from "../../lib/storage/utils/capacitorDetection";
 import { getAuthRedirectUrl } from "../../lib/authRedirect";
@@ -291,13 +289,6 @@ const AuthModal = () => {
   const handleApple = async () => {
     try {
       setLoading(true);
-
-      console.log("[AUTH_NATIVE_APPLE]", {
-        isNativeApp: isNativeApp(),
-        isIOS: isIOS(),
-        canUseNativeAppleSignIn: canUseNativeAppleSignIn(),
-        getPlatform: Capacitor.getPlatform(),
-      });
 
       if (canUseNativeAppleSignIn()) {
         dbg("Apple:native_start", {});
