@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { PiAppleLogo, PiGooglePlayLogo } from "react-icons/pi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { isIOS, isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 const CONTACT_EMAIL = "blueprtdigital@gmail.com";
 
@@ -14,6 +15,8 @@ interface WelcomeModalProps {
 }
 
 export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
+  const hideGooglePlayRow = isNativeApp() && isIOS();
+
   // Disable body scroll when modal is open
   useEffect(() => {
     if (isOpen) {
@@ -113,10 +116,12 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
               </button>
             </div>
 
-            {/* App Store & Play Store Section */}
+            {/* App Store (always); Play Store hidden on native iOS to avoid irrelevant store copy in review builds */}
             <div className="mb-8">
               <p className="text-sm text-[var(--text)]/70 mb-4">
-                Download our mobile app:
+                {hideGooglePlayRow
+                  ? "EchoToo on the App Store:"
+                  : "Download our mobile app:"}
               </p>
 
               <div className="flex flex-col gap-3">
@@ -129,14 +134,18 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
                   </span>
                 </div>
 
-                {/* Play Store */}
-                <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                  <PiGooglePlayLogo className="text-[var(--text)] text-xl shrink-0" aria-hidden />
-                  <span className="text-[var(--text)]">Google Play</span>
-                  <span className="text-xs text-[var(--text)]/50 ml-auto">
-                    Coming Soon
-                  </span>
-                </div>
+                {!hideGooglePlayRow ? (
+                  <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
+                    <PiGooglePlayLogo
+                      className="text-[var(--text)] text-xl shrink-0"
+                      aria-hidden
+                    />
+                    <span className="text-[var(--text)]">Google Play</span>
+                    <span className="text-xs text-[var(--text)]/50 ml-auto">
+                      Coming Soon
+                    </span>
+                  </div>
+                ) : null}
               </div>
             </div>
 

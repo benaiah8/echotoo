@@ -1,15 +1,20 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import {
   PiArrowCounterClockwise,
   PiBell,
+  PiChatCircleText,
+  PiFileText,
   PiFlag,
   PiList,
   PiMagnifyingGlass,
+  PiMegaphone,
   PiPencilSimple,
   PiProhibit,
   PiShareFat,
   PiSignOut,
+  PiTrashSimple,
 } from "react-icons/pi";
 import { Capacitor } from "@capacitor/core";
 import Logo from "../ui/Logo";
@@ -18,6 +23,7 @@ import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplaine
 import ThemeSwitch from "../ui/ThemeSwitch";
 import { getPublicShareBaseUrl } from "../../lib/publicSiteUrl";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import { Paths } from "../../router/Paths";
 import toast from "react-hot-toast";
 import {
   getPushRegistrationUserFeedback,
@@ -42,7 +48,7 @@ const PROFILE_ACTION_MENU_TOP_OFFSET_PX = 16;
 const PROFILE_ACTION_MENU_BETWEEN_PILLS_PX = 6;
 
 /** Minimum width for the stacked action pills (all match widest); fits “Allow notifications” on one line. */
-const PROFILE_ACTION_MENU_MIN_WIDTH_PX = 168;
+const PROFILE_ACTION_MENU_MIN_WIDTH_PX = 200;
 
 const profileActionIconWrapClass =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]";
@@ -89,6 +95,7 @@ export default function ProfileTopBar({
   onRequestEditProfile?: () => void;
   onRequestLogout?: () => void;
 }) {
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [showShareModal, setShowShareModal] = useState(false);
   const [showHangoutReminderModal, setShowHangoutReminderModal] =
@@ -485,6 +492,95 @@ export default function ProfileTopBar({
                   <PiShareFat size={14} />
                 </span>
               </button>
+            )}
+            {showEditProfile && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    navigate(Paths.privacy);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Privacy policy
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiFileText size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    navigate(Paths.terms);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Terms of service
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiFileText size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    navigate(Paths.reporting);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Reporting
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiMegaphone size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    navigate(Paths.support);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Support
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiChatCircleText size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    navigate(Paths.deleteAccount);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Delete account
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiTrashSimple size={14} aria-hidden />
+                  </span>
+                </button>
+              </>
             )}
             {showLogout && (
               <button
