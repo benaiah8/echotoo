@@ -552,7 +552,7 @@ export default function PersonalInviteThreadOverlay({
   const isIOSDevice = isIOS();
   const composerBottomGap = isIOSDevice
     ? keyboardInsetRoundedPx > 0
-      ? `max(0.375rem, calc(${keyboardInsetRoundedPx}px - min(24px, var(--safe-area-bottom-layout)) + 0.25rem))`
+      ? `max(0.375rem, calc(${keyboardInsetRoundedPx}px - min(24px, var(--safe-area-bottom-layout)) + 0.875rem))`
       : "max(0.5rem, calc(var(--safe-area-bottom-layout) - 20px))"
     : keyboardInsetRoundedPx > 0
     ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`

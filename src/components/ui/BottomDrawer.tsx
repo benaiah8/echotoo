@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { isAndroid } from "../../lib/storage/utils/capacitorDetection";
 
 interface BottomDrawerProps {
   open: boolean;
@@ -84,10 +85,11 @@ export default function BottomDrawer({
   const [isMounted, setIsMounted] = useState(false);
   const blurBackdropClickRef = useRef(false);
   const { keyboardInsetPx } = useCreateKeyboardInset();
-  const keyboardOffsetPx = Math.round(keyboardInsetPx);
+  const rawKeyboardOffsetPx = Math.round(keyboardInsetPx);
+  const drawerKeyboardOffsetPx = isAndroid() ? 0 : rawKeyboardOffsetPx;
   const resolvedMaxHeight =
-    keyboardOffsetPx > 0
-      ? `min(${maxHeight}, calc(100dvh - ${keyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
+    drawerKeyboardOffsetPx > 0
+      ? `min(${maxHeight}, calc(100dvh - ${drawerKeyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
       : maxHeight;
 
   // Mount/unmount and body scroll lock
@@ -159,7 +161,7 @@ export default function BottomDrawer({
       <div
         className={`absolute inset-x-0 rounded-t-2xl overflow-hidden ${className}`}
         style={{
-          bottom: keyboardOffsetPx,
+          bottom: drawerKeyboardOffsetPx,
           maxHeight: resolvedMaxHeight,
           transition: "bottom 220ms ease-out, max-height 220ms ease-out",
           // With `footer` and full-height mode: fixed height so flex-1 middle works.
