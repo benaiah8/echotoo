@@ -79,6 +79,66 @@ export type FcmDataPayload = {
 
 export type PushDevicePlatform = "android" | "ios";
 
+type FcmSendResult = {
+  ok: boolean;
+  status: number;
+  errorText?: string;
+  errorStatus?: string;
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+function truncateForLog(value: string, max = 240): string {
+  const singleLine = value
+    .replace(/[A-Za-z0-9_:\-.]{32,}/g, "[redacted-long-value]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return singleLine.length > max ? `${singleLine.slice(0, max)}...` : singleLine;
+}
+
+function extractFcmErrorSummary(text: string): Omit<FcmSendResult, "ok" | "status"> {
+  const fallback = { errorText: truncateForLog(text) };
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: {
+        status?: unknown;
+        message?: unknown;
+        details?: unknown;
+      };
+    };
+    const err = parsed?.error;
+    if (!err || typeof err !== "object") return fallback;
+
+    let errorCode: string | undefined;
+    if (Array.isArray(err.details)) {
+      for (const detail of err.details) {
+        if (!detail || typeof detail !== "object") continue;
+        const maybeCode = (detail as { errorCode?: unknown }).errorCode;
+        if (typeof maybeCode === "string" && maybeCode.trim()) {
+          errorCode = maybeCode.trim();
+          break;
+        }
+      }
+    }
+
+    const errorStatus =
+      typeof err.status === "string" && err.status.trim()
+        ? err.status.trim()
+        : undefined;
+    const errorMessage =
+      typeof err.message === "string" && err.message.trim()
+        ? truncateForLog(err.message)
+        : undefined;
+
+    const errorText =
+      [errorStatus, errorCode, errorMessage].filter(Boolean).join(" | ") ||
+      fallback.errorText;
+    return { errorText, errorStatus, errorCode, errorMessage };
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * Send one FCM v1 message to a single device token.
  */
@@ -88,7 +148,7 @@ export async function sendFcmToDevice(
   deviceToken: string,
   platform: PushDevicePlatform,
   data: FcmDataPayload
-): Promise<{ ok: boolean; status: number; errorText?: string }> {
+): Promise<FcmSendResult> {
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
   const fcmData: Record<string, string> = {
     postId: data.postId,
@@ -167,7 +227,11 @@ export async function sendFcmToDevice(
 
   const text = await res.text();
   if (!res.ok) {
-    return { ok: false, status: res.status, errorText: text.slice(0, 500) };
+    return {
+      ok: false,
+      status: res.status,
+      ...extractFcmErrorSummary(text),
+    };
   }
   return { ok: true, status: res.status };
 }

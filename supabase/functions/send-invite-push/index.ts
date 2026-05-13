@@ -54,8 +54,56 @@ type PushDeviceTarget = {
   platform: PushDevicePlatform;
 };
 
+type PlatformCounts = Record<PushDevicePlatform, number>;
+
+type DeviceRowPlatformCounts = PlatformCounts & {
+  other: number;
+};
+
 function isPushDevicePlatform(value: unknown): value is PushDevicePlatform {
   return value === "android" || value === "ios";
+}
+
+function emptyPlatformCounts(): PlatformCounts {
+  return { android: 0, ios: 0 };
+}
+
+function emptyDeviceRowPlatformCounts(): DeviceRowPlatformCounts {
+  return { android: 0, ios: 0, other: 0 };
+}
+
+function safeTokenPreview(token: string): string {
+  const trimmed = token.trim();
+  if (!trimmed) return "empty(len=0)";
+  return `${trimmed.slice(0, 8)}...(len=${trimmed.length})`;
+}
+
+function sanitizeErrorPreview(value: string | undefined, max = 240): string | undefined {
+  if (!value) return undefined;
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (!singleLine) return undefined;
+  return singleLine.length > max ? `${singleLine.slice(0, max)}...` : singleLine;
+}
+
+function countDeviceRowsByPlatform(rows: unknown[] | null): DeviceRowPlatformCounts {
+  const counts = emptyDeviceRowPlatformCounts();
+  for (const row of rows ?? []) {
+    const platform = (row as { platform?: unknown }).platform;
+    if (isPushDevicePlatform(platform)) {
+      counts[platform]++;
+    } else {
+      counts.other++;
+    }
+  }
+  return counts;
+}
+
+function countTargetsByPlatform(targets: PushDeviceTarget[]): PlatformCounts {
+  const counts = emptyPlatformCounts();
+  for (const target of targets) {
+    counts[target.platform]++;
+  }
+  return counts;
 }
 
 function toPublicMediaAvatarUrl(
@@ -246,6 +294,13 @@ Deno.serve(async (req) => {
       )
     : [];
 
+  console.log("[send-invite-push] request begin", {
+    hasPostId: Boolean(postId),
+    postType: postType ?? null,
+    hasActorId: Boolean(actorId),
+    recipientUserIdsCount: recipientUserIds.length,
+  });
+
   if (!postId || !postType || !actorId) {
     return jsonResponse(
       { error: "post_id, post_type, and actor_id are required" },
@@ -345,6 +400,9 @@ Deno.serve(async (req) => {
   }
 
   const authIdList = [...authIdsForPush];
+  console.log("[send-invite-push] resolved auth ids", {
+    authIdListCount: authIdList.length,
+  });
 
   const { data: deviceRows, error: devicesError } = await supabaseAdmin
     .from("push_devices")
@@ -365,6 +423,12 @@ Deno.serve(async (req) => {
     );
   }
 
+  const rawDevicePlatformCounts = countDeviceRowsByPlatform(deviceRows ?? []);
+  console.log("[send-invite-push] push device rows", {
+    rawDeviceRowCount: deviceRows?.length ?? 0,
+    byPlatform: rawDevicePlatformCounts,
+  });
+
   const targetByPlatformAndToken = new Map<string, PushDeviceTarget>();
   for (const row of deviceRows ?? []) {
     const token = ((row as { token?: string | null }).token ?? "").trim();
@@ -373,6 +437,11 @@ Deno.serve(async (req) => {
     targetByPlatformAndToken.set(`${platform}:${token}`, { token, platform });
   }
   const pushTargets = [...targetByPlatformAndToken.values()];
+  const attemptedByPlatform = countTargetsByPlatform(pushTargets);
+  console.log("[send-invite-push] push targets after dedupe", {
+    pushTargetCount: pushTargets.length,
+    byPlatform: attemptedByPlatform,
+  });
 
   if (pushTargets.length === 0) {
     return jsonResponse(
@@ -472,9 +541,21 @@ Deno.serve(async (req) => {
   }
 
   let sent = 0;
-  const failures: { status: number; detail?: string }[] = [];
+  const sentByPlatform = emptyPlatformCounts();
+  const failures: {
+    platform: PushDevicePlatform;
+    status: number;
+    detail?: string;
+    errorStatus?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }[] = [];
 
   for (const targetDevice of pushTargets) {
+    console.log("[send-invite-push] FCM send begin", {
+      platform: targetDevice.platform,
+      tokenPreview: safeTokenPreview(targetDevice.token),
+    });
     const result = await sendFcmToDevice(
       accessToken,
       projectId,
@@ -484,8 +565,30 @@ Deno.serve(async (req) => {
     );
     if (result.ok) {
       sent++;
+      sentByPlatform[targetDevice.platform]++;
+      console.log("[send-invite-push] FCM send success", {
+        platform: targetDevice.platform,
+        status: result.status,
+      });
     } else {
-      failures.push({ status: result.status, detail: result.errorText });
+      const detail = sanitizeErrorPreview(result.errorText);
+      const errorMessage = sanitizeErrorPreview(result.errorMessage);
+      console.error("[send-invite-push] FCM send failed", {
+        platform: targetDevice.platform,
+        status: result.status,
+        errorStatus: result.errorStatus,
+        errorCode: result.errorCode,
+        errorMessage,
+        detail,
+      });
+      failures.push({
+        platform: targetDevice.platform,
+        status: result.status,
+        detail,
+        errorStatus: result.errorStatus,
+        errorCode: result.errorCode,
+        errorMessage,
+      });
     }
   }
 
@@ -494,6 +597,8 @@ Deno.serve(async (req) => {
       ok: true,
       sent,
       attempted: pushTargets.length,
+      attemptedByPlatform,
+      sentByPlatform,
       failures: failures.length > 0 ? failures.slice(0, 5) : undefined,
     },
     200
