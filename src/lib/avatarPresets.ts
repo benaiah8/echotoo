@@ -98,3 +98,13 @@ export function getAvatarPresets(): AvatarPresetInfo[] {
     .map(([id, url]) => ({ id, url }))
     .sort((a, b) => presetIdSortComparator(a.id, b.id));
 }
+
+/**
+ * Random `preset:{id}` value for `profiles.avatar_url`, or `null` if no presets bundled.
+ */
+export function pickRandomPresetAvatarValue(): string | null {
+  const presets = getAvatarPresets();
+  if (presets.length === 0) return null;
+  const pick = presets[Math.floor(Math.random() * presets.length)]!;
+  return `${AVATAR_PRESET_PREFIX}${pick.id}`;
+}

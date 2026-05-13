@@ -1,6 +1,7 @@
 import { Toaster } from "react-hot-toast";
 import BottomTab from "./BottomTab";
 import InstallAppButton from "./InstallAppButton";
+import ProfileFinishSoftNudge from "./profile/ProfileFinishSoftNudge";
 import { useIsDesktopLayout } from "../lib/desktopLayoutDetection";
 
 /**
@@ -14,6 +15,8 @@ export default function AppFloatingChrome() {
   return (
     <>
       {!isDesktop ? <BottomTab /> : null}
+
+      <ProfileFinishSoftNudge />
 
       <Toaster
         position="top-center"

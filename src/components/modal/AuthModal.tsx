@@ -21,6 +21,7 @@ import {
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
+import { pickRandomPresetAvatarValue } from "../../lib/avatarPresets";
 
 /** Narrower glass shell (~80% viewport) so auth feels compact on phones */
 const AUTH_MODAL_SHELL_CLASS = "!max-w-[80vw] w-full";
@@ -28,43 +29,52 @@ const AUTH_MODAL_SHELL_CLASS = "!max-w-[80vw] w-full";
 /**
  * Native Sign in with Apple only: persist Apple-provided person name to
  * `profiles.display_name` when missing (never overwrites). Keeps auth
- * `user_metadata.full_name` in sync, awaited before profile writes.
+ * `user_metadata.full_name` in sync. Assigns a random Echo `preset:` avatar
+ * when `profiles.avatar_url` is empty (never overwrites an existing avatar).
  */
 async function persistAppleFullNameAfterNativeSignIn(
   fullNameFromApple: string
 ): Promise<void> {
   const trimmed = fullNameFromApple.trim();
-  if (!trimmed) return;
-
-  const { error: metaErr } = await supabase.auth.updateUser({
-    data: { full_name: trimmed },
-  });
-  if (metaErr) {
-    console.warn("[AuthModal] Apple updateUser full_name:", metaErr.message);
-  }
-
   const {
     data: { session },
   } = await supabase.auth.getSession();
   const userId = session?.user?.id;
   if (!userId) return;
 
+  if (trimmed) {
+    const { error: metaErr } = await supabase.auth.updateUser({
+      data: { full_name: trimmed },
+    });
+    if (metaErr) {
+      console.warn("[AuthModal] Apple updateUser full_name:", metaErr.message);
+    }
+  }
+
+  const preset = pickRandomPresetAvatarValue();
+
   const { data: existing, error: selErr } = await supabase
     .from("profiles")
-    .select("id, display_name, username")
+    .select("id, display_name, avatar_url")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (selErr) {
     console.warn("[AuthModal] Apple profile lookup:", selErr.message);
+    invalidateProfileByUserIdCache(userId);
     return;
   }
 
   if (!existing) {
+    if (!trimmed) {
+      invalidateProfileByUserIdCache(userId);
+      return;
+    }
     const { error: insErr } = await supabase.from("profiles").insert({
       user_id: userId,
       display_name: trimmed,
       username: null,
+      avatar_url: preset ?? null,
       onboarding_completed: false,
       onboarding_step: 0,
     });
@@ -75,26 +85,43 @@ async function persistAppleFullNameAfterNativeSignIn(
       if (isDup) {
         const { data: row } = await supabase
           .from("profiles")
-          .select("id, display_name")
+          .select("id, display_name, avatar_url")
           .eq("user_id", userId)
           .maybeSingle();
-        if (row?.id && !String(row.display_name ?? "").trim()) {
-          await supabase
-            .from("profiles")
-            .update({ display_name: trimmed })
-            .eq("id", row.id);
+        if (row?.id) {
+          const patch: Record<string, string> = {};
+          if (!String(row.display_name ?? "").trim()) {
+            patch.display_name = trimmed;
+          }
+          const av = String(row.avatar_url ?? "").trim();
+          if (!av && preset) {
+            patch.avatar_url = preset;
+          }
+          if (Object.keys(patch).length > 0) {
+            await supabase.from("profiles").update(patch).eq("id", row.id);
+          }
         }
       } else {
         console.warn("[AuthModal] Apple profile insert:", insErr.message);
       }
     }
-  } else if (!String(existing.display_name ?? "").trim()) {
-    const { error: upErr } = await supabase
-      .from("profiles")
-      .update({ display_name: trimmed })
-      .eq("id", existing.id);
-    if (upErr) {
-      console.warn("[AuthModal] Apple profile display_name:", upErr.message);
+  } else {
+    const patch: Record<string, string> = {};
+    if (trimmed && !String(existing.display_name ?? "").trim()) {
+      patch.display_name = trimmed;
+    }
+    const av = String(existing.avatar_url ?? "").trim();
+    if (!av && preset) {
+      patch.avatar_url = preset;
+    }
+    if (Object.keys(patch).length > 0) {
+      const { error: upErr } = await supabase
+        .from("profiles")
+        .update(patch)
+        .eq("id", existing.id);
+      if (upErr) {
+        console.warn("[AuthModal] Apple profile patch:", upErr.message);
+      }
     }
   }
 
