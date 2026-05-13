@@ -13,6 +13,11 @@ import {
 } from "../../lib/storage/utils/capacitorDetection";
 import { getAuthRedirectUrl } from "../../lib/authRedirect";
 import { openOAuthUrl } from "../../lib/openOAuthUrl";
+import {
+  canUseNativeAppleSignIn,
+  isAppleNativeSignInUserCancel,
+  signInWithAppleNative,
+} from "../../lib/nativeAppleSignIn";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 
@@ -284,6 +289,38 @@ const AuthModal = () => {
   const handleApple = async () => {
     try {
       setLoading(true);
+
+      if (canUseNativeAppleSignIn()) {
+        dbg("Apple:native_start", {});
+        const { idToken, rawNonce, givenName, familyName, email } =
+          await signInWithAppleNative();
+
+        const { error } = await supabase.auth.signInWithIdToken({
+          provider: "apple",
+          token: idToken,
+          nonce: rawNonce,
+        });
+        dbg("Apple:native_supabase", { ok: !error, error: error?.message });
+        if (error) throw error;
+
+        const fullName =
+          [givenName?.trim(), familyName?.trim()].filter(Boolean).join(" ") ||
+          "";
+        if (fullName || email?.trim()) {
+          void supabase.auth
+            .updateUser({
+              data: {
+                ...(fullName ? { full_name: fullName } : {}),
+              },
+            })
+            .catch(() => {
+              /* non-blocking */
+            });
+        }
+
+        return;
+      }
+
       const redirectTo = getAuthRedirectUrl();
 
       console.log("[AuthRedirectDebug] Apple sign-in", {
@@ -319,11 +356,20 @@ const AuthModal = () => {
         });
       }
     } catch (e: any) {
+      if (isAppleNativeSignInUserCancel(e)) {
+        dbg("Apple:native_canceled", {});
+        return;
+      }
       dbg("Apple:catch", { error: e?.message });
-      setLoading(false);
       const errorMsg = e?.message ?? "Apple sign-in failed";
-      console.error("[AuthModal] Apple sign-in error:", errorMsg);
-      toast.error(`${errorMsg}. Check console for redirect URL.`);
+      console.warn("[AuthModal] Apple sign-in error:", errorMsg);
+      toast.error(
+        canUseNativeAppleSignIn()
+          ? errorMsg
+          : `${errorMsg}. Check console for redirect URL.`
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
