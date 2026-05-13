@@ -34,8 +34,8 @@ import { logFetchStart } from "../../lib/tabVisibilityDebug";
 import { NOTIFICATIONS_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
 import { Paths } from "../../router/Paths";
 
-/** Dedupe invite push deep-link handling (StrictMode remount resets refs). */
-const processedInvitePushDeepLinks = new Set<string>();
+/** Max extra invite pages to auto-fetch while resolving a push deep link (avoids infinite loops). */
+const MAX_PUSH_INVITE_AUTO_LOADS = 30;
 
 /** First page & each "Load more" batch (server applies typeGroup as today). */
 const NOTIFICATION_PAGE_SIZE = 10;
@@ -186,6 +186,13 @@ export default function NotificationList({
   const invitesRealtimeBadgeTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+
+  /** Push invite deep-link: reset when `source=push` query changes or leaves. */
+  const pushInviteIntentKeyRef = useRef<string | null>(null);
+  const pushInviteAutoLoadsRef = useRef(0);
+  const pushInviteLastTriggeredLoadAtLenRef = useRef<number | null>(null);
+  const invitePushSubFilterClearedForIntentRef = useRef<string | null>(null);
+  const pushHighlightAppliedForIntentRef = useRef<string | null>(null);
 
   /** For switch button dot: other view’s unread (from head counts) */
   const [tabBadgeBreakdown, setTabBadgeBreakdown] = useState({
@@ -540,7 +547,11 @@ export default function NotificationList({
 
   useEffect(() => {
     if (searchParams.get("source") !== "push") {
-      processedInvitePushDeepLinks.clear();
+      pushInviteIntentKeyRef.current = null;
+      pushInviteAutoLoadsRef.current = 0;
+      pushInviteLastTriggeredLoadAtLenRef.current = null;
+      invitePushSubFilterClearedForIntentRef.current = null;
+      pushHighlightAppliedForIntentRef.current = null;
     }
   }, [searchParams]);
 

@@ -12,6 +12,7 @@ import {
   isNativeApp,
 } from "../../lib/storage/utils/capacitorDetection";
 import { getAuthRedirectUrl } from "../../lib/authRedirect";
+import { openOAuthUrl } from "../../lib/openOAuthUrl";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 
@@ -249,6 +250,7 @@ const AuthModal = () => {
         provider: "google",
         options: {
           redirectTo,
+          skipBrowserRedirect: true,
           queryParams: {
             access_type: "offline",
             prompt: "consent",
@@ -259,20 +261,16 @@ const AuthModal = () => {
       dbg("Google:returned", { ok: !error, error: error?.message });
       if (error) throw error;
 
-      if (isNativeApp() && data?.url) {
-        const { Browser } = await import("@capacitor/browser");
+      if (data?.url) {
         console.log("[DBG:OAUTH] browser_open_before", {
           t: Date.now(),
           source: "AuthModal.handleGoogle",
         });
-        await Browser.open({ url: data.url });
+        await openOAuthUrl(data.url);
         console.log("[DBG:OAUTH] browser_open_after", {
           t: Date.now(),
           source: "AuthModal.handleGoogle",
         });
-        // User will return via appUrlOpen; no redirect here.
-      } else if (data?.url) {
-        window.location.href = data.url;
       }
     } catch (e: any) {
       dbg("Google:catch", { error: e?.message });
@@ -303,25 +301,22 @@ const AuthModal = () => {
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "apple",
-        options: { redirectTo },
+        options: { redirectTo, skipBrowserRedirect: true },
       });
 
       dbg("Apple:returned", { ok: !error, error: error?.message });
       if (error) throw error;
 
-      if (isNativeApp() && data?.url) {
-        const { Browser } = await import("@capacitor/browser");
+      if (data?.url) {
         console.log("[DBG:OAUTH] browser_open_before", {
           t: Date.now(),
           source: "AuthModal.handleApple",
         });
-        await Browser.open({ url: data.url });
+        await openOAuthUrl(data.url);
         console.log("[DBG:OAUTH] browser_open_after", {
           t: Date.now(),
           source: "AuthModal.handleApple",
         });
-      } else if (data?.url) {
-        window.location.href = data.url;
       }
     } catch (e: any) {
       dbg("Apple:catch", { error: e?.message });

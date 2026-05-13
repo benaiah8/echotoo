@@ -1,5 +1,5 @@
 /**
- * Capacitor-only: Listens for OAuth redirect (com.experience.app://auth/callback)
+ * Capacitor-only: Listens for OAuth redirect (com.echotoo.app://auth/callback)
  * and navigates the WebView to /auth/callback with query params so AuthCallback
  * can run exchangeCodeForSession.
  */

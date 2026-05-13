@@ -5,6 +5,7 @@ import { useDispatch } from "react-redux";
 import { setAuthUser, setAuthLoading } from "../reducers/authReducer";
 import { setAuthModal } from "../reducers/modalReducer";
 import { getAuthRedirectUrl } from "../lib/authRedirect";
+import { openOAuthUrl } from "../lib/openOAuthUrl";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { deleteMyPushDevices } from "../api/services/pushDevices";
 
@@ -77,15 +78,12 @@ export default function useSupabaseAuth() {
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo },
+      options: { redirectTo, skipBrowserRedirect: true },
     });
     if (error) throw error;
 
-    if (isNativeApp() && data?.url) {
-      const { Browser } = await import("@capacitor/browser");
-      await Browser.open({ url: data.url });
-    } else if (data?.url) {
-      window.location.href = data.url;
+    if (data?.url) {
+      await openOAuthUrl(data.url);
     }
   }, []);
 

@@ -63,6 +63,42 @@ function isInvitePushData(
   return typeRaw === "invite";
 }
 
+/** Safe tap diagnostics: keys + presence flags only (no full tokens/IDs). */
+function logPushTapPayloadMeta(
+  data: Record<string, unknown> | null | undefined
+): void {
+  if (!data) {
+    console.log("[PUSH_TAP] tap_data_meta", {
+      keys: [],
+      hasType: false,
+      hasInviteId: false,
+      hasThreadId: false,
+      hasThreadKind: false,
+    });
+    return;
+  }
+  const keys = Object.keys(data);
+  const hasType =
+    Object.prototype.hasOwnProperty.call(data, "type") &&
+    String(data.type ?? "").trim().length > 0;
+  const hasInviteId =
+    Object.prototype.hasOwnProperty.call(data, "inviteId") &&
+    String(data.inviteId ?? "").trim().length > 0;
+  const hasThreadId =
+    Object.prototype.hasOwnProperty.call(data, "threadId") &&
+    String(data.threadId ?? "").trim().length > 0;
+  const hasThreadKind =
+    Object.prototype.hasOwnProperty.call(data, "threadKind") &&
+    String(data.threadKind ?? "").trim().length > 0;
+  console.log("[PUSH_TAP] tap_data_meta", {
+    keys,
+    hasType,
+    hasInviteId,
+    hasThreadId,
+    hasThreadKind,
+  });
+}
+
 /** Deep-link to notifications tab with optional invite/thread ids from FCM data. */
 function buildInviteNotificationsPath(
   data: Record<string, unknown> | null | undefined
@@ -106,6 +142,7 @@ export function registerNativePushTapListener(): void {
             data && typeof data === "object" && !Array.isArray(data)
               ? (data as Record<string, unknown>)
               : undefined;
+          logPushTapPayloadMeta(record);
           if (isInvitePushData(record)) {
             deliverPath(buildInviteNotificationsPath(record));
             return;
