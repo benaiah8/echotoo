@@ -20,9 +20,86 @@ import {
 } from "../../lib/nativeAppleSignIn";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
+import { invalidateProfileByUserIdCache } from "../../api/services/follows";
 
 /** Narrower glass shell (~80% viewport) so auth feels compact on phones */
 const AUTH_MODAL_SHELL_CLASS = "!max-w-[80vw] w-full";
+
+/**
+ * Native Sign in with Apple only: persist Apple-provided person name to
+ * `profiles.display_name` when missing (never overwrites). Keeps auth
+ * `user_metadata.full_name` in sync, awaited before profile writes.
+ */
+async function persistAppleFullNameAfterNativeSignIn(
+  fullNameFromApple: string
+): Promise<void> {
+  const trimmed = fullNameFromApple.trim();
+  if (!trimmed) return;
+
+  const { error: metaErr } = await supabase.auth.updateUser({
+    data: { full_name: trimmed },
+  });
+  if (metaErr) {
+    console.warn("[AuthModal] Apple updateUser full_name:", metaErr.message);
+  }
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const userId = session?.user?.id;
+  if (!userId) return;
+
+  const { data: existing, error: selErr } = await supabase
+    .from("profiles")
+    .select("id, display_name, username")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (selErr) {
+    console.warn("[AuthModal] Apple profile lookup:", selErr.message);
+    return;
+  }
+
+  if (!existing) {
+    const { error: insErr } = await supabase.from("profiles").insert({
+      user_id: userId,
+      display_name: trimmed,
+      username: null,
+      onboarding_completed: false,
+      onboarding_step: 0,
+    });
+    if (insErr) {
+      const isDup =
+        insErr.code === "23505" ||
+        String(insErr.message || "").includes("duplicate");
+      if (isDup) {
+        const { data: row } = await supabase
+          .from("profiles")
+          .select("id, display_name")
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (row?.id && !String(row.display_name ?? "").trim()) {
+          await supabase
+            .from("profiles")
+            .update({ display_name: trimmed })
+            .eq("id", row.id);
+        }
+      } else {
+        console.warn("[AuthModal] Apple profile insert:", insErr.message);
+      }
+    }
+  } else if (!String(existing.display_name ?? "").trim()) {
+    const { error: upErr } = await supabase
+      .from("profiles")
+      .update({ display_name: trimmed })
+      .eq("id", existing.id);
+    if (upErr) {
+      console.warn("[AuthModal] Apple profile display_name:", upErr.message);
+    }
+  }
+
+  invalidateProfileByUserIdCache(userId);
+}
 
 /** Our local form state (username/fullName optional for login) */
 type FormState = {
@@ -292,7 +369,7 @@ const AuthModal = () => {
 
       if (canUseNativeAppleSignIn()) {
         dbg("Apple:native_start", {});
-        const { idToken, rawNonce, givenName, familyName, email } =
+        const { idToken, rawNonce, givenName, familyName } =
           await signInWithAppleNative();
 
         const { error } = await supabase.auth.signInWithIdToken({
@@ -306,17 +383,7 @@ const AuthModal = () => {
         const fullName =
           [givenName?.trim(), familyName?.trim()].filter(Boolean).join(" ") ||
           "";
-        if (fullName || email?.trim()) {
-          void supabase.auth
-            .updateUser({
-              data: {
-                ...(fullName ? { full_name: fullName } : {}),
-              },
-            })
-            .catch(() => {
-              /* non-blocking */
-            });
-        }
+        await persistAppleFullNameAfterNativeSignIn(fullName);
 
         return;
       }

@@ -326,6 +326,21 @@ export default function FullScreenProfileCreation({
       setError(null);
       const snap = initialProfileDataRef.current;
 
+      /** First-time create: pre-fill display name from Supabase auth if Apple/OAuth stored full_name. */
+      const maybeHydrateDisplayFromAuthMetadata = async () => {
+        if (!isFirstTime || cancelled) return;
+        const b = baselineRef.current;
+        if (!b || b.displayName.trim()) return;
+        const { data: sess } = await supabase.auth.getSession();
+        if (cancelled) return;
+        const meta = String(
+          sess?.session?.user?.user_metadata?.full_name ?? "",
+        ).trim();
+        if (!meta) return;
+        setDisplayName(meta);
+        setBaselineFromValues({ ...b, displayName: meta });
+      };
+
       if (snap) {
         applyProfileRow({
           display_name: snap.display_name,
@@ -358,13 +373,17 @@ export default function FullScreenProfileCreation({
           );
           if (!snap) {
             setError("Failed to load profile data. Please try again.");
+            return;
           }
+          await maybeHydrateDisplayFromAuthMetadata();
           return;
         }
 
         if (data) {
           applyProfileRow(data);
         }
+
+        await maybeHydrateDisplayFromAuthMetadata();
       } catch (e) {
         console.error(
           "[FullScreenProfileCreation] Unexpected error fetching profile:",
@@ -380,7 +399,7 @@ export default function FullScreenProfileCreation({
     return () => {
       cancelled = true;
     };
-  }, [open, profileId, applyProfileRow]);
+  }, [open, profileId, applyProfileRow, isFirstTime]);
 
   const isDirty = useCallback(() => {
     const b = baselineRef.current;
