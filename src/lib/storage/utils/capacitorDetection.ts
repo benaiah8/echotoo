@@ -52,8 +52,7 @@ export function isIOS(): boolean {
 
   if (isCapacitor()) {
     try {
-      const capacitor = (window as any).Capacitor;
-      return capacitor.getPlatform() === "ios";
+      return Capacitor.getPlatform() === "ios";
     } catch {
       return false;
     }
@@ -73,8 +72,7 @@ export function isAndroid(): boolean {
 
   if (isCapacitor()) {
     try {
-      const capacitor = (window as any).Capacitor;
-      return capacitor.getPlatform() === "android";
+      return Capacitor.getPlatform() === "android";
     } catch {
       return false;
     }
