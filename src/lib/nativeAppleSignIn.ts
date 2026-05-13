@@ -28,15 +28,23 @@ function generateRawNonce(): string {
   return base64UrlEncode(bytes);
 }
 
+function bytesToLowerHex(bytes: Uint8Array): string {
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i]!.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
 /**
- * Apple expects `ASAuthorizationAppleIDRequest.nonce` to be the SHA-256 of the
- * raw nonce (UTF-8), base64url-encoded. Supabase `signInWithIdToken` needs the
- * same raw nonce to validate the `nonce` claim in the Apple ID token.
+ * Apple `ASAuthorizationAppleIDRequest.nonce`: SHA-256 of the raw nonce string
+ * (UTF-8 bytes), as a **lowercase hex** string (64 chars). This matches what
+ * Supabase expects to pair with `signInWithIdToken({ nonce: rawNonce })`.
  */
-async function sha256Base64UrlUtf8(input: string): Promise<string> {
+async function sha256HexUtf8(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest("SHA-256", data);
-  return base64UrlEncode(new Uint8Array(digest));
+  return bytesToLowerHex(new Uint8Array(digest));
 }
 
 export function canUseNativeAppleSignIn(): boolean {
@@ -58,7 +66,8 @@ export async function signInWithAppleNative(): Promise<NativeAppleSignInResult> 
   }
 
   const rawNonce = generateRawNonce();
-  const nonceForAppleRequest = await sha256Base64UrlUtf8(rawNonce);
+  /** Apple: SHA-256 hex of UTF-8(rawNonce). Supabase: same `rawNonce` string. */
+  const nonceForAppleRequest = await sha256HexUtf8(rawNonce);
 
   const result = await AppleSignIn.signIn({
     nonce: nonceForAppleRequest,
