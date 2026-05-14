@@ -14,8 +14,8 @@ import {
   PiProhibit,
   PiShareFat,
   PiSignOut,
+  PiCaretLeft,
   PiTrashSimple,
-  PiX,
 } from "react-icons/pi";
 import { Capacitor } from "@capacitor/core";
 import Logo from "../ui/Logo";
@@ -280,19 +280,26 @@ export default function ProfileTopBar({
     "active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40",
   ].join(" ");
 
-  const ownSheetRowClass = [
-    "flex w-full min-w-0 items-center justify-between gap-3",
-    "rounded-2xl border border-[var(--bottom-tab-border)]",
-    "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-    "py-2.5 pl-3 pr-2 text-[var(--text)] text-sm font-medium",
-    "shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_16px_color-mix(in_oklab,var(--brand)_14%,transparent)]",
+  const ownSheetGlassPill =
+    "rounded-full border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_14px_color-mix(in_oklab,var(--brand)_12%,transparent)]";
+
+  const ownSheetRowBase = [
+    "flex w-full min-w-0 items-center justify-between gap-2 rounded-full",
+    ownSheetGlassPill,
+    "px-2.5 pl-3 pr-1.5 text-[var(--text)] text-[11px] font-medium leading-none",
     "transition-[box-shadow,transform,background-color]",
-    "hover:bg-[var(--glass-active-bg)] active:scale-[0.995]",
+    "hover:bg-[var(--glass-active-bg)] active:scale-[0.99]",
     "disabled:pointer-events-none disabled:opacity-40",
   ].join(" ");
 
+  const ownSheetRowClass = `${ownSheetRowBase} h-10`;
+  const ownSheetRowMultilineClass = `${ownSheetRowBase} min-h-[40px] max-h-[52px] h-auto py-1.5`;
+
   const ownSheetSectionLabelClass =
-    "px-0.5 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text)]/45 first:pt-2";
+    "w-full pt-4 pb-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 first:pt-0";
+
+  const ownSheetIconWrapClass =
+    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]";
 
   return (
     <>
@@ -383,12 +390,12 @@ export default function ProfileTopBar({
         useOwnProfileActionSheet &&
         createPortal(
           <div
-            className="fixed inset-0 z-[100] flex flex-col justify-end overscroll-none"
+            className="fixed inset-0 z-[100] flex items-center justify-center overscroll-none p-6 pointer-events-none"
             role="presentation"
           >
             <button
               type="button"
-              className="absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
+              className="pointer-events-auto absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
               aria-label="Dismiss profile menu"
               onClick={() => closeProfileMenu()}
             />
@@ -397,192 +404,195 @@ export default function ProfileTopBar({
               role="dialog"
               aria-modal="true"
               aria-labelledby="own-profile-actions-title"
-              className="relative z-10 flex max-h-[min(92dvh,920px)] w-full flex-col overflow-hidden rounded-t-[1.35rem] border border-[var(--bottom-tab-border)] border-b-0 bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] shadow-[0_-8px_40px_rgba(0,0,0,0.22)] safe-area-inset-bottom [-webkit-backdrop-filter:blur(var(--glass-blur))]"
+              className="relative z-10 flex max-h-[min(85dvh,calc(100vh-48px))] w-[min(280px,calc(100vw-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5 pointer-events-auto"
             >
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-                <h2
+              <div className="flex w-full shrink-0 items-center justify-between gap-2">
+                <span
                   id="own-profile-actions-title"
-                  className="text-base font-semibold tracking-tight text-[var(--text)]"
+                  className={`${ownSheetGlassPill} inline-flex h-9 max-w-[min(200px,calc(100vw-120px))] items-center truncate px-3 text-[12px] font-semibold tracking-tight text-[var(--text)]`}
                 >
                   Profile
-                </h2>
+                </span>
                 <button
                   type="button"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)] text-[var(--text)] hover:bg-[var(--glass-active-bg)]"
+                  className={`${ownSheetGlassPill} flex h-9 w-9 shrink-0 items-center justify-center p-0 text-[var(--text)] hover:bg-[var(--glass-active-bg)]`}
                   aria-label="Close"
                   onClick={() => closeProfileMenu()}
                 >
-                  <PiX size={20} aria-hidden />
+                  <PiCaretLeft size={18} aria-hidden />
                 </button>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
-                <p className={ownSheetSectionLabelClass}>Account</p>
-                <div className="flex flex-col gap-2">
-                  <button
-                    type="button"
-                    className={ownSheetRowClass}
-                    onClick={() => {
-                      onRequestEditProfile?.();
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span>Edit profile</span>
-                    <span className={profileActionIconWrapClass}>
-                      <PiPencilSimple size={16} aria-hidden />
-                    </span>
-                  </button>
-                  {showHangoutReminderMenuItem && (
-                    <button
-                      type="button"
-                      className={ownSheetRowClass}
-                      disabled={nativePushRegisterBusy}
-                      onClick={() => {
-                        closeProfileMenu();
-                        if (shouldDirectlyRefreshIosPush) {
-                          void refreshNativePushRegistration();
-                          return;
-                        }
-                        setShowHangoutReminderModal(true);
-                      }}
-                    >
-                      <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
-                        <span>{nativePushMenuLabel}</span>
-                        {nativePushSubline ? (
-                          <span className="text-xs font-normal text-[var(--text)]/50">
-                            {nativePushSubline}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className={profileActionIconWrapClass}>
-                        <PiBell size={16} aria-hidden />
-                      </span>
-                    </button>
-                  )}
-                  <div
-                    role="group"
-                    aria-label="Theme"
-                    className={`${ownSheetRowClass} cursor-default`}
-                    onClick={(e) => e.stopPropagation()}
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <span className="text-left">Switch theme</span>
-                    <ThemeSwitch
-                      className="shrink-0"
-                      width={56}
-                      knobW={22}
-                      knobH={20}
-                      padX={4}
-                      padY={4}
-                    />
-                  </div>
-                  {showShare && (
-                    <button
-                      type="button"
-                      className={ownSheetRowClass}
-                      onClick={() => {
-                        setShowShareModal(true);
-                        closeProfileMenu();
-                      }}
-                    >
-                      <span>Share</span>
-                      <span className={profileActionIconWrapClass}>
-                        <PiShareFat size={16} aria-hidden />
-                      </span>
-                    </button>
-                  )}
-                </div>
 
-                <p className={ownSheetSectionLabelClass}>Safety &amp; Legal</p>
-                <div className="flex flex-col gap-2">
+              <p className={ownSheetSectionLabelClass}>Account</p>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    onRequestEditProfile?.();
+                    closeProfileMenu();
+                  }}
+                >
+                  <span>Edit profile</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiPencilSimple size={14} aria-hidden />
+                  </span>
+                </button>
+                {showHangoutReminderMenuItem && (
                   <button
                     type="button"
-                    className={ownSheetRowClass}
+                    className={ownSheetRowMultilineClass}
+                    disabled={nativePushRegisterBusy}
                     onClick={() => {
-                      navigate(Paths.privacy);
                       closeProfileMenu();
+                      if (shouldDirectlyRefreshIosPush) {
+                        void refreshNativePushRegistration();
+                        return;
+                      }
+                      setShowHangoutReminderModal(true);
                     }}
                   >
-                    <span className="text-left">Privacy policy</span>
-                    <span className={profileActionIconWrapClass}>
-                      <PiFileText size={16} aria-hidden />
+                    <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                      <span>{nativePushMenuLabel}</span>
+                      {nativePushSubline ? (
+                        <span className="text-[9px] font-normal leading-tight text-[var(--text)]/50">
+                          {nativePushSubline}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className={ownSheetIconWrapClass}>
+                      <PiBell size={14} aria-hidden />
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    className={ownSheetRowClass}
-                    onClick={() => {
-                      navigate(Paths.terms);
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span className="text-left">Terms of service</span>
-                    <span className={profileActionIconWrapClass}>
-                      <PiFileText size={16} aria-hidden />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={ownSheetRowClass}
-                    onClick={() => {
-                      navigate(Paths.reporting);
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span className="text-left">Reporting</span>
-                    <span className={profileActionIconWrapClass}>
-                      <PiMegaphone size={16} aria-hidden />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={ownSheetRowClass}
-                    onClick={() => {
-                      navigate(Paths.support);
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span className="text-left">Support</span>
-                    <span className={profileActionIconWrapClass}>
-                      <PiChatCircleText size={16} aria-hidden />
-                    </span>
-                  </button>
+                )}
+                <div
+                  role="group"
+                  aria-label="Theme"
+                  className={`${ownSheetRowBase} min-h-[40px] h-auto py-1.5`}
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <span className="text-left text-[11px] font-medium">
+                    Switch theme
+                  </span>
+                  <ThemeSwitch
+                    className="shrink-0"
+                    width={52}
+                    knobW={20}
+                    knobH={18}
+                    padX={3}
+                    padY={3}
+                  />
                 </div>
+                {showShare && (
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      setShowShareModal(true);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span>Share</span>
+                    <span className={ownSheetIconWrapClass}>
+                      <PiShareFat size={14} aria-hidden />
+                    </span>
+                  </button>
+                )}
+              </div>
 
-                <p className={ownSheetSectionLabelClass}>Account controls</p>
-                <div className="mt-1 flex flex-col gap-2 border-t border-[var(--border)] pt-4">
-                  <button
-                    type="button"
-                    className={[
-                      ownSheetRowClass,
-                      "border-red-500/30 bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] text-[color-mix(in_oklab,var(--danger)_92%,var(--text))] hover:bg-[color-mix(in_oklab,var(--danger)_16%,transparent)]",
-                    ].join(" ")}
-                    onClick={() => {
-                      navigate(Paths.deleteAccount);
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span className="text-left font-semibold">Delete account</span>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-red-500/35 bg-[color-mix(in_oklab,var(--danger)_12%,transparent)]">
-                      <PiTrashSimple size={16} aria-hidden />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={[
-                      ownSheetRowClass,
-                      "text-[color-mix(in_oklab,var(--danger)_75%,var(--text))] border-[color-mix(in_oklab,var(--danger)_28%,var(--border))]",
-                    ].join(" ")}
-                    onClick={() => {
-                      onRequestLogout?.();
-                      closeProfileMenu();
-                    }}
-                  >
-                    <span className="font-medium">Log out</span>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_oklab,var(--danger)_35%,var(--border))] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)]">
-                      <PiSignOut size={16} aria-hidden />
-                    </span>
-                  </button>
-                </div>
+              <p className={ownSheetSectionLabelClass}>Safety &amp; Legal</p>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    navigate(Paths.privacy);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left">Privacy policy</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiFileText size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    navigate(Paths.terms);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left">Terms of service</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiFileText size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    navigate(Paths.reporting);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left">Reporting</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiMegaphone size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    navigate(Paths.support);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left">Support</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiChatCircleText size={14} aria-hidden />
+                  </span>
+                </button>
+              </div>
+
+              <p className={`${ownSheetSectionLabelClass} pt-5`}>
+                Account controls
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  className={[
+                    ownSheetRowClass,
+                    "border-red-500/35 bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] text-[color-mix(in_oklab,var(--danger)_90%,var(--text))] hover:bg-[color-mix(in_oklab,var(--danger)_15%,transparent)]",
+                  ].join(" ")}
+                  onClick={() => {
+                    navigate(Paths.deleteAccount);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left font-semibold">Delete account</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-500/40 bg-[color-mix(in_oklab,var(--danger)_14%,transparent)]">
+                    <PiTrashSimple size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={[
+                    ownSheetRowClass,
+                    "border-rose-400/28 text-[color-mix(in_oklab,#e11d48_55%,var(--text))] hover:bg-[color-mix(in_oklab,#fb7185_10%,transparent)] app-dark:border-rose-400/25 app-dark:text-rose-300/95",
+                  ].join(" ")}
+                  onClick={() => {
+                    onRequestLogout?.();
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="font-medium">Log out</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-rose-400/35 bg-[color-mix(in_oklab,#fb7185_10%,transparent)]">
+                    <PiSignOut size={14} aria-hidden />
+                  </span>
+                </button>
               </div>
             </div>
           </div>,
