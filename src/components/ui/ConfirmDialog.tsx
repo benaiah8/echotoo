@@ -46,6 +46,10 @@ interface ConfirmDialogProps {
    * bottom row = primary full width (invite outcome “some already invited”).
    */
   stackThreeActionsPrimaryBelow?: boolean;
+  /**
+   * Optional alert below the message body and above action buttons (e.g. policy copy).
+   */
+  inlineAlert?: React.ReactNode;
 }
 
 /**
@@ -119,6 +123,7 @@ export default function ConfirmDialog({
   secondaryVariant = "primary",
   pillButtons = false,
   stackThreeActionsPrimaryBelow = false,
+  inlineAlert,
 }: ConfirmDialogProps) {
   const handleConfirm = async () => {
     if (isLoading) return;
@@ -188,6 +193,19 @@ export default function ConfirmDialog({
             {message}
           </div>
         )}
+        {inlineAlert != null && inlineAlert !== false ? (
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="mb-3 rounded-xl border border-red-500/45 bg-[color-mix(in_oklab,var(--danger)_12%,var(--glass-bg))] px-3 py-2 text-center text-[11px] font-semibold leading-snug text-red-800 shadow-sm backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] app-dark:border-red-500/35 app-dark:text-red-200"
+          >
+            {typeof inlineAlert === "string" ? (
+              <p className="m-0 leading-snug">{inlineAlert}</p>
+            ) : (
+              inlineAlert
+            )}
+          </div>
+        ) : null}
         {pillButtons && stackThreeActionsPrimaryBelow && hasSecondary ? (
           <div className="flex w-full min-w-0 flex-col gap-2">
             <div className="flex min-w-0 gap-2">

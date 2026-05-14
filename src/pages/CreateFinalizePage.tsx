@@ -52,10 +52,7 @@ import { dispatchCreateFlowLeaveRequest } from "../lib/createFlowLeaveRequest";
 import { getViewerAuthUserId } from "../api/services/follows";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
 import { clampCaption, CREATE_FLOW_CAPTION_MAX } from "../lib/createFlowLimits";
-import {
-  isUgcTextPolicyError,
-  UGC_TEXT_POLICY_ERROR_MESSAGE,
-} from "../lib/ugcTextPolicy";
+import { isUgcTextPolicyError } from "../lib/ugcTextPolicy";
 import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
   BOTTOM_TAB_PILL_OFFSET_PX,
@@ -68,6 +65,9 @@ import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
 
 const GAP_ABOVE_TAB = 16;
 const PREVIEW_ACTION_STRIP_HEIGHT_PX = 36;
+
+const FINALIZE_PUBLISH_UGC_INLINE_ALERT_COPY =
+  "This post may violate EchoToo\u2019s Community Guidelines. Please revise the wording before publishing.";
 
 /** After mount scroll (~120ms), allow smooth scroll to settle before caption entry pulse. */
 const FINALIZE_CAPTION_PULSE_START_MS = 550;
@@ -291,6 +291,8 @@ export default function CreateFinalizePage() {
   const { upsertNotice, removeNotice, notices } = useCreateFlowNotices();
   /** Single final publish modal (optional warning boxes + publish / back). */
   const [publishModalOpen, setPublishModalOpen] = useState(false);
+  /** UGC policy violation: show inline alert in publish confirm (no top toast). */
+  const [publishModalUgcInline, setPublishModalUgcInline] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [showPostedModal, setShowPostedModal] = useState(false);
   const [newPostId, setNewPostId] = useState<string | null>(null);
@@ -389,6 +391,30 @@ export default function CreateFinalizePage() {
       ),
     [sanitizedActivities]
   );
+
+  const finalizePublishUgcClearFingerprint = useMemo(
+    () =>
+      JSON.stringify({
+        caption,
+        tags,
+        acts: sanitizedActivities.map((a) => ({
+          title: a.title,
+          activityType: a.activityType,
+          customActivity: a.customActivity,
+          locationDesc: a.locationDesc,
+          location: a.location,
+          locationNotes: a.locationNotes,
+          locationUrl: a.locationUrl,
+          tags: a.tags,
+          additionalInfo: a.additionalInfo,
+        })),
+      }),
+    [caption, tags, sanitizedActivities]
+  );
+
+  useEffect(() => {
+    setPublishModalUgcInline(false);
+  }, [finalizePublishUgcClearFingerprint]);
 
   const dbVisibility = visibility === "friends" ? "friends" : "public";
 
@@ -747,11 +773,13 @@ export default function CreateFinalizePage() {
       scrollCaptionIntoView();
       return;
     }
+    setPublishModalUgcInline(false);
     setPublishModalOpen(true);
   };
 
   const handleFinalizePublish = async () => {
     if (publishing) return;
+    setPublishModalUgcInline(false);
     setPublishing(true);
     try {
       const {
@@ -798,18 +826,20 @@ export default function CreateFinalizePage() {
         localStorage.removeItem("draftActivities");
         discardAllDrafts();
         localStorage.removeItem("editPostData");
+        setPublishModalUgcInline(false);
         setPublishModalOpen(false);
         navigateAfterEditPublish(nav, { returnPath, returnState });
         return;
       }
 
       setNewPostId(post.id);
+      setPublishModalUgcInline(false);
       setPublishModalOpen(false);
       setShowPostedModal(true);
     } catch (e) {
       console.error("[CreateFinalizePage] publish failed", e);
       if (isUgcTextPolicyError(e)) {
-        toast.error(UGC_TEXT_POLICY_ERROR_MESSAGE);
+        setPublishModalUgcInline(true);
       } else {
         const msg = e instanceof Error ? e.message : "";
         toast.error(msg.trim() ? msg : "Publish failed");
@@ -980,10 +1010,18 @@ export default function CreateFinalizePage() {
 
         <ConfirmDialog
           open={publishModalOpen}
-          onClose={() => !publishing && setPublishModalOpen(false)}
+          onClose={() => {
+            if (!publishing) {
+              setPublishModalUgcInline(false);
+              setPublishModalOpen(false);
+            }
+          }}
           onConfirm={() => void handleFinalizePublish()}
           title={isEditMode ? "Republish this post?" : "Publish this post?"}
           message={finalizePublishModalMessage}
+          inlineAlert={
+            publishModalUgcInline ? FINALIZE_PUBLISH_UGC_INLINE_ALERT_COPY : null
+          }
           confirmLabel={publishActionLabel}
           cancelLabel="Back"
           confirmVariant="primary"
