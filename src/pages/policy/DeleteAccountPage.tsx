@@ -21,14 +21,25 @@ export default function DeleteAccountPage() {
           when you do.
         </p>
 
-        <h3>How to Delete Your Account (In-App)</h3>
+        <h3>Account deletion information (in the app)</h3>
         <p>
-          Follow these steps to delete your account from within the EchoToo app:
+          You can open this deletion overview at any time from your profile: go
+          to <strong>Profile</strong>, open the <strong>menu</strong> (list icon
+          in the top bar), then tap <strong>Delete account</strong>.
+        </p>
+
+        <h3>How to complete account deletion (in the app)</h3>
+        <p>
+          To start the in-app deletion flow (including confirmation), open{" "}
+          <strong>Profile</strong>, choose <strong>Edit profile</strong>, then
+          tap <strong>Delete Account</strong> and follow the prompts. This is
+          the control that submits your deletion request and signs you out when
+          you confirm.
         </p>
         <ol>
           <li>Open EchoToo</li>
           <li>Go to Profile</li>
-          <li>Open Edit Profile</li>
+          <li>Tap Edit profile</li>
           <li>Tap Delete Account</li>
           <li>Confirm deletion</li>
         </ol>

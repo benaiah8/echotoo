@@ -15,6 +15,7 @@ import {
   PiShareFat,
   PiSignOut,
   PiTrashSimple,
+  PiX,
 } from "react-icons/pi";
 import { Capacitor } from "@capacitor/core";
 import Logo from "../ui/Logo";
@@ -107,6 +108,7 @@ export default function ProfileTopBar({
   const [nativePushRegisterBusy, setNativePushRegisterBusy] = useState(false);
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const profileMenuDropdownRef = useRef<HTMLDivElement>(null);
+  const ownProfileSheetRef = useRef<HTMLDivElement>(null);
 
   const showReport = Boolean(reportUserId && onRequestReport);
   const showBlock = Boolean(showBlockControls);
@@ -114,6 +116,8 @@ export default function ProfileTopBar({
   const showHangoutReminderMenuItem = Boolean(showHangoutReminderSetupInMenu);
   const showEditProfile = Boolean(onRequestEditProfile);
   const showLogout = Boolean(onRequestLogout);
+  /** Own profile: full action sheet + scroll lock; other profiles keep compact pill menu. */
+  const useOwnProfileActionSheet = showEditProfile && showLogout;
   const showProfileOverflowMenu =
     !blockedShellTopBar &&
     (showReport ||
@@ -175,7 +179,9 @@ export default function ProfileTopBar({
     const onDoc = (e: MouseEvent | TouchEvent) => {
       const t = e.target as Node;
       if (profileMenuTriggerRef.current?.contains(t)) return;
-      if (profileMenuDropdownRef.current?.contains(t)) return;
+      if (useOwnProfileActionSheet) {
+        if (ownProfileSheetRef.current?.contains(t)) return;
+      } else if (profileMenuDropdownRef.current?.contains(t)) return;
       closeProfileMenu();
     };
     const onKey = (e: KeyboardEvent) => {
@@ -189,7 +195,22 @@ export default function ProfileTopBar({
       document.removeEventListener("touchstart", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [profileMenuOpen, closeProfileMenu]);
+  }, [profileMenuOpen, closeProfileMenu, useOwnProfileActionSheet]);
+
+  /** Own-profile sheet: lock document scroll (same pattern as ReportModal). */
+  useEffect(() => {
+    if (!profileMenuOpen || !useOwnProfileActionSheet) return;
+    const scrollbarWidth =
+      window.innerWidth - document.documentElement.clientWidth;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = "hidden";
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
+    };
+  }, [profileMenuOpen, useOwnProfileActionSheet]);
 
   const notifyRegistrationOutcome = useCallback(
     (result: Awaited<
@@ -218,9 +239,9 @@ export default function ProfileTopBar({
     refreshNativePushStatus,
   ]);
 
-  // Close on scroll/resize so fixed position does not drift from trigger
+  // Pill menu only: close on scroll/resize so fixed position does not drift from trigger
   useEffect(() => {
-    if (!profileMenuOpen) return;
+    if (!profileMenuOpen || useOwnProfileActionSheet) return;
     const close = () => closeProfileMenu();
     window.addEventListener("scroll", close, { capture: true });
     window.addEventListener("resize", close);
@@ -228,7 +249,7 @@ export default function ProfileTopBar({
       window.removeEventListener("scroll", close, { capture: true });
       window.removeEventListener("resize", close);
     };
-  }, [profileMenuOpen, closeProfileMenu]);
+  }, [profileMenuOpen, closeProfileMenu, useOwnProfileActionSheet]);
 
   // simple debounce so we don't query on every keystroke
   useEffect(() => {
@@ -258,6 +279,20 @@ export default function ProfileTopBar({
     "hover:bg-[var(--glass-active-bg)] hover:shadow-[0_3px_12px_rgba(0,0,0,0.16),0_0_24px_color-mix(in_oklab,var(--brand)_26%,transparent)]",
     "active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40",
   ].join(" ");
+
+  const ownSheetRowClass = [
+    "flex w-full min-w-0 items-center justify-between gap-3",
+    "rounded-2xl border border-[var(--bottom-tab-border)]",
+    "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+    "py-2.5 pl-3 pr-2 text-[var(--text)] text-sm font-medium",
+    "shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_16px_color-mix(in_oklab,var(--brand)_14%,transparent)]",
+    "transition-[box-shadow,transform,background-color]",
+    "hover:bg-[var(--glass-active-bg)] active:scale-[0.995]",
+    "disabled:pointer-events-none disabled:opacity-40",
+  ].join(" ");
+
+  const ownSheetSectionLabelClass =
+    "px-0.5 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text)]/45 first:pt-2";
 
   return (
     <>
@@ -319,7 +354,9 @@ export default function ProfileTopBar({
                   onClick={() => {
                     setProfileMenuOpen((prev) => {
                       const next = !prev;
-                      if (next && profileMenuTriggerRef.current) {
+                      if (next && useOwnProfileActionSheet) {
+                        setMenuAnchorRect(null);
+                      } else if (next && profileMenuTriggerRef.current) {
                         setMenuAnchorRect(
                           profileMenuTriggerRef.current.getBoundingClientRect(),
                         );
@@ -332,7 +369,7 @@ export default function ProfileTopBar({
                   className="shrink-0 w-9 h-9 rounded-full border border-[var(--border)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
                   aria-label="Profile actions"
                   aria-expanded={profileMenuOpen}
-                  aria-haspopup="menu"
+                  aria-haspopup={useOwnProfileActionSheet ? "dialog" : "menu"}
                 >
                   <PiList size={18} className="text-[var(--text)]" />
                 </button>
@@ -342,8 +379,219 @@ export default function ProfileTopBar({
         )}
       </div>
 
-      {/* Portaled stack: right-aligned with trigger so icon circles line up vertically */}
       {profileMenuOpen &&
+        useOwnProfileActionSheet &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex flex-col justify-end overscroll-none"
+            role="presentation"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
+              aria-label="Dismiss profile menu"
+              onClick={() => closeProfileMenu()}
+            />
+            <div
+              ref={ownProfileSheetRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="own-profile-actions-title"
+              className="relative z-10 flex max-h-[min(92dvh,920px)] w-full flex-col overflow-hidden rounded-t-[1.35rem] border border-[var(--bottom-tab-border)] border-b-0 bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] shadow-[0_-8px_40px_rgba(0,0,0,0.22)] safe-area-inset-bottom [-webkit-backdrop-filter:blur(var(--glass-blur))]"
+            >
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+                <h2
+                  id="own-profile-actions-title"
+                  className="text-base font-semibold tracking-tight text-[var(--text)]"
+                >
+                  Profile
+                </h2>
+                <button
+                  type="button"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)] text-[var(--text)] hover:bg-[var(--glass-active-bg)]"
+                  aria-label="Close"
+                  onClick={() => closeProfileMenu()}
+                >
+                  <PiX size={20} aria-hidden />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
+                <p className={ownSheetSectionLabelClass}>Account</p>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      onRequestEditProfile?.();
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span>Edit profile</span>
+                    <span className={profileActionIconWrapClass}>
+                      <PiPencilSimple size={16} aria-hidden />
+                    </span>
+                  </button>
+                  {showHangoutReminderMenuItem && (
+                    <button
+                      type="button"
+                      className={ownSheetRowClass}
+                      disabled={nativePushRegisterBusy}
+                      onClick={() => {
+                        closeProfileMenu();
+                        if (shouldDirectlyRefreshIosPush) {
+                          void refreshNativePushRegistration();
+                          return;
+                        }
+                        setShowHangoutReminderModal(true);
+                      }}
+                    >
+                      <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                        <span>{nativePushMenuLabel}</span>
+                        {nativePushSubline ? (
+                          <span className="text-xs font-normal text-[var(--text)]/50">
+                            {nativePushSubline}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className={profileActionIconWrapClass}>
+                        <PiBell size={16} aria-hidden />
+                      </span>
+                    </button>
+                  )}
+                  <div
+                    role="group"
+                    aria-label="Theme"
+                    className={`${ownSheetRowClass} cursor-default`}
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <span className="text-left">Switch theme</span>
+                    <ThemeSwitch
+                      className="shrink-0"
+                      width={56}
+                      knobW={22}
+                      knobH={20}
+                      padX={4}
+                      padY={4}
+                    />
+                  </div>
+                  {showShare && (
+                    <button
+                      type="button"
+                      className={ownSheetRowClass}
+                      onClick={() => {
+                        setShowShareModal(true);
+                        closeProfileMenu();
+                      }}
+                    >
+                      <span>Share</span>
+                      <span className={profileActionIconWrapClass}>
+                        <PiShareFat size={16} aria-hidden />
+                      </span>
+                    </button>
+                  )}
+                </div>
+
+                <p className={ownSheetSectionLabelClass}>Safety &amp; Legal</p>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      navigate(Paths.privacy);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="text-left">Privacy policy</span>
+                    <span className={profileActionIconWrapClass}>
+                      <PiFileText size={16} aria-hidden />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      navigate(Paths.terms);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="text-left">Terms of service</span>
+                    <span className={profileActionIconWrapClass}>
+                      <PiFileText size={16} aria-hidden />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      navigate(Paths.reporting);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="text-left">Reporting</span>
+                    <span className={profileActionIconWrapClass}>
+                      <PiMegaphone size={16} aria-hidden />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      navigate(Paths.support);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="text-left">Support</span>
+                    <span className={profileActionIconWrapClass}>
+                      <PiChatCircleText size={16} aria-hidden />
+                    </span>
+                  </button>
+                </div>
+
+                <p className={ownSheetSectionLabelClass}>Account controls</p>
+                <div className="mt-1 flex flex-col gap-2 border-t border-[var(--border)] pt-4">
+                  <button
+                    type="button"
+                    className={[
+                      ownSheetRowClass,
+                      "border-red-500/30 bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] text-[color-mix(in_oklab,var(--danger)_92%,var(--text))] hover:bg-[color-mix(in_oklab,var(--danger)_16%,transparent)]",
+                    ].join(" ")}
+                    onClick={() => {
+                      navigate(Paths.deleteAccount);
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="text-left font-semibold">Delete account</span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-red-500/35 bg-[color-mix(in_oklab,var(--danger)_12%,transparent)]">
+                      <PiTrashSimple size={16} aria-hidden />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      ownSheetRowClass,
+                      "text-[color-mix(in_oklab,var(--danger)_75%,var(--text))] border-[color-mix(in_oklab,var(--danger)_28%,var(--border))]",
+                    ].join(" ")}
+                    onClick={() => {
+                      onRequestLogout?.();
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span className="font-medium">Log out</span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_oklab,var(--danger)_35%,var(--border))] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)]">
+                      <PiSignOut size={16} aria-hidden />
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {/* Other profile (etc.): compact pills aligned to trigger */}
+      {profileMenuOpen &&
+        !useOwnProfileActionSheet &&
         menuAnchorRect &&
         createPortal(
           <div

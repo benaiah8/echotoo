@@ -135,6 +135,20 @@ export default function PostDetailModal() {
     };
   }, []);
 
+  /** Overlay route: keep underlying tab (window scroll) from moving behind the sheet. */
+  useEffect(() => {
+    const scrollbarWidth =
+      window.innerWidth - document.documentElement.clientWidth;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = "hidden";
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
+    };
+  }, []);
+
   useEffect(() => {
     setIsExiting(false);
     setDragOffset(0);
