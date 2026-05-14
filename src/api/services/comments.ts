@@ -81,6 +81,16 @@ const invalidateCommentsCache = (postId: string): void => {
 // In-flight deduplication: concurrent identical requests share one network call
 const commentsInFlight = new Map<string, Promise<CommentWithDetails[]>>();
 
+/** Clears all client-side cached comment trees so lists refetch (e.g. after block). */
+export function clearAllCommentsClientCache(): void {
+  try {
+    localStorage.removeItem(COMMENTS_CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+  commentsInFlight.clear();
+}
+
 async function fetchCommentsForPostImpl(
   postId: string
 ): Promise<CommentWithDetails[]> {

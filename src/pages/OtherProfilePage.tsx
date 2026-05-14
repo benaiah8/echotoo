@@ -72,6 +72,8 @@ import {
   isBlockingUser,
   unblockUser,
 } from "../api/services/blocks";
+import { submitProfileReport } from "../api/services/reports";
+import { clearAllCommentsClientCache } from "../api/services/comments";
 import {
   buildProfileReportDraftFromProfile,
   type ReportDraft,
@@ -85,6 +87,9 @@ import {
 } from "../lib/homeRefreshEvents";
 import { dataCache } from "../lib/dataCache";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
+
+const AUTOMATIC_BLOCK_MODERATION_DETAILS =
+  "Automatic moderation signal: this profile was blocked by a user. Please review for potential abusive or objectionable behavior.";
 
 /**
  * OtherProfilePage - Page for /u/:username route
@@ -268,7 +273,26 @@ export default function OtherProfilePage({
     setBlockActionLoading(true);
     try {
       await blockUser(profile.user_id);
+
+      try {
+        if (profile.id) {
+          await submitProfileReport({
+            targetProfileId: profile.id,
+            targetOwnerUserId: profile.user_id,
+            reason: "other",
+            details: AUTOMATIC_BLOCK_MODERATION_DETAILS,
+          });
+        }
+      } catch (reportErr) {
+        console.warn(
+          "[OtherProfilePage] Automatic moderation signal after block failed:",
+          reportErr
+        );
+      }
+
       await flushCachesAfterBlockChange();
+      clearAllCommentsClientCache();
+
       setShowBlockConfirm(false);
       setIsBlocked(true);
       setProfile(null);
@@ -279,7 +303,7 @@ export default function OtherProfilePage({
     } finally {
       setBlockActionLoading(false);
     }
-  }, [profile?.user_id, flushCachesAfterBlockChange, navigate]);
+  }, [profile?.user_id, profile?.id, flushCachesAfterBlockChange, navigate]);
 
   const [showInfoModal, setShowInfoModal] = useState(false);
 
