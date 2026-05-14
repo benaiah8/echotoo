@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import { uploadImage } from "../../api/services/mediaUpload";
+import {
+  assertPlainTextAllowedForUgc,
+} from "../../lib/ugcTextPolicy";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
 
@@ -106,6 +109,13 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
       if (origUsername !== username.trim()) {
         patch.last_username_change_at = new Date().toISOString();
       }
+
+      assertPlainTextAllowedForUgc(displayName.trim(), "default");
+      assertPlainTextAllowedForUgc(username.trim(), "username");
+      assertPlainTextAllowedForUgc(bio.trim(), "default");
+      assertPlainTextAllowedForUgc(instagramUrl.trim(), "default");
+      assertPlainTextAllowedForUgc(tiktokUrl.trim(), "default");
+      assertPlainTextAllowedForUgc(telegramUrl.trim(), "default");
 
       const { error: upErr } = await supabase
         .from("profiles")

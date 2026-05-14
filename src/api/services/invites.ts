@@ -1,5 +1,6 @@
 import { supabase } from "../../lib/supabaseClient";
 import { getViewerAuthUserId } from "./follows";
+import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
 /** Max length for optional invite note (plain text, in-app). */
 export const INVITE_NOTE_MAX_LENGTH = 200;
@@ -292,6 +293,10 @@ export async function sendInvites(
 
     const userId = await getViewerAuthUserId();
     if (!userId) throw new Error("Not authenticated");
+
+    if (note != null && String(note).trim() !== "") {
+      assertPlainTextAllowedForUgc(String(note), "default");
+    }
 
     console.log("Current user:", userId);
 

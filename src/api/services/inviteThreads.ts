@@ -4,6 +4,7 @@
  */
 
 import { supabase } from "../../lib/supabaseClient";
+import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
 /** Values returned on `invite_threads.thread_kind` via RPC. */
 export type InviteThreadKind = "personal" | "group" | "announcement";
@@ -210,6 +211,8 @@ export async function postInviteThreadMessage(
   body: string
 ): Promise<{ data: PostInviteThreadMessageResult | null; error: any }> {
   try {
+    assertPlainTextAllowedForUgc(body, "default");
+
     const { data, error } = await supabase.rpc("post_invite_thread_message", {
       p_thread_id: threadId,
       p_body: body,

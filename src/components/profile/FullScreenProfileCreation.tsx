@@ -19,6 +19,7 @@ import { useSelector } from "react-redux";
 import { RootState } from "../../app/store";
 import AvatarCropModal from "./AvatarCropModal";
 import { isPlaceholderUsername } from "../../lib/profileUsername";
+import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
 const DISPLAY_NAME_MAX = 40;
 const USERNAME_MAX = 24;
@@ -593,6 +594,13 @@ export default function FullScreenProfileCreation({
       }
 
       // Username cooldown removed - users can change username anytime for now
+
+      assertPlainTextAllowedForUgc(displayName.trim(), "default");
+      assertPlainTextAllowedForUgc(username.trim(), "username");
+      assertPlainTextAllowedForUgc(bio.trim(), "default");
+      assertPlainTextAllowedForUgc(instagramUrl.trim(), "default");
+      assertPlainTextAllowedForUgc(tiktokUrl.trim(), "default");
+      assertPlainTextAllowedForUgc(telegramUrl.trim(), "default");
 
       // Update profile (excluding privacy settings - handled separately)
       const patch: any = {

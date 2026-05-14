@@ -5,6 +5,7 @@ import { getConfirmDialogButtonClass } from "./ConfirmDialog";
 import type { PostReportReasonCode, ReportDraft } from "../../types/report";
 import { submitPostReport, submitProfileReport } from "../../api/services/reports";
 import { showErrorToast } from "../../lib/errorHandling";
+import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
 const REASON_OPTIONS: {
   label: string;
@@ -74,6 +75,8 @@ export default function ReportModal({ open, draft, onClose }: Props) {
     if (!reason || submitting) return;
     setSubmitting(true);
     try {
+      assertPlainTextAllowedForUgc(details.trim() || undefined, "default");
+
       if (draft.reportKind === "post") {
         await submitPostReport({
           targetPostId: draft.targetPostId,

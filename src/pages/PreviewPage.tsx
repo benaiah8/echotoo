@@ -23,6 +23,7 @@ import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill"
 import InviteDrawer from "../components/ui/InviteDrawer";
 import PostedSuccessModal from "../components/ui/PostedSuccessModal";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
+import { assertCreateFlowDraftTextAllowed } from "../lib/ugcTextPolicy";
 import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
 
 const BOTTOM_NAV_H = 56;
@@ -186,6 +187,12 @@ export default function PreviewPage() {
         return;
       }
 
+      assertCreateFlowDraftTextAllowed({
+        caption: finalMeta.caption || "",
+        tags,
+        activities: sanitizedActivities as DraftActivity[],
+      });
+
       const rsvpCap =
         finalMeta.rsvpCapacity === "" ? null : finalMeta.rsvpCapacity ?? null;
 
@@ -224,7 +231,9 @@ export default function PreviewPage() {
       }
     } catch (err) {
       console.error("[Preview] Publish failed", err);
-      toast?.error?.("Publish failed");
+      toast?.error?.(
+        err instanceof Error ? err.message : "Publish failed"
+      );
     } finally {
       setPublishing(false);
     }
@@ -253,6 +262,12 @@ export default function PreviewPage() {
         toast?.error?.("Please sign in to continue");
         return;
       }
+
+      assertCreateFlowDraftTextAllowed({
+        caption: finalMeta.caption || "",
+        tags,
+        activities: sanitizedActivities as DraftActivity[],
+      });
 
       // Save as draft (always create new, never update existing)
       const post = await saveDraft({
@@ -318,7 +333,9 @@ export default function PreviewPage() {
       return nav("/u/me");
     } catch (err) {
       console.error("[Preview] Save draft failed", err);
-      toast?.error?.("Save draft failed");
+      toast?.error?.(
+        err instanceof Error ? err.message : "Save draft failed"
+      );
     } finally {
       setPublishing(false);
     }

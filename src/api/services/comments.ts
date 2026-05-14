@@ -11,6 +11,7 @@ import {
   CommentCount,
 } from "../../types/comment";
 import { getViewerAuthUserId } from "./follows";
+import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
 // Cache configuration
 const COMMENTS_CACHE_KEY = "comments_cache";
@@ -277,6 +278,8 @@ export const createComment = async (
     console.log("Creating comment:", commentData); // Debug log
     console.log("User ID:", userId); // Debug log
 
+    assertPlainTextAllowedForUgc(commentData.content, "default");
+
     const { data, error } = await supabase
       .from("comments")
       .insert({
@@ -315,6 +318,8 @@ export const updateComment = async (
   updateData: UpdateCommentData
 ): Promise<Comment> => {
   try {
+    assertPlainTextAllowedForUgc(updateData.content, "default");
+
     const { data, error } = await supabase
       .from("comments")
       .update({

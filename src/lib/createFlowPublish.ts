@@ -11,6 +11,7 @@ import { incrementMyXp } from "../api/services/xp";
 import { sanitizeTagsForPublish } from "./createFlowLimits";
 import { isDefaultStopTitle } from "./createFlowMeaningfulActivity";
 import { persistOwnCreatedPrependPending } from "./ownCreatedPendingPrepend";
+import { assertCreateFlowDraftTextAllowed } from "./ugcTextPolicy";
 
 /** Legacy sessionStorage key — no longer written; cleared on new publish for hygiene. */
 const LEGACY_OWN_CREATED_PUBLISHED_PENDING_KEY =
@@ -133,6 +134,12 @@ export async function executeCreateFlowPublish(
   } = await supabase.auth.getSession();
   if (sessErr) throw sessErr;
   if (!session?.user) throw new Error("Not authenticated");
+
+  assertCreateFlowDraftTextAllowed({
+    caption: input.caption,
+    tags: input.tags,
+    activities: input.activities,
+  });
 
   const dbVisibility = input.visibility === "friends" ? "friends" : "public";
   const tags = sanitizeTagsForPublish(input.tags);
