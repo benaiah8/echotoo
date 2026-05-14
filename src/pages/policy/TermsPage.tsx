@@ -17,6 +17,18 @@ export default function TermsPage() {
           If you do not agree, please do not use the platform.
         </p>
 
+        <h3>User-generated content, zero tolerance, and safety</h3>
+        <p>
+          EchoToo has zero tolerance for objectionable content, abusive behavior,
+          harassment, hate speech, threats, sexual exploitation, and other
+          unsafe content. You can report posts and user accounts from inside the
+          app. EchoToo reviews objectionable content reports within 24 hours, to
+          the extent reasonably practicable. EchoToo may remove content and
+          suspend or eject users who violate these Terms, the Community
+          Guidelines, or applicable law. You may block abusive users from their
+          profile in the app.
+        </p>
+
         <h3>1. About EchoToo</h3>
         <p>
           EchoToo is a social discovery platform that helps users find and share
@@ -112,8 +124,11 @@ export default function TermsPage() {
 
         <h3>8. Reporting and Enforcement</h3>
         <p>
-          EchoToo allows users to report posts and user accounts. We may review
-          reported content and take action when appropriate.
+          EchoToo allows users to report posts and user accounts from inside the
+          app. Reports are reviewed by the EchoToo team; we aim to review reports
+          of objectionable content within 24 hours, to the extent reasonably
+          practicable. We may review reported content and take action when
+          appropriate.
         </p>
         <p>Enforcement actions may include:</p>
         <ul>

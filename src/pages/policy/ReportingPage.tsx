@@ -17,6 +17,15 @@ export default function ReportingPage() {
           Policy explains how reporting works and how the platform may respond
           to violations.
         </p>
+        <p>
+          EchoToo has zero tolerance for objectionable content, abusive behavior,
+          harassment, hate speech, threats, sexual exploitation, and other unsafe
+          content. You can report posts and user accounts from inside the app.
+          EchoToo reviews objectionable content reports within 24 hours, to the
+          extent reasonably practicable. EchoToo may remove content and suspend
+          or eject users who violate the rules. You may block abusive users from
+          their profile in the app.
+        </p>
 
         <h3>1. Reporting Content</h3>
         <p>
@@ -56,7 +65,8 @@ export default function ReportingPage() {
         <p>
           The EchoToo team may review reported content and determine whether it
           violates the platform’s rules, Community Guidelines, or applicable
-          laws.
+          laws. EchoToo aims to review reports of objectionable content within 24
+          hours, to the extent reasonably practicable.
         </p>
         <p>
           Not every report results in enforcement action, but reports help us

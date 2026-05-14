@@ -1,6 +1,7 @@
 import Modal from "./Modal";
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useNavigate } from "react-router-dom";
 import { PiAppleLogo, PiEye, PiEyeSlash } from "react-icons/pi";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
@@ -22,6 +23,13 @@ import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
 import { pickRandomPresetAvatarValue } from "../../lib/avatarPresets";
+import { Paths } from "../../router/Paths";
+
+const AUTH_AGREEMENT_TOAST =
+  "Please agree to the Terms of Service, Community Guidelines, and Privacy Policy before continuing.";
+
+const policyLinkClass =
+  "text-[var(--brand)] underline underline-offset-2 decoration-[var(--brand)]/50 font-medium hover:opacity-90";
 
 /**
  * After Apple DB writes: clear profile fetch dedupe + legacy LS rows, then republish
@@ -247,6 +255,7 @@ function PasswordInput({
 
 const AuthModal = () => {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { authModal } = useSelector((s: RootState) => s.modal);
 
   const [tab, setTab] = useState<"login" | "signup">("login");
@@ -265,8 +274,22 @@ const AuthModal = () => {
     username: "",
     repeatPassword: "",
   });
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const close = () => dispatch(setAuthModal(false));
+
+  const requireAuthAgreement = (): boolean => {
+    if (!acceptedTerms) {
+      toast.error(AUTH_AGREEMENT_TOAST);
+      return false;
+    }
+    return true;
+  };
+
+  const openPolicy = (path: string) => {
+    close();
+    navigate(path);
+  };
 
   // Close modal when Supabase reports SIGNED_IN
   useEffect(() => {
@@ -295,6 +318,8 @@ const AuthModal = () => {
     if (!authModal) {
       setSignupPhase("form");
       setShowEmailForm(false);
+    } else {
+      setAcceptedTerms(false);
     }
   }, [authModal]);
 
@@ -308,6 +333,7 @@ const AuthModal = () => {
   }, [resendCooldown]);
 
   const handleEmailLogin = async () => {
+    if (!requireAuthAgreement()) return;
     try {
       setLoading(true);
       dbg("EmailLogin:start", { email: data.email });
@@ -331,6 +357,7 @@ const AuthModal = () => {
   };
 
   const handleForgotPassword = async () => {
+    if (!requireAuthAgreement()) return;
     if (!data.email?.trim()) {
       toast.error("Enter your email above first");
       return;
@@ -351,6 +378,7 @@ const AuthModal = () => {
   };
 
   const handleEmailSignup = async () => {
+    if (!requireAuthAgreement()) return;
     try {
       if (!data.email || !data.password) {
         toast.error("Email & password required");
@@ -403,6 +431,7 @@ const AuthModal = () => {
   };
 
   const handleGoogle = async () => {
+    if (!requireAuthAgreement()) return;
     try {
       setLoading(true);
       const redirectTo = getAuthRedirectUrl();
@@ -457,6 +486,7 @@ const AuthModal = () => {
   };
 
   const handleApple = async () => {
+    if (!requireAuthAgreement()) return;
     try {
       setLoading(true);
 
@@ -567,6 +597,7 @@ const AuthModal = () => {
 
   // Continue browsing as guest for this session; timer logic is handled elsewhere.
   const continueAsGuest = () => {
+    if (!requireAuthAgreement()) return;
     dispatch(setAuthModal(false));
   };
 
@@ -678,10 +709,65 @@ const AuthModal = () => {
           </p>
         </div>
 
+        <label className="flex items-start gap-2.5 mb-4 cursor-pointer text-left w-full rounded-xl px-3 py-2.5 border border-[var(--border)]/80 bg-[color-mix(in_oklab,var(--surface)_35%,transparent)]">
+          <input
+            type="checkbox"
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-[var(--border)] accent-[var(--brand)]"
+            aria-describedby="auth-legal-summary"
+          />
+          <span
+            id="auth-legal-summary"
+            className="text-[11px] leading-snug text-[var(--text)]/95"
+          >
+            I agree to the{" "}
+            <button
+              type="button"
+              className={policyLinkClass}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPolicy(Paths.terms);
+              }}
+            >
+              Terms of Service
+            </button>
+            ,{" "}
+            <button
+              type="button"
+              className={policyLinkClass}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPolicy(Paths.communityGuidelines);
+              }}
+            >
+              Community Guidelines
+            </button>
+            , and{" "}
+            <button
+              type="button"
+              className={policyLinkClass}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openPolicy(Paths.privacy);
+              }}
+            >
+              Privacy Policy
+            </button>
+            , including EchoToo&apos;s zero-tolerance policy for objectionable
+            content and abusive behavior.
+          </span>
+        </label>
+
         {/* Continue with Google — always visible (collapsed + expanded) */}
         <button
           type="button"
-          className="ui-btn auth-google-btn flex w-full items-center justify-center gap-2 mb-3"
+          className={`ui-btn auth-google-btn flex w-full items-center justify-center gap-2 mb-3 ${
+            !acceptedTerms && !loading ? "opacity-55" : ""
+          }`}
           onClick={handleGoogle}
           disabled={loading}
         >
@@ -691,7 +777,9 @@ const AuthModal = () => {
 
         <button
           type="button"
-          className="ui-btn auth-apple-btn flex w-full items-center justify-center gap-2 mb-3"
+          className={`ui-btn auth-apple-btn flex w-full items-center justify-center gap-2 mb-3 ${
+            !acceptedTerms && !loading ? "opacity-55" : ""
+          }`}
           onClick={handleApple}
           disabled={loading}
         >
@@ -701,7 +789,9 @@ const AuthModal = () => {
 
         <button
           type="button"
-          className="auth-guest-link w-full mb-1"
+          className={`auth-guest-link w-full mb-1 ${
+            !acceptedTerms && !loading ? "opacity-55" : ""
+          }`}
           onClick={continueAsGuest}
         >
           Continue as guest
@@ -710,8 +800,13 @@ const AuthModal = () => {
         {!showEmailForm ? (
           <button
             type="button"
-            className="w-full text-center text-xs font-normal text-[var(--brand)] opacity-70 py-2 mt-1 transition-opacity hover:opacity-100 hover:underline"
-            onClick={() => setShowEmailForm(true)}
+            className={`w-full text-center text-xs font-normal text-[var(--brand)] py-2 mt-1 transition-opacity hover:opacity-100 hover:underline ${
+              !acceptedTerms && !loading ? "opacity-55" : "opacity-70"
+            }`}
+            onClick={() => {
+              if (!requireAuthAgreement()) return;
+              setShowEmailForm(true);
+            }}
             aria-expanded={false}
             aria-controls="auth-email-sign-in"
           >
