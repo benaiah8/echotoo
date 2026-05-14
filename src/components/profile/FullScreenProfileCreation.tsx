@@ -82,6 +82,9 @@ type Props = {
     is_private?: boolean | null;
     social_media_public?: boolean | null;
   };
+  /** When opening from profile menu "Delete account", scroll danger zone into view (non–first-time edit only). */
+  focusDeleteAccountOnMount?: boolean;
+  onFocusDeleteAccountHandled?: () => void;
 };
 
 export default function FullScreenProfileCreation({
@@ -91,6 +94,8 @@ export default function FullScreenProfileCreation({
   isFirstTime = false,
   onComplete,
   initialProfileData,
+  focusDeleteAccountOnMount = false,
+  onFocusDeleteAccountHandled,
 }: Props) {
   const navigate = useNavigate();
   const authState = useSelector((state: RootState) => state.auth);
@@ -128,6 +133,7 @@ export default function FullScreenProfileCreation({
   const [avatarCropSrc, setAvatarCropSrc] = useState<string | null>(null);
   const avatarCropObjectUrlRef = useRef<string | null>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const deleteDangerZoneRef = useRef<HTMLDivElement>(null);
   /** After user types in the username field, display-name sync must not overwrite (create flow only). */
   const usernameTouchedByUserRef = useRef(false);
 
@@ -159,6 +165,22 @@ export default function FullScreenProfileCreation({
       setEchoPickedNote(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !focusDeleteAccountOnMount) return;
+    if (isFirstTime) {
+      onFocusDeleteAccountHandled?.();
+      return;
+    }
+    const t = window.setTimeout(() => {
+      deleteDangerZoneRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      onFocusDeleteAccountHandled?.();
+    }, 200);
+    return () => window.clearTimeout(t);
+  }, [open, focusDeleteAccountOnMount, isFirstTime, onFocusDeleteAccountHandled]);
 
   const handleCroppedAvatarConfirm = useCallback(
     async (croppedFile: File) => {
@@ -1253,7 +1275,10 @@ export default function FullScreenProfileCreation({
 
             {/* Danger zone - only when editing (not first-time) */}
             {!isFirstTime && (
-              <div className="pt-4 mt-4 border-t border-[var(--border)]">
+              <div
+                ref={deleteDangerZoneRef}
+                className="pt-4 mt-4 border-t border-[var(--border)]"
+              >
                 <label className="block text-sm font-medium text-[var(--text)] mb-3">
                   Danger zone
                 </label>

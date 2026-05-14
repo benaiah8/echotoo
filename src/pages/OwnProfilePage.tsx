@@ -176,6 +176,8 @@ export default function OwnProfilePage() {
   >(false);
   const [lightbox, setLightbox] = useState(false);
   const [fullScreenEditOpen, setFullScreenEditOpen] = useState(false);
+  const [focusDeleteAccountOnEditorOpen, setFocusDeleteAccountOnEditorOpen] =
+    useState(false);
   const [isFirstTimeUser, setIsFirstTimeUser] = useState(false);
   const [showOnboardingForTesting, setShowOnboardingForTesting] =
     useState(false);
@@ -771,6 +773,15 @@ export default function OwnProfilePage() {
     window.setTimeout(() => setFullScreenEditOpen(true), 0);
   }, []);
 
+  const handleRequestDeleteAccount = useCallback(() => {
+    setFocusDeleteAccountOnEditorOpen(true);
+    setFullScreenEditOpen(true);
+  }, []);
+
+  const handleFocusDeleteAccountHandled = useCallback(() => {
+    setFocusDeleteAccountOnEditorOpen(false);
+  }, []);
+
   // Open edit if URL has ?edit=1 or first time user
   useEffect(() => {
     if (!profile) return;
@@ -804,6 +815,7 @@ export default function OwnProfilePage() {
   }, [profile, location.pathname, location.search, navigate]);
 
   const handleProfileCreationComplete = () => {
+    setFocusDeleteAccountOnEditorOpen(false);
     setFullScreenEditOpen(false);
     if (isFirstTimeUser && !SKIP_WELCOME_ONBOARDING) {
       setShowOnboardingForTesting(true);
@@ -861,6 +873,7 @@ export default function OwnProfilePage() {
               showHangoutReminderSetupInMenu
               onRequestEditProfile={() => setFullScreenEditOpen(true)}
               onRequestLogout={() => setShowLogoutConfirm(true)}
+              onRequestDeleteAccount={handleRequestDeleteAccount}
             />
           </div>
 
@@ -1109,11 +1122,16 @@ export default function OwnProfilePage() {
               <>
                 <FullScreenProfileCreation
                   open={fullScreenEditOpen}
-                  onClose={() => setFullScreenEditOpen(false)}
+                  onClose={() => {
+                    setFocusDeleteAccountOnEditorOpen(false);
+                    setFullScreenEditOpen(false);
+                  }}
                   profileId={profile.id}
                   isFirstTime={isFirstTimeUser}
                   onComplete={handleProfileCreationComplete}
                   initialProfileData={editModalInitialData}
+                  focusDeleteAccountOnMount={focusDeleteAccountOnEditorOpen}
+                  onFocusDeleteAccountHandled={handleFocusDeleteAccountHandled}
                 />
                 {drawerOpen && (
                   <FollowListDrawer

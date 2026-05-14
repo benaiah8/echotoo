@@ -15,6 +15,7 @@ import {
   PiShareFat,
   PiSignOut,
   PiCaretLeft,
+  PiInfo,
   PiTrashSimple,
 } from "react-icons/pi";
 import { Capacitor } from "@capacitor/core";
@@ -75,6 +76,8 @@ export default function ProfileTopBar({
   onRequestEditProfile,
   /** Own profile: show logout confirm (parent owns dialog + signOut). */
   onRequestLogout,
+  /** Own profile: open full-screen editor scrolled to account deletion (parent owns flow). */
+  onRequestDeleteAccount,
 }: {
   onLogoClick?: () => void;
   onSearch?: (q: string) => void;
@@ -95,6 +98,7 @@ export default function ProfileTopBar({
   showHangoutReminderSetupInMenu?: boolean;
   onRequestEditProfile?: () => void;
   onRequestLogout?: () => void;
+  onRequestDeleteAccount?: () => void;
 }) {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
@@ -319,21 +323,32 @@ export default function ProfileTopBar({
 
         {blockedShellTopBar ? (
           showBlockControls && (
-            <button
-              type="button"
-              disabled={blockBusy}
-              onClick={() =>
-                isBlocked ? onRequestUnblock?.() : onRequestBlock?.()
-              }
-              className="shrink-0 w-9 h-9 rounded-full border border-[var(--border)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)] disabled:opacity-40 ml-auto"
-              aria-label={isBlocked ? "Unblock user" : "Block user"}
-            >
-              {isBlocked ? (
-                <PiArrowCounterClockwise size={16} />
-              ) : (
-                <PiProhibit size={16} />
-              )}
-            </button>
+            isBlocked ? (
+              <button
+                type="button"
+                disabled={blockBusy}
+                onClick={() => onRequestUnblock?.()}
+                className="shrink-0 ml-auto flex h-9 min-w-0 max-w-[min(200px,calc(100vw-120px))] items-center justify-center gap-1.5 rounded-full border border-emerald-500/45 bg-[color-mix(in_oklab,#22c55e_16%,var(--glass-bg))] px-3 text-[11px] font-semibold text-emerald-950 shadow-sm backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] transition hover:bg-[color-mix(in_oklab,#22c55e_24%,var(--glass-bg))] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40 app-dark:border-emerald-400/35 app-dark:bg-[color-mix(in_oklab,#22c55e_22%,var(--glass-bg))] app-dark:text-emerald-50"
+                aria-label="Unblock user"
+              >
+                <PiArrowCounterClockwise
+                  size={14}
+                  className="shrink-0 opacity-90"
+                  aria-hidden
+                />
+                <span className="truncate">Unblock</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={blockBusy}
+                onClick={() => onRequestBlock?.()}
+                className="shrink-0 w-9 h-9 rounded-full border border-[var(--border)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)] disabled:opacity-40 ml-auto"
+                aria-label="Block user"
+              >
+                <PiProhibit size={16} aria-hidden />
+              </button>
+            )
           )
         ) : (
           <>
@@ -555,10 +570,23 @@ export default function ProfileTopBar({
                     <PiChatCircleText size={14} aria-hidden />
                   </span>
                 </button>
+                <button
+                  type="button"
+                  className={ownSheetRowClass}
+                  onClick={() => {
+                    navigate(Paths.deleteAccount);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="text-left">Account deletion info</span>
+                  <span className={ownSheetIconWrapClass}>
+                    <PiInfo size={14} aria-hidden />
+                  </span>
+                </button>
               </div>
 
               <p className={`${ownSheetSectionLabelClass} pt-5`}>
-                Account controls
+                Account Controls
               </p>
               <div className="flex flex-col gap-2">
                 <button
@@ -568,7 +596,7 @@ export default function ProfileTopBar({
                     "border-red-500/35 bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] text-[color-mix(in_oklab,var(--danger)_90%,var(--text))] hover:bg-[color-mix(in_oklab,var(--danger)_15%,transparent)]",
                   ].join(" ")}
                   onClick={() => {
-                    navigate(Paths.deleteAccount);
+                    onRequestDeleteAccount?.();
                     closeProfileMenu();
                   }}
                 >
@@ -828,6 +856,23 @@ export default function ProfileTopBar({
                   className={profileActionPillClass}
                   onClick={() => {
                     navigate(Paths.deleteAccount);
+                    closeProfileMenu();
+                  }}
+                >
+                  <span className="min-w-0 flex-1 pl-0.5 text-left text-[11px] font-medium leading-tight tracking-tight">
+                    Account deletion info
+                  </span>
+                  <span className={profileActionIconWrapClass}>
+                    <PiInfo size={14} aria-hidden />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  style={glassMenuSurface}
+                  className={profileActionPillClass}
+                  onClick={() => {
+                    onRequestDeleteAccount?.();
                     closeProfileMenu();
                   }}
                 >

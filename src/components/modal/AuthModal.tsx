@@ -275,12 +275,15 @@ const AuthModal = () => {
     repeatPassword: "",
   });
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [authAgreementError, setAuthAgreementError] = useState<string | null>(
+    null,
+  );
 
   const close = () => dispatch(setAuthModal(false));
 
   const requireAuthAgreement = (): boolean => {
     if (!acceptedTerms) {
-      toast.error(AUTH_AGREEMENT_TOAST);
+      setAuthAgreementError(AUTH_AGREEMENT_TOAST);
       return false;
     }
     return true;
@@ -310,7 +313,12 @@ const AuthModal = () => {
       repeatPassword: "",
     }));
     setLoginError(null);
+    setAuthAgreementError(null);
   }, [tab]);
+
+  useEffect(() => {
+    if (acceptedTerms) setAuthAgreementError(null);
+  }, [acceptedTerms]);
 
   // Reset loading, email panel, and signupPhase when modal opens or closes
   useEffect(() => {
@@ -318,8 +326,10 @@ const AuthModal = () => {
     if (!authModal) {
       setSignupPhase("form");
       setShowEmailForm(false);
+      setAuthAgreementError(null);
     } else {
       setAcceptedTerms(false);
+      setAuthAgreementError(null);
     }
   }, [authModal]);
 
@@ -716,6 +726,7 @@ const AuthModal = () => {
             onChange={(e) => setAcceptedTerms(e.target.checked)}
             className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-[var(--border)] accent-[var(--brand)]"
             aria-describedby="auth-legal-summary"
+            aria-invalid={authAgreementError ? true : undefined}
           />
           <span
             id="auth-legal-summary"
@@ -761,6 +772,14 @@ const AuthModal = () => {
             content and abusive behavior.
           </span>
         </label>
+        {authAgreementError ? (
+          <p
+            className="mb-3 rounded-lg border border-red-500/35 bg-[color-mix(in_oklab,var(--danger)_12%,transparent)] px-2.5 py-1.5 text-center text-[11px] font-medium leading-snug text-red-800 app-dark:text-red-200"
+            role="alert"
+          >
+            {authAgreementError}
+          </p>
+        ) : null}
 
         {/* Continue with Google — always visible (collapsed + expanded) */}
         <button

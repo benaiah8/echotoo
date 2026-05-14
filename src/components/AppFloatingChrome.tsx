@@ -20,6 +20,10 @@ export default function AppFloatingChrome() {
 
       <Toaster
         position="top-center"
+        containerStyle={{
+          top: "calc(12px + env(safe-area-inset-top, 0px))",
+          zIndex: 10050,
+        }}
         toastOptions={{
           style: { background: "#111", color: "#fff" },
           success: {
