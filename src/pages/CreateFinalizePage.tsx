@@ -53,6 +53,10 @@ import { getViewerAuthUserId } from "../api/services/follows";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
 import { clampCaption, CREATE_FLOW_CAPTION_MAX } from "../lib/createFlowLimits";
 import {
+  isUgcTextPolicyError,
+  UGC_TEXT_POLICY_ERROR_MESSAGE,
+} from "../lib/ugcTextPolicy";
+import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
   BOTTOM_TAB_PILL_OFFSET_PX,
   resolveSafeAreaBottomLayoutPx,
@@ -804,7 +808,12 @@ export default function CreateFinalizePage() {
       setShowPostedModal(true);
     } catch (e) {
       console.error("[CreateFinalizePage] publish failed", e);
-      toast.error("Publish failed");
+      if (isUgcTextPolicyError(e)) {
+        toast.error(UGC_TEXT_POLICY_ERROR_MESSAGE);
+      } else {
+        const msg = e instanceof Error ? e.message : "";
+        toast.error(msg.trim() ? msg : "Publish failed");
+      }
     } finally {
       setPublishing(false);
     }

@@ -29,6 +29,11 @@ type Props = {
    * (e.g. create finalize). No gradient scrim — shadow only. Does not change behavior.
    */
   enhancedSurface?: boolean;
+  /**
+   * Destructive inline hint above the action pills (e.g. UGC filter). Stays outside the
+   * scroll-hide transform so it remains visible. Does not replace {@link pendingUploadsNotice}.
+   */
+  inlineError?: string | null;
 };
 
 /** Keep in sync with CreateTabsSection */
@@ -61,6 +66,7 @@ export default function ActionSheet({
   lockActionsWhilePendingUploads = false,
   stableActions = false,
   enhancedSurface = false,
+  inlineError = null,
 }: Props) {
   const [btHeight, setBtHeight] = useState(0);
   const [btWidth, setBtWidth] = useState(0);
@@ -159,6 +165,17 @@ export default function ActionSheet({
             aria-live="polite"
           >
             {pendingUploadsNotice}
+          </p>
+        </div>
+      ) : null}
+      {inlineError ? (
+        <div className="pointer-events-auto mb-2 w-full max-w-[min(640px,calc(100vw-24px))] px-3">
+          <p
+            className="rounded-xl border border-red-500/45 bg-[color-mix(in_oklab,var(--danger)_12%,var(--surface))] px-3 py-2.5 text-center text-[12px] font-semibold leading-snug text-red-700 shadow-sm backdrop-blur-[var(--glass-blur)] app-dark:border-red-500/40 app-dark:text-red-300 sm:text-[13px]"
+            role="alert"
+            aria-live="assertive"
+          >
+            {inlineError}
           </p>
         </div>
       ) : null}

@@ -23,7 +23,11 @@ import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill"
 import InviteDrawer from "../components/ui/InviteDrawer";
 import PostedSuccessModal from "../components/ui/PostedSuccessModal";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
-import { assertCreateFlowDraftTextAllowed } from "../lib/ugcTextPolicy";
+import {
+  assertCreateFlowDraftTextAllowed,
+  isUgcTextPolicyError,
+  UGC_TEXT_POLICY_ERROR_MESSAGE,
+} from "../lib/ugcTextPolicy";
 import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
 
 const BOTTOM_NAV_H = 56;
@@ -159,6 +163,31 @@ export default function PreviewPage() {
   const [newPostId, setNewPostId] = useState<string | null>(null);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
+  const [ugcInlineError, setUgcInlineError] = useState<string | null>(null);
+
+  const ugcDraftFingerprint = useMemo(
+    () =>
+      JSON.stringify({
+        caption: finalMeta.caption ?? "",
+        tags,
+        activities: (sanitizedActivities as DraftActivity[]).map((a) => ({
+          title: a.title,
+          activityType: a.activityType,
+          customActivity: a.customActivity,
+          locationDesc: a.locationDesc,
+          location: a.location,
+          locationNotes: a.locationNotes,
+          locationUrl: a.locationUrl,
+          tags: a.tags,
+          additionalInfo: a.additionalInfo,
+        })),
+      }),
+    [finalMeta.caption, tags, sanitizedActivities]
+  );
+
+  useEffect(() => {
+    setUgcInlineError(null);
+  }, [ugcDraftFingerprint]);
 
   const { hasPendingUploads, jobs } = useCreatePostMedia();
 
@@ -168,6 +197,7 @@ export default function PreviewPage() {
   );
 
   const handlePublish = async () => {
+    setUgcInlineError(null);
     if (hasPendingUploads) {
       console.log("[PreviewPage] publish blocked: post image uploads pending");
       toast.error("Images are still uploading. Please wait before publishing.");
@@ -213,6 +243,7 @@ export default function PreviewPage() {
         ratingEnabled: finalMeta.ratingEnabled ?? false,
       });
 
+      setUgcInlineError(null);
       setNewPostId(post.id);
 
       if (isEditMode) {
@@ -231,15 +262,20 @@ export default function PreviewPage() {
       }
     } catch (err) {
       console.error("[Preview] Publish failed", err);
-      toast?.error?.(
-        err instanceof Error ? err.message : "Publish failed"
-      );
+      if (isUgcTextPolicyError(err)) {
+        setUgcInlineError(UGC_TEXT_POLICY_ERROR_MESSAGE);
+      } else {
+        toast?.error?.(
+          err instanceof Error ? err.message : "Publish failed"
+        );
+      }
     } finally {
       setPublishing(false);
     }
   };
 
   const handleSaveDraft = async () => {
+    setUgcInlineError(null);
     if (hasPendingUploads) {
       console.log(
         "[PreviewPage] save draft blocked: post image uploads pending"
@@ -321,6 +357,7 @@ export default function PreviewPage() {
         discardAllDrafts();
       }
 
+      setUgcInlineError(null);
       toast?.success?.("Draft saved successfully!");
       // Navigate to profile to see the saved draft
       const userId = await getViewerAuthUserId();
@@ -333,9 +370,13 @@ export default function PreviewPage() {
       return nav("/u/me");
     } catch (err) {
       console.error("[Preview] Save draft failed", err);
-      toast?.error?.(
-        err instanceof Error ? err.message : "Save draft failed"
-      );
+      if (isUgcTextPolicyError(err)) {
+        setUgcInlineError(UGC_TEXT_POLICY_ERROR_MESSAGE);
+      } else {
+        toast?.error?.(
+          err instanceof Error ? err.message : "Save draft failed"
+        );
+      }
     } finally {
       setPublishing(false);
     }
@@ -528,6 +569,7 @@ export default function PreviewPage() {
           onSaveDraft={undefined} // Disable until database is updated
           publishing={publishing}
           lockActionsWhilePendingUploads={hasPendingUploads}
+          inlineError={ugcInlineError}
           backText="Back"
           publishText={isEditMode ? "Republish" : "Publish"}
           isEditMode={isEditMode}

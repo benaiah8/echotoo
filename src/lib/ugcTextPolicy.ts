@@ -6,6 +6,11 @@
 export const UGC_TEXT_POLICY_ERROR_MESSAGE =
   "That wording isn't allowed on EchoToo. Please edit and try again.";
 
+/** True when `err` is the client UGC filter rejection (same message as {@link UGC_TEXT_POLICY_ERROR_MESSAGE}). */
+export function isUgcTextPolicyError(err: unknown): boolean {
+  return err instanceof Error && err.message === UGC_TEXT_POLICY_ERROR_MESSAGE;
+}
+
 export type UgcPlainTextContext = "default" | "username";
 
 /** Activity-shaped object from create flow / preview drafts. */
