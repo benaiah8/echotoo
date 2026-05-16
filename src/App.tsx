@@ -29,6 +29,7 @@ import AppUpdateRuntimeController from "./components/AppUpdateRuntimeController"
 import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMount";
 import PushRegistrationMount from "./components/PushRegistrationMount";
 import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
+import { persistProviderProfileDefaultsAfterSignIn } from "./lib/persistProviderProfileDefaults";
 
 function App() {
   const dispatch = useDispatch();
@@ -140,6 +141,10 @@ function App() {
 
       clearAuthCache(); // Clear auth cache and mutual friends cache (feed cache cleared separately above)
       dispatch(setAuthUser(u ? { id: u.id, email: u.email } : (null as any)));
+
+      if (event === "SIGNED_IN" && u) {
+        void persistProviderProfileDefaultsAfterSignIn(u);
+      }
     });
 
     return () => {

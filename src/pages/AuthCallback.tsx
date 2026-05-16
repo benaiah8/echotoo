@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import { dbg, dumpAuthEnv } from "../lib/authDebug";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import { persistProviderProfileDefaultsAfterSignIn } from "../lib/persistProviderProfileDefaults";
 
 /** Native WebView: `setSession` sometimes resolves before the session is readable via `getSession`. */
 async function authCallbackPollObservableSession(
@@ -140,6 +141,7 @@ export default function AuthCallback() {
       });
       if (s0.session) {
         console.log("[AUTHDBG] AuthCallback branch session_already_present → finish()");
+        await persistProviderProfileDefaultsAfterSignIn(s0.session.user);
         void closeNativeOAuthBrowserBackup();
         return finish("/", "session_already_present");
       }
@@ -179,6 +181,7 @@ export default function AuthCallback() {
                 "[AUTHDBG] hash_session_success → finish()",
                 data.session.user?.id
               );
+              await persistProviderProfileDefaultsAfterSignIn(data.session.user);
               void closeNativeOAuthBrowserBackup();
               return finish("/", "hash_session_success");
             }
@@ -201,6 +204,12 @@ export default function AuthCallback() {
                   "[AUTHDBG] observable session after hash setSession → finish()",
                   { t: Date.now() }
                 );
+                const { data: polSession } = await supabase.auth.getSession();
+                if (polSession.session?.user) {
+                  await persistProviderProfileDefaultsAfterSignIn(
+                    polSession.session.user,
+                  );
+                }
                 void closeNativeOAuthBrowserBackup();
                 return finish("/", "hash_poll_success");
               }
@@ -261,6 +270,7 @@ export default function AuthCallback() {
               t: Date.now(),
               sessionUserId: data.session.user?.id ?? null,
             });
+            await persistProviderProfileDefaultsAfterSignIn(data.session.user);
             void closeNativeOAuthBrowserBackup();
             return finish("/", "exchange_success");
           }
@@ -309,8 +319,12 @@ export default function AuthCallback() {
           sessionUserId: session?.user?.id ?? null,
         });
         if (session) {
-          void closeNativeOAuthBrowserBackup();
-          finish("/", "onAuthStateChange_session");
+          void persistProviderProfileDefaultsAfterSignIn(
+            session.user,
+          ).finally(() => {
+            void closeNativeOAuthBrowserBackup();
+            finish("/", "onAuthStateChange_session");
+          });
         }
       });
 

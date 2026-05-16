@@ -257,6 +257,23 @@ export default function OnboardingWrapper({
       );
   }, [user?.id, checkOnboardingStatus]);
 
+  /** After shared post-sign-in profile defaults: re-run onboarding gate (avoid flashing FullScreenProfileCreation). */
+  useEffect(() => {
+    const onDefaultsSynced = (ev: Event) => {
+      const id = (ev as CustomEvent<{ userId?: string }>).detail?.userId;
+      if (!id || id !== user?.id) return;
+      invalidateProfileByUserIdCache(id);
+      lastCheckedUserIdRef.current = null;
+      void checkOnboardingStatus();
+    };
+    window.addEventListener("echotoo:profile-defaults-synced", onDefaultsSynced);
+    return () =>
+      window.removeEventListener(
+        "echotoo:profile-defaults-synced",
+        onDefaultsSynced,
+      );
+  }, [user?.id, checkOnboardingStatus]);
+
   const handleProfileComplete = async () => {
     setShowProfileCreation(false);
     // Re-check onboarding status after profile creation
