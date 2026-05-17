@@ -78,6 +78,9 @@ function setCachedInviteById(inviteId: string, data: any): void {
 /** Display-only: invite thread row shows a 48h window from notification delivery. Backend remains source of truth. */
 const INVITE_ROW_WINDOW_MS = 48 * 60 * 60 * 1000;
 
+const inviteRowExpiredChipClass =
+  "mt-0.5 shrink-0 rounded-full border border-rose-500/45 bg-rose-500/[0.12] px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-rose-800/90 app-dark:border-rose-400/40 app-dark:bg-rose-400/[0.14] app-dark:text-rose-100/92";
+
 type ThreadKindForCountdown = "personal" | "group";
 
 /** True when this invite row carries a counted thread kind (still display-only countdown). */
@@ -548,13 +551,22 @@ export default function InviteNotificationItem({
 
   const rowBody = (
     <>
-      <div className="flex w-11 shrink-0 items-center justify-center self-center sm:w-12">
+      <div
+        className={`flex w-11 shrink-0 items-center justify-center self-center transition-opacity sm:w-12 ${
+          expired48hInviteDisplay ? "opacity-55" : ""
+        }`}
+      >
         {isGroupThreadRow ? rowGroupIcon : rowActorAvatar}
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-start gap-x-1.5 gap-y-1 sm:gap-x-2">
           <PostTypeMetaChip type={metaPostType} className="mt-0.5 shrink-0" />
+          {expired48hInviteDisplay ? (
+            <span className={inviteRowExpiredChipClass} aria-label="Invite expired">
+              Expired
+            </span>
+          ) : null}
           <div className="flex min-w-0 flex-[1_1_0] items-baseline gap-x-1.5">
             <span
               className={`inline-flex min-w-0 items-baseline whitespace-nowrap text-[13px] leading-snug sm:text-sm ${
@@ -619,14 +631,9 @@ export default function InviteNotificationItem({
         ) : null}
         {show48hInviteCountdownRow ? (
           expired48hInviteDisplay ? (
-            <div className="flex flex-col items-end gap-px">
-              <span className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text)]/40">
-                Expired
-              </span>
-              <span className="text-[10px] tabular-nums leading-tight text-[var(--text)]/38 sm:text-[11px]">
-                {timeAgoRelative}
-              </span>
-            </div>
+            <span className="text-[10px] tabular-nums leading-snug text-[var(--text)]/38 sm:text-[11px]">
+              {timeAgoRelative}
+            </span>
           ) : activeExpiry != null ? (
             <InviteExpiryPill
               windowStartAt={notification.created_at}
@@ -662,7 +669,6 @@ export default function InviteNotificationItem({
         className={[
           "flex min-h-[4rem] w-full items-start gap-2 text-left transition-colors sm:min-h-[4.25rem] sm:gap-3",
           rowPad,
-          expired48hInviteDisplay ? "opacity-[0.93]" : "",
           rowInteractive
             ? "cursor-pointer hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
             : "",

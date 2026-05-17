@@ -170,12 +170,79 @@ function asToggleInterestResult(raw: unknown): ToggleInviteInterestResult | null
   return { thread_id, viewer_interested, interest_count };
 }
 
+/** In-memory invite thread bundle cache (reduces RPC egress on repeat opens). */
+const INVITE_THREAD_BUNDLE_CACHE_TTL_MS = 2 * 60 * 1000;
+const inviteThreadBundleCache = new Map<
+  string,
+  { bundle: InviteThreadBundle; ts: number }
+>();
+
+function cloneInviteThreadBundle(bundle: InviteThreadBundle): InviteThreadBundle {
+  if (typeof structuredClone === "function") {
+    return structuredClone(bundle);
+  }
+  return JSON.parse(JSON.stringify(bundle)) as InviteThreadBundle;
+}
+
+/**
+ * Returns a fresh clone of the cached bundle if valid, else null.
+ */
+export function readInviteThreadBundleCache(
+  threadId: string
+): InviteThreadBundle | null {
+  const entry = inviteThreadBundleCache.get(threadId);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > INVITE_THREAD_BUNDLE_CACHE_TTL_MS) {
+    inviteThreadBundleCache.delete(threadId);
+    return null;
+  }
+  return cloneInviteThreadBundle(entry.bundle);
+}
+
+export function writeInviteThreadBundleCache(
+  threadId: string,
+  bundle: InviteThreadBundle
+): void {
+  inviteThreadBundleCache.set(threadId, {
+    bundle: cloneInviteThreadBundle(bundle),
+    ts: Date.now(),
+  });
+}
+
+/** Omit `threadId` to clear the entire thread bundle cache map. */
+export function clearInviteThreadBundleCache(threadId?: string): void {
+  if (threadId) {
+    inviteThreadBundleCache.delete(threadId);
+  } else {
+    inviteThreadBundleCache.clear();
+  }
+}
+
+export type GetInviteThreadForViewerOptions = {
+  /** When true, skip reading cache and always call RPC (still writes cache on success). */
+  forceRefresh?: boolean;
+  /** When true, return a valid cached bundle without RPC when possible (unless forceRefresh). */
+  allowCache?: boolean;
+};
+
 /**
  * Load invite thread bundle for the signed-in viewer (personal, group, or announcement RPC).
+ * Defaults preserve prior behavior: no cache read, always RPC, cache written on success.
  */
 export async function getInviteThreadForViewer(
-  threadId: string
+  threadId: string,
+  options?: GetInviteThreadForViewerOptions
 ): Promise<{ data: InviteThreadBundle | null; error: any }> {
+  const allowCache = options?.allowCache === true;
+  const forceRefresh = options?.forceRefresh === true;
+
+  if (allowCache && !forceRefresh) {
+    const cached = readInviteThreadBundleCache(threadId);
+    if (cached) {
+      return { data: cached, error: null };
+    }
+  }
+
   try {
     const { data, error } = await supabase.rpc("get_invite_thread_for_viewer", {
       p_thread_id: threadId,
@@ -196,6 +263,7 @@ export async function getInviteThreadForViewer(
       return { data: null, error: { message: "Unexpected RPC response shape" } };
     }
 
+    writeInviteThreadBundleCache(threadId, bundle);
     return { data: bundle, error: null };
   } catch (err) {
     console.error("[getInviteThreadForViewer] Unexpected error:", err);

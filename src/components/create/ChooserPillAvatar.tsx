@@ -12,13 +12,29 @@ type Props = {
   url?: string | null;
   name?: string | null;
   userId?: string | null;
+  /** Override default h-9 w-14 pill dimensions (e.g. invite thread header). */
+  className?: string;
+  /** Override default glass-active border (e.g. invite header side pill). */
+  borderClassName?: string;
 };
 
 /**
  * Horizontal pill avatar with the same “active profile tab” treatment as BottomTab:
  * blurred mirror layer + sharp foreground image, clipped to a rounded pill (not a circle).
  */
-export default function ChooserPillAvatar({ url, name, userId }: Props) {
+const DEFAULT_PILL_CLASS =
+  "relative h-9 w-14 shrink-0 overflow-hidden rounded-full border border-[var(--glass-active-border)] shadow-[var(--glass-active-shadow)]";
+
+const DEFAULT_BORDER_CLASS =
+  "border border-[var(--glass-active-border)]";
+
+export default function ChooserPillAvatar({
+  url,
+  name,
+  userId,
+  className,
+  borderClassName,
+}: Props) {
   const letter = (name || "").trim().charAt(0).toUpperCase() || " ";
   const [cachedUrl, setCachedUrl] = useState<string | null>(() =>
     userId ? getCachedAvatar(userId) : null
@@ -50,11 +66,13 @@ export default function ChooserPillAvatar({ url, name, userId }: Props) {
       ? raw
       : optimizeImageUrl(raw, "small"));
 
+  const borderClass = borderClassName ?? DEFAULT_BORDER_CLASS;
+  const pillClass = className
+    ? `relative shrink-0 overflow-hidden rounded-full shadow-[var(--glass-active-shadow)] ${borderClass} ${className}`
+    : DEFAULT_PILL_CLASS;
+
   return (
-    <div
-      className="relative h-9 w-14 shrink-0 overflow-hidden rounded-full border border-[var(--glass-active-border)] shadow-[var(--glass-active-shadow)]"
-      aria-hidden
-    >
+    <div className={pillClass} aria-hidden>
       {resolved ? (
         <>
           <div

@@ -179,23 +179,27 @@ export function clearNotificationsResponseCache(): void {
  * [OPTIMIZATION: Phase 2] Uses RequestManager for deduplication
  * [OPTIMIZATION: StrictMode] Uses short TTL response cache for remount duplicates
  * @param options.typeGroup — optional filter: invite-only or all non-invite (activity)
+ * @param options.bypassResponseCache — when true, always hit network (still writes cache after success)
  */
 export async function getNotifications(
   limit = 20,
   offset = 0,
-  options?: { typeGroup?: "invite" | "activity" }
+  options?: { typeGroup?: "invite" | "activity"; bypassResponseCache?: boolean }
 ): Promise<NotificationWithActor[]> {
   const userId = await getViewerAuthUserId();
   if (!userId) throw new Error("User not authenticated");
 
   const tg = options?.typeGroup;
+  const bypassResponseCache = options?.bypassResponseCache === true;
   const dedupeKey = `notifications_${userId}_${limit}_${offset}_${tg ?? "all"}`;
 
   // [OPTIMIZATION: StrictMode] Check cache first - prevents 2nd network call
   // when component remounts after 1st call completed (RequestManager no longer in-flight)
-  const cached = notificationsResponseCache.get(dedupeKey);
-  if (cached && Date.now() - cached.ts < NOTIFICATIONS_TTL_MS) {
-    return cached.data;
+  if (!bypassResponseCache) {
+    const cached = notificationsResponseCache.get(dedupeKey);
+    if (cached && Date.now() - cached.ts < NOTIFICATIONS_TTL_MS) {
+      return cached.data;
+    }
   }
 
   // [OPTIMIZATION] Use RequestManager for in-flight deduplication

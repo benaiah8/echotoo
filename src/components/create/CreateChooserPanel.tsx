@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { PiCalendarBlank, PiPath } from "react-icons/pi";
 import { useAppSelector } from "../../app/hooks";
 import { getCachedAvatar } from "../../lib/avatarCache";
 import ChooserPillAvatar from "./ChooserPillAvatar";
@@ -111,15 +112,13 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
     const base = [
       "inline-flex w-fit max-w-full shrink-0 items-center rounded-full border transition",
       "disabled:cursor-not-allowed",
-      // Default: original spacing. Selected: tighter insets so the larger pill avatar fills the chip.
-      !selected
-        ? "min-h-11 h-11 pl-2 pt-2 pb-2 gap-4 pr-5"
-        : "min-h-11 h-11 pl-1 py-1 gap-3 pr-4",
+      // Same insets for default + selected so h-9 pill avatar centers in h-11 chip.
+      "min-h-11 h-11 pl-1 py-1 gap-3 pr-4",
     ];
     if (!selected) {
       return [
         ...base,
-        "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--brand-glass-bg)_12%)] backdrop-blur-xl",
+        "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--brand-glass-bg)_12%)]",
         "border-[var(--border)] shadow-[0_4px_18px_rgba(247,208,71,0.12)]",
       ].join(" ");
     }
@@ -140,7 +139,7 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
   })();
 
   const ctaLabelClass = !selected
-    ? "min-w-0 text-left text-sm font-medium leading-tight whitespace-nowrap text-[var(--text)]/92"
+    ? "min-w-0 text-left text-sm font-bold leading-tight whitespace-nowrap text-[var(--text)]/92"
     : "min-w-0 text-left text-sm font-bold leading-tight whitespace-nowrap text-[var(--create-chooser-cta-selected-label)]";
 
   const rootClass = variant === "page" ? "w-full max-w-md mx-auto" : "w-full";
@@ -184,20 +183,15 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
           disabled={!selected}
           onClick={() => selected && onContinue(selected)}
           className={ctaButtonClass}
-          style={{
-            maxWidth: ctaMaxW,
-            ...(selected
-              ? {}
-              : {
-                  WebkitBackdropFilter: "blur(20px)",
-                  backdropFilter: "blur(20px)",
-                }),
-          }}
+          style={ctaMaxW != null ? { maxWidth: ctaMaxW } : undefined}
         >
           <ChooserPillAvatar
             url={avatarUrlForCta}
             name={name}
             userId={authUserId}
+            className={
+              selected ? undefined : "h-8 w-12"
+            }
           />
           <span className={ctaLabelClass}>{ctaLabel}</span>
         </button>
@@ -223,14 +217,17 @@ function ChooserCard({
           ring: "ring-green-500/45",
           border: "border-green-500/50",
           glow: "shadow-[0_4px_22px_rgba(34,197,94,0.26)]",
-          dot: "bg-green-500",
+          icon: PiCalendarBlank,
+          iconClass: "text-green-500",
         }
       : {
           ring: "ring-orange-500/28",
           border: "border-orange-500/34",
           glow: "shadow-[0_4px_18px_rgba(249,115,22,0.14)]",
-          dot: "bg-orange-500",
+          icon: PiPath,
+          iconClass: "text-orange-500",
         };
+  const TitleIcon = accent.icon;
 
   return (
     <button
@@ -246,14 +243,16 @@ function ChooserCard({
       ].join(" ")}
       style={{ WebkitBackdropFilter: "blur(18px)" }}
     >
-      <div className="flex items-start gap-2">
-        <div
-          className={`mt-1 h-2 w-2 shrink-0 rounded-full ${accent.dot} opacity-90`}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-[var(--text)]">
-            {c.title}
+      <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-semibold text-[var(--text)]">
+              {c.title}
+            </span>
+            <TitleIcon
+              className={`h-3.5 w-3.5 shrink-0 ${accent.iconClass}`}
+              strokeWidth={1.35}
+              aria-hidden
+            />
           </div>
           <div className="text-xs text-[var(--text)]/65 mt-0.5">
             {c.subtitle}
@@ -268,7 +267,6 @@ function ChooserCard({
               {c.helper}
             </p>
           </div>
-        </div>
       </div>
     </button>
   );

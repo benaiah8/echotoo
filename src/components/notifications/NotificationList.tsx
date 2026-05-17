@@ -40,6 +40,100 @@ const MAX_PUSH_INVITE_AUTO_LOADS = 30;
 /** First page & each "Load more" batch (server applies typeGroup as today). */
 const NOTIFICATION_PAGE_SIZE = 10;
 
+/** In-memory list SWR cache (survives NotificationList unmount when leaving the tab). */
+type NotificationDisplayListView = "invites" | "activity";
+
+type NotificationDisplayCacheEntry = {
+  notifications: NotificationWithActor[];
+  hasMore: boolean;
+  batchedFollowStatuses: Record<
+    string,
+    "none" | "pending" | "following" | "friends"
+  >;
+  ts: number;
+};
+
+const notificationDisplayCache = new Map<string, NotificationDisplayCacheEntry>();
+
+/** Invites: ~2 min — activity: ~60s */
+const DISPLAY_CACHE_TTL_MS_INVITES = 2 * 60 * 1000;
+const DISPLAY_CACHE_TTL_MS_ACTIVITY = 60 * 1000;
+
+function notificationDisplayCacheKey(
+  userId: string,
+  listView: NotificationDisplayListView
+) {
+  return `${userId}:${listView}`;
+}
+
+function notificationDisplayCacheTtlMs(listView: NotificationDisplayListView) {
+  return listView === "invites"
+    ? DISPLAY_CACHE_TTL_MS_INVITES
+    : DISPLAY_CACHE_TTL_MS_ACTIVITY;
+}
+
+function readValidNotificationDisplayCache(
+  userId: string,
+  listView: NotificationDisplayListView
+): NotificationDisplayCacheEntry | null {
+  const key = notificationDisplayCacheKey(userId, listView);
+  const e = notificationDisplayCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > notificationDisplayCacheTtlMs(listView)) {
+    notificationDisplayCache.delete(key);
+    return null;
+  }
+  return e;
+}
+
+function writeNotificationDisplayCache(
+  userId: string,
+  listView: NotificationDisplayListView,
+  notifications: NotificationWithActor[],
+  hasMore: boolean,
+  batchedFollowStatuses: Record<
+    string,
+    "none" | "pending" | "following" | "friends"
+  >
+) {
+  notificationDisplayCache.set(notificationDisplayCacheKey(userId, listView), {
+    notifications,
+    hasMore,
+    batchedFollowStatuses,
+    ts: Date.now(),
+  });
+}
+
+function clearNotificationDisplayCacheForUser(userId: string) {
+  notificationDisplayCache.delete(
+    notificationDisplayCacheKey(userId, "invites")
+  );
+  notificationDisplayCache.delete(
+    notificationDisplayCacheKey(userId, "activity")
+  );
+}
+
+function persistNotificationDisplayCache(
+  listViewKey: NotificationDisplayListView,
+  nextNotifications: NotificationWithActor[],
+  nextHasMore: boolean,
+  nextFollow: Record<
+    string,
+    "none" | "pending" | "following" | "friends"
+  >
+) {
+  void getViewerAuthUserId().then((uid) => {
+    if (!uid) return;
+    writeNotificationDisplayCache(
+      uid,
+      listViewKey,
+      nextNotifications,
+      nextHasMore,
+      nextFollow
+    );
+  });
+}
+
 /** Invites tab only: sort by additional_data.latest_activity_at desc, else created_at desc. */
 function inviteSortTimeMs(n: NotificationWithActor): number {
   const raw = n.additional_data?.latest_activity_at;
@@ -58,6 +152,20 @@ function sortInviteNotificationsByLatestActivity(
     if (d !== 0) return d;
     return (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0);
   });
+}
+
+/** Replace server page 0 and keep older pages by id de-dupe (invites resort). */
+function mergeFirstPageIntoExisting(
+  prev: NotificationWithActor[],
+  page0: NotificationWithActor[],
+  typeGroup: "invite" | "activity"
+): NotificationWithActor[] {
+  const freshIds = new Set(page0.map((n) => n.id));
+  const tail = prev.filter((n) => !freshIds.has(n.id));
+  if (typeGroup === "invite") {
+    return sortInviteNotificationsByLatestActivity([...page0, ...tail]);
+  }
+  return [...page0, ...tail];
 }
 
 /** Invites tab quick filter: matches additional_data.thread_kind only. */
@@ -211,23 +319,61 @@ export default function NotificationList({
 
   const lastLoadedAtRef = useRef<number>(0);
   const prevListViewRef = useRef(listView);
+  const notificationsRef = useRef<NotificationWithActor[]>([]);
+  const hasMoreRef = useRef(true);
+  const batchedFollowStatusesRef = useRef<
+    Record<string, "none" | "pending" | "following" | "friends">
+  >({});
+  const listViewEffectGenRef = useRef(0);
 
-  const loadNotifications = async (offset = 0, append = false) => {
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+  useEffect(() => {
+    batchedFollowStatusesRef.current = batchedFollowStatuses;
+  }, [batchedFollowStatuses]);
+
+  type LoadNotificationsOptions = {
+    quiet?: boolean;
+    forceRefresh?: boolean;
+    listViewForRequest?: NotificationDisplayListView;
+  };
+
+  const loadNotifications = async (
+    offset = 0,
+    append = false,
+    opts?: LoadNotificationsOptions
+  ) => {
+    const quiet = opts?.quiet ?? false;
+    const forceRefresh = opts?.forceRefresh ?? false;
+    const listViewForRequest = opts?.listViewForRequest;
+    const effectiveListView = listViewForRequest ?? listViewRef.current;
+    const typeGroup =
+      effectiveListView === "invites" ? "invite" : "activity";
+
     try {
-      if (offset === 0) {
+      if (offset === 0 && !quiet) {
         setLoading(true);
         setError(null);
-      } else {
+      } else if (offset > 0) {
         setLoadingMore(true);
       }
 
+      if (forceRefresh && offset === 0) {
+        clearNotificationsResponseCache();
+      }
+
+      const bypassResponseCache =
+        offset === 0 && (forceRefresh || quiet);
+
       logFetchStart("NotificationList", "notifications", isVisible, undefined);
-      const typeGroup =
-        listViewRef.current === "invites" ? "invite" : "activity";
       let data = await getNotifications(
         NOTIFICATION_PAGE_SIZE,
         offset,
-        { typeGroup }
+        { typeGroup, bypassResponseCache }
       );
 
       // [OPTIMIZATION] Batch hydrate invite direction/status to eliminate N+1 getInviteById
@@ -366,24 +512,67 @@ export default function NotificationList({
         }
       }
 
+      const pageHasMore = data.length === NOTIFICATION_PAGE_SIZE;
+
       if (append) {
-        setNotifications((prev) =>
-          typeGroup === "invite"
-            ? sortInviteNotificationsByLatestActivity([...prev, ...data])
-            : [...prev, ...data]
-        );
+        setNotifications((prev) => {
+          const merged =
+            typeGroup === "invite"
+              ? sortInviteNotificationsByLatestActivity([...prev, ...data])
+              : [...prev, ...data];
+          const mergedFollow = {
+            ...batchedFollowStatusesRef.current,
+            ...statusMap,
+          };
+          persistNotificationDisplayCache(
+            effectiveListView,
+            merged,
+            pageHasMore,
+            mergedFollow
+          );
+          return merged;
+        });
         setBatchedFollowStatuses((prev) => ({ ...prev, ...statusMap }));
+        setHasMore(pageHasMore);
+      } else if (quiet) {
+        const prev = notificationsRef.current;
+        const merged = mergeFirstPageIntoExisting(prev, data, typeGroup);
+        const mergedFollow = {
+          ...batchedFollowStatusesRef.current,
+          ...statusMap,
+        };
+        let nextHasMore = pageHasMore;
+        if (prev.length > NOTIFICATION_PAGE_SIZE) {
+          nextHasMore = nextHasMore || hasMoreRef.current;
+        }
+        setNotifications(merged);
+        setBatchedFollowStatuses(mergedFollow);
+        setHasMore(nextHasMore);
+        lastLoadedAtRef.current = Date.now();
+        persistNotificationDisplayCache(
+          effectiveListView,
+          merged,
+          nextHasMore,
+          mergedFollow
+        );
       } else {
         setNotifications(data);
         setBatchedFollowStatuses(statusMap);
+        setHasMore(pageHasMore);
         lastLoadedAtRef.current = Date.now();
+        persistNotificationDisplayCache(
+          effectiveListView,
+          data,
+          pageHasMore,
+          statusMap
+        );
       }
-
-      setHasMore(data.length === NOTIFICATION_PAGE_SIZE);
     } catch (err: any) {
       console.error("Failed to load notifications:", err);
-      setError(err.message || "Failed to load notifications");
-      toast.error("Failed to load notifications");
+      if (!quiet) {
+        setError(err.message || "Failed to load notifications");
+        toast.error("Failed to load notifications");
+      }
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -399,13 +588,21 @@ export default function NotificationList({
   useEffect(() => {
     const onTabRefresh = () => {
       if (!isVisible) return;
-      lastLoadedAtRef.current = 0;
-      initialLoadInFlightRef.current = false;
-      setError(null);
-      if (import.meta.env.DEV) {
-        console.debug("[notifications-tab-refresh] refetch");
-      }
-      loadNotificationsRef.current(0, false);
+      void (async () => {
+        const uid = await getViewerAuthUserId();
+        if (uid) {
+          clearNotificationDisplayCacheForUser(uid);
+        }
+        clearNotificationsResponseCache();
+        lastLoadedAtRef.current = 0;
+        initialLoadInFlightRef.current = false;
+        listViewEffectGenRef.current += 1;
+        setError(null);
+        if (import.meta.env.DEV) {
+          console.debug("[notifications-tab-refresh] refetch");
+        }
+        await loadNotificationsRef.current(0, false, { forceRefresh: true });
+      })();
     };
     window.addEventListener(NOTIFICATIONS_TAB_REFRESH_EVENT, onTabRefresh);
     return () =>
@@ -459,6 +656,7 @@ export default function NotificationList({
             if (listViewRef.current !== "invites") return prev;
             const id = withActor.id;
             const idx = prev.findIndex((n) => n.id === id);
+            let next: NotificationWithActor[];
             if (idx >= 0) {
               const prevRow = prev[idx];
               const merged: NotificationWithActor = {
@@ -470,14 +668,22 @@ export default function NotificationList({
                 },
                 actor: withActor.actor ?? prevRow.actor,
               };
-              const next = [...prev];
-              next[idx] = merged;
-              return sortInviteNotificationsByLatestActivity(next);
+              const arr = [...prev];
+              arr[idx] = merged;
+              next = sortInviteNotificationsByLatestActivity(arr);
+            } else {
+              next = sortInviteNotificationsByLatestActivity([
+                withActor,
+                ...prev,
+              ]);
             }
-            return sortInviteNotificationsByLatestActivity([
-              withActor,
-              ...prev,
-            ]);
+            persistNotificationDisplayCache(
+              "invites",
+              next,
+              hasMoreRef.current,
+              batchedFollowStatusesRef.current
+            );
+            return next;
           });
         } catch (e) {
           console.warn("[NotificationList] invite realtime merge failed:", e);
@@ -542,7 +748,51 @@ export default function NotificationList({
     }
     if (initialLoadInFlightRef.current) return;
     initialLoadInFlightRef.current = true;
-    loadNotifications(0, false);
+
+    const capturedListView = listView;
+    const gen = ++listViewEffectGenRef.current;
+
+    void (async () => {
+      const userId = await getViewerAuthUserId();
+      if (gen !== listViewEffectGenRef.current) {
+        initialLoadInFlightRef.current = false;
+        return;
+      }
+      if (!userId) {
+        await loadNotifications(0, false, {
+          listViewForRequest: capturedListView,
+        });
+        return;
+      }
+      const cached = readValidNotificationDisplayCache(userId, capturedListView);
+      if (cached) {
+        if (gen !== listViewEffectGenRef.current) {
+          initialLoadInFlightRef.current = false;
+          return;
+        }
+        setNotifications(cached.notifications);
+        setHasMore(cached.hasMore);
+        setBatchedFollowStatuses(cached.batchedFollowStatuses);
+        notificationsRef.current = cached.notifications;
+        hasMoreRef.current = cached.hasMore;
+        batchedFollowStatusesRef.current = cached.batchedFollowStatuses;
+        setLoading(false);
+        setError(null);
+        await loadNotifications(0, false, {
+          quiet: true,
+          forceRefresh: true,
+          listViewForRequest: capturedListView,
+        });
+        return;
+      }
+      if (gen !== listViewEffectGenRef.current) {
+        initialLoadInFlightRef.current = false;
+        return;
+      }
+      await loadNotifications(0, false, {
+        listViewForRequest: capturedListView,
+      });
+    })();
   }, [isVisible, listView]);
 
   useEffect(() => {
@@ -692,13 +942,20 @@ export default function NotificationList({
 
   const handleMarkAsRead = (notificationId: string) => {
     lastLoadedAtRef.current = 0;
-    setNotifications((prev) =>
-      prev.map((notification) =>
+    setNotifications((prev) => {
+      const next = prev.map((notification) =>
         notification.id === notificationId
           ? { ...notification, is_read: true }
           : notification
-      )
-    );
+      );
+      persistNotificationDisplayCache(
+        listViewRef.current,
+        next,
+        hasMoreRef.current,
+        batchedFollowStatusesRef.current
+      );
+      return next;
+    });
   };
 
   const handleClearUnreadInView = async () => {
@@ -708,9 +965,19 @@ export default function NotificationList({
           listView === "invites" ? "invite" : "activity"
         );
         lastLoadedAtRef.current = 0;
-        setNotifications((prev) =>
-          prev.map((notification) => ({ ...notification, is_read: true }))
-        );
+        setNotifications((prev) => {
+          const next = prev.map((notification) => ({
+            ...notification,
+            is_read: true,
+          }));
+          persistNotificationDisplayCache(
+            listViewRef.current,
+            next,
+            hasMoreRef.current,
+            batchedFollowStatusesRef.current
+          );
+          return next;
+        });
         toast.success(
           listView === "invites"
             ? "Cleared invite unread"
@@ -751,9 +1018,18 @@ export default function NotificationList({
         await markNotificationIdsAsRead(markable);
         if (cancelled) return;
         const markSet = new Set(markable);
-        setNotifications((prev) =>
-          prev.map((n) => (markSet.has(n.id) ? { ...n, is_read: true } : n))
-        );
+        setNotifications((prev) => {
+          const next = prev.map((n) =>
+            markSet.has(n.id) ? { ...n, is_read: true } : n
+          );
+          persistNotificationDisplayCache(
+            listViewRef.current,
+            next,
+            hasMoreRef.current,
+            batchedFollowStatusesRef.current
+          );
+          return next;
+        });
       } catch (e) {
         console.warn("[NotificationList] auto mark visible as read:", e);
       }
@@ -896,7 +1172,7 @@ export default function NotificationList({
   const listPanelHorizontalClass =
     listView === "invites" ? "px-1.5 sm:px-2" : "px-3";
 
-  if (loading) {
+  if (loading && notifications.length === 0) {
     return (
       <div className={`w-full min-h-0 ${className}`}>
         <div
@@ -962,7 +1238,7 @@ export default function NotificationList({
           <p className="text-sm mb-4">Failed to load notifications</p>
           <button
             type="button"
-            onClick={() => loadNotifications(0, false)}
+            onClick={() => loadNotifications(0, false, { forceRefresh: true })}
             className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm hover:bg-blue-600 transition-colors"
           >
             Try Again

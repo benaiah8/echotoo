@@ -21,6 +21,8 @@ import {
   getInviteThreadForViewer,
   postInviteThreadMessage,
   toggleInviteMessageReaction,
+  readInviteThreadBundleCache,
+  writeInviteThreadBundleCache,
   type InviteThreadBundle,
   type InviteThreadMessage,
 } from "../../api/services/inviteThreads";
@@ -31,11 +33,26 @@ import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
 import { isIOS } from "../../lib/storage/utils/capacitorDetection";
 import { supabase } from "../../lib/supabaseClient";
 import InviteExpiryPill from "./InviteExpiryPill";
-import Avatar from "../ui/Avatar";
+import ChooserPillAvatar from "../create/ChooserPillAvatar";
 import InviteThreadMessageList from "./invite-thread/InviteThreadMessageList";
+import {
+  InviteThreadExpiredBanner,
+  InviteThreadReadOnlyComposerNotice,
+  InviteThreadReadOnlyScrollHint,
+} from "./invite-thread/InviteThreadExpiredNotice";
+import {
+  InviteThreadScrollContext,
+  InviteThreadTopHeader,
+  inviteThreadHeaderBackArrowClass,
+  inviteThreadHeaderBackButtonClass,
+  inviteThreadHeaderSidePillBorderClass,
+  inviteThreadHeaderSidePillSizeClass,
+  PERSONAL_QUOTA_SEGMENT_TOTAL,
+  personalQuotaActiveSegmentsCount,
+} from "./invite-thread/InviteThreadOverlayLayout";
 
 /** Space for floating top cluster (bar + quota); tuned with safe-area. */
-const SCROLL_PAD_TOP_PX = 118;
+const SCROLL_PAD_TOP_PX = 120;
 /** Fallback scroll bottom inset before bottom chrome is measured. */
 const SCROLL_PAD_BOTTOM_FALLBACK_PX = 148;
 
@@ -75,10 +92,6 @@ const COMPOSER_PILL_OUTER_HEIGHT_PX =
  * Top bar: ~65% tighter than gap-x-2 (8px → ~2.8px) for minimal space beside caption.
  * Symmetric grid cols keep caption visually centered between back + avatar.
  */
-const TOP_BAR_GAP_CLASS = "gap-x-[3px]";
-
-/** Quota strip stays narrower than the caption pill, centered under it. */
-const QUOTA_STRIP_MAX_W_CLASS = "max-w-[12rem]";
 
 const QUICK_REPLY_CHIPS = [
   "I'm in",
@@ -87,23 +100,6 @@ const QUICK_REPLY_CHIPS = [
   "Send details",
   "Convince me",
 ] as const;
-
-const QUOTA_SEGMENTS = 5;
-
-/** Active segment count when personal quota is within 5-slot UI: mirrors remaining exactly. Larger caps fall back to proportional rounding. */
-function quotaActiveSegmentsCount(bundle: InviteThreadBundle): number {
-  const cap = bundle.my_messages_used + bundle.my_messages_remaining;
-  if (cap <= QUOTA_SEGMENTS) {
-    return Math.min(QUOTA_SEGMENTS, Math.max(0, bundle.my_messages_remaining));
-  }
-  return Math.min(
-    QUOTA_SEGMENTS,
-    Math.max(
-      0,
-      Math.round((bundle.my_messages_remaining / cap) * QUOTA_SEGMENTS),
-    ),
-  );
-}
 
 function rpcLikeMessage(error: unknown, fallback: string): string {
   if (typeof (error as { message?: string })?.message === "string") {
@@ -157,6 +153,9 @@ export default function PersonalInviteThreadOverlay({
   );
   const [reactionError, setReactionError] = useState<string | null>(null);
 
+  const bundleRef = useRef<InviteThreadBundle | null>(null);
+  const suppressSilentThreadRefreshRef = useRef(false);
+
   const draftTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomChromeRef = useRef<HTMLDivElement>(null);
   const [bottomChromeHeightPx, setBottomChromeHeightPx] = useState(
@@ -200,6 +199,10 @@ export default function PersonalInviteThreadOverlay({
     if (!open || !bundle?.can_compose) return;
     syncDraftTextareaHeight();
   }, [open, bundle?.can_compose, draft, syncDraftTextareaHeight]);
+
+  useEffect(() => {
+    bundleRef.current = bundle;
+  }, [bundle]);
 
   useEffect(() => {
     if (!open) {
@@ -251,7 +254,18 @@ export default function PersonalInviteThreadOverlay({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !threadId) {
+    if (!open) {
+      setDraft("");
+      setSubmitError(null);
+      setSubmitting(false);
+      setReactingMessageId(null);
+      setReactionError(null);
+      setComposerInputShape("pill");
+      setLoading(false);
+      return;
+    }
+
+    if (!threadId) {
       setBundle(null);
       setError(null);
       setLoading(false);
@@ -270,39 +284,52 @@ export default function PersonalInviteThreadOverlay({
     setReactingMessageId(null);
     setReactionError(null);
 
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setBundle(null);
+    const cached = readInviteThreadBundleCache(threadId);
+    const inMemory =
+      bundleRef.current?.thread.id === threadId ? bundleRef.current : null;
+    const hydrate = cached ?? inMemory ?? null;
+    const hadHydrate = hydrate != null;
 
-    (async () => {
+    if (hydrate) {
+      setBundle(hydrate);
+      setLoading(false);
+      setError(null);
+    } else {
+      setBundle(null);
+      setLoading(true);
+      setError(null);
+    }
+
+    let cancelled = false;
+
+    void (async () => {
       try {
         const uid = await getViewerAuthUserId();
         if (cancelled) return;
         setViewerUserId(uid);
         const { data, error: rpcError } = await getInviteThreadForViewer(
           threadId,
+          { allowCache: true, forceRefresh: true },
         );
         if (cancelled) return;
-        if (rpcError) {
-          setError(rpcLikeMessage(rpcError, "Could not load invite chat."));
-          setLoading(false);
-          return;
-        }
-        if (!data) {
-          setError("Could not load invite chat.");
-          setLoading(false);
+        if (rpcError || !data) {
+          if (!hadHydrate) {
+            setError(
+              rpcLikeMessage(rpcError ?? {}, "Could not load invite chat."),
+            );
+            setLoading(false);
+          }
           return;
         }
         setBundle(data);
+        setLoading(false);
       } catch (e) {
-        if (!cancelled) {
+        if (!cancelled && !hadHydrate) {
           setError(
             e instanceof Error ? e.message : "Could not load invite chat.",
           );
+          setLoading(false);
         }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     })();
 
@@ -325,14 +352,17 @@ export default function PersonalInviteThreadOverlay({
     draftTooLong;
 
   const nearCharLimit =
-    draftTooLong ||
-    draft.length > Math.floor(bodyLimit * 0.75);
+    draftTooLong || draft.length > Math.floor(bodyLimit * 0.75);
 
   const refreshBundleSilently = useCallback(async () => {
     if (!threadId || !open) return;
+    if (suppressSilentThreadRefreshRef.current) return;
     try {
       const { data: refreshed, error: reloadErr } =
-        await getInviteThreadForViewer(threadId);
+        await getInviteThreadForViewer(threadId, {
+          allowCache: true,
+          forceRefresh: true,
+        });
       if (reloadErr || !refreshed) return;
       setBundle(refreshed);
     } catch {
@@ -346,6 +376,7 @@ export default function PersonalInviteThreadOverlay({
 
     setSubmitError(null);
     setSubmitting(true);
+    suppressSilentThreadRefreshRef.current = true;
     try {
       const { error: postErr } = await postInviteThreadMessage(threadId, body);
       if (postErr) {
@@ -354,7 +385,10 @@ export default function PersonalInviteThreadOverlay({
       }
 
       const { data: refreshed, error: reloadErr } =
-        await getInviteThreadForViewer(threadId);
+        await getInviteThreadForViewer(threadId, {
+          allowCache: true,
+          forceRefresh: true,
+        });
       if (reloadErr) {
         setDraft("");
         setSubmitError(
@@ -379,6 +413,7 @@ export default function PersonalInviteThreadOverlay({
       );
     } finally {
       setSubmitting(false);
+      suppressSilentThreadRefreshRef.current = false;
     }
   }, [threadId, bundle?.can_compose, submitting, sendDisabled, trimmedDraft]);
 
@@ -395,7 +430,8 @@ export default function PersonalInviteThreadOverlay({
 
     const onVisibilityOrFocus = () => {
       const docVisible =
-        typeof document === "undefined" || document.visibilityState === "visible";
+        typeof document === "undefined" ||
+        document.visibilityState === "visible";
       if (!docVisible) return;
       scheduleRefresh();
     };
@@ -440,6 +476,7 @@ export default function PersonalInviteThreadOverlay({
       if (!reactionsInteractive) return;
       setReactionError(null);
       setReactingMessageId(messageId);
+      suppressSilentThreadRefreshRef.current = true;
       let previousMessage: InviteThreadMessage | null = null;
       setBundle((prev) => {
         if (!prev) return prev;
@@ -488,7 +525,7 @@ export default function PersonalInviteThreadOverlay({
         const targetId = data.message_id;
         setBundle((prev) => {
           if (!prev) return prev;
-          return {
+          const next: InviteThreadBundle = {
             ...prev,
             messages: prev.messages.map((m) =>
               m.id === targetId
@@ -500,6 +537,8 @@ export default function PersonalInviteThreadOverlay({
                 : m,
             ),
           };
+          if (threadId) writeInviteThreadBundleCache(threadId, next);
+          return next;
         });
       } catch (e) {
         if (previousMessage) {
@@ -518,9 +557,10 @@ export default function PersonalInviteThreadOverlay({
         );
       } finally {
         setReactingMessageId(null);
+        suppressSilentThreadRefreshRef.current = false;
       }
     },
-    [reactionsInteractive],
+    [reactionsInteractive, threadId],
   );
 
   const linkToPost =
@@ -531,10 +571,9 @@ export default function PersonalInviteThreadOverlay({
         )
       : null;
 
-  const counterpartyProfilePath =
-    counterparty?.username?.trim().length
-      ? profileByUsername(counterparty.username.trim())
-      : null;
+  const counterpartyProfilePath = counterparty?.username?.trim().length
+    ? profileByUsername(counterparty.username.trim())
+    : null;
 
   const readOnlyExplanation = (): string[] => {
     if (!bundle || bundle.can_compose) return [];
@@ -591,29 +630,24 @@ export default function PersonalInviteThreadOverlay({
               No thread.
             </p>
           </div>
-        ) : loading ? (
+        ) : loading && !bundle ? (
           <div className="flex min-h-full flex-col justify-end pb-8">
             <p className="text-center text-sm text-[var(--text)]/60">
               Loading…
             </p>
           </div>
-        ) : error ? (
+        ) : error && !bundle ? (
           <div className="flex min-h-full flex-col justify-end pb-8">
             <p className="text-center text-sm text-red-500/90">{error}</p>
           </div>
         ) : bundle ? (
           <div className="flex min-h-full flex-col justify-end gap-5 pb-2">
-            {bundle.invite.invite_note != null &&
-            String(bundle.invite.invite_note).trim().length > 0 ? (
-              <div className="mx-auto w-full max-w-md rounded-2xl bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)] px-3 py-2.5 text-center">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--text)]/40">
-                  Invite note
-                </p>
-                <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-[var(--text)]/72">
-                  {bundle.invite.invite_note}
-                </p>
-              </div>
-            ) : null}
+            {bundle.is_expired ? <InviteThreadExpiredBanner /> : null}
+            <InviteThreadScrollContext
+              bundle={bundle}
+              linkToPost={linkToPost}
+              backgroundLocation={location}
+            />
 
             <div>
               {reactionError ? (
@@ -636,16 +670,12 @@ export default function PersonalInviteThreadOverlay({
               />
             </div>
 
-            {!bundle.can_compose && (
-              <p className="text-center text-[11px] text-[var(--text)]/45">
-                Messaging and reactions are read-only here for now.
-              </p>
-            )}
+            <InviteThreadReadOnlyScrollHint bundle={bundle} />
           </div>
         ) : null}
       </div>
 
-      {/* Floating top: back + caption pill + counterparty avatar */}
+      {/* Floating top: back + message status + counterparty avatar */}
       <div
         className={floatClusterClass}
         style={{
@@ -653,127 +683,64 @@ export default function PersonalInviteThreadOverlay({
           paddingTop: "0.5rem",
         }}
       >
-        <div
-          className={`pointer-events-auto mx-auto grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-start ${TOP_BAR_GAP_CLASS}`}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/16 bg-[color-mix(in_oklab,var(--surface-2)_36%,transparent)] text-[var(--text)]/88 shadow-sm backdrop-blur-xl transition-colors hover:bg-[color-mix(in_oklab,var(--surface-2)_52%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 app-dark:border-white/24 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]"
-            aria-label="Back"
-          >
-            <PiArrowLeft className="h-5 w-5" aria-hidden />
-          </button>
-
-          <div className="flex min-w-0 justify-center">
-            {!bundle ? (
-              <div className="w-full min-w-0 rounded-full border-2 border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_36%,transparent)] px-3 py-1.5 text-center text-[10px] leading-snug text-[var(--text)]/45 shadow-sm backdrop-blur-xl app-dark:border-white/30 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)]">
-                {loading ? "Loading…" : ""}
-              </div>
-            ) : (
-              <Link
-                to={linkToPost ?? "#"}
-                state={
-                  linkToPost ? { backgroundLocation: location } : undefined
-                }
-                onClick={(e) => {
-                  if (!linkToPost) e.preventDefault();
-                }}
-                className={`block w-full min-w-0 rounded-full border-2 border-neutral-900/22 bg-[color-mix(in_oklab,var(--surface-2)_36%,transparent)] px-3 py-1.5 text-center shadow-sm backdrop-blur-xl transition-colors app-dark:border-white/30 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_28%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)] ${
-                  linkToPost
-                    ? "hover:bg-[color-mix(in_oklab,var(--surface-2)_50%,transparent)]"
-                    : "pointer-events-none opacity-50"
-                }`}
+        <div className="pointer-events-auto mx-auto w-full max-w-lg">
+          <InviteThreadTopHeader
+            bundle={bundle}
+            loading={loading && !bundle}
+            segmentTotal={PERSONAL_QUOTA_SEGMENT_TOTAL}
+            segmentActive={
+              bundle ? personalQuotaActiveSegmentsCount(bundle) : 0
+            }
+            back={
+              <button
+                type="button"
+                onClick={onClose}
+                className={inviteThreadHeaderBackButtonClass}
+                aria-label="Back"
               >
-                <p className="line-clamp-2 text-center text-[10px] leading-snug text-[var(--text)]/75">
-                  {bundle.post_peek.post_caption?.trim() || "Untitled"}
-                </p>
-              </Link>
-            )}
-          </div>
-
-          {counterpartyProfilePath ? (
-            <Link
-              to={counterpartyProfilePath}
-              aria-label={`View ${counterparty?.display_name?.trim() || counterparty?.username || "profile"}`}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/16 bg-[color-mix(in_oklab,var(--surface-2)_32%,transparent)] shadow-sm backdrop-blur-xl transition-colors hover:bg-[color-mix(in_oklab,var(--surface-2)_44%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 app-dark:border-white/24 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] app-dark:hover:bg-[color-mix(in_oklab,var(--surface-2)_38%,transparent)]"
-            >
-              <Avatar
-                variant="default"
-                url={counterparty?.avatar_url || undefined}
-                name={
-                  counterparty?.display_name ||
-                  counterparty?.username ||
-                  undefined
-                }
-                size={40}
-                tightLineBox
-                className="rounded-full"
-              />
-            </Link>
-          ) : (
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-neutral-900/16 bg-[color-mix(in_oklab,var(--surface-2)_32%,transparent)] shadow-sm backdrop-blur-xl app-dark:border-white/24 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]">
-              <Avatar
-                variant="default"
-                url={counterparty?.avatar_url || undefined}
-                name={
-                  counterparty?.display_name ||
-                  counterparty?.username ||
-                  undefined
-                }
-                size={40}
-                tightLineBox
-                className="rounded-full"
-              />
-            </div>
-          )}
+                <PiArrowLeft
+                  className={inviteThreadHeaderBackArrowClass}
+                  aria-hidden
+                />
+              </button>
+            }
+            right={
+              counterpartyProfilePath ? (
+                <Link
+                  to={counterpartyProfilePath}
+                  aria-label={`View ${
+                    counterparty?.display_name?.trim() ||
+                    counterparty?.username ||
+                    "profile"
+                  }`}
+                  className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40"
+                >
+                  <ChooserPillAvatar
+                    url={counterparty?.avatar_url}
+                    name={
+                      counterparty?.display_name ||
+                      counterparty?.username ||
+                      undefined
+                    }
+                    className={inviteThreadHeaderSidePillSizeClass}
+                    borderClassName={inviteThreadHeaderSidePillBorderClass}
+                  />
+                </Link>
+              ) : (
+                <ChooserPillAvatar
+                  url={counterparty?.avatar_url}
+                  name={
+                    counterparty?.display_name ||
+                    counterparty?.username ||
+                    undefined
+                  }
+                  className={inviteThreadHeaderSidePillSizeClass}
+                  borderClassName={inviteThreadHeaderSidePillBorderClass}
+                />
+              )
+            }
+          />
         </div>
-
-        {bundle ? (
-          <div
-            className={`pointer-events-none mx-auto mt-2 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
-            role="img"
-            aria-label={`${bundle.my_messages_remaining} messages remaining in your quota`}
-          >
-            {/* In-flow spacers: keeps quota aligned with caption column only */}
-            <div className="w-11 shrink-0" aria-hidden />
-            <div className="flex min-w-0 justify-center">
-              <div
-                className={`flex min-h-[7px] w-full ${QUOTA_STRIP_MAX_W_CLASS} gap-1`}
-              >
-                {Array.from({ length: QUOTA_SEGMENTS }, (_, i) => {
-                  const activeLeft = quotaActiveSegmentsCount(bundle);
-                  /** Drain right → left: inactive segments on the right. */
-                  const isInactive = i >= activeLeft;
-                  return (
-                    <div
-                      key={i}
-                      className={`h-1.5 min-h-1.5 min-w-[6px] flex-1 rounded-full transition-colors ${
-                        isInactive
-                          ? "bg-amber-900/[0.13] ring-1 ring-amber-900/[0.08] app-dark:bg-amber-100/[0.14] app-dark:ring-amber-100/[0.1]"
-                          : "bg-gradient-to-r from-amber-300/95 to-amber-200/88 shadow-[0_0_0_1px_rgba(253,224,138,0.55)] app-dark:from-amber-400/82 app-dark:to-amber-400/62 app-dark:shadow-[0_0_0_1px_rgba(251,191,36,0.38)]"
-                      }`}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-            <div className="w-11 shrink-0" aria-hidden />
-          </div>
-        ) : null}
-        {bundle ? (
-          <div
-            className={`pointer-events-none mx-auto mt-1 grid w-full max-w-lg grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center ${TOP_BAR_GAP_CLASS}`}
-          >
-            <div className="w-11 shrink-0" aria-hidden />
-            <p className="text-center text-[10px] leading-none text-[var(--text)]/44 app-dark:text-[var(--text)]/52">
-              {bundle.my_messages_remaining === 1
-                ? "1 message left"
-                : `${bundle.my_messages_remaining} messages left`}
-            </p>
-            <div className="w-11 shrink-0" aria-hidden />
-          </div>
-        ) : null}
       </div>
 
       {/* Floating bottom: quick reply + composer */}
@@ -786,11 +753,10 @@ export default function PersonalInviteThreadOverlay({
           }}
         >
           <div className="space-y-1.5">
-            {!bundle.can_compose ? (
-              <p className="pointer-events-auto max-w-lg text-center text-[11px] text-[var(--text)]/60">
-                {readOnlyExplanation().join(" ")}
-              </p>
-            ) : null}
+            <InviteThreadReadOnlyComposerNotice
+              bundle={bundle}
+              readOnlyExplanation={readOnlyExplanation}
+            />
             {submitError ? (
               <p
                 className="pointer-events-auto max-w-lg text-center text-xs text-red-500/95"
