@@ -97,7 +97,7 @@ export default function ProfileFinishSoftNudge() {
   };
 
   const goEdit = () => {
-    navigate(Paths.profileMe);
+    navigate({ pathname: Paths.profileMe, search: "?edit=1" });
   };
 
   return (

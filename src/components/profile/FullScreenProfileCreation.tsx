@@ -20,6 +20,9 @@ import { RootState } from "../../app/store";
 import AvatarCropModal from "./AvatarCropModal";
 import { isPlaceholderUsername } from "../../lib/profileUsername";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
+import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplainerModal";
+import { getNativePushReceiveState } from "../../lib/explicitNativePushRegistration";
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 const DISPLAY_NAME_MAX = 40;
 const USERNAME_MAX = 24;
@@ -56,6 +59,18 @@ const ECHO_AVATAR_PRESETS = getAvatarPresets();
 type AvatarMode = "photo" | "echo";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
+
+function profileEditorNotifNudgeStorageKey(userId: string): string {
+  return `echotoo_profile_editor_notif_nudge_dismissed_${userId}`;
+}
+
+function isEditorNotifNudgeDismissed(userId: string): boolean {
+  try {
+    return localStorage.getItem(profileEditorNotifNudgeStorageKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function mapProfileAvatarUploadError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
@@ -118,6 +133,8 @@ export default function FullScreenProfileCreation({
   const [avatarMode, setAvatarMode] = useState<AvatarMode>("photo");
   /** Shown once when create flow assigns a random preset (empty avatar + presets). */
   const [echoPickedNote, setEchoPickedNote] = useState(false);
+  const [showNotifSetupCard, setShowNotifSetupCard] = useState(false);
+  const [notifExplainerOpen, setNotifExplainerOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [usernameChecking, setUsernameChecking] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(
@@ -165,6 +182,35 @@ export default function FullScreenProfileCreation({
       setEchoPickedNote(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !user?.id || !isNativeApp()) {
+      setShowNotifSetupCard(false);
+      return;
+    }
+    if (isEditorNotifNudgeDismissed(user.id)) {
+      setShowNotifSetupCard(false);
+      return;
+    }
+    let cancelled = false;
+    void getNativePushReceiveState().then(({ ui }) => {
+      if (!cancelled) setShowNotifSetupCard(ui !== "granted");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, user?.id]);
+
+  const dismissNotifSetupCard = useCallback(() => {
+    if (user?.id) {
+      try {
+        localStorage.setItem(profileEditorNotifNudgeStorageKey(user.id), "1");
+      } catch {
+        /* ignore */
+      }
+    }
+    setShowNotifSetupCard(false);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!open || !focusDeleteAccountOnMount) return;
@@ -1120,6 +1166,37 @@ export default function FullScreenProfileCreation({
               </div>
             </div>
 
+            {showNotifSetupCard ? (
+              <div
+                className="mb-6 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--glass-bg)] p-3.5 backdrop-blur-[var(--glass-blur)] shadow-sm"
+                role="region"
+                aria-label="Notification setup suggestion"
+              >
+                <h3 className="text-[13px] font-semibold leading-tight text-[var(--text)]">
+                  Stay in the loop
+                </h3>
+                <p className="mt-1.5 text-[12px] leading-snug text-[var(--text)]/75">
+                  Get notified about invites, activity, and saved hangouts.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full bg-[var(--brand)] px-3.5 py-1.5 text-[11px] font-semibold text-[var(--brand-ink)] transition-opacity hover:opacity-90"
+                    onClick={() => setNotifExplainerOpen(true)}
+                  >
+                    Allow notifications
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full border border-[var(--border)] bg-[var(--surface)]/55 px-3.5 py-1.5 text-[11px] font-semibold text-[var(--text)]/85 transition-colors hover:bg-[var(--surface)]/75"
+                    onClick={dismissNotifSetupCard}
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             {/* Social Media Links */}
             <div>
               <label className="block text-sm font-medium text-[var(--text)] mb-3">
@@ -1347,6 +1424,19 @@ export default function FullScreenProfileCreation({
         confirmVariant="primary"
         isLoading={saving}
         higherZIndex
+      />
+
+      <HangoutNotificationExplainerModal
+        open={notifExplainerOpen}
+        onOpenChange={(next) => {
+          setNotifExplainerOpen(next);
+          if (!next && user?.id) {
+            void getNativePushReceiveState().then(({ ui }) => {
+              if (ui === "granted") setShowNotifSetupCard(false);
+            });
+          }
+        }}
+        mode="manual"
       />
 
       <ConfirmDialog
