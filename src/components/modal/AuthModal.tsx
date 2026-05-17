@@ -19,6 +19,11 @@ import {
   isAppleNativeSignInUserCancel,
   signInWithAppleNative,
 } from "../../lib/nativeAppleSignIn";
+import {
+  canUseNativeGoogleSignInAndroid,
+  isGoogleNativeSignInUserCancel,
+  signInWithGoogleNativeAndroid,
+} from "../../lib/nativeGoogleSignInAndroid";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
@@ -444,6 +449,44 @@ const AuthModal = () => {
     if (!requireAuthAgreement()) return;
     try {
       setLoading(true);
+
+      if (canUseNativeGoogleSignInAndroid()) {
+        try {
+          dbg("Google:native_start", {});
+          const idToken = await signInWithGoogleNativeAndroid();
+          const { error: nativeError } = await supabase.auth.signInWithIdToken({
+            provider: "google",
+            token: idToken,
+          });
+          dbg("Google:native_supabase", {
+            ok: !nativeError,
+            error: nativeError?.message,
+          });
+          if (nativeError) throw nativeError;
+
+          const {
+            data: { session: postGoogle },
+          } = await supabase.auth.getSession();
+          const postUid = postGoogle?.user?.id;
+          if (postUid) {
+            invalidateProfileByUserIdCache(postUid);
+          }
+
+          setLoading(false);
+          return;
+        } catch (nativeErr: unknown) {
+          if (isGoogleNativeSignInUserCancel(nativeErr)) {
+            dbg("Google:native_canceled", {});
+            setLoading(false);
+            return;
+          }
+          console.warn(
+            "[AuthModal] Native Google sign-in failed, falling back to OAuth:",
+            nativeErr
+          );
+        }
+      }
+
       const redirectTo = getAuthRedirectUrl();
 
       // Temporary validation logging (remove when stable)

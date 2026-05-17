@@ -10,6 +10,14 @@ const config: CapacitorConfig = {
       // `visualViewport` / layout stay coherent without double-counting extra JS padding.
       resize: "body",
     },
+    SocialLogin: {
+      providers: {
+        google: true,
+        apple: false,
+        facebook: false,
+        twitter: false,
+      },
+    },
   },
 };
 
