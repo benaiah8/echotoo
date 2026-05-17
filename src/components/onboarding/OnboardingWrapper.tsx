@@ -10,6 +10,10 @@ import {
 import { clearCachedFollowCounts } from "../../lib/followCountsCache";
 import OnboardingFlow from "./OnboardingFlow";
 import FullScreenProfileCreation from "../profile/FullScreenProfileCreation";
+import FrostedCenterModal, {
+  frostedModalPanelClassName,
+  frostedModalPanelStyle,
+} from "../ui/FrostedCenterModal";
 
 interface OnboardingCheck {
   needsProfile: boolean;
@@ -25,6 +29,8 @@ const PROFILE_DEFAULTS_STARTED_EVENT = "echotoo:profile-defaults-started";
 const PROFILE_DEFAULTS_FINISHED_EVENT = "echotoo:profile-defaults-finished";
 /** Failsafe if persist never signals finished (network/DB hang). */
 const PROFILE_DEFAULTS_SYNC_TIMEOUT_MS = 9_000;
+/** Avoid painting overlay for very fast no-op or sub-250ms syncs. */
+const PROFILE_DEFAULTS_OVERLAY_DEBOUNCE_MS = 250;
 
 export default function OnboardingWrapper({
   children,
@@ -40,9 +46,14 @@ export default function OnboardingWrapper({
   const [showProfileCreation, setShowProfileCreation] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [profileDefaultsSyncing, setProfileDefaultsSyncing] = useState(false);
+  const [showProfileDefaultsOverlay, setShowProfileDefaultsOverlay] =
+    useState(false);
   // [OPTIMIZATION] Fetch-once-per-session guard: avoid repeated getProfileByUserId when auth events fire
   const lastCheckedUserIdRef = useRef<string | null>(null);
   const profileDefaultsSyncTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const profileDefaultsOverlayDebounceRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
 
@@ -273,15 +284,28 @@ export default function OnboardingWrapper({
     }
   }, []);
 
+  const clearProfileDefaultsOverlayDebounce = useCallback(() => {
+    if (profileDefaultsOverlayDebounceRef.current) {
+      clearTimeout(profileDefaultsOverlayDebounceRef.current);
+      profileDefaultsOverlayDebounceRef.current = null;
+    }
+  }, []);
+
   const finishProfileDefaultsSync = useCallback(
     (userId: string) => {
       clearProfileDefaultsSyncTimeout();
+      clearProfileDefaultsOverlayDebounce();
+      setShowProfileDefaultsOverlay(false);
       setProfileDefaultsSyncing(false);
       invalidateProfileByUserIdCache(userId);
       lastCheckedUserIdRef.current = null;
       void checkOnboardingStatus();
     },
-    [clearProfileDefaultsSyncTimeout, checkOnboardingStatus],
+    [
+      clearProfileDefaultsSyncTimeout,
+      clearProfileDefaultsOverlayDebounce,
+      checkOnboardingStatus,
+    ],
   );
 
   /** Post-sign-in profile defaults: block Create Profile until persist finishes. */
@@ -291,7 +315,12 @@ export default function OnboardingWrapper({
       if (!id || id !== user?.id) return;
       setShowProfileCreation(false);
       setProfileDefaultsSyncing(true);
+      setShowProfileDefaultsOverlay(false);
+      clearProfileDefaultsOverlayDebounce();
       clearProfileDefaultsSyncTimeout();
+      profileDefaultsOverlayDebounceRef.current = setTimeout(() => {
+        setShowProfileDefaultsOverlay(true);
+      }, PROFILE_DEFAULTS_OVERLAY_DEBOUNCE_MS);
       profileDefaultsSyncTimeoutRef.current = setTimeout(() => {
         console.warn(
           "[OnboardingWrapper] profile defaults sync timed out; continuing",
@@ -316,6 +345,7 @@ export default function OnboardingWrapper({
     );
     return () => {
       clearProfileDefaultsSyncTimeout();
+      clearProfileDefaultsOverlayDebounce();
       window.removeEventListener(
         PROFILE_DEFAULTS_STARTED_EVENT,
         onStarted as EventListener,
@@ -328,15 +358,22 @@ export default function OnboardingWrapper({
   }, [
     user?.id,
     clearProfileDefaultsSyncTimeout,
+    clearProfileDefaultsOverlayDebounce,
     finishProfileDefaultsSync,
   ]);
 
   useEffect(() => {
     if (!user?.id) {
       setProfileDefaultsSyncing(false);
+      setShowProfileDefaultsOverlay(false);
       clearProfileDefaultsSyncTimeout();
+      clearProfileDefaultsOverlayDebounce();
     }
-  }, [user?.id, clearProfileDefaultsSyncTimeout]);
+  }, [
+    user?.id,
+    clearProfileDefaultsSyncTimeout,
+    clearProfileDefaultsOverlayDebounce,
+  ]);
 
   const handleProfileComplete = async () => {
     setShowProfileCreation(false);
@@ -350,27 +387,38 @@ export default function OnboardingWrapper({
     checkOnboardingStatus();
   };
 
-  if (profileDefaultsSyncing) {
+  if (showProfileDefaultsOverlay) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] p-6">
+      <FrostedCenterModal
+        open
+        zTier="blocking"
+        aria-labelledby="profile-defaults-setup-title"
+      >
         <div
-          className="w-full max-w-[min(360px,calc(100vw-3rem))] overflow-hidden rounded-2xl border border-[var(--border)] px-5 py-5 text-center shadow-[0_12px_40px_-10px_rgba(0,0,0,0.38)]"
+          className={`${frostedModalPanelClassName} text-center`}
+          style={frostedModalPanelStyle}
           role="status"
           aria-live="polite"
-          style={{
-            backgroundColor: "var(--glass-bg)",
-            backdropFilter: "blur(var(--glass-blur))",
-            WebkitBackdropFilter: "blur(var(--glass-blur))",
-          }}
         >
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-[var(--brand)] border-t-transparent" />
-          <h2 className="text-base font-semibold tracking-tight text-[var(--text)]">
+          <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-[var(--brand)] border-t-transparent" />
+          <div
+            id="profile-defaults-setup-title"
+            className="text-sm font-semibold text-[var(--text)]"
+          >
             Setting up your profile…
-          </h2>
-          <p className="mt-2 text-[13px] leading-snug text-[var(--text)]/75">
-            Just a moment while we personalize EchoToo for you.
+          </div>
+          <p className="mt-1 text-xs text-[var(--text)]/70">
+            Choosing your Echo avatar and getting things ready.
           </p>
         </div>
+      </FrostedCenterModal>
+    );
+  }
+
+  if (profileDefaultsSyncing) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--brand)] border-t-transparent" />
       </div>
     );
   }

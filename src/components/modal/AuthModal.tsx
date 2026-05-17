@@ -29,6 +29,7 @@ import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
 import { pickRandomPresetAvatarValue } from "../../lib/avatarPresets";
 import { Paths } from "../../router/Paths";
+import { markProfileDefaultsLoginPending } from "../../lib/persistProviderProfileDefaults";
 
 const AUTH_AGREEMENT_TOAST =
   "Please agree to the Terms of Service, Community Guidelines, and Privacy Policy before continuing.";
@@ -352,6 +353,7 @@ const AuthModal = () => {
     try {
       setLoading(true);
       dbg("EmailLogin:start", { email: data.email });
+      markProfileDefaultsLoginPending();
       const { error } = await supabase.auth.signInWithPassword({
         email: data.email.trim(),
         password: data.password,
@@ -453,6 +455,7 @@ const AuthModal = () => {
       if (canUseNativeGoogleSignInAndroid()) {
         try {
           dbg("Google:native_start", {});
+          markProfileDefaultsLoginPending();
           const idToken = await signInWithGoogleNativeAndroid();
           const { error: nativeError } = await supabase.auth.signInWithIdToken({
             provider: "google",
@@ -503,6 +506,7 @@ const AuthModal = () => {
         isNativeApp: isNativeApp(),
       });
 
+      markProfileDefaultsLoginPending();
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -592,6 +596,7 @@ const AuthModal = () => {
         isNativeApp: isNativeApp(),
       });
 
+      markProfileDefaultsLoginPending();
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "apple",
         options: { redirectTo, skipBrowserRedirect: true },

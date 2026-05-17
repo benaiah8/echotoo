@@ -306,19 +306,19 @@ export default function AuthCallback() {
       console.log("[AUTHDBG] AuthCallback subscribe onAuthStateChange (implicit wait)", {
         t: Date.now(),
       });
-      const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      const { data: sub } = supabase.auth.onAuthStateChange((authEvent, session) => {
         dbg("AuthCallback:onAuthStateChange", {
-          event: _e,
+          event: authEvent,
           has: !!session,
           user: session?.user?.id,
         });
         console.log("[AUTHDBG] AuthCallback inner onAuthStateChange", {
           t: Date.now(),
-          event: _e,
+          event: authEvent,
           hasSession: !!session,
           sessionUserId: session?.user?.id ?? null,
         });
-        if (session) {
+        if (authEvent === "SIGNED_IN" && session?.user) {
           void persistProviderProfileDefaultsAfterSignIn(
             session.user,
           ).finally(() => {

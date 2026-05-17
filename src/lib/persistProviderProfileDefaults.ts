@@ -11,6 +11,31 @@ export const PROFILE_DEFAULTS_STARTED_EVENT = "echotoo:profile-defaults-started"
 export const PROFILE_DEFAULTS_FINISHED_EVENT =
   "echotoo:profile-defaults-finished";
 
+/** Set before email/OAuth login so App.tsx can persist on real SIGNED_IN only. */
+export const PROFILE_DEFAULTS_LOGIN_PENDING_KEY =
+  "echotoo:profile-defaults-login-pending";
+
+export function markProfileDefaultsLoginPending(): void {
+  try {
+    sessionStorage.setItem(PROFILE_DEFAULTS_LOGIN_PENDING_KEY, "1");
+  } catch {
+    /* private browsing */
+  }
+}
+
+export function consumeProfileDefaultsLoginPending(): boolean {
+  try {
+    const v = sessionStorage.getItem(PROFILE_DEFAULTS_LOGIN_PENDING_KEY);
+    if (v) {
+      sessionStorage.removeItem(PROFILE_DEFAULTS_LOGIN_PENDING_KEY);
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 function dispatchProfileDefaultsStarted(userId: string): void {
   window.dispatchEvent(
     new CustomEvent(PROFILE_DEFAULTS_STARTED_EVENT, {
@@ -173,7 +198,10 @@ async function syncProfileCachesAndDispatch(
   );
 }
 
-async function runPersist(user: User): Promise<void> {
+/**
+ * @returns true if progress events (started/finished) were emitted for this run.
+ */
+async function runPersist(user: User): Promise<boolean> {
   const userId = user.id;
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
   const email = user.email ?? undefined;
@@ -203,7 +231,7 @@ async function runPersist(user: User): Promise<void> {
       "[persistProviderProfileDefaults] profile select:",
       selErr.message,
     );
-    return;
+    return false;
   }
 
   const hasDisplay = Boolean(String(existing?.display_name ?? "").trim());
@@ -245,6 +273,11 @@ async function runPersist(user: User): Promise<void> {
   if (!hasUsername && nextUsername) patch.username = nextUsername;
   if (!hasAvatar && nextAvatar) patch.avatar_url = nextAvatar;
 
+  const willWrite = !existing || Object.keys(patch).length > 0;
+  if (!willWrite) return false;
+
+  dispatchProfileDefaultsStarted(userId);
+
   if (!existing) {
     const insertDisplay = nextDisplay ?? displayName.trim();
     const insertUsername =
@@ -284,7 +317,7 @@ async function runPersist(user: User): Promise<void> {
             "[persistProviderProfileDefaults] insert duplicate but row missing:",
             insErr.message,
           );
-          return;
+          return true;
         }
         const retryPatch: Record<string, string> = {};
         if (!String(row.display_name ?? "").trim() && insertDisplay)
@@ -303,25 +336,23 @@ async function runPersist(user: User): Promise<void> {
               "[persistProviderProfileDefaults] patch after dup insert:",
               upErr.message,
             );
-            return;
+            return true;
           }
         }
         invalidateProfileByUserIdCache(userId);
         await syncProfileCachesAndDispatch(userId);
-        return;
+        return true;
       }
       console.warn(
         "[persistProviderProfileDefaults] insert:",
         insErr.message,
       );
-      return;
+      return true;
     }
     invalidateProfileByUserIdCache(userId);
     await syncProfileCachesAndDispatch(userId);
-    return;
+    return true;
   }
-
-  if (Object.keys(patch).length === 0) return;
 
   const { error: upErr } = await supabase
     .from("profiles")
@@ -340,11 +371,12 @@ async function runPersist(user: User): Promise<void> {
         upErr.message,
       );
     }
-    return;
+    return true;
   }
 
   invalidateProfileByUserIdCache(userId);
   await syncProfileCachesAndDispatch(userId);
+  return true;
 }
 
 /**
@@ -358,13 +390,12 @@ export async function persistProviderProfileDefaultsAfterSignIn(
   const existing = persistInflight.get(user.id);
   if (existing) return existing;
 
-  dispatchProfileDefaultsStarted(user.id);
-
   const work = (async () => {
+    let emittedStarted = false;
     try {
-      await runPersist(user);
+      emittedStarted = await runPersist(user);
     } finally {
-      dispatchProfileDefaultsFinished(user.id);
+      if (emittedStarted) dispatchProfileDefaultsFinished(user.id);
     }
   })();
 
