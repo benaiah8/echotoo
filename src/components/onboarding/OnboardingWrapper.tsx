@@ -21,6 +21,11 @@ interface OnboardingCheck {
 /** Dispatched from AuthModal after native Apple sign-in + profile/metadata writes. */
 const NATIVE_APPLE_SIGNIN_COMPLETE_EVENT = "echotoo:native-apple-signin-complete";
 
+const PROFILE_DEFAULTS_STARTED_EVENT = "echotoo:profile-defaults-started";
+const PROFILE_DEFAULTS_FINISHED_EVENT = "echotoo:profile-defaults-finished";
+/** Failsafe if persist never signals finished (network/DB hang). */
+const PROFILE_DEFAULTS_SYNC_TIMEOUT_MS = 9_000;
+
 export default function OnboardingWrapper({
   children,
 }: {
@@ -34,8 +39,12 @@ export default function OnboardingWrapper({
   const [loading, setLoading] = useState(true);
   const [showProfileCreation, setShowProfileCreation] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [profileDefaultsSyncing, setProfileDefaultsSyncing] = useState(false);
   // [OPTIMIZATION] Fetch-once-per-session guard: avoid repeated getProfileByUserId when auth events fire
   const lastCheckedUserIdRef = useRef<string | null>(null);
+  const profileDefaultsSyncTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
 
   const checkOnboardingStatus = useCallback(async () => {
     const uid = user?.id;
@@ -257,22 +266,77 @@ export default function OnboardingWrapper({
       );
   }, [user?.id, checkOnboardingStatus]);
 
-  /** After shared post-sign-in profile defaults: re-run onboarding gate (avoid flashing FullScreenProfileCreation). */
-  useEffect(() => {
-    const onDefaultsSynced = (ev: Event) => {
-      const id = (ev as CustomEvent<{ userId?: string }>).detail?.userId;
-      if (!id || id !== user?.id) return;
-      invalidateProfileByUserIdCache(id);
+  const clearProfileDefaultsSyncTimeout = useCallback(() => {
+    if (profileDefaultsSyncTimeoutRef.current) {
+      clearTimeout(profileDefaultsSyncTimeoutRef.current);
+      profileDefaultsSyncTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finishProfileDefaultsSync = useCallback(
+    (userId: string) => {
+      clearProfileDefaultsSyncTimeout();
+      setProfileDefaultsSyncing(false);
+      invalidateProfileByUserIdCache(userId);
       lastCheckedUserIdRef.current = null;
       void checkOnboardingStatus();
+    },
+    [clearProfileDefaultsSyncTimeout, checkOnboardingStatus],
+  );
+
+  /** Post-sign-in profile defaults: block Create Profile until persist finishes. */
+  useEffect(() => {
+    const onStarted = (ev: Event) => {
+      const id = (ev as CustomEvent<{ userId?: string }>).detail?.userId;
+      if (!id || id !== user?.id) return;
+      setShowProfileCreation(false);
+      setProfileDefaultsSyncing(true);
+      clearProfileDefaultsSyncTimeout();
+      profileDefaultsSyncTimeoutRef.current = setTimeout(() => {
+        console.warn(
+          "[OnboardingWrapper] profile defaults sync timed out; continuing",
+        );
+        finishProfileDefaultsSync(id);
+      }, PROFILE_DEFAULTS_SYNC_TIMEOUT_MS);
     };
-    window.addEventListener("echotoo:profile-defaults-synced", onDefaultsSynced);
-    return () =>
+
+    const onFinished = (ev: Event) => {
+      const id = (ev as CustomEvent<{ userId?: string }>).detail?.userId;
+      if (!id || id !== user?.id) return;
+      finishProfileDefaultsSync(id);
+    };
+
+    window.addEventListener(
+      PROFILE_DEFAULTS_STARTED_EVENT,
+      onStarted as EventListener,
+    );
+    window.addEventListener(
+      PROFILE_DEFAULTS_FINISHED_EVENT,
+      onFinished as EventListener,
+    );
+    return () => {
+      clearProfileDefaultsSyncTimeout();
       window.removeEventListener(
-        "echotoo:profile-defaults-synced",
-        onDefaultsSynced,
+        PROFILE_DEFAULTS_STARTED_EVENT,
+        onStarted as EventListener,
       );
-  }, [user?.id, checkOnboardingStatus]);
+      window.removeEventListener(
+        PROFILE_DEFAULTS_FINISHED_EVENT,
+        onFinished as EventListener,
+      );
+    };
+  }, [
+    user?.id,
+    clearProfileDefaultsSyncTimeout,
+    finishProfileDefaultsSync,
+  ]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setProfileDefaultsSyncing(false);
+      clearProfileDefaultsSyncTimeout();
+    }
+  }, [user?.id, clearProfileDefaultsSyncTimeout]);
 
   const handleProfileComplete = async () => {
     setShowProfileCreation(false);
@@ -285,6 +349,31 @@ export default function OnboardingWrapper({
     // Refresh the onboarding check
     checkOnboardingStatus();
   };
+
+  if (profileDefaultsSyncing) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] p-6">
+        <div
+          className="w-full max-w-[min(360px,calc(100vw-3rem))] overflow-hidden rounded-2xl border border-[var(--border)] px-5 py-5 text-center shadow-[0_12px_40px_-10px_rgba(0,0,0,0.38)]"
+          role="status"
+          aria-live="polite"
+          style={{
+            backgroundColor: "var(--glass-bg)",
+            backdropFilter: "blur(var(--glass-blur))",
+            WebkitBackdropFilter: "blur(var(--glass-blur))",
+          }}
+        >
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-[var(--brand)] border-t-transparent" />
+          <h2 className="text-base font-semibold tracking-tight text-[var(--text)]">
+            Setting up your profile…
+          </h2>
+          <p className="mt-2 text-[13px] leading-snug text-[var(--text)]/75">
+            Just a moment while we personalize EchoToo for you.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Show loading while checking auth or onboarding status
   if (authLoading || loading) {
@@ -299,7 +388,7 @@ export default function OnboardingWrapper({
   }
 
   // Show profile creation if needed
-  if (showProfileCreation && onboardingCheck) {
+  if (showProfileCreation && onboardingCheck && !profileDefaultsSyncing) {
     return (
       <FullScreenProfileCreation
         open={showProfileCreation}

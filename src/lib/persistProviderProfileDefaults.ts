@@ -7,6 +7,26 @@ const USERNAME_MAX = 24;
 /** Dedupe concurrent persist for the same auth user (OAuth + SIGNED_IN racing). */
 const persistInflight = new Map<string, Promise<void>>();
 
+export const PROFILE_DEFAULTS_STARTED_EVENT = "echotoo:profile-defaults-started";
+export const PROFILE_DEFAULTS_FINISHED_EVENT =
+  "echotoo:profile-defaults-finished";
+
+function dispatchProfileDefaultsStarted(userId: string): void {
+  window.dispatchEvent(
+    new CustomEvent(PROFILE_DEFAULTS_STARTED_EVENT, {
+      detail: { userId },
+    }),
+  );
+}
+
+function dispatchProfileDefaultsFinished(userId: string): void {
+  window.dispatchEvent(
+    new CustomEvent(PROFILE_DEFAULTS_FINISHED_EVENT, {
+      detail: { userId },
+    }),
+  );
+}
+
 function stringFromMeta(
   meta: Record<string, unknown>,
   keys: string[],
@@ -335,11 +355,21 @@ export async function persistProviderProfileDefaultsAfterSignIn(
   user: User | null | undefined,
 ): Promise<void> {
   if (!user?.id) return;
-  let p = persistInflight.get(user.id);
-  if (p) return p;
-  p = runPersist(user).finally(() => {
-    if (persistInflight.get(user.id) === p) persistInflight.delete(user.id);
+  const existing = persistInflight.get(user.id);
+  if (existing) return existing;
+
+  dispatchProfileDefaultsStarted(user.id);
+
+  const work = (async () => {
+    try {
+      await runPersist(user);
+    } finally {
+      dispatchProfileDefaultsFinished(user.id);
+    }
+  })();
+
+  persistInflight.set(user.id, work);
+  return work.finally(() => {
+    if (persistInflight.get(user.id) === work) persistInflight.delete(user.id);
   });
-  persistInflight.set(user.id, p);
-  return p;
 }
