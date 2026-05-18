@@ -1,5 +1,6 @@
 import "./App.css";
 import GlobalErrorHandler from "./wrappers/GlobalErrorHandler";
+import AppErrorBoundary from "./wrappers/AppErrorBoundary";
 import AppRouter from "./router/AppRouter";
 import { useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
@@ -171,24 +172,26 @@ function App() {
 
       {/* Router MUST wrap BottomTab and all route content */}
       <BrowserRouter>
-        {isNativeApp() && <NativePushTapNavigationBridge />}
+        {!showSplash && isNativeApp() && <NativePushTapNavigationBridge />}
         <PostEngagementRealtimeMount />
         {isNativeApp() && <PushRegistrationMount />}
         {isNativeApp() && <CapacitorOAuthListener />}
         {!showSplash && <AppUpdateRuntimeController />}
-        <CreateChooserProvider>
-          <OwlMessageModalProvider>
-            <div className="app-shell">
-              <DesktopShellWrapper>
-                <OnboardingWrapper>
-                  <AppRouter />
-                </OnboardingWrapper>
-              </DesktopShellWrapper>
+        <AppErrorBoundary>
+          <CreateChooserProvider>
+            <OwlMessageModalProvider>
+              <div className="app-shell">
+                <DesktopShellWrapper>
+                  <OnboardingWrapper>
+                    <AppRouter contentReady={!showSplash} />
+                  </OnboardingWrapper>
+                </DesktopShellWrapper>
 
-              <AppFloatingChrome />
-            </div>
-          </OwlMessageModalProvider>
-        </CreateChooserProvider>
+                <AppFloatingChrome />
+              </div>
+            </OwlMessageModalProvider>
+          </CreateChooserProvider>
+        </AppErrorBoundary>
       </BrowserRouter>
     </GlobalErrorHandler>
   );

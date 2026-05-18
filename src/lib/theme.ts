@@ -2,11 +2,19 @@ export type Theme = "dark" | "light";
 const KEY = "theme";
 
 export function getInitialTheme(): Theme {
-  const saved = localStorage.getItem(KEY) as Theme | null;
-  if (saved === "dark" || saved === "light") return saved;
-  return window.matchMedia("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
+  try {
+    const saved = localStorage.getItem(KEY) as Theme | null;
+    if (saved === "dark" || saved === "light") return saved;
+  } catch {
+    /* private browsing / restricted storage */
+  }
+  try {
+    return window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+  } catch {
+    return "dark";
+  }
 }
 
 export function applyTheme(theme: Theme) {

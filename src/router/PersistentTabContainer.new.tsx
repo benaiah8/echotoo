@@ -95,6 +95,8 @@ export function useTabActive(tab: TabId): boolean {
 interface PersistentTabContainerProps {
   /** When provided (e.g. overlay mode), use this path for tab selection instead of location.pathname */
   backgroundPath?: string;
+  /** When false, home feed is not mounted (e.g. startup splash). Default true. */
+  mountHomeTab?: boolean;
 }
 
 /**
@@ -115,6 +117,7 @@ interface PersistentTabContainerProps {
  */
 export function PersistentTabContainer({
   backgroundPath,
+  mountHomeTab = true,
 }: PersistentTabContainerProps = {}) {
   const location = useLocation();
   const params = useParams<{ username?: string }>();
@@ -177,7 +180,7 @@ export function PersistentTabContainer({
             minHeight: "100vh",
           }}
         >
-          <HomePage />
+          {mountHomeTab ? <HomePage /> : null}
         </div>
 
         {/* Own Profile Tab */}

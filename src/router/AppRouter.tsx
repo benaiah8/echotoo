@@ -68,7 +68,12 @@ function isTabPath(pathname: string): boolean {
   );
 }
 
-export default function AppRouter() {
+type AppRouterProps = {
+  /** When false, tab pages (incl. home feed) are not mounted — used during startup splash. */
+  contentReady?: boolean;
+};
+
+export default function AppRouter({ contentReady = true }: AppRouterProps) {
   const location = useLocation();
   const state = location.state as { backgroundLocation?: Location } | null;
   const backgroundLocation = state?.backgroundLocation;
@@ -80,8 +85,11 @@ export default function AppRouter() {
   return (
     <>
       {/* Tab container: on tab routes, or when modal overlay (show background) */}
-      {(isTabRoute || backgroundLocation) && (
-        <PersistentTabContainer backgroundPath={backgroundLocation?.pathname} />
+      {contentReady && (isTabRoute || backgroundLocation) && (
+        <PersistentTabContainer
+          backgroundPath={backgroundLocation?.pathname}
+          mountHomeTab={contentReady}
+        />
       )}
 
       {/* Main routes: use background location when modal is open so background stays rendered */}
