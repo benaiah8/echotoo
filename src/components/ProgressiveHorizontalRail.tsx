@@ -26,6 +26,7 @@ import { onPostChanged, onPostDeleted } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
 import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
+import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 
 export interface ProgressiveHorizontalRailProps<T> {
   // Data loading
@@ -526,19 +527,14 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
   // Error display
   if (error && items.length === 0) {
     return (
-      <div className="w-full py-4 text-center">
-        <p className="text-sm text-red-400 mb-2">{error}</p>
-        <button
-          onClick={() => {
-            setError(null);
-            shouldLoadRef.current = true;
-            loadMore();
-          }}
-          className="px-3 py-1.5 text-xs rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-        >
-          Retry
-        </button>
-      </div>
+      <FeedLoadErrorState
+        compact
+        onRetry={() => {
+          setError(null);
+          shouldLoadRef.current = true;
+          loadMore();
+        }}
+      />
     );
   }
 

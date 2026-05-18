@@ -8,6 +8,7 @@ import {
 import { getPostByIdOptimized } from "../api/queries/getPostById";
 import PostDetailBody, { type Post } from "./detail/PostDetailBody";
 import PostDetailSkeleton from "./skeletons/PostDetailSkeleton";
+import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 import { supabase } from "../lib/supabaseClient";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { onPostChanged } from "../lib/postEvents";
@@ -70,6 +71,7 @@ export default function PostDetailModal() {
   });
   const [loading, setLoading] = useState(!hasMatchingInitialPost);
   const [error, setError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   const [composerFocused, setComposerFocused] = useState(false);
   const [handlePressed, setHandlePressed] = useState(false);
@@ -231,7 +233,7 @@ export default function PostDetailModal() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, loadAttempt]);
 
   useEffect(() => {
     const cleanup = onPostChanged((e) => {
@@ -502,9 +504,15 @@ export default function PostDetailModal() {
                   )}
                   {loading && !post && <PostDetailSkeleton />}
                   {error && !post && (
-                    <div className="py-4 text-red-400 text-sm text-center">
-                      {error}
-                    </div>
+                    <FeedLoadErrorState
+                      title="We couldn't load this post"
+                      body="Check your connection and try again."
+                      onRetry={() => {
+                        setError(null);
+                        setLoading(true);
+                        setLoadAttempt((n) => n + 1);
+                      }}
+                    />
                   )}
                   {post && (
                     <PostDetailBody

@@ -37,6 +37,7 @@ import { applyPostPatch } from "../lib/applyPostPatch";
 import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import { batchFetchActivitiesForPosts } from "../api/services/activitiesBatch";
+import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
@@ -1620,18 +1621,12 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // Error display
   if (error && items.length === 0) {
     return (
-      <div className="w-full py-8 text-center">
-        <p className="text-sm text-red-400 mb-4">{error}</p>
-        <button
-          onClick={() => {
-            setError(null);
-            loadMore();
-          }}
-          className="px-4 py-2 text-sm rounded-lg border border-red-500/50 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
-        >
-          Retry
-        </button>
-      </div>
+      <FeedLoadErrorState
+        onRetry={() => {
+          setError(null);
+          loadMore();
+        }}
+      />
     );
   }
 
