@@ -22,7 +22,7 @@ const CHROME_SHOW_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const chipButtonClass = (isSelected: boolean) =>
   [
     "shrink-0 inline-flex items-center justify-center whitespace-nowrap rounded-full border-0",
-    "text-[9px] font-medium leading-none tracking-tight",
+    "text-[11px] font-semibold leading-none tracking-tight",
     "h-[18px] min-h-[18px] px-3 py-0 transition-[transform,background-color,color,box-shadow] duration-200",
     "active:scale-[0.96]",
     isSelected

@@ -27,8 +27,6 @@ import {
   isPostDetailRoutePath,
 } from "../../lib/inviteOverlayHistory";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
-import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
-import { isIOS } from "../../lib/storage/utils/capacitorDetection";
 import { supabase } from "../../lib/supabaseClient";
 import Avatar from "../ui/Avatar";
 import InviteThreadMessageList from "./invite-thread/InviteThreadMessageList";
@@ -46,9 +44,7 @@ import {
   GROUP_QUOTA_UI_SEGMENT_TOTAL,
   groupQuotaActiveSegmentsCount,
 } from "./invite-thread/InviteThreadOverlayLayout";
-
-const SCROLL_PAD_TOP_PX = 120;
-const SCROLL_PAD_BOTTOM_FALLBACK_PX = 148;
+import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
 const DRAFT_TEXTAREA_MAX_PX = 220;
 const COMPOSER_MULTILINE_CORNER_PX = 21;
 const COMPOSER_PILL_INSET_PX = 6;
@@ -112,8 +108,6 @@ export default function GroupInviteThreadOverlay({
   const pathname = location.pathname;
   const engageInviteBack = open && !isPostDetailRoutePath(pathname);
   const navigate = useNavigate();
-  const { keyboardInsetPx } = useCreateKeyboardInset();
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bundle, setBundle] = useState<InviteThreadBundle | null>(null);
@@ -125,9 +119,6 @@ export default function GroupInviteThreadOverlay({
     null,
   );
   const [reactionError, setReactionError] = useState<string | null>(null);
-  const [bottomChromeHeightPx, setBottomChromeHeightPx] = useState(
-    SCROLL_PAD_BOTTOM_FALLBACK_PX,
-  );
   const [composerInputShape, setComposerInputShape] = useState<
     "pill" | "multiline"
   >("pill");
@@ -145,7 +136,6 @@ export default function GroupInviteThreadOverlay({
   participantsOpenRef.current = participantsOpen;
   onCloseRef.current = onClose;
 
-  const bottomChromeRef = useRef<HTMLDivElement>(null);
   const draftTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const syncDraftTextareaHeight = useCallback(() => {
@@ -319,14 +309,6 @@ export default function GroupInviteThreadOverlay({
 
   useEffect(() => {
     if (!open) {
-      setComposerInputShape("pill");
-      setBottomChromeHeightPx(SCROLL_PAD_BOTTOM_FALLBACK_PX);
-      return;
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
       setDraft("");
       setSubmitError(null);
       setSubmitting(false);
@@ -465,31 +447,29 @@ export default function GroupInviteThreadOverlay({
     };
   }, [open, threadId, refreshBundleSilently]);
 
-  useEffect(() => {
-    if (!open) return;
-    const el = bottomChromeRef.current;
-    if (!el) return;
-    const measure = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height);
-      if (h > 0) setBottomChromeHeightPx(h);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    window.addEventListener("orientationchange", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("orientationchange", measure);
-    };
-  }, [
+  const {
+    scrollLayerRef,
+    bottomChromeOuterRef,
+    bottomChromeContentRef,
+    scrollPadTop,
+    scrollPadBottom,
+    composerBottomGap,
+    onComposerFocus,
+    onComposerBlur,
+    scrollToBottomAfterSend,
+  } = useInviteThreadKeyboardLayout({
     open,
-    threadId,
-    bundle?.can_compose,
-    draft,
-    keyboardInsetPx,
-    submitError,
-    loading,
-  ]);
+    measureChrome: open && Boolean(threadId && bundle),
+    remeasureDeps: [
+      threadId,
+      bundle?.can_compose,
+      draft,
+      submitError,
+      loading,
+      composerInputShape,
+      participantsOpen,
+    ],
+  });
 
   const linkToPost = useMemo(() => {
     if (!bundle?.post_peek.post_id) return null;
@@ -556,6 +536,7 @@ export default function GroupInviteThreadOverlay({
       setBundle(refreshed);
       setDraft("");
       if (draftTextareaRef.current) draftTextareaRef.current.style.height = "";
+      scrollToBottomAfterSend();
     } catch (e) {
       setSubmitError(
         e instanceof Error ? e.message : "Could not send message.",
@@ -564,7 +545,14 @@ export default function GroupInviteThreadOverlay({
       setSubmitting(false);
       suppressSilentThreadRefreshRef.current = false;
     }
-  }, [threadId, bundle?.can_compose, sendDisabled, submitting, trimmedDraft]);
+  }, [
+    threadId,
+    bundle?.can_compose,
+    sendDisabled,
+    submitting,
+    trimmedDraft,
+    scrollToBottomAfterSend,
+  ]);
 
   const handleReactionToggle = useCallback(
     async (messageId: string) => {
@@ -657,16 +645,6 @@ export default function GroupInviteThreadOverlay({
 
   const safeHorizontalPad =
     "pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))]";
-  const scrollPadTop = `calc(env(safe-area-inset-top, 0px) + ${SCROLL_PAD_TOP_PX}px)`;
-  const keyboardInsetRoundedPx = Math.max(0, Math.round(keyboardInsetPx));
-  const isIOSDevice = isIOS();
-  const composerBottomGap = isIOSDevice
-    ? keyboardInsetRoundedPx > 0
-      ? `max(0.375rem, calc(${keyboardInsetRoundedPx}px - min(24px, var(--safe-area-bottom-layout)) + 0.875rem))`
-      : "max(0.5rem, calc(var(--safe-area-bottom-layout) - 20px))"
-    : keyboardInsetRoundedPx > 0
-    ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
-    : "max(0.5rem, var(--safe-area-bottom-layout))";
 
   if (!open) return null;
 
@@ -682,11 +660,6 @@ export default function GroupInviteThreadOverlay({
     return Array.from(new Set(bits));
   };
 
-  const scrollPadBottom =
-    keyboardInsetRoundedPx > 0
-      ? `max(0px, calc(${bottomChromeHeightPx}px - ${keyboardInsetRoundedPx}px))`
-      : `${bottomChromeHeightPx}px`;
-
   const sheetParticipants = bundle?.participants ?? [];
 
   return createPortal(
@@ -697,6 +670,7 @@ export default function GroupInviteThreadOverlay({
       />
 
       <div
+        ref={scrollLayerRef}
         className={`absolute inset-0 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] ${safeHorizontalPad}`}
         style={{ paddingTop: scrollPadTop, paddingBottom: scrollPadBottom }}
       >
@@ -930,12 +904,16 @@ export default function GroupInviteThreadOverlay({
 
       {open && threadId && bundle ? (
         <div
-          ref={bottomChromeRef}
-          className={`pointer-events-none absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center gap-1.5 pb-1 ${safeHorizontalPad}`}
+          ref={bottomChromeOuterRef}
+          className={`pointer-events-none absolute bottom-0 left-0 right-0 z-20 ${safeHorizontalPad}`}
           style={{
             paddingBottom: composerBottomGap,
           }}
         >
+          <div
+            ref={bottomChromeContentRef}
+            className="flex w-full flex-col items-center gap-1.5 pb-1"
+          >
           <div className="space-y-1.5">
             <InviteThreadReadOnlyComposerNotice
               bundle={bundle}
@@ -1080,6 +1058,8 @@ export default function GroupInviteThreadOverlay({
                         setDraft(e.target.value);
                         if (submitError) setSubmitError(null);
                       }}
+                      onFocus={onComposerFocus}
+                      onBlur={onComposerBlur}
                       onKeyDown={(e) => {
                         if (e.key !== "Enter" || e.shiftKey) return;
                         if (sendDisabled) return;
@@ -1143,6 +1123,7 @@ export default function GroupInviteThreadOverlay({
               </div>
             </>
           ) : null}
+          </div>
         </div>
       ) : open && threadId && !bundle && !loading && !error ? (
         <div
