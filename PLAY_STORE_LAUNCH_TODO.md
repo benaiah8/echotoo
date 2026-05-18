@@ -7,6 +7,7 @@
 ## Phase 1: Android Build Setup
 
 - [x] **1.1** Update `capacitor.config.ts` → `appId: 'com.echotoo.app'`
+- [ ] **1.1a** Before each Play release build: confirm **`.env.local`** exists and includes `VITE_GOOGLE_WEB_CLIENT_ID=<Google Web OAuth Client ID>` (gitignored — do not commit). See `RELEASE_SIGNING_GUIDE.md`. If missing, native Google sign-in may not work in the release app.
 - [x] **1.2** Run `npm run build`
 - [x] **1.3** Android folder exists (already added)
 - [x] **1.4** Run `npx cap sync`
@@ -44,11 +45,12 @@
 
 ## Phase 5: Signing & AAB Build
 
+- [ ] **5.0** Confirm `.env.local` has `VITE_GOOGLE_WEB_CLIENT_ID` (then `npm run build` → `npx cap sync android` → `bundleRelease`) — See `RELEASE_SIGNING_GUIDE.md`
 - [ ] **5.1** Create Android keystore — See `RELEASE_SIGNING_GUIDE.md` (manual)
 - [x] **5.2** Configure `android/app/build.gradle` with signing config ✅
 - [x] **5.3** Produce `app-release.aab` via `.\gradlew.bat bundleRelease` ✅
 
-**Full steps:** See `RELEASE_SIGNING_GUIDE.md`. You must create the keystore and `android/keystore.properties` before the AAB is Play Console–ready. Without them, the build uses debug signing (Play will reject it).
+**Full steps:** See `RELEASE_SIGNING_GUIDE.md`. You must create the keystore and `android/keystore.properties` before the AAB is Play Console–ready. Without them, the build uses debug signing (Play will reject it). Run `npm run build` only after `VITE_GOOGLE_WEB_CLIENT_ID` is in `.env.local`.
 
 ---
 

@@ -49,9 +49,26 @@ storeFile=..\\..\\echotoo-release.keystore
 
 ## Step 3: Build the release AAB
 
+### Before `npm run build`
+
+Native **Continue with Google** on Android needs a Web OAuth client ID baked into the app at build time.
+
+- Confirm **`.env.local`** exists in the project root (it is gitignored — **do not commit it**).
+- Confirm it includes:
+  ```
+  VITE_GOOGLE_WEB_CLIENT_ID=<your Google Web OAuth Client ID>
+  ```
+- Run **`npm run build` only after** that line is present. Vite reads `VITE_*` variables during the build; Gradle does not add them later.
+
+If this variable is missing, Play/release builds may not get native Google sign-in (users may see browser sign-in instead, or sign-in may fail).
+
+### Build commands
+
 From the project root:
 
 ```powershell
+npm run build
+npx cap sync android
 cd android
 .\gradlew.bat bundleRelease
 ```
@@ -81,7 +98,7 @@ android\app\build\outputs\bundle\release\app-release.aab
 
 Before submitting to Play Console, test on a device or emulator:
 
-- [ ] **Google login** — Sign in with Google works; redirect back to app succeeds
+- [ ] **Google login** — Sign in with Google works (native account picker on Android when `VITE_GOOGLE_WEB_CLIENT_ID` was set before `npm run build`)
 - [ ] **Feed loads** — Home feed displays posts
 - [ ] **Create post** — Create flow works (title → activities → preview → publish)
 - [ ] **Comments** — Add comment on a post; replies work
