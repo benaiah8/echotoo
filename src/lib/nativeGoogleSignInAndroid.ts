@@ -80,9 +80,7 @@ export async function signInWithGoogleNativeAndroid(): Promise<string> {
 
   const login = await SocialLogin.login({
     provider: "google",
-    options: {
-      scopes: ["email", "profile"],
-    },
+    options: {},
   });
 
   const result = login.result;

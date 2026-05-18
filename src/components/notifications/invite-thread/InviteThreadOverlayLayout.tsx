@@ -16,14 +16,14 @@ const contextCardLabelClass =
 const seePostCueClass =
   "mt-2 inline-flex items-center justify-center gap-0.5 text-[10px] font-medium text-[var(--text)]/62 underline decoration-transparent underline-offset-2 transition-colors group-hover:text-primary/85 group-hover:decoration-primary/45 group-hover:underline sm:text-[11px]";
 
-/** Matches invite composer pill-mode outer height (50px) and inset (6px). */
+/** Matches invite composer pill-mode outer height (~5% below composer 50px) and inset (6px). */
 export const INVITE_HEADER_PILL_INSET_PX = 6;
-export const INVITE_HEADER_PILL_OUTER_HEIGHT_PX = 50;
+export const INVITE_HEADER_PILL_OUTER_HEIGHT_PX = 48;
 
 /** Unified invite thread header pill — mirrors NotificationList / CreateFlow glass chrome. */
 export const inviteThreadHeaderPillClass = [
   "relative box-border w-full min-w-0 rounded-full",
-  "h-[50px] min-h-[50px] max-h-[50px]",
+  "h-[48px] min-h-[48px] max-h-[48px]",
   "border border-[var(--bottom-tab-border)]",
   "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
   "[-webkit-backdrop-filter:blur(var(--glass-blur))]",
@@ -33,7 +33,7 @@ export const inviteThreadHeaderPillClass = [
 ].join(" ");
 
 /** Side control pills (back + personal avatar) — matched pair inside the header lane. */
-export const inviteThreadHeaderSidePillSizeClass = "h-[36px] w-[60px]";
+export const inviteThreadHeaderSidePillSizeClass = "h-[34px] w-[60px]";
 
 /** Between main header chrome and hairline — visible but softer than the outer bar. */
 export const inviteThreadHeaderSidePillBorderClass =
@@ -55,7 +55,7 @@ export const inviteThreadHeaderBackButtonClass = [
 /** Slightly wider than tall so the back chevron reads longer in the pill. */
 export const inviteThreadHeaderBackArrowClass = "h-[18px] w-[24px] shrink-0";
 
-const QUOTA_METER_HEIGHT_CLASS = "h-8";
+const QUOTA_METER_HEIGHT_CLASS = "h-[30px]";
 
 const QUOTA_SEGMENT_ACTIVE_CLASS =
   "bg-gradient-to-b from-amber-300/95 to-amber-200/88 shadow-[0_0_0_1px_rgba(253,224,138,0.55)] app-dark:from-amber-400/82 app-dark:to-amber-400/62 app-dark:shadow-[0_0_0_1px_rgba(251,191,36,0.38)]";
@@ -220,7 +220,7 @@ export function InviteThreadTopHeader({
   return (
     <div className="flex w-full flex-col items-center">
       <div className={inviteThreadHeaderPillClass}>
-        <div className="relative flex h-full min-h-[34px] w-full items-center justify-between">
+        <div className="relative flex h-full min-h-[32px] w-full items-center justify-between">
           <div className="relative z-10 shrink-0">{back}</div>
           <div
             className={`pointer-events-none absolute left-1/2 top-1/2 z-0 -translate-x-1/2 -translate-y-1/2 ${quotaMeterWrapperWidthClass(segmentTotal)}`}

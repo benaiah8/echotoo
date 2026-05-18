@@ -800,7 +800,7 @@ export default function GroupInviteThreadOverlay({
               </button>
             }
             right={
-              <div className="flex h-[34px] shrink-0 items-center justify-end">
+              <div className="flex h-[32px] shrink-0 items-center justify-end">
                 <button
                   type="button"
                   disabled={!bundle}
@@ -809,7 +809,7 @@ export default function GroupInviteThreadOverlay({
                     if (!bundle) return;
                     setParticipantsOpen((prev) => !prev);
                   }}
-                  className="relative flex min-h-[34px] min-w-[44px] cursor-pointer items-center justify-center rounded-full border border-transparent bg-transparent px-0.5 shadow-none backdrop-blur-none transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="relative flex min-h-[32px] min-w-[44px] cursor-pointer items-center justify-center rounded-full border border-transparent bg-transparent px-0.5 shadow-none backdrop-blur-none transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40 disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label="Group members"
                 >
                   <div className="flex items-center justify-center -space-x-2.5">
