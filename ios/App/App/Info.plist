@@ -65,6 +65,14 @@
 			<key>CFBundleURLName</key>
 			<string>com.echotoo.app</string>
 		</dict>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.697785875054-92qgd65fc8rvktd1ice1ojphf25ja5ef</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>GoogleSignIn</string>
+		</dict>
 	</array>
 </dict>
 </plist>

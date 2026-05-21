@@ -21,9 +21,11 @@ import {
 } from "../../lib/nativeAppleSignIn";
 import {
   canUseNativeGoogleSignInAndroid,
+  canUseNativeGoogleSignInIOS,
   isGoogleNativeSignInUserCancel,
   signInWithGoogleNativeAndroid,
-} from "../../lib/nativeGoogleSignInAndroid";
+  signInWithGoogleNativeIOS,
+} from "../../lib/nativeGoogleSignIn";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
@@ -485,6 +487,44 @@ const AuthModal = () => {
           }
           console.warn(
             "[AuthModal] Native Google sign-in failed, falling back to OAuth:",
+            nativeErr
+          );
+        }
+      }
+
+      if (canUseNativeGoogleSignInIOS()) {
+        try {
+          dbg("Google:native_ios_start", {});
+          markProfileDefaultsLoginPending();
+          const idToken = await signInWithGoogleNativeIOS();
+          const { error: nativeError } = await supabase.auth.signInWithIdToken({
+            provider: "google",
+            token: idToken,
+          });
+          dbg("Google:native_ios_supabase", {
+            ok: !nativeError,
+            error: nativeError?.message,
+          });
+          if (nativeError) throw nativeError;
+
+          const {
+            data: { session: postGoogle },
+          } = await supabase.auth.getSession();
+          const postUid = postGoogle?.user?.id;
+          if (postUid) {
+            invalidateProfileByUserIdCache(postUid);
+          }
+
+          setLoading(false);
+          return;
+        } catch (nativeErr: unknown) {
+          if (isGoogleNativeSignInUserCancel(nativeErr)) {
+            dbg("Google:native_ios_canceled", {});
+            setLoading(false);
+            return;
+          }
+          console.warn(
+            "[AuthModal] Native Google sign-in (iOS) failed, falling back to OAuth:",
             nativeErr
           );
         }

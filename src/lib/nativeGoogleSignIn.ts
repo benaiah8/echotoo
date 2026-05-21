@@ -1,5 +1,5 @@
 import { SocialLogin } from "@capgo/capacitor-social-login";
-import { isAndroid, isNativeApp } from "./storage/utils/capacitorDetection";
+import { isAndroid, isIOS, isNativeApp } from "./storage/utils/capacitorDetection";
 
 let initializePromise: Promise<void> | null = null;
 
@@ -13,21 +13,43 @@ function getGoogleWebClientId(): string {
   return id;
 }
 
+function getGoogleIOSClientId(): string | undefined {
+  const raw = import.meta.env.VITE_GOOGLE_IOS_CLIENT_ID?.trim();
+  if (!raw || raw.startsWith("PASTE_")) return undefined;
+  return raw;
+}
+
 async function ensureGoogleSignInInitialized(): Promise<void> {
   if (!initializePromise) {
     const webClientId = getGoogleWebClientId();
-    initializePromise = SocialLogin.initialize({
-      google: {
-        webClientId,
-        mode: "online",
-      },
-    });
+    const iOSClientId = getGoogleIOSClientId();
+
+    const google: {
+      webClientId: string;
+      mode: "online";
+      iOSClientId?: string;
+      iOSServerClientId?: string;
+    } = {
+      webClientId,
+      mode: "online",
+    };
+
+    if (iOSClientId) {
+      google.iOSClientId = iOSClientId;
+      google.iOSServerClientId = webClientId;
+    }
+
+    initializePromise = SocialLogin.initialize({ google });
   }
   await initializePromise;
 }
 
 export function canUseNativeGoogleSignInAndroid(): boolean {
   return isNativeApp() && isAndroid();
+}
+
+export function canUseNativeGoogleSignInIOS(): boolean {
+  return isNativeApp() && isIOS();
 }
 
 function collectCancelMarkers(error: unknown): string {
@@ -65,19 +87,7 @@ export function isGoogleNativeSignInUserCancel(error: unknown): boolean {
   return GOOGLE_CANCEL_MARKERS.some((m) => haystack.includes(m));
 }
 
-/**
- * Native Sign in with Google (Android only). Call only when
- * `canUseNativeGoogleSignInAndroid()` is true.
- */
-export async function signInWithGoogleNativeAndroid(): Promise<string> {
-  if (!canUseNativeGoogleSignInAndroid()) {
-    throw new Error(
-      "Native Google Sign-In is only available on the Android app."
-    );
-  }
-
-  await ensureGoogleSignInInitialized();
-
+async function readGoogleIdTokenFromLoginResult(): Promise<string> {
   const login = await SocialLogin.login({
     provider: "google",
     options: {},
@@ -94,4 +104,39 @@ export async function signInWithGoogleNativeAndroid(): Promise<string> {
   }
 
   return idToken;
+}
+
+/**
+ * Native Sign in with Google (Android only). Call only when
+ * `canUseNativeGoogleSignInAndroid()` is true.
+ */
+export async function signInWithGoogleNativeAndroid(): Promise<string> {
+  if (!canUseNativeGoogleSignInAndroid()) {
+    throw new Error(
+      "Native Google Sign-In is only available on the Android app."
+    );
+  }
+
+  await ensureGoogleSignInInitialized();
+  return readGoogleIdTokenFromLoginResult();
+}
+
+/**
+ * Native Sign in with Google (iOS only). Call only when
+ * `canUseNativeGoogleSignInIOS()` is true.
+ */
+export async function signInWithGoogleNativeIOS(): Promise<string> {
+  if (!canUseNativeGoogleSignInIOS()) {
+    throw new Error("Native Google Sign-In is only available on the iOS app.");
+  }
+
+  const iosClientId = getGoogleIOSClientId();
+  if (!iosClientId) {
+    throw new Error(
+      "VITE_GOOGLE_IOS_CLIENT_ID is not set. Add it to .env.local for native Google Sign-In on iOS."
+    );
+  }
+
+  await ensureGoogleSignInInitialized();
+  return readGoogleIdTokenFromLoginResult();
 }
