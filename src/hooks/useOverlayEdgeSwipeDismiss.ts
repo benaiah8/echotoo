@@ -7,10 +7,18 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
-/** Ignore competing vertical intent until horizontal clearly wins. */
-const GESTURE_SLOP_PX = 10;
-/** Require dx to exceed dy * this once past slop to treat as horizontal dismiss. */
-const HORIZONTAL_DOMINANCE = 1.15;
+/** If vertical movement exceeds this and beats horizontal, treat as scroll — cancel gesture. */
+const VERTICAL_SLOP_PX = 10;
+/** Vertical must exceed horizontal by this ratio to cancel (avoid hijacking message scroll). */
+const VERTICAL_DOMINANCE_OVER_DX = 1.12;
+/** Minimum rightward dx before we show any overlay translation (preview). */
+const HORIZONTAL_PREVIEW_MIN_DX = 3;
+/** Lock to full horizontal tracking once dx is this large and leads vertical motion. */
+const HORIZONTAL_LOCK_MIN_DX = 5;
+/** For lock: dx must exceed |dy| times this (looser than before so motion starts sooner). */
+const HORIZONTAL_LOCK_DOMINANCE = 1.05;
+/** Cancel if user swipes meaningfully left from start. */
+const LEFTWARD_CANCEL_DX = 8;
 const SNAP_BACK_MS = 320;
 const COMMIT_EXIT_MS = 260;
 const COMMIT_NAV_DELAY_MS = 280;
@@ -236,27 +244,41 @@ export function useOverlayEdgeSwipeDismiss(
 
       if (mode === "undecided") {
         if (
-          Math.abs(dy) > GESTURE_SLOP_PX &&
-          Math.abs(dy) >= Math.abs(dx) * HORIZONTAL_DOMINANCE
+          Math.abs(dy) > VERTICAL_SLOP_PX &&
+          Math.abs(dy) >= Math.abs(dx) * VERTICAL_DOMINANCE_OVER_DX
         ) {
           gestureModeRef.current = "cancelled";
           setTranslateX(0);
           return;
         }
-        if (dx < -GESTURE_SLOP_PX) {
+        if (dx < -LEFTWARD_CANCEL_DX) {
           gestureModeRef.current = "cancelled";
           setTranslateX(0);
           return;
         }
+
+        const cap = resolveMaxDragPx();
+
         if (
-          dx > GESTURE_SLOP_PX &&
-          dx > Math.abs(dy) * HORIZONTAL_DOMINANCE
+          dx >= HORIZONTAL_LOCK_MIN_DX &&
+          dx > Math.abs(dy) * HORIZONTAL_LOCK_DOMINANCE
         ) {
           gestureModeRef.current = "horizontal";
           setIsDragging(true);
-        } else {
+          setTranslateX(Math.max(0, Math.min(dx, cap)));
           return;
         }
+
+        if (
+          dx >= HORIZONTAL_PREVIEW_MIN_DX &&
+          dx > Math.abs(dy)
+        ) {
+          setTranslateX(Math.max(0, Math.min(dx, cap)));
+          return;
+        }
+
+        setTranslateX(0);
+        return;
       }
 
       if (gestureModeRef.current !== "horizontal") return;
@@ -293,7 +315,8 @@ export function useOverlayEdgeSwipeDismiss(
     style: {
       top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
       width: `min(calc(${inset}px + env(safe-area-inset-left, 0px)), ${maxW}px)`,
-      touchAction: "pan-x",
+      /** `none` keeps WebViews/browsers from claiming horizontal pans before our listeners. */
+      touchAction: "none",
       WebkitTapHighlightColor: "transparent",
     },
     onPointerDown,
