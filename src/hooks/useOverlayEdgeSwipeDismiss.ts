@@ -59,6 +59,12 @@ export type UseOverlayEdgeSwipeDismissOptions = {
   tryConsumeDismissLayer?: () => boolean;
   /** Added to env(safe-area-inset-left) for strip width; default 14 */
   edgeTouchInsetPx?: number;
+  /**
+   * Extra horizontal inset (px) after `env(safe-area-inset-left)` where the strip begins.
+   * Default `0`. On mobile web, `8`–`16` helps avoid the browser/OS reserved left-edge
+   * “back” gesture zone so the swipe is handled by this hook instead of native navigation.
+   */
+  edgeStripLeftInsetPx?: number;
   /** Pixels below safe-area top where the strip starts; default 52 */
   edgeTopBelowSafeAreaPx?: number;
   /** Max total strip width; default 48 */
@@ -95,9 +101,9 @@ export type UseOverlayEdgeSwipeDismissResult = {
  * Reusable iOS-style left-edge swipe-right to dismiss a full-screen overlay.
  *
  * - No visible handle, arrow, or affordance is rendered.
- * - A native OS/browser “back” chevron (e.g. blue on iOS Safari) may still appear; that is
- *   not drawn by this hook and cannot be fully suppressed from web-only code — tune
- *   Capacitor/WKWebView settings separately if required.
+ * - A native OS/browser “back” chevron may still appear if touches start in the system’s
+ *   reserved edge zone; use `edgeStripLeftInsetPx` (e.g. 8–16 on mobile web) to start the
+ *   invisible strip slightly inward. Full suppression may still require Capacitor/WKWebView tuning.
  */
 export function useOverlayEdgeSwipeDismiss(
   options: UseOverlayEdgeSwipeDismissOptions,
@@ -293,6 +299,7 @@ export function useOverlayEdgeSwipeDismiss(
   const topPad =
     options.edgeTopBelowSafeAreaPx ?? DEFAULT_EDGE_TOP_BELOW_SAFE_PX;
   const maxW = options.edgeMaxWidthPx ?? DEFAULT_EDGE_MAX_WIDTH_PX;
+  const edgeStripLeftInsetPx = options.edgeStripLeftInsetPx ?? 0;
   const zClass = options.edgeStripZClass ?? "z-[28]";
 
   const overlayMotionStyle: CSSProperties = {
@@ -308,11 +315,12 @@ export function useOverlayEdgeSwipeDismiss(
 
   const edgeStripProps: OverlayEdgeSwipeDismissStripProps = {
     className: [
-      "pointer-events-auto select-none outline-none absolute left-0 bottom-0",
+      "pointer-events-auto select-none outline-none absolute bottom-0",
       "bg-transparent",
       zClass,
     ].join(" "),
     style: {
+      left: `calc(env(safe-area-inset-left, 0px) + ${edgeStripLeftInsetPx}px)`,
       top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
       width: `min(calc(${inset}px + env(safe-area-inset-left, 0px)), ${maxW}px)`,
       /** `none` keeps WebViews/browsers from claiming horizontal pans before our listeners. */

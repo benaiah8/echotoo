@@ -226,6 +226,10 @@ export default function PersonalInviteThreadOverlay({
     active: open,
     engageSwipe: engageInviteBack,
     gestureDisabled: keyboardOpen || composerFocused,
+    /** Inset strip from physical edge so mobile web / Chrome are less likely to steal the gesture. */
+    edgeStripLeftInsetPx: 12,
+    edgeTouchInsetPx: 52,
+    edgeMaxWidthPx: 56,
     onDismiss: onClose,
   });
 
