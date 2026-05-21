@@ -45,6 +45,7 @@ import {
   groupQuotaActiveSegmentsCount,
 } from "./invite-thread/InviteThreadOverlayLayout";
 import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
+import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
 const DRAFT_TEXTAREA_MAX_PX = 220;
 const COMPOSER_MULTILINE_CORNER_PX = 21;
 const COMPOSER_PILL_INSET_PX = 6;
@@ -135,6 +136,20 @@ export default function GroupInviteThreadOverlay({
   const prevParticipantsOpenForHist = useRef(false);
   participantsOpenRef.current = participantsOpen;
   onCloseRef.current = onClose;
+
+  const dismissParticipantsIfNeeded = useCallback((): boolean => {
+    if (!participantsOpenRef.current) return false;
+    setParticipantsOpen(false);
+    if (pushedParticipantsRef.current) {
+      const st = window.history.state as Record<string, boolean> | null;
+      if (st && st[INVITE_OVERLAY_HISTORY.groupParticipants] === true) {
+        skipPopstateRef.current = true;
+        window.history.back();
+      }
+      pushedParticipantsRef.current = false;
+    }
+    return true;
+  }, []);
 
   const draftTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -237,19 +252,6 @@ export default function GroupInviteThreadOverlay({
   /** Android Back + Escape: same ordering as popstate */
   useEffect(() => {
     if (!open || !engageInviteBack) return;
-    const dismissParticipantsIfNeeded = () => {
-      if (!participantsOpenRef.current) return false;
-      setParticipantsOpen(false);
-      if (pushedParticipantsRef.current) {
-        const st = window.history.state as Record<string, boolean> | null;
-        if (st && st[INVITE_OVERLAY_HISTORY.groupParticipants] === true) {
-          skipPopstateRef.current = true;
-          window.history.back();
-        }
-        pushedParticipantsRef.current = false;
-      }
-      return true;
-    };
     const unsub = subscribeAndroidHardwareBack(() => {
       if (dismissParticipantsIfNeeded()) return;
       onCloseRef.current();
@@ -264,7 +266,7 @@ export default function GroupInviteThreadOverlay({
       unsub();
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, engageInviteBack]);
+  }, [open, engageInviteBack, dismissParticipantsIfNeeded]);
 
   /** Backdrop / UI closed participants only — drop synthetic participants entry */
   useEffect(() => {
@@ -454,6 +456,8 @@ export default function GroupInviteThreadOverlay({
     scrollPadTop,
     scrollPadBottom,
     composerBottomGap,
+    keyboardOpen,
+    composerFocused,
     onComposerFocus,
     onComposerBlur,
     scrollToBottomAfterSend,
@@ -469,6 +473,14 @@ export default function GroupInviteThreadOverlay({
       composerInputShape,
       participantsOpen,
     ],
+  });
+
+  const { overlayMotionStyle, edgeStripProps } = useOverlayEdgeSwipeDismiss({
+    active: open,
+    engageSwipe: engageInviteBack,
+    gestureDisabled: keyboardOpen || composerFocused,
+    tryConsumeDismissLayer: dismissParticipantsIfNeeded,
+    onDismiss: onClose,
   });
 
   const linkToPost = useMemo(() => {
@@ -663,7 +675,10 @@ export default function GroupInviteThreadOverlay({
   const sheetParticipants = bundle?.participants ?? [];
 
   return createPortal(
-    <div className="fixed inset-0 z-[110] isolate overflow-hidden">
+    <div
+      className="fixed inset-0 z-[110] isolate overflow-hidden"
+      style={overlayMotionStyle}
+    >
       <div
         className="absolute inset-0 bg-[color-mix(in_oklab,var(--bg)_28%,transparent)] backdrop-blur-[28px] backdrop-saturate-[1.35] app-dark:bg-black/22 app-dark:backdrop-blur-[30px]"
         aria-hidden
@@ -1133,6 +1148,8 @@ export default function GroupInviteThreadOverlay({
           }}
         />
       ) : null}
+
+      <div {...edgeStripProps} />
     </div>,
     document.body,
   );

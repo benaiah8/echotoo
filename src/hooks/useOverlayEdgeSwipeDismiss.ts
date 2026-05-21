@@ -1,0 +1,308 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+
+/** Ignore competing vertical intent until horizontal clearly wins. */
+const GESTURE_SLOP_PX = 10;
+/** Require dx to exceed dy * this once past slop to treat as horizontal dismiss. */
+const HORIZONTAL_DOMINANCE = 1.15;
+const SNAP_BACK_MS = 320;
+const COMMIT_EXIT_MS = 260;
+const COMMIT_NAV_DELAY_MS = 280;
+
+const DEFAULT_EDGE_TOUCH_INSET_PX = 14;
+const DEFAULT_EDGE_TOP_BELOW_SAFE_PX = 52;
+const DEFAULT_EDGE_MAX_WIDTH_PX = 48;
+
+export function defaultOverlayEdgeSwipeCommitThresholdPx(): number {
+  if (typeof window === "undefined") return 108;
+  return Math.max(96, Math.min(120, Math.round(window.innerWidth * 0.25)));
+}
+
+export function defaultOverlayEdgeSwipeMaxDragPx(): number {
+  if (typeof window === "undefined") return 480;
+  return Math.round(window.innerWidth * 0.92);
+}
+
+export type UseOverlayEdgeSwipeDismissOptions = {
+  /** Overlay mounted and visible */
+  active: boolean;
+  /**
+   * When false, the gesture is disabled (e.g. invite overlays off post-detail routes).
+   * Defaults to true when omitted.
+   */
+  engageSwipe?: boolean;
+  /**
+   * When true, edge swipe does not start (e.g. keyboard open or composer focused).
+   * Prefer a single boolean from the caller.
+   */
+  gestureDisabled?: boolean;
+  /** Same path as in-app Back / dismiss — must not bypass history cleanup */
+  onDismiss: () => void;
+  /**
+   * On commit, invoked first. If returns true, a nested layer consumed the dismiss
+   * (e.g. group participants); overlay should snap back and stay open.
+   */
+  tryConsumeDismissLayer?: () => boolean;
+  /** Added to env(safe-area-inset-left) for strip width; default 14 */
+  edgeTouchInsetPx?: number;
+  /** Pixels below safe-area top where the strip starts; default 52 */
+  edgeTopBelowSafeAreaPx?: number;
+  /** Max total strip width; default 48 */
+  edgeMaxWidthPx?: number;
+  /** Tailwind z-index class for the strip; default z-[28] */
+  edgeStripZClass?: string;
+  /** Override commit threshold (px) or factory */
+  commitThresholdPx?: number | (() => number);
+  /** Override max drag (px) or factory */
+  maxDragPx?: number | (() => number);
+};
+
+export type OverlayEdgeSwipeDismissStripProps = {
+  className: string;
+  style: CSSProperties;
+  onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onLostPointerCapture: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  "aria-hidden": boolean;
+};
+
+export type UseOverlayEdgeSwipeDismissResult = {
+  /** Apply to the full-screen overlay root (entire subtree moves together). */
+  overlayMotionStyle: CSSProperties;
+  /** Narrow invisible left-edge hit target — render as last child with z above scroll. */
+  edgeStripProps: OverlayEdgeSwipeDismissStripProps;
+  /** True while a horizontal dismiss gesture is active (after angle lock). */
+  isDragging: boolean;
+};
+
+/**
+ * Reusable iOS-style left-edge swipe-right to dismiss a full-screen overlay.
+ *
+ * - No visible handle, arrow, or affordance is rendered.
+ * - A native OS/browser “back” chevron (e.g. blue on iOS Safari) may still appear; that is
+ *   not drawn by this hook and cannot be fully suppressed from web-only code — tune
+ *   Capacitor/WKWebView settings separately if required.
+ */
+export function useOverlayEdgeSwipeDismiss(
+  options: UseOverlayEdgeSwipeDismissOptions,
+): UseOverlayEdgeSwipeDismissResult {
+  const optsRef = useRef(options);
+  optsRef.current = options;
+
+  const [translateX, setTranslateX] = useState(0);
+  const [transitionMs, setTransitionMs] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const draggingRef = useRef(false);
+  const gestureModeRef = useRef<"undecided" | "horizontal" | "cancelled">(
+    "undecided",
+  );
+  const startClientXRef = useRef(0);
+  const startClientYRef = useRef(0);
+  const translateRef = useRef(0);
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onDismissRef = useRef(options.onDismiss);
+  onDismissRef.current = options.onDismiss;
+  const tryConsumeRef = useRef(options.tryConsumeDismissLayer);
+  tryConsumeRef.current = options.tryConsumeDismissLayer;
+
+  useEffect(() => {
+    translateRef.current = translateX;
+  }, [translateX]);
+
+  useEffect(() => {
+    if (!options.active) {
+      setTranslateX(0);
+      setTransitionMs(0);
+      setIsDragging(false);
+      draggingRef.current = false;
+      gestureModeRef.current = "undecided";
+      if (commitTimerRef.current) {
+        clearTimeout(commitTimerRef.current);
+        commitTimerRef.current = null;
+      }
+    }
+  }, [options.active]);
+
+  useEffect(() => {
+    return () => {
+      if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    };
+  }, []);
+
+  const engage = options.engageSwipe !== false;
+  const canStartSwipe =
+    options.active && engage && !options.gestureDisabled;
+
+  const resolveCommitThresholdPx = useCallback(() => {
+    const o = optsRef.current.commitThresholdPx;
+    if (typeof o === "function") return o();
+    if (typeof o === "number") return o;
+    return defaultOverlayEdgeSwipeCommitThresholdPx();
+  }, []);
+
+  const resolveMaxDragPx = useCallback(() => {
+    const o = optsRef.current.maxDragPx;
+    if (typeof o === "function") return o();
+    if (typeof o === "number") return o;
+    return defaultOverlayEdgeSwipeMaxDragPx();
+  }, []);
+
+  const resetGestureState = useCallback(() => {
+    draggingRef.current = false;
+    gestureModeRef.current = "undecided";
+    setIsDragging(false);
+  }, []);
+
+  const endPointerGesture = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+
+      const mode = gestureModeRef.current;
+      resetGestureState();
+
+      if (mode === "cancelled" || mode === "undecided") {
+        setTransitionMs(SNAP_BACK_MS);
+        setTranslateX(0);
+        return;
+      }
+
+      const t = resolveCommitThresholdPx();
+      const x = translateRef.current;
+      if (x >= t * 0.92) {
+        const consumed = tryConsumeRef.current?.() === true;
+        if (consumed) {
+          setTransitionMs(SNAP_BACK_MS);
+          setTranslateX(0);
+          return;
+        }
+        const exitX = resolveMaxDragPx();
+        setTransitionMs(COMMIT_EXIT_MS);
+        setTranslateX(exitX);
+        if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+        commitTimerRef.current = setTimeout(() => {
+          commitTimerRef.current = null;
+          onDismissRef.current();
+        }, COMMIT_NAV_DELAY_MS);
+        return;
+      }
+
+      setTransitionMs(SNAP_BACK_MS);
+      setTranslateX(0);
+    },
+    [resetGestureState, resolveCommitThresholdPx, resolveMaxDragPx],
+  );
+
+  const onPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!canStartSwipe) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (commitTimerRef.current) return;
+
+      e.preventDefault();
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      draggingRef.current = true;
+      gestureModeRef.current = "undecided";
+      startClientXRef.current = e.clientX;
+      startClientYRef.current = e.clientY;
+      setTransitionMs(0);
+    },
+    [canStartSwipe],
+  );
+
+  const onPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+
+      const dx = e.clientX - startClientXRef.current;
+      const dy = e.clientY - startClientYRef.current;
+      const mode = gestureModeRef.current;
+
+      if (mode === "cancelled") return;
+
+      if (mode === "undecided") {
+        if (
+          Math.abs(dy) > GESTURE_SLOP_PX &&
+          Math.abs(dy) >= Math.abs(dx) * HORIZONTAL_DOMINANCE
+        ) {
+          gestureModeRef.current = "cancelled";
+          setTranslateX(0);
+          return;
+        }
+        if (dx < -GESTURE_SLOP_PX) {
+          gestureModeRef.current = "cancelled";
+          setTranslateX(0);
+          return;
+        }
+        if (
+          dx > GESTURE_SLOP_PX &&
+          dx > Math.abs(dy) * HORIZONTAL_DOMINANCE
+        ) {
+          gestureModeRef.current = "horizontal";
+          setIsDragging(true);
+        } else {
+          return;
+        }
+      }
+
+      if (gestureModeRef.current !== "horizontal") return;
+      const cap = resolveMaxDragPx();
+      setTranslateX(Math.max(0, Math.min(dx, cap)));
+    },
+    [resolveMaxDragPx],
+  );
+
+  const inset =
+    options.edgeTouchInsetPx ?? DEFAULT_EDGE_TOUCH_INSET_PX;
+  const topPad =
+    options.edgeTopBelowSafeAreaPx ?? DEFAULT_EDGE_TOP_BELOW_SAFE_PX;
+  const maxW = options.edgeMaxWidthPx ?? DEFAULT_EDGE_MAX_WIDTH_PX;
+  const zClass = options.edgeStripZClass ?? "z-[28]";
+
+  const overlayMotionStyle: CSSProperties = {
+    transform: `translate3d(${translateX}px,0,0)`,
+    transition:
+      transitionMs > 0
+        ? `transform ${transitionMs}ms cubic-bezier(0.22, 1, 0.32, 1)`
+        : "none",
+    willChange: translateX !== 0 ? "transform" : undefined,
+    /** Scoped: reduce horizontal overscroll chaining without global CSS. */
+    overscrollBehaviorX: "none",
+  };
+
+  const edgeStripProps: OverlayEdgeSwipeDismissStripProps = {
+    className: [
+      "pointer-events-auto select-none outline-none absolute left-0 bottom-0",
+      "bg-transparent",
+      zClass,
+    ].join(" "),
+    style: {
+      top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
+      width: `min(calc(${inset}px + env(safe-area-inset-left, 0px)), ${maxW}px)`,
+      touchAction: "pan-x",
+      WebkitTapHighlightColor: "transparent",
+    },
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: endPointerGesture,
+    onPointerCancel: endPointerGesture,
+    onLostPointerCapture: endPointerGesture,
+    "aria-hidden": true,
+  };
+
+  return { overlayMotionStyle, edgeStripProps, isDragging };
+}

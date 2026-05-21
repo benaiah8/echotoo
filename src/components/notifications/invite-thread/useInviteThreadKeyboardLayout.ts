@@ -235,6 +235,7 @@ export function useInviteThreadKeyboardLayout({
     scrollPadBottom,
     composerBottomGap,
     keyboardOpen,
+    composerFocused,
     onComposerFocus,
     onComposerBlur,
     scrollToBottomAfterSend,

@@ -49,6 +49,7 @@ import {
   personalQuotaActiveSegmentsCount,
 } from "./invite-thread/InviteThreadOverlayLayout";
 import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
+import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
 
 /** Max draft height — scroll bottom inset tracks composer via ResizeObserver. */
 const DRAFT_TEXTAREA_MAX_PX = 220;
@@ -203,6 +204,8 @@ export default function PersonalInviteThreadOverlay({
     scrollPadTop,
     scrollPadBottom,
     composerBottomGap,
+    keyboardOpen,
+    composerFocused,
     onComposerFocus,
     onComposerBlur,
     scrollToBottomAfterSend,
@@ -217,6 +220,13 @@ export default function PersonalInviteThreadOverlay({
       loading,
       composerInputShape,
     ],
+  });
+
+  const { overlayMotionStyle, edgeStripProps } = useOverlayEdgeSwipeDismiss({
+    active: open,
+    engageSwipe: engageInviteBack,
+    gestureDisabled: keyboardOpen || composerFocused,
+    onDismiss: onClose,
   });
 
   useEffect(() => {
@@ -584,7 +594,10 @@ export default function PersonalInviteThreadOverlay({
   if (!open) return null;
 
   const backdrop = (
-    <div className="fixed inset-0 z-[110] isolate overflow-hidden">
+    <div
+      className="fixed inset-0 z-[110] isolate overflow-hidden"
+      style={overlayMotionStyle}
+    >
       {/* Frosted scrim: underlying route stays faintly visible, de-emphasized */}
       <div
         className="absolute inset-0 bg-[color-mix(in_oklab,var(--bg)_28%,transparent)] backdrop-blur-[28px] backdrop-saturate-[1.35] app-dark:bg-black/22 app-dark:backdrop-blur-[30px]"
@@ -950,6 +963,8 @@ export default function PersonalInviteThreadOverlay({
           }}
         />
       ) : null}
+
+      <div {...edgeStripProps} />
     </div>
   );
 

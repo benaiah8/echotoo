@@ -15,6 +15,10 @@ import { clearCachedNotificationCount } from "../../lib/notificationCountCache";
 import NotificationItem from "./NotificationItem";
 import NotificationPermissionBanner from "./NotificationPermissionBanner";
 import {
+  NotificationListActivitySkeletonRows,
+  NotificationListInviteSkeletonRows,
+} from "./NotificationListSkeletons";
+import {
   PiEnvelopeSimple,
   PiHeart,
   PiMegaphone,
@@ -1172,47 +1176,6 @@ export default function NotificationList({
   const listPanelHorizontalClass =
     listView === "invites" ? "px-1.5 sm:px-2" : "px-3";
 
-  if (loading && notifications.length === 0) {
-    return (
-      <div className={`w-full min-h-0 ${className}`}>
-        <div
-          className="fixed left-0 right-0 z-[30] flex flex-col items-center"
-          style={{
-            paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
-          }}
-        >
-          {topBarPill}
-        </div>
-        <div
-          id="notifications-list-panel"
-          role="tabpanel"
-          aria-labelledby={
-            listView === "invites"
-              ? "notifications-tab-invites"
-              : "notifications-tab-activity"
-          }
-          className={listPanelHorizontalClass}
-          style={listScrollPadding}
-        >
-          <div className="space-y-2">
-            {[...Array(5)].map((_, i) => (
-              <div
-                key={i}
-                className="w-full rounded-lg p-3 gap-3 flex bg-[var(--surface-2)]/80 animate-pulse"
-              >
-                <div className="w-14 h-14 rounded-lg bg-[var(--text)]/10 flex-shrink-0" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-[var(--text)]/10 rounded w-3/4" />
-                  <div className="h-3 bg-[var(--text)]/10 rounded w-1/2" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (error) {
     return (
       <div className={`w-full min-h-0 ${className}`}>
@@ -1419,8 +1382,15 @@ export default function NotificationList({
           className={
             listView === "invites" ? "flex flex-col gap-2 py-1" : "py-1"
           }
+          aria-busy={loading && notifications.length === 0 ? true : undefined}
         >
-          {showInviteFilteredEmpty ? (
+          {loading && notifications.length === 0 ? (
+            listView === "invites" ? (
+              <NotificationListInviteSkeletonRows />
+            ) : (
+              <NotificationListActivitySkeletonRows />
+            )
+          ) : showInviteFilteredEmpty ? (
             <p className="py-6 text-center text-sm text-[var(--text)]/55">
               No matching invites.
             </p>
@@ -1470,7 +1440,7 @@ export default function NotificationList({
           )}
         </div>
 
-        {hasMore && (
+        {hasMore && !(loading && notifications.length === 0) && (
           <div className="flex justify-center py-4">
             <button
               type="button"
