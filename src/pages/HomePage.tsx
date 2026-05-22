@@ -50,13 +50,10 @@ import {
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
+import { HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
 
-const PAGE_SIZE = 6;
-
-/** After Today-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
-const NO_TODAY_BANNER_DISMISS_MS = 2600;
-/** After Friends-empty preflight: same dismiss cadence as Today. */
-const NO_FRIENDS_BANNER_DISMISS_MS = NO_TODAY_BANNER_DISMISS_MS;
+/** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
+const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
 /** Bounded fetch size aligned with top rail first load (~visible+buffer). */
 const TODAY_PREFLIGHT_LOAD_LIMIT = 6;
 
@@ -148,14 +145,6 @@ export default function HomePage() {
   // Used to show empty card and visual distinction for filtered items
   const railFilteredCountRef = useRef<number | undefined>(undefined);
 
-  /** Inline banner when Today preflight finds zero matches (client-side slice; not DB-wide). */
-  const [noTodayInlineBannerVisible, setNoTodayInlineBannerVisible] =
-    useState(false);
-  const noTodayBannerTimerRef = useRef<number | null>(null);
-  const todayPreflightInFlightRef = useRef(false);
-  const [todayPreflightPending, setTodayPreflightPending] = useState(false);
-  const hadTodayInFiltersRef = useRef(false);
-
   /** Inline banner when Friends preflight finds zero matches (client-side slice; not DB-wide). */
   const [noFriendsInlineBannerVisible, setNoFriendsInlineBannerVisible] =
     useState(false);
@@ -218,7 +207,6 @@ export default function HomePage() {
   }, [
     userSearchOverlayOpen,
     filtersOpen,
-    noTodayInlineBannerVisible,
     noFriendsInlineBannerVisible,
     search,
     searchMode,
@@ -244,7 +232,6 @@ export default function HomePage() {
   const pinHomeTopBar =
     homeSearchFocused ||
     filtersOpen ||
-    noTodayInlineBannerVisible ||
     noFriendsInlineBannerVisible ||
     userSearchOverlayOpen;
   const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
@@ -299,79 +286,6 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [isHomeVisible]);
-
-  /**
-   * Bounded slice probe for Today (vertical will use RPC later).
-   * Does not gate chip activation — only drives the “Nothing happening today” banner when inert locally.
-   */
-  const runTodayPresenceProbeForBanner = useCallback(
-    async (filtersSnapshot: FilterType[]): Promise<boolean> => {
-      const filtersWithToday = (
-        filtersSnapshot.includes("today")
-          ? filtersSnapshot
-          : [...filtersSnapshot, "today"]
-      ) as FilterType[];
-      const feedOptions: FeedOptions = {
-        type: undefined,
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
-        offset: 0,
-        viewerProfileId: viewerProfileId || undefined,
-      };
-      const fetchedItems = USE_OPTIMIZED_FEED
-        ? await getPublicFeedOptimized(feedOptions)
-        : await getPublicFeed(feedOptions);
-      const railsFilteredItems = filterRailsItems(fetchedItems);
-      let mutualFriends: Set<string> | null = null;
-      if (filtersWithToday.includes("friends") && viewerProfileId) {
-        mutualFriends = await getMutualFriends(viewerProfileId);
-      }
-      const result = applyFiltersWithFallback(
-        railsFilteredItems,
-        filtersWithToday,
-        mutualFriends,
-        3,
-        true
-      );
-      return result.filteredCount > 0;
-    },
-    [feedSearchQ, selectedTags, viewerProfileId]
-  );
-
-  const handleTodayChipClick = useCallback(async () => {
-    if (todayPreflightInFlightRef.current) return;
-    todayPreflightInFlightRef.current = true;
-    setTodayPreflightPending(true);
-
-    const filtersSnapshot = (
-      selectedFilters.includes("today")
-        ? selectedFilters
-        : [...selectedFilters, "today"]
-    ) as FilterType[];
-
-    setSelectedFilters((prev) =>
-      prev.includes("today") ? prev : [...prev, "today"]
-    );
-
-    try {
-      const hasMatches = await runTodayPresenceProbeForBanner(filtersSnapshot);
-      if (!hasMatches) {
-        setNoTodayInlineBannerVisible(true);
-        if (noTodayBannerTimerRef.current !== null) {
-          clearTimeout(noTodayBannerTimerRef.current);
-          noTodayBannerTimerRef.current = null;
-        }
-        noTodayBannerTimerRef.current = window.setTimeout(() => {
-          noTodayBannerTimerRef.current = null;
-          setNoTodayInlineBannerVisible(false);
-        }, NO_TODAY_BANNER_DISMISS_MS);
-      }
-    } finally {
-      todayPreflightInFlightRef.current = false;
-      setTodayPreflightPending(false);
-    }
-  }, [selectedFilters, runTodayPresenceProbeForBanner]);
 
   /**
    * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Friends added.
@@ -438,18 +352,6 @@ export default function HomePage() {
   }, [runFriendsPreflight]);
 
   useEffect(() => {
-    const hasToday = selectedFilters.includes("today");
-    if (hadTodayInFiltersRef.current && !hasToday) {
-      setNoTodayInlineBannerVisible(false);
-      if (noTodayBannerTimerRef.current !== null) {
-        clearTimeout(noTodayBannerTimerRef.current);
-        noTodayBannerTimerRef.current = null;
-      }
-    }
-    hadTodayInFiltersRef.current = hasToday;
-  }, [selectedFilters]);
-
-  useEffect(() => {
     const hasFriends = selectedFilters.includes("friends");
     if (hadFriendsInFiltersRef.current && !hasFriends) {
       setNoFriendsInlineBannerVisible(false);
@@ -463,9 +365,6 @@ export default function HomePage() {
 
   useEffect(() => {
     return () => {
-      if (noTodayBannerTimerRef.current !== null) {
-        clearTimeout(noTodayBannerTimerRef.current);
-      }
       if (noFriendsBannerTimerRef.current !== null) {
         clearTimeout(noFriendsBannerTimerRef.current);
       }
@@ -491,7 +390,7 @@ export default function HomePage() {
           : undefined,
       q: feedSearchQ,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
-      limit: PAGE_SIZE,
+      limit: HOME_FEED_FIRST_PAGE,
       offset: 0,
       viewerProfileId: viewerProfileId ?? null, // Use state, not ref
     });
@@ -914,9 +813,6 @@ export default function HomePage() {
           setViewMode={setViewMode}
           selectedFilters={selectedFilters}
           onFilterChange={setSelectedFilters}
-          onTodayChipClick={handleTodayChipClick}
-          todayPreflightPending={todayPreflightPending}
-          noTodayInlineBannerVisible={noTodayInlineBannerVisible}
           onFriendsChipClick={handleFriendsChipClick}
           friendsPreflightPending={friendsPreflightPending}
           noFriendsInlineBannerVisible={noFriendsInlineBannerVisible}
@@ -1066,9 +962,8 @@ export default function HomePage() {
                         ? items
                         : personalizedItemsRaw;
 
-                    // [TASK B] Feed pipeline debug
-                    const DEBUG_FEED_PIPELINE = true;
-                    if (DEBUG_FEED_PIPELINE) {
+                    // Feed pipeline instrumentation (dev only — avoids noisy / costly logs in prod)
+                    if (import.meta.env.DEV) {
                       console.log("[FeedPipeline] HomePage loadItems", {
                         offset,
                         limit,
@@ -1124,7 +1019,7 @@ export default function HomePage() {
                       : undefined,
                   q: feedSearchQ,
                   tags: selectedTags.length > 0 ? selectedTags : undefined,
-                  limit: PAGE_SIZE,
+                  limit: HOME_FEED_FIRST_PAGE,
                   offset: 0,
                   viewerProfileId: viewerProfileId ?? null, // Use state
                 };
@@ -1143,7 +1038,7 @@ export default function HomePage() {
                         : undefined,
                     q: feedSearchQ,
                     tags: selectedTags.length > 0 ? selectedTags : undefined,
-                    limit: PAGE_SIZE,
+                    limit: HOME_FEED_FIRST_PAGE,
                     offset: 0,
                     viewerProfileId: viewerProfileId ?? null, // Use state
                   };

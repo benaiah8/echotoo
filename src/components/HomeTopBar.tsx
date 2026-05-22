@@ -66,12 +66,6 @@ export interface HomeTopBarProps {
   onFilterChange: (filters: string[]) => void;
   /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
   onSearchFocusChange?: (focused: boolean) => void;
-  /** Inline notice below quick chips when Today filter matches nothing on the current rail slice (client-side). */
-  noTodayInlineBannerVisible?: boolean;
-  /** Preflight before activating Today (inactive chip only). Active Today still uses onFilterChange to remove. */
-  onTodayChipClick?: () => void;
-  /** Dim/disable Today while preflight fetch runs */
-  todayPreflightPending?: boolean;
   /** Inline notice below quick chips when Friends preflight finds no matches (client-side). */
   noFriendsInlineBannerVisible?: boolean;
   /** Preflight before activating Friends (inactive chip only). Active Friends still uses onFilterChange to remove. */
@@ -102,9 +96,6 @@ export default function HomeTopBar({
   selectedFilters,
   onFilterChange,
   onSearchFocusChange,
-  noTodayInlineBannerVisible = false,
-  onTodayChipClick,
-  todayPreflightPending = false,
   noFriendsInlineBannerVisible = false,
   onFriendsChipClick,
   friendsPreflightPending = false,
@@ -114,13 +105,8 @@ export default function HomeTopBar({
       onFilterChange(selectedFilters.filter((v) => v !== "today"));
       return;
     }
-    if (todayPreflightPending) return;
-    onTodayChipClick?.();
+    onFilterChange([...selectedFilters, "today"]);
   };
-
-  /** Visual only: match banner during empty preflight without putting "today" in selectedFilters. */
-  const todayIsVisuallyActive =
-    selectedFilters.includes("today") || noTodayInlineBannerVisible;
 
   const friendsFilterActive = selectedFilters.includes("friends");
   /** Visual only: match banner during empty Friends preflight without putting "friends" in selectedFilters. */
@@ -332,14 +318,7 @@ export default function HomeTopBar({
               <button
                 type="button"
                 onClick={handleTodayChipClick}
-                disabled={todayPreflightPending}
-                aria-busy={todayPreflightPending || undefined}
-                className={[
-                  chipButtonClass(todayIsVisuallyActive),
-                  todayPreflightPending
-                    ? "opacity-60 pointer-events-none"
-                    : "",
-                ].join(" ")}
+                className={chipButtonClass(selectedFilters.includes("today"))}
               >
                 Today
               </button>
@@ -364,20 +343,6 @@ export default function HomeTopBar({
             </div>
           </div>
 
-          {noTodayInlineBannerVisible ? (
-            <div
-              className={[
-                "w-full rounded-xl px-3 py-1.5",
-                "bg-[var(--brand)] text-[var(--brand-ink)]",
-                "text-[10px] font-medium leading-snug text-center tracking-tight",
-                "shadow-[0_2px_10px_rgba(0,0,0,0.18)]",
-                "border border-[color-mix(in_oklab,var(--brand-ink)_18%,transparent)]",
-              ].join(" ")}
-              role="status"
-            >
-              Nothing happening today
-            </div>
-          ) : null}
           {noFriendsInlineBannerVisible ? (
             <div
               className={[
