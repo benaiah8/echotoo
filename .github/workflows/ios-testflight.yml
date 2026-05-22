@@ -320,11 +320,25 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -archivePath "${RUNNER_TEMP}/EchoToo.xcarchive" \
-            MARKETING_VERSION=1.0 \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution"
+
+      - name: Verify archived app version (non-secret)
+        run: |
+          set -eo pipefail
+          PLIST="${RUNNER_TEMP}/EchoToo.xcarchive/Products/Applications/App.app/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Archived Info.plist not found at $PLIST"
+            ls -la "${RUNNER_TEMP}/EchoToo.xcarchive/Products/Applications/" || true
+            exit 1
+          fi
+          PB="/usr/libexec/PlistBuddy"
+          echo "Archived CFBundleShortVersionString:"
+          "$PB" -c "Print CFBundleShortVersionString" "$PLIST"
+          echo "Archived CFBundleVersion:"
+          "$PB" -c "Print CFBundleVersion" "$PLIST"
 
       - name: Write ExportOptions.plist
         env:
