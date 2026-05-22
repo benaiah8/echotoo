@@ -27,6 +27,34 @@ const DEFAULT_EDGE_TOUCH_INSET_PX = 14;
 const DEFAULT_EDGE_TOP_BELOW_SAFE_PX = 52;
 const DEFAULT_EDGE_MAX_WIDTH_PX = 48;
 
+/** No scale polish until this fraction of commit threshold (avoids early “shrink”). */
+const POLISH_START_THRESHOLD_FRACTION = 0.4;
+/** Subtle shrink at full delayed progress (in `transform` only; no root opacity). */
+const POLISH_SCALE_MIN = 0.993;
+const REDUCED_MOTION_TRANSITION_CAP_MS = 120;
+
+/**
+ * 0 until `translateX` passes ~40% of commit threshold, then ramps to 1 at threshold and beyond.
+ */
+function dragDismissScaleProgress(
+  translateXPx: number,
+  commitThresholdPx: number,
+): number {
+  if (commitThresholdPx <= 0 || translateXPx <= 0) return 0;
+  const startPx = commitThresholdPx * POLISH_START_THRESHOLD_FRACTION;
+  if (translateXPx <= startPx) return 0;
+  const span = Math.max(commitThresholdPx - startPx, 1e-6);
+  return Math.min(1, (translateXPx - startPx) / span);
+}
+
+function computePolishScale(
+  progress: number,
+  reduceMotion: boolean,
+): number {
+  if (reduceMotion) return 1;
+  return 1 - (1 - POLISH_SCALE_MIN) * progress;
+}
+
 export function defaultOverlayEdgeSwipeCommitThresholdPx(): number {
   if (typeof window === "undefined") return 108;
   return Math.max(96, Math.min(120, Math.round(window.innerWidth * 0.25)));
@@ -101,6 +129,9 @@ export type UseOverlayEdgeSwipeDismissResult = {
  * Reusable iOS-style left-edge swipe-right to dismiss a full-screen overlay.
  *
  * - No visible handle, arrow, or affordance is rendered.
+ * - While dragging, the overlay uses a **very subtle** `scale()` only (no root `opacity`)
+ *   so the sheet never looks see-through over the route behind it. Scale eases in only after
+ *   ~40% of the commit threshold; `prefers-reduced-motion: reduce` keeps scale at 1.
  * - A native OS/browser “back” chevron may still appear if touches start in the system’s
  *   reserved edge zone; use `edgeStripLeftInsetPx` (e.g. 8–16 on mobile web) to start the
  *   invisible strip slightly inward. Full suppression may still require Capacitor/WKWebView tuning.
@@ -114,6 +145,7 @@ export function useOverlayEdgeSwipeDismiss(
   const [translateX, setTranslateX] = useState(0);
   const [transitionMs, setTransitionMs] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
 
   const draggingRef = useRef(false);
   const gestureModeRef = useRef<"undecided" | "horizontal" | "cancelled">(
@@ -153,6 +185,15 @@ export function useOverlayEdgeSwipeDismiss(
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduceMotion(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
   const engage = options.engageSwipe !== false;
   const canStartSwipe =
     options.active && engage && !options.gestureDisabled;
@@ -190,6 +231,12 @@ export function useOverlayEdgeSwipeDismiss(
       resetGestureState();
 
       if (mode === "cancelled" || mode === "undecided") {
+        const x = translateRef.current;
+        if (x <= 1) {
+          setTransitionMs(0);
+          setTranslateX(0);
+          return;
+        }
         setTransitionMs(SNAP_BACK_MS);
         setTranslateX(0);
         return;
@@ -200,6 +247,11 @@ export function useOverlayEdgeSwipeDismiss(
       if (x >= t * 0.92) {
         const consumed = tryConsumeRef.current?.() === true;
         if (consumed) {
+          if (x <= 1) {
+            setTransitionMs(0);
+            setTranslateX(0);
+            return;
+          }
           setTransitionMs(SNAP_BACK_MS);
           setTranslateX(0);
           return;
@@ -215,6 +267,11 @@ export function useOverlayEdgeSwipeDismiss(
         return;
       }
 
+      if (x <= 1) {
+        setTransitionMs(0);
+        setTranslateX(0);
+        return;
+      }
       setTransitionMs(SNAP_BACK_MS);
       setTranslateX(0);
     },
@@ -254,11 +311,13 @@ export function useOverlayEdgeSwipeDismiss(
           Math.abs(dy) >= Math.abs(dx) * VERTICAL_DOMINANCE_OVER_DX
         ) {
           gestureModeRef.current = "cancelled";
+          setTransitionMs(0);
           setTranslateX(0);
           return;
         }
         if (dx < -LEFTWARD_CANCEL_DX) {
           gestureModeRef.current = "cancelled";
+          setTransitionMs(0);
           setTranslateX(0);
           return;
         }
@@ -283,6 +342,7 @@ export function useOverlayEdgeSwipeDismiss(
           return;
         }
 
+        setTransitionMs(0);
         setTranslateX(0);
         return;
       }
@@ -302,13 +362,28 @@ export function useOverlayEdgeSwipeDismiss(
   const edgeStripLeftInsetPx = options.edgeStripLeftInsetPx ?? 0;
   const zClass = options.edgeStripZClass ?? "z-[28]";
 
+  const commitThresholdPx = resolveCommitThresholdPx();
+  const scaleProgress = dragDismissScaleProgress(translateX, commitThresholdPx);
+  const overlayPolishScale = computePolishScale(scaleProgress, reduceMotion);
+
+  const effectiveTransitionMs =
+    reduceMotion && transitionMs > 0
+      ? Math.min(transitionMs, REDUCED_MOTION_TRANSITION_CAP_MS)
+      : transitionMs;
+
+  const motionEasing = "cubic-bezier(0.22, 1, 0.32, 1)";
+  const transitionTransform =
+    effectiveTransitionMs > 0
+      ? `transform ${effectiveTransitionMs}ms ${motionEasing}`
+      : "none";
+
   const overlayMotionStyle: CSSProperties = {
-    transform: `translate3d(${translateX}px,0,0)`,
-    transition:
-      transitionMs > 0
-        ? `transform ${transitionMs}ms cubic-bezier(0.22, 1, 0.32, 1)`
-        : "none",
-    willChange: translateX !== 0 ? "transform" : undefined,
+    transform: `translate3d(${translateX}px,0,0) scale(${overlayPolishScale})`,
+    transition: transitionTransform,
+    willChange:
+      translateX !== 0 || isDragging || effectiveTransitionMs > 0
+        ? "transform"
+        : undefined,
     /** Scoped: reduce horizontal overscroll chaining without global CSS. */
     overscrollBehaviorX: "none",
   };
