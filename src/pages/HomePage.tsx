@@ -170,6 +170,18 @@ export default function HomePage() {
     [searchMode, search]
   );
 
+  /** Social filters applied to rails only (Hangouts/Discover); Today affects vertical feed in later phases. */
+  const railAppliedFilters = useMemo(
+    (): FilterType[] =>
+      selectedFilters.filter((f) => f !== "today") as FilterType[],
+    [selectedFilters]
+  );
+  const railAppliedFiltersSortedKey = useMemo(
+    () => [...railAppliedFilters].sort().join(","),
+    [railAppliedFilters]
+  );
+  const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
+
   const userSearchOverlayOpen =
     searchMode === "users" &&
     (homeSearchFocused || search.trim().length > 0);
@@ -289,52 +301,62 @@ export default function HomePage() {
   }, [isHomeVisible]);
 
   /**
-   * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Today added.
-   * Bounded slice only — not a guarantee against deeper feed pages.
+   * Bounded slice probe for Today (vertical will use RPC later).
+   * Does not gate chip activation — only drives the “Nothing happening today” banner when inert locally.
    */
-  const runTodayPreflight = useCallback(async (): Promise<boolean> => {
-    const filtersWithToday = (
-      selectedFilters.includes("today")
-        ? selectedFilters
-        : [...selectedFilters, "today"]
-    ) as FilterType[];
-    const feedOptions: FeedOptions = {
-      type: undefined,
-      q: feedSearchQ,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
-      offset: 0,
-      viewerProfileId: viewerProfileId || undefined,
-    };
-    const fetchedItems = USE_OPTIMIZED_FEED
-      ? await getPublicFeedOptimized(feedOptions)
-      : await getPublicFeed(feedOptions);
-    const railsFilteredItems = filterRailsItems(fetchedItems);
-    let mutualFriends: Set<string> | null = null;
-    if (filtersWithToday.includes("friends") && viewerProfileId) {
-      mutualFriends = await getMutualFriends(viewerProfileId);
-    }
-    const result = applyFiltersWithFallback(
-      railsFilteredItems,
-      filtersWithToday,
-      mutualFriends,
-      3,
-      true
-    );
-    return result.filteredCount > 0;
-  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+  const runTodayPresenceProbeForBanner = useCallback(
+    async (filtersSnapshot: FilterType[]): Promise<boolean> => {
+      const filtersWithToday = (
+        filtersSnapshot.includes("today")
+          ? filtersSnapshot
+          : [...filtersSnapshot, "today"]
+      ) as FilterType[];
+      const feedOptions: FeedOptions = {
+        type: undefined,
+        q: feedSearchQ,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
+        offset: 0,
+        viewerProfileId: viewerProfileId || undefined,
+      };
+      const fetchedItems = USE_OPTIMIZED_FEED
+        ? await getPublicFeedOptimized(feedOptions)
+        : await getPublicFeed(feedOptions);
+      const railsFilteredItems = filterRailsItems(fetchedItems);
+      let mutualFriends: Set<string> | null = null;
+      if (filtersWithToday.includes("friends") && viewerProfileId) {
+        mutualFriends = await getMutualFriends(viewerProfileId);
+      }
+      const result = applyFiltersWithFallback(
+        railsFilteredItems,
+        filtersWithToday,
+        mutualFriends,
+        3,
+        true
+      );
+      return result.filteredCount > 0;
+    },
+    [feedSearchQ, selectedTags, viewerProfileId]
+  );
 
   const handleTodayChipClick = useCallback(async () => {
     if (todayPreflightInFlightRef.current) return;
     todayPreflightInFlightRef.current = true;
     setTodayPreflightPending(true);
+
+    const filtersSnapshot = (
+      selectedFilters.includes("today")
+        ? selectedFilters
+        : [...selectedFilters, "today"]
+    ) as FilterType[];
+
+    setSelectedFilters((prev) =>
+      prev.includes("today") ? prev : [...prev, "today"]
+    );
+
     try {
-      const hasMatches = await runTodayPreflight();
-      if (hasMatches) {
-        setSelectedFilters((prev) =>
-          prev.includes("today") ? prev : [...prev, "today"]
-        );
-      } else {
+      const hasMatches = await runTodayPresenceProbeForBanner(filtersSnapshot);
+      if (!hasMatches) {
         setNoTodayInlineBannerVisible(true);
         if (noTodayBannerTimerRef.current !== null) {
           clearTimeout(noTodayBannerTimerRef.current);
@@ -349,7 +371,7 @@ export default function HomePage() {
       todayPreflightInFlightRef.current = false;
       setTodayPreflightPending(false);
     }
-  }, [runTodayPreflight]);
+  }, [selectedFilters, runTodayPresenceProbeForBanner]);
 
   /**
    * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Friends added.
@@ -486,7 +508,8 @@ export default function HomePage() {
         type: undefined,
         q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters: selectedFilters.length > 0 ? selectedFilters : undefined,
+        filters:
+          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
         limit: 20,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
@@ -495,7 +518,13 @@ export default function HomePage() {
     } catch (e) {
       console.warn("[HomePage] purgeHomePrimaryCaches failed", e);
     }
-  }, [feedCacheKey, feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+  }, [
+    feedCacheKey,
+    feedSearchQ,
+    selectedTags,
+    railAppliedFilters,
+    viewerProfileId,
+  ]);
 
   useEffect(() => {
     const onRefreshRequest = (e: Event) => {
@@ -681,35 +710,31 @@ export default function HomePage() {
         ? await getPublicFeedOptimized(feedOptions)
         : await getPublicFeed(feedOptions);
 
-      // 2. Apply filters client-side if any are active
-      if (selectedFilters.length > 0) {
+      // 2. Apply rail-only filters client-side if any are active (excludes Today)
+      if (railAppliedFilters.length > 0) {
         // Get mutual friends if needed
         let mutualFriends: Set<string> | null = null;
-        if (selectedFilters.includes("friends") && viewerProfileId) {
+        if (railAppliedFilters.includes("friends") && viewerProfileId) {
           mutualFriends = await getMutualFriends(viewerProfileId);
         }
 
-        // Apply filters with fallback (shows unfiltered items if filtered results are sparse)
         const result = applyFiltersWithFallback(
           fetchedItems,
-          selectedFilters as FilterType[],
+          railAppliedFilters,
           mutualFriends,
-          3, // Minimum 3 filtered items before showing fallback
-          true // Always show fallback (even with 1 filtered item)
+          3,
+          true
         );
 
-        // Store filteredCount in ref for passing to components
         railFilteredCountRef.current = result.filteredCount;
 
         return result.items;
       }
 
-      // 3. If no filters, mix hangouts and experiences
-      // Reset filteredCount when no filters
       railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(fetchedItems, limit);
     },
-    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
   );
 
   const railGetCachedItems = useCallback(
@@ -718,7 +743,8 @@ export default function HomePage() {
         type: undefined,
         q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters: selectedFilters.length > 0 ? selectedFilters : undefined,
+        filters:
+          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
         limit: 20,
         offset,
         viewerProfileId: viewerProfileId ?? null,
@@ -727,7 +753,7 @@ export default function HomePage() {
       const cached = dataCache.get<FeedItem[]>(cacheKey);
       return Array.isArray(cached) ? cached : null;
     },
-    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
   );
 
   const railSetCachedItems = useCallback(
@@ -736,7 +762,8 @@ export default function HomePage() {
         type: undefined,
         q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters: selectedFilters.length > 0 ? selectedFilters : undefined,
+        filters:
+          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
         limit: 20,
         offset,
         viewerProfileId: viewerProfileId ?? null,
@@ -744,7 +771,7 @@ export default function HomePage() {
       const cacheKey = dataCache.generateFeedKey(feedOptions);
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
   );
 
   // Top horizontal rail only (viewMode === "all") — must be unconditional hooks; see HomeHangoutSection JSX.
@@ -769,38 +796,33 @@ export default function HomePage() {
       // This prevents fallback from reintroducing unscheduled/expired hangouts
       const railsFilteredItems = filterRailsItems(fetchedItems);
 
-      // 2. Apply filters client-side if any are active
-      if (selectedFilters.length > 0) {
-        // Get mutual friends if needed
+      // 2. Apply rail-only filters client-side if any are active (excludes Today)
+      if (railAppliedFilters.length > 0) {
         let mutualFriends: Set<string> | null = null;
         if (
-          selectedFilters.includes("friends") &&
+          railAppliedFilters.includes("friends") &&
           viewerProfileId
         ) {
           mutualFriends = await getMutualFriends(viewerProfileId);
         }
 
-        // Apply filters with fallback (shows unfiltered items if filtered results are sparse)
-        // Note: railsFilteredItems already excludes unscheduled/expired hangouts
         const result = applyFiltersWithFallback(
           railsFilteredItems,
-          selectedFilters as FilterType[],
+          railAppliedFilters,
           mutualFriends,
-          3, // Minimum 3 filtered items before showing fallback
-          true // Always show fallback (even with 1 filtered item)
+          3,
+          true
         );
 
-        // Store filteredCount in ref for passing to components
         railFilteredCountRef.current = result.filteredCount;
 
         return result.items;
       }
 
-      // 3. If no filters, mix hangouts and experiences
-      // Note: railsFilteredItems already excludes unscheduled/expired hangouts
+      railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(railsFilteredItems, limit);
     },
-    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
   );
 
   const topRailGetCachedItems = useCallback(() => {
@@ -809,7 +831,7 @@ export default function HomePage() {
       q: feedSearchQ,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       filters:
-        selectedFilters.length > 0 ? selectedFilters : undefined,
+        railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
       limit: 20,
       offset: 0,
       viewerProfileId: viewerProfileId ?? null,
@@ -817,7 +839,7 @@ export default function HomePage() {
     const cacheKey = dataCache.generateFeedKey(feedOptions);
     const cached = dataCache.get<FeedItem[]>(cacheKey);
     return Array.isArray(cached) ? cached : null;
-  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+  }, [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]);
 
   const topRailSetCachedItems = useCallback(
     (items: FeedItem[]) => {
@@ -826,7 +848,7 @@ export default function HomePage() {
         q: feedSearchQ,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         filters:
-          selectedFilters.length > 0 ? selectedFilters : undefined,
+          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
         limit: 20,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
@@ -834,7 +856,7 @@ export default function HomePage() {
       const cacheKey = dataCache.generateFeedKey(feedOptions);
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
   );
 
   const showSearchKindToggle =
@@ -964,7 +986,7 @@ export default function HomePage() {
           {viewMode === "all" && (
             <div className="w-full max-w-[640px] mx-auto px-0">
               <HomeHangoutSection
-                key={`rail-top-${selectedFilters.join(",")}-${selectedTags.join(
+                key={`rail-top-${railAppliedFiltersSortedKey}-${selectedTags.join(
                   ","
                 )}-${feedSearchQ ?? ""}-e${homeRefreshEpoch}`}
                 items={[]}
@@ -975,7 +997,7 @@ export default function HomePage() {
                 isVisible={isHomeVisible}
                 tabId="home"
                 filteredCount={railFilteredCountRef.current}
-                hasActiveFilters={selectedFilters.length > 0}
+                hasActiveFilters={railHasActiveDiscoveryFilters}
                 loadItems={topRailLoadItems}
                 getCachedItems={topRailGetCachedItems}
                 setCachedItems={topRailSetCachedItems}
@@ -1149,6 +1171,7 @@ export default function HomePage() {
               railSetCachedItems={
                 viewMode === "all" ? railSetCachedItems : undefined
               }
+              railHasActiveFilters={railHasActiveDiscoveryFilters}
               selectedFilters={selectedFilters}
             />
           </div>

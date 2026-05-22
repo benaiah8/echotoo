@@ -6,7 +6,6 @@ import { applyPostPatch } from "../../lib/applyPostPatch";
 import Hangout from "../../components/Hangout";
 import { type BatchLoadResult } from "../../types/legacy";
 import ProgressiveHorizontalRail from "../../components/ProgressiveHorizontalRail";
-import EmptyRailCard from "../../components/EmptyRailCard";
 
 /** Some feeds include extra fields; make them optional here */
 type FeedItemExtended = FeedItem & {
@@ -187,7 +186,6 @@ export default function HomeHangoutSection({
         loading={loading}
         isVisible={isVisible}
         tabId={tabId}
-        emptyComponent={<EmptyRailCard />}
         suppressFilteredEmptyCard={suppressFilteredEmptyCard}
         filteredCount={filteredCount}
         hasActiveFilters={hasActiveFilters}
