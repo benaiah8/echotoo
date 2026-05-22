@@ -55,7 +55,7 @@ import { HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
 /** Bounded fetch size aligned with top rail first load (~visible+buffer). */
-const TODAY_PREFLIGHT_LOAD_LIMIT = 6;
+const FRIENDS_PREFLIGHT_LOAD_LIMIT = 6;
 
 /** Cumulative scroll intent for Home chrome (stricter than default `useScrollDirection`). */
 const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
@@ -306,7 +306,7 @@ export default function HomePage() {
       type: undefined,
       q: feedSearchQ,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
-      limit: TODAY_PREFLIGHT_LOAD_LIMIT * 2,
+      limit: FRIENDS_PREFLIGHT_LOAD_LIMIT * 2,
       offset: 0,
       viewerProfileId: viewerProfileId || undefined,
     };
