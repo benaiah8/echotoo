@@ -63,6 +63,10 @@ const notificationDisplayCache = new Map<string, NotificationDisplayCacheEntry>(
 const DISPLAY_CACHE_TTL_MS_INVITES = 2 * 60 * 1000;
 const DISPLAY_CACHE_TTL_MS_ACTIVITY = 60 * 1000;
 
+/** Min cache age before a background quiet list sync — avoids egress on rapid tab switch / revisit while very fresh */
+const MIN_INVITES_QUIET_REFRESH_AGE_MS = 20 * 1000;
+const MIN_ACTIVITY_QUIET_REFRESH_AGE_MS = 10 * 1000;
+
 function notificationDisplayCacheKey(
   userId: string,
   listView: NotificationDisplayListView
@@ -782,11 +786,20 @@ export default function NotificationList({
         batchedFollowStatusesRef.current = cached.batchedFollowStatuses;
         setLoading(false);
         setError(null);
-        await loadNotifications(0, false, {
-          quiet: true,
-          forceRefresh: true,
-          listViewForRequest: capturedListView,
-        });
+        const cacheAgeMs = Date.now() - cached.ts;
+        const minQuietRefreshAgeMs =
+          capturedListView === "invites"
+            ? MIN_INVITES_QUIET_REFRESH_AGE_MS
+            : MIN_ACTIVITY_QUIET_REFRESH_AGE_MS;
+        if (cacheAgeMs >= minQuietRefreshAgeMs) {
+          await loadNotifications(0, false, {
+            quiet: true,
+            forceRefresh: true,
+            listViewForRequest: capturedListView,
+          });
+        } else {
+          initialLoadInFlightRef.current = false;
+        }
         return;
       }
       if (gen !== listViewEffectGenRef.current) {

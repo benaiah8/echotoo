@@ -8,6 +8,8 @@ import {
 import { retry } from "../../lib/retry";
 import { filterExpiredHangouts } from "../../lib/feedExpiryFilters";
 
+const IS_DEV_BUILD = Boolean(import.meta.env.DEV);
+
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
 
@@ -30,7 +32,7 @@ function normalizeActivityImages(
   if (hasNonCloudinary && hasCloudinary) {
     return arr.filter((u) => !isCloudinaryUrl(u));
   }
-  if (hasCloudinary && !hasNonCloudinary) {
+  if (hasCloudinary && !hasNonCloudinary && IS_DEV_BUILD) {
     console.log(
       "[FeedMap][CLOUDINARY_ONLY] activity has only Cloudinary URLs, leaving as-is for migration tracking",
       {
@@ -251,10 +253,12 @@ export async function getPublicFeed(
         maxRetries: 3,
         initialDelay: 1000,
         onRetry: (attempt, err) => {
-          console.log(
-            `[getPublicFeed] Retry attempt ${attempt} after error:`,
-            err
-          );
+          if (IS_DEV_BUILD) {
+            console.log(
+              `[getPublicFeed] Retry attempt ${attempt} after error:`,
+              err
+            );
+          }
         },
       }
     );
@@ -270,9 +274,11 @@ export async function getPublicFeed(
       const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
       const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
       if (cachedData) {
-        console.log(
-          "[getPublicFeed] Returning cached data after query failure"
-        );
+        if (IS_DEV_BUILD) {
+          console.log(
+            "[getPublicFeed] Returning cached data after query failure"
+          );
+        }
         return cachedData;
       }
     }
@@ -705,96 +711,96 @@ export async function getPublicFeedOptimizedWithCount(
 
           if (error) {
             console.error("[getPublicFeedOptimized] RPC error:", error);
-            console.error(
-              "[getPublicFeedOptimized] RPC params were:",
-              rpcParams
-            );
+            if (IS_DEV_BUILD) {
+              console.error(
+                "[getPublicFeedOptimized] RPC params were:",
+                rpcParams
+              );
+            }
             throw error;
           }
 
-          // [FeedPayload] Single log for payload size (confirm 10MB issue consistently)
-          const totalBytes = JSON.stringify(data).length;
-          const postsLength =
-            (data as { posts?: unknown[] })?.posts?.length ?? 0;
-          const avgKbPerPost =
-            postsLength > 0
-              ? (totalBytes / 1024 / postsLength).toFixed(2)
-              : "0";
-          console.log("[FeedPayload]", {
-            totalBytes,
-            postsLength,
-            avgKbPerPost: `${avgKbPerPost} KB`,
-          });
-
-          // [DIAG: Phase 2.2] Check raw PostgreSQL response size and structure
-          const rawResponseSize = JSON.stringify(data).length;
-          const responseSizeKB = Math.round(rawResponseSize / 1024);
-          const responseSizeMB = parseFloat(
-            (rawResponseSize / (1024 * 1024)).toFixed(2)
-          );
-
-          // [DIAG: Phase 2.2] Flag large responses for investigation (>1MB is concerning)
-          // This will help identify why some responses are 4-10MB when they should be <50KB
-          if (responseSizeMB > 1.0) {
-            const posts = (data as any)?.posts || [];
-            const firstPost = posts[0] || null;
-            const firstActivity = firstPost?.activities?.[0] || null;
-            const firstImageUrl = firstActivity?.images?.[0] || null;
-
-            // Calculate total size per post to identify which post(s) are large
-            const postSizes = posts.map((p: any) => {
-              try {
-                const postJson = JSON.stringify(p);
-                return {
-                  postId: p?.id || "unknown",
-                  sizeKB: Math.round(postJson.length / 1024),
-                  hasActivities: !!p?.activities,
-                  activitiesLength: p?.activities?.length || 0,
-                  firstActivityImagesCount:
-                    p?.activities?.[0]?.images?.length || 0,
-                  firstImageUrlLength:
-                    p?.activities?.[0]?.images?.[0]?.length || 0,
-                  isBase64:
-                    p?.activities?.[0]?.images?.[0]?.startsWith(
-                      "data:image/"
-                    ) || false,
-                };
-              } catch (e) {
-                return {
-                  postId: p?.id || "unknown",
-                  sizeKB: 0,
-                  error: "Failed to stringify post",
-                };
-              }
+          if (IS_DEV_BUILD) {
+            // [FeedPayload] Dev-only — avoids costly JSON.stringify of full RPC payload in production
+            const totalBytes = JSON.stringify(data).length;
+            const postsLength =
+              (data as { posts?: unknown[] })?.posts?.length ?? 0;
+            const avgKbPerPost =
+              postsLength > 0
+                ? (totalBytes / 1024 / postsLength).toFixed(2)
+                : "0";
+            console.log("[FeedPayload]", {
+              totalBytes,
+              postsLength,
+              avgKbPerPost: `${avgKbPerPost} KB`,
             });
 
-            console.warn("⚠️⚠️⚠️ [LARGE RESPONSE DETECTED] ⚠️⚠️⚠️", {
-              responseSizeKB,
-              responseSizeMB: responseSizeMB.toFixed(2),
-              params: {
-                ...rpcParams,
-                p_viewer_user_id: rpcParams.p_viewer_user_id
-                  ? "[REDACTED]"
-                  : null,
-              },
-              postsCount: posts.length,
-              expectedLimit: rpcParams.p_limit,
-              averageSizePerPostKB:
-                posts.length > 0
-                  ? Math.round(responseSizeKB / posts.length)
-                  : 0,
-              postSizes: postSizes,
-              firstPostId: firstPost?.id || "N/A",
-              firstPostHasActivities: !!firstPost?.activities,
-              firstPostActivitiesLength: firstPost?.activities?.length || 0,
-              firstActivity: firstActivity || null,
-              firstActivityImagesCount: firstActivity?.images?.length || 0,
-              firstImageUrlLength: firstImageUrl?.length || 0,
-              firstImageUrlPreview: firstImageUrl
-                ? firstImageUrl.substring(0, 200) + "..."
-                : "N/A",
-              isBase64Image: firstImageUrl?.startsWith("data:image/") || false,
-            });
+            const rawResponseSize = totalBytes;
+            const responseSizeKB = Math.round(rawResponseSize / 1024);
+            const responseSizeMB = parseFloat(
+              (rawResponseSize / (1024 * 1024)).toFixed(2)
+            );
+
+            if (responseSizeMB > 1.0) {
+              const posts = (data as any)?.posts || [];
+              const firstPost = posts[0] || null;
+              const firstActivity = firstPost?.activities?.[0] || null;
+              const firstImageUrl = firstActivity?.images?.[0] || null;
+
+              const postSizes = posts.map((p: any) => {
+                try {
+                  const postJson = JSON.stringify(p);
+                  return {
+                    postId: p?.id || "unknown",
+                    sizeKB: Math.round(postJson.length / 1024),
+                    hasActivities: !!p?.activities,
+                    activitiesLength: p?.activities?.length || 0,
+                    firstActivityImagesCount:
+                      p?.activities?.[0]?.images?.length || 0,
+                    firstImageUrlLength:
+                      p?.activities?.[0]?.images?.[0]?.length || 0,
+                    isBase64:
+                      p?.activities?.[0]?.images?.[0]?.startsWith(
+                        "data:image/"
+                      ) || false,
+                  };
+                } catch {
+                  return {
+                    postId: p?.id || "unknown",
+                    sizeKB: 0,
+                    error: "Failed to stringify post",
+                  };
+                }
+              });
+
+              console.warn("⚠️⚠️⚠️ [LARGE RESPONSE DETECTED] ⚠️⚠️⚠️", {
+                responseSizeKB,
+                responseSizeMB: responseSizeMB.toFixed(2),
+                params: {
+                  ...rpcParams,
+                  p_viewer_user_id: rpcParams.p_viewer_user_id
+                    ? "[REDACTED]"
+                    : null,
+                },
+                postsCount: posts.length,
+                expectedLimit: rpcParams.p_limit,
+                averageSizePerPostKB:
+                  posts.length > 0
+                    ? Math.round(responseSizeKB / posts.length)
+                    : 0,
+                postSizes: postSizes,
+                firstPostId: firstPost?.id || "N/A",
+                firstPostHasActivities: !!firstPost?.activities,
+                firstPostActivitiesLength: firstPost?.activities?.length || 0,
+                firstActivity: firstActivity || null,
+                firstActivityImagesCount: firstActivity?.images?.length || 0,
+                firstImageUrlLength: firstImageUrl?.length || 0,
+                firstImageUrlPreview: firstImageUrl
+                  ? firstImageUrl.substring(0, 200) + "..."
+                  : "N/A",
+                isBase64Image: firstImageUrl?.startsWith("data:image/") || false,
+              });
+            }
           }
 
           // SILENCED: Too verbose
@@ -1157,10 +1163,12 @@ export async function getPublicFeedOptimizedWithCount(
             const cacheKey = dataCache.generateFeedKey(opts);
             const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
             if (cachedData) {
-              console.log(
-                "[getPublicFeedOptimizedWithCount] Returning cached data after error",
-                { offset, cacheKey, cachedItems: cachedData.length }
-              );
+              if (IS_DEV_BUILD) {
+                console.log(
+                  "[getPublicFeedOptimizedWithCount] Returning cached data after error",
+                  { offset, cacheKey, cachedItems: cachedData.length }
+                );
+              }
               // Return cached data with unknown count (will use length check fallback)
               return {
                 items: cachedData,

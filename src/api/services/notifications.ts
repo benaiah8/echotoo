@@ -134,11 +134,13 @@ async function invokeSendPostPush(params: {
   actorId: string;
   recipientUserIds: string[];
 }): Promise<void> {
-  console.log("[SPP] invoke", {
-    postId: params.postId,
-    entityType: params.entityType,
-    recipientCount: params.recipientUserIds.length,
-  });
+  if (import.meta.env.DEV) {
+    console.log("[SPP] invoke", {
+      postId: params.postId,
+      entityType: params.entityType,
+      recipientCount: params.recipientUserIds.length,
+    });
+  }
   if (params.recipientUserIds.length === 0) return;
   try {
     const {
@@ -232,23 +234,10 @@ export async function getNotifications(
       if (error) throw error;
 
       const notifications = (data || []) as Notification[];
-
-      // Debug: Log invite notifications
+      /** Invite rows only — used for missing-actor diagnostics (no verbose enumeration logs). */
       const inviteNotifications = notifications.filter(
         (n) => n.type === "invite"
       );
-      if (inviteNotifications.length > 0) {
-        console.log(
-          `Found ${inviteNotifications.length} invite notifications:`,
-          inviteNotifications.map((n) => ({
-            id: n.id,
-            type: n.type,
-            user_id: n.user_id,
-            actor_id: n.actor_id,
-            invite_direction: (n.additional_data as any)?.invite_direction,
-          }))
-        );
-      }
 
       // Get unique actor IDs
       const actorIds = notifications
@@ -276,15 +265,17 @@ export async function getNotifications(
             return acc;
           }, {} as Record<string, any>);
 
-          // Debug: Log missing actor profiles for invite notifications
-          const missingActors = inviteNotifications
-            .filter((n) => n.actor_id && !actors[n.actor_id])
-            .map((n) => n.actor_id);
-          if (missingActors.length > 0) {
-            console.warn(
-              "Missing actor profiles for invite notifications:",
-              missingActors
-            );
+          // Missing actor diagnostics (invite rows only — dev-only IDs in log)
+          if (import.meta.env.DEV) {
+            const missingActors = inviteNotifications
+              .filter((n) => n.actor_id && !actors[n.actor_id])
+              .map((n) => n.actor_id);
+            if (missingActors.length > 0) {
+              console.warn(
+                "Missing actor profiles for invite notifications:",
+                missingActors
+              );
+            }
           }
         } catch (error) {
           console.error("Error fetching actor profiles:", error);
@@ -298,24 +289,6 @@ export async function getNotifications(
           ? actors[notification.actor_id] || null
           : null,
       }));
-
-      // Debug: Log final invite notifications with actor data
-      const finalInviteNotifications = finalResult.filter(
-        (n) => n.type === "invite"
-      );
-      if (finalInviteNotifications.length > 0) {
-        console.log(
-          `Returning ${finalInviteNotifications.length} invite notifications with actor data:`,
-          finalInviteNotifications.map((n) => ({
-            id: n.id,
-            type: n.type,
-            actor: n.actor
-              ? { user_id: n.actor.user_id, username: n.actor.username }
-              : null,
-            invite_direction: (n.additional_data as any)?.invite_direction,
-          }))
-        );
-      }
 
       return finalResult;
     },

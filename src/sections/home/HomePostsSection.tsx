@@ -16,6 +16,7 @@ import { dataCache } from "../../lib/dataCache";
 import { type BatchLoadResult } from "../../types/legacy";
 import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
 import { supabase } from "../../lib/supabaseClient";
+import { HOME_FEED_FIRST_PAGE } from "../../lib/homeFeedConstants";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
@@ -349,7 +350,7 @@ export default function HomePostsSection({
               ? "No posts match your current filters."
               : "No posts to show right now."
           }
-          pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
+          pageSize={HOME_FEED_FIRST_PAGE} // Matches Home vertical dataCache.generateFeedKey first-page limit
         />
 
         {/* Show fallback posts when tag filters are active */}

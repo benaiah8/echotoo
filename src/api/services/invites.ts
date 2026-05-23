@@ -280,7 +280,6 @@ export async function sendInvites(
 ): Promise<SendInvitesResult> {
   try {
     const noteForDb = normalizeInviteNote(note);
-    console.log("Sending invites for post:", postId, "to users:", inviteeIds);
 
     if (inviteeIds.length > INVITE_MAX_PER_SEND) {
       return {
@@ -297,8 +296,6 @@ export async function sendInvites(
     if (note != null && String(note).trim() !== "") {
       assertPlainTextAllowedForUgc(String(note), "default");
     }
-
-    console.log("Current user:", userId);
 
     // Fast client check — RPC validates again (authoritative).
     const { data: post, error: postError } = await supabase
@@ -360,10 +357,6 @@ export async function sendInvites(
 
     const insertedInviteIds = rpc.inserted_invite_ids;
     if (insertedInviteIds.length === 0) {
-      console.log(
-        "RPC invite send: zero new inserts. already_invited:",
-        alreadyInvitedIds.length
-      );
       return {
         data: [],
         error: null,
@@ -390,7 +383,6 @@ export async function sendInvites(
     }
 
     const data = (fetchedInvites || []) as Invite[];
-    console.log("Successfully fetched invites after RPC:", data.length);
 
     // Preserve row order aligned with RPC inserted_invitee_ids when possible
     const byInviteeOrder = rpc.inserted_invitee_ids;
@@ -482,12 +474,6 @@ export async function sendInvites(
               is_read: false,
             }));
 
-        console.log(
-          "Creating sent invite notifications:",
-          sentInviteNotifications.length,
-          "notifications"
-        );
-
         // Insert sent invite notifications
         const { data: insertedNotifications, error: notificationError } =
           await supabase
@@ -500,19 +486,10 @@ export async function sendInvites(
             "Error creating sent invite notifications:",
             notificationError
           );
-          console.error(
-            "Notification error details:",
-            JSON.stringify(notificationError, null, 2)
-          );
-        } else {
-          console.log(
-            "Successfully created sent invite notifications:",
-            insertedNotifications?.length || 0
-          );
-          if (insertedNotifications && insertedNotifications.length > 0) {
-            console.log(
-              "Sample notification:",
-              JSON.stringify(insertedNotifications[0], null, 2)
+          if (import.meta.env.DEV) {
+            console.error(
+              "Notification error details:",
+              JSON.stringify(notificationError, null, 2)
             );
           }
         }

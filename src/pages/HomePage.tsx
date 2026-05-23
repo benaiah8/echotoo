@@ -378,52 +378,40 @@ export default function HomePage() {
   // Track and persist scroll position per feed key to restore when navigating back
   const latestScrollRef = useRef(0);
 
+  /** Single options object for Home vertical first-page cache key — shared by scroll purge, sync initialItems, get/set callbacks. */
+  const homeVerticalFirstPageFeedKeyOptions = useMemo(
+    () =>
+      ({
+        type:
+          viewMode === "hangouts"
+            ? "hangout"
+            : viewMode === "experiences"
+            ? "experience"
+            : undefined,
+        q: feedSearchQ,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        limit: HOME_FEED_FIRST_PAGE,
+        offset: 0,
+        viewerProfileId: viewerProfileId ?? null,
+      }) as Parameters<typeof dataCache.generateFeedKey>[0],
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+  );
+
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
   // This ensures cache hits after profile ID resolves
-  const feedCacheKey = useMemo(() => {
-    return dataCache.generateFeedKey({
-      type:
-        viewMode === "hangouts"
-          ? "hangout"
-          : viewMode === "experiences"
-          ? "experience"
-          : undefined,
-      q: feedSearchQ,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      limit: HOME_FEED_FIRST_PAGE,
-      offset: 0,
-      viewerProfileId: viewerProfileId ?? null, // Use state, not ref
-    });
-  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]); // Added viewerProfileId to deps
+  const feedCacheKey = useMemo(
+    () => dataCache.generateFeedKey(homeVerticalFirstPageFeedKeyOptions),
+    [homeVerticalFirstPageFeedKeyOptions]
+  );
+
+  /** Warm memory hits only — same key as ProgressiveFeed hydrate; avoids empty-array initialItems misleading offset. */
+  const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    const cached = dataCache.get<FeedItem[]>(feedCacheKey);
+    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+  }, [feedCacheKey]);
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
-
-  /** Drop first-page caches for vertical feed + top rail (not global clearFeedCache — avoids nuking profile). */
-  const purgeHomePrimaryCaches = useCallback(() => {
-    try {
-      dataCache.delete(feedCacheKey);
-      const railKey = dataCache.generateFeedKey({
-        type: undefined,
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters:
-          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
-        limit: 20,
-        offset: 0,
-        viewerProfileId: viewerProfileId ?? null,
-      });
-      dataCache.delete(railKey);
-    } catch (e) {
-      console.warn("[HomePage] purgeHomePrimaryCaches failed", e);
-    }
-  }, [
-    feedCacheKey,
-    feedSearchQ,
-    selectedTags,
-    railAppliedFilters,
-    viewerProfileId,
-  ]);
 
   useEffect(() => {
     const onRefreshRequest = (e: Event) => {
@@ -441,16 +429,18 @@ export default function HomePage() {
         setSearchMode("posts");
       }
       if (import.meta.env.DEV) {
-        console.debug(`[${HOME_TAB_REFRESH_EVENT}] remount + cache purge`);
+        console.debug(
+          `[${HOME_TAB_REFRESH_EVENT}] remount (keeping feed/rail caches until fresh load)`
+        );
       }
-      purgeHomePrimaryCaches();
+      /** Do not purge in-memory caches here — remount uses initialItems/getCachedItems; ProgressiveFeed/setCachedItems + RPC cache overwrite after success */
       setHomeRefreshEpoch((n) => n + 1);
     };
     window.addEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     return () => {
       window.removeEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     };
-  }, [isHomeTabActive, purgeHomePrimaryCaches]);
+  }, [isHomeTabActive]);
 
   const {
     pullPx,
@@ -1009,43 +999,16 @@ export default function HomePage() {
                 },
                 [feedSearchQ, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
               )}
+              initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
-                const feedOptions = {
-                  type:
-                    viewMode === "hangouts"
-                      ? "hangout"
-                      : viewMode === "experiences"
-                      ? "experience"
-                      : undefined,
-                  q: feedSearchQ,
-                  tags: selectedTags.length > 0 ? selectedTags : undefined,
-                  limit: HOME_FEED_FIRST_PAGE,
-                  offset: 0,
-                  viewerProfileId: viewerProfileId ?? null, // Use state
-                };
-                const cacheKey = dataCache.generateFeedKey(feedOptions);
-                const cached = dataCache.get<FeedItem[]>(cacheKey);
+                const cached = dataCache.get<FeedItem[]>(feedCacheKey);
                 return Array.isArray(cached) ? cached : null;
-              }, [feedSearchQ, selectedTags, viewMode, viewerProfileId])} // Added viewerProfileId
+              }, [feedCacheKey])}
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
-                  const feedOptions = {
-                    type:
-                      viewMode === "hangouts"
-                        ? "hangout"
-                        : viewMode === "experiences"
-                        ? "experience"
-                        : undefined,
-                    q: feedSearchQ,
-                    tags: selectedTags.length > 0 ? selectedTags : undefined,
-                    limit: HOME_FEED_FIRST_PAGE,
-                    offset: 0,
-                    viewerProfileId: viewerProfileId ?? null, // Use state
-                  };
-                  const cacheKey = dataCache.generateFeedKey(feedOptions);
-                  dataCache.set(cacheKey, items, 10 * 60 * 1000);
+                  dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
                 },
-                [feedSearchQ, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
+                [feedCacheKey]
               )}
               feedOptions={{
                 type:

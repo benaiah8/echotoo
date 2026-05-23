@@ -118,13 +118,15 @@ export async function getUserPostsCreated(
   includeDrafts = true,
   isOwner = false
 ) {
-  console.log("[getUserPostsCreated] Starting query with params:", {
-    authorId,
-    from,
-    limit,
-    includeDrafts,
-    isOwner,
-  });
+  if (import.meta.env.DEV) {
+    console.log("[getUserPostsCreated] Starting query with params:", {
+      authorId,
+      from,
+      limit,
+      includeDrafts,
+      isOwner,
+    });
+  }
 
   let query = supabase
     .from("posts")
@@ -160,11 +162,13 @@ export async function getUserPostsCreated(
     .range(from, from + limit - 1)
     .abortSignal(AbortSignal.timeout(20000));
 
-  console.log("[getUserPostsCreated] Query result:", {
-    dataLength: data?.length,
-    error: error?.message,
-    hasError: !!error,
-  });
+  if (import.meta.env.DEV) {
+    console.log("[getUserPostsCreated] Query result:", {
+      dataLength: data?.length,
+      error: error?.message,
+      hasError: !!error,
+    });
+  }
 
   return { data: data ?? [], error };
 }
