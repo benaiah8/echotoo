@@ -288,6 +288,15 @@ export default function ProgressiveFeed<T extends { id: string }>({
   );
   const [error, setError] = useState<string | null>(externalError);
 
+  /**
+   * When false and items are empty (no error), we are still awaiting the first cache hydrate or
+   * initial-load response for this mount. Prevents perpetual "loading" that blocked emptyMessage / black feed.
+   */
+  const [
+    emptySurfaceAwaitingInitialResponse,
+    setEmptySurfaceAwaitingInitialResponse,
+  ] = useState(() => initialItemsArray.length === 0);
+
   // Refs
   const internalContainerRef = useRef<HTMLDivElement>(null);
   const containerRef = externalContainerRef || internalContainerRef;
@@ -390,6 +399,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     setIsLoadingMore(false);
     initialLoadGuardRef.current = false;
     initialLoadCompleteRef.current = true;
+    setEmptySurfaceAwaitingInitialResponse(false);
     captureSoftBaselineEpoch();
     commitHasMore(false);
 
@@ -577,6 +587,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     setIsLoadingMore(false);
     if (itemsRef.current.length === 0) {
       initialLoadCompleteRef.current = false;
+      setEmptySurfaceAwaitingInitialResponse(true);
     }
   }, [isVisible]);
 
@@ -1072,6 +1083,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
           setCachedItems(deduplicated);
         }
         initialLoadCompleteRef.current = true;
+        setEmptySurfaceAwaitingInitialResponse(false);
         captureSoftBaselineEpoch();
         return; // Cache loaded, don't proceed to API load
       }
@@ -1086,6 +1098,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
     if (items.length === 0 && initialLoadCompleteRef.current) {
       initialLoadCompleteRef.current = false;
+      setEmptySurfaceAwaitingInitialResponse(true);
     }
 
     initialLoadRunCountRef.current += 1;
@@ -1261,6 +1274,8 @@ export default function ProgressiveFeed<T extends { id: string }>({
             if (items.length === 0) {
               initialLoadCompleteRef.current = true;
             }
+            // First-load promise settled — allow zero-row feeds to exit loading and show emptyMessage.
+            setEmptySurfaceAwaitingInitialResponse(false);
           });
       };
 
@@ -1276,6 +1291,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
     } else if (items.length > 0 || initialItems) {
       // If we have items (from cache or initialItems), mark initial load as complete
       initialLoadCompleteRef.current = true;
+      setEmptySurfaceAwaitingInitialResponse(false);
       captureSoftBaselineEpoch();
     }
 
@@ -1614,9 +1630,15 @@ export default function ProgressiveFeed<T extends { id: string }>({
     virtualScrolling.endIndex,
   ]);
 
-  // Loading state
+  // Loading state (emptyMessage path requires !isLoading with zero items — see Phase C0)
+  const emptyAwaitingBootstrap =
+    items.length === 0 &&
+    !error &&
+    emptySurfaceAwaitingInitialResponse &&
+    !externalLoading &&
+    !isValidating;
   const isLoading =
-    externalLoading || isValidating || (items.length === 0 && !error);
+    externalLoading || isValidating || emptyAwaitingBootstrap;
 
   // Error display
   if (error && items.length === 0) {
