@@ -134,6 +134,10 @@ export type FeedOptions = {
   limit?: number;
   offset?: number;
   viewerProfileId?: string; // Optional: viewer's profile ID for privacy filtering
+  /** YYYY-MM-DD viewer-local occurrence date for Today filter (RPC `p_occurs_on`). */
+  occursOn?: string | null;
+  /** IANA timezone (RPC `p_occurs_tz`). With `occursOn`, enables server-side Today filtering. */
+  occursTz?: string | null;
 };
 
 export async function getPublicFeed(
@@ -142,8 +146,6 @@ export async function getPublicFeed(
   // console.log("[getPublicFeed] Starting query with opts:", opts);
 
   const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
-
-  // Check cache first (only for non-offset queries to avoid pagination issues)
   if (offset === 0) {
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
     const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
@@ -370,7 +372,16 @@ export async function getPublicFeed(
 export async function getPublicFeedOptimizedWithCount(
   opts: FeedOptions = {}
 ): Promise<{ items: FeedItem[]; consumedOffset?: number; count: number }> {
-  const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
+  const {
+    type,
+    q,
+    tags,
+    limit = 12,
+    offset = 0,
+    viewerProfileId,
+    occursOn = null,
+    occursTz = null,
+  } = opts;
 
   // [PHASE 2.3 - FIX] Wait for cache preload to complete before checking cache
   // Why: Ensures cache is loaded from StorageManager before cache lookup
@@ -517,7 +528,9 @@ export async function getPublicFeedOptimizedWithCount(
   // For offset=0, different limits will use the same dedupeKey (normalized limit)
   const dedupeKey = `feed_optimized:${type || "all"}:${q || ""}:${
     tags?.join(",") || ""
-  }:${normalizedLimitForDedup}:${offset}:${viewerProfileId || "guest"}`;
+  }:${normalizedLimitForDedup}:${offset}:${viewerProfileId || "guest"}:${occursOn || ""}:${
+    occursTz || ""
+  }`;
 
   // [Top-level in-flight dedupe] Same requestKey → one RPC even if called twice back-to-back (e.g. StrictMode)
   const existingPromise = feedRpcInFlight.get(dedupeKey);
@@ -697,6 +710,8 @@ export async function getPublicFeedOptimizedWithCount(
             p_limit: normalizedLimitForDedup, // Use normalized limit for deduplication
             p_offset: offset,
             p_viewer_user_id: viewerUserId || null,
+            p_occurs_on: occursOn ?? null,
+            p_occurs_tz: occursTz ?? null,
           };
 
           const { data, error } = await supabase.rpc(

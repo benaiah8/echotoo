@@ -66,6 +66,36 @@ const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
   maxDeltaPerEvent: 22,
 };
 
+/**
+ * Viewer-local calendar date YYYY-MM-DD + IANA zone for Phase B vertical Today RPC.
+ * Matches backend `AT TIME ZONE` interpretation of scheduled instants.
+ */
+function viewerLocalOccurrenceForTodayChip(): {
+  occursOn: string;
+  occursTz: string;
+} | null {
+  try {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!timeZone) return null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === "year")?.value;
+    const month = parts.find((p) => p.type === "month")?.value;
+    const day = parts.find((p) => p.type === "day")?.value;
+    if (!year || !month || !day) return null;
+    return {
+      occursOn: `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`,
+      occursTz: timeZone,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Feature flag: Enable optimized PostgreSQL function
 // Set to false to use the original getPublicFeed function
 const USE_OPTIMIZED_FEED = true;
@@ -170,6 +200,18 @@ export default function HomePage() {
     [railAppliedFilters]
   );
   const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
+
+  /** Vertical-feed Today only: passed into `get_feed_with_related_data` when Today chip selected. */
+  const verticalOccurrenceParams = useMemo((): Pick<
+    FeedOptions,
+    "occursOn" | "occursTz"
+  > => {
+    if (!selectedFilters.includes("today")) {
+      return { occursOn: null, occursTz: null };
+    }
+    const o = viewerLocalOccurrenceForTodayChip();
+    return o ? { occursOn: o.occursOn, occursTz: o.occursTz } : { occursOn: null, occursTz: null };
+  }, [selectedFilters]);
 
   const userSearchOverlayOpen =
     searchMode === "users" &&
@@ -393,8 +435,10 @@ export default function HomePage() {
         limit: HOME_FEED_FIRST_PAGE,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
+        occursOn: verticalOccurrenceParams.occursOn,
+        occursTz: verticalOccurrenceParams.occursTz,
       }) as Parameters<typeof dataCache.generateFeedKey>[0],
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId, verticalOccurrenceParams]
   );
 
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
@@ -931,16 +975,23 @@ export default function HomePage() {
                     limit,
                     offset,
                     viewerProfileId: viewerProfileId || undefined, // Use state
+                    ...((verticalOccurrenceParams.occursOn &&
+                      verticalOccurrenceParams.occursTz && {
+                      occursOn: verticalOccurrenceParams.occursOn,
+                      occursTz: verticalOccurrenceParams.occursTz,
+                    }) ||
+                      {}),
                   };
                   if (USE_OPTIMIZED_FEED) {
                     const { items, consumedOffset, count } =
                       await getPublicFeedOptimizedWithCount(feedOptions);
 
-                    // [PHASE 4] Apply personalization to vertical feed (only when no filters active)
+                    // [PHASE 4 + B2] Skip personalization while Today narrows RPC — keep strict server ordering.
                     const shouldPersonalize =
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
-                      viewMode === "all";
+                      viewMode === "all" &&
+                      !selectedFilters.includes("today");
 
                     const personalizedItemsRaw = shouldPersonalize
                       ? personalizeFeedBatch(items)
@@ -974,11 +1025,12 @@ export default function HomePage() {
                   } else {
                     const items = await getPublicFeed(feedOptions);
 
-                    // [PHASE 4] Apply personalization to vertical feed (only when no filters active)
+                    // [PHASE 4 + B2] Skip personalization while Today narrows RPC — keep strict server ordering.
                     const shouldPersonalize =
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
-                      viewMode === "all";
+                      viewMode === "all" &&
+                      !selectedFilters.includes("today");
 
                     const personalizedItemsRaw = shouldPersonalize
                       ? personalizeFeedBatch(items)
@@ -997,7 +1049,14 @@ export default function HomePage() {
                     };
                   }
                 },
-                [feedSearchQ, selectedTags, viewMode, viewerProfileId] // Added viewerProfileId
+                [
+                  feedSearchQ,
+                  selectedTags,
+                  viewMode,
+                  viewerProfileId,
+                  verticalOccurrenceParams,
+                  selectedFilters,
+                ] // Vertical Today + personalization guard
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
@@ -1020,6 +1079,8 @@ export default function HomePage() {
                 q: feedSearchQ,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
                 currentUserId: viewerProfileId ?? null, // Use state for feedKey
+                occursOn: verticalOccurrenceParams.occursOn,
+                occursTz: verticalOccurrenceParams.occursTz,
               }}
               // [FIX: Phase 1.2 - Horizontal Rail] Pass railLoadItems and cache functions for injected rails
               railLoadItems={viewMode === "all" ? railLoadItems : undefined}

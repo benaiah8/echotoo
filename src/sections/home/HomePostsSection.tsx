@@ -56,6 +56,8 @@ interface Props {
     q?: string;
     tags?: string[];
     currentUserId?: string | null; // Include for feedKey to reset on auth change
+    occursOn?: string | null;
+    occursTz?: string | null;
   };
   // [FIX: Phase 1.2 - Horizontal Rail] Props for injected rails filtering
   railLoadItems?: (offset: number, limit: number) => Promise<FeedItem[]>;
@@ -267,11 +269,27 @@ export default function HomePostsSection({
   // This ensures ProgressiveFeed remounts and resets internal state (offsetRef, initialLoadCompleteRef)
   const feedKey = useMemo(
     () =>
-      `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${
+      `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${feedOptions?.occursOn || ""
+      }@${feedOptions?.occursTz || ""}-${
         feedOptions?.currentUserId || "guest"
       }`,
-    [viewMode, selectedTags, feedOptions?.q, feedOptions?.currentUserId]
+    [
+      viewMode,
+      selectedTags,
+      feedOptions?.q,
+      feedOptions?.occursOn,
+      feedOptions?.occursTz,
+      feedOptions?.currentUserId,
+    ]
   );
+
+  const todayFilterActive = selectedFilters.includes("today");
+
+  const verticalEmptyMessage = todayFilterActive
+    ? "Nothing scheduled for today."
+    : hasActiveFilters
+      ? "No posts match your current filters."
+      : "No posts to show right now.";
 
   // Legacy mode: prefetch logic
   useEffect(() => {
@@ -345,11 +363,7 @@ export default function HomePostsSection({
           enableScrollStopDetection={true}
           loading={loading}
           loadingComponent={<PostSkeleton />}
-          emptyMessage={
-            hasActiveFilters
-              ? "No posts match your current filters."
-              : "No posts to show right now."
-          }
+          emptyMessage={verticalEmptyMessage}
           pageSize={HOME_FEED_FIRST_PAGE} // Matches Home vertical dataCache.generateFeedKey first-page limit
         />
 

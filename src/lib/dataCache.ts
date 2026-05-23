@@ -323,8 +323,11 @@ class DataCache {
     limit?: number;
     offset?: number;
     viewerProfileId?: string | null; // User-specific cache key (prevents cross-user data leakage)
+    occursOn?: string | null;
+    occursTz?: string | null;
   }): string {
-    const { type, q, tags, filters, limit, offset, viewerProfileId } = opts;
+    const { type, q, tags, filters, limit, offset, viewerProfileId, occursOn, occursTz } =
+      opts;
     // Include viewerProfileId in key to prevent cross-user cache pollution
     // Defaults to "guest" for backward compatibility
     const userId = viewerProfileId || "guest";
@@ -332,9 +335,11 @@ class DataCache {
     const filtersKey = filters && filters.length > 0 
       ? filters.slice().sort().join(",") 
       : "";
+    const occursOnSeg = occursOn || "";
+    const occursTzSeg = occursTz || "";
     return `feed:${type || "all"}:${q || ""}:${tags?.join(",") || ""}:${filtersKey}:${
       limit || 12
-    }:${offset || 0}:${userId}`;
+    }:${offset || 0}:${occursOnSeg}:${occursTzSeg}:${userId}`;
   }
 
   // [PHASE 2.2] Enhanced cache update with SmartCacheValidator
