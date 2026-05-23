@@ -4,6 +4,7 @@ import {
   useRef,
   useCallback,
   type CSSProperties,
+  type FocusEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -37,8 +38,13 @@ const inviteFrostedPanelStyle: CSSProperties = {
   boxShadow: "var(--glass-active-shadow, 0 2px 12px rgba(0, 0, 0, 0.1))",
 };
 
-const glassInputClass =
-  "w-full rounded-full border pl-9 pr-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/50 focus:outline-none focus:ring-2 focus:ring-primary/25";
+/** Outer shell for invite search row (icon + field + followers toggle). */
+const inviteSearchPillClass =
+  "relative flex w-full min-w-0 min-h-[2.5rem] items-center rounded-full border focus-within:ring-2 focus-within:ring-primary/25";
+
+/** Text field only — border lives on the pill shell. */
+const inviteSearchInputClass =
+  "min-h-0 min-w-0 flex-1 border-0 bg-transparent py-2 pl-9 pr-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/50 outline-none";
 
 const glassInputStyle: CSSProperties = {
   backgroundColor: "color-mix(in oklab, var(--glass-bg) 75%, var(--bg))",
@@ -67,12 +73,107 @@ function isInviteeFkError(err: unknown): boolean {
 const messageBoxClass =
   "w-full min-h-[2.75rem] max-h-24 resize-y rounded-xl pl-3 pr-11 pb-6 pt-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
 
+/** Single-line pill when note is empty and unfocused (compact drawer). */
+const messageBoxCollapsedClass =
+  "w-full min-h-[2.5rem] max-h-[2.5rem] resize-none overflow-hidden rounded-full border py-2 pl-3 pr-10 text-sm leading-snug text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
+
 const messageBoxStyle: CSSProperties = {
   ...glassInputStyle,
   borderWidth: 1,
   borderStyle: "solid",
   boxShadow: "inset 0 1px 0 color-mix(in oklab, var(--text) 6%, transparent)",
 };
+
+/** Debounce clearing focus so search ↔ note does not flicker compact layout. */
+const FOCUS_BLUR_DEFER_MS = 120;
+
+type InviteEditingSurface = "none" | "search" | "note";
+
+/** Single source of truth for InviteDrawer chrome (max-heights, gaps, caption). */
+type InviteLayoutPlan = {
+  editingSurface: InviteEditingSurface;
+  captionVariant: "normal" | "compact";
+  selectedDetailsMaxClass: string;
+  resultsScrollMaxClass: string;
+  panelPaddingClass: string;
+  stackGapClass: string;
+  resultsSpacingClass: string;
+  resultsSectionGapClass: string;
+  footerActionGapClass: string;
+  noteExpanded: boolean;
+};
+
+function getInviteLayoutPlan(input: {
+  searchFocused: boolean;
+  noteFocused: boolean;
+  selectedDetailsOpen: boolean;
+  inviteNote: string;
+}): InviteLayoutPlan {
+  const { searchFocused, noteFocused, selectedDetailsOpen, inviteNote } =
+    input;
+
+  const editingSurface: InviteEditingSurface = searchFocused
+    ? "search"
+    : noteFocused
+      ? "note"
+      : "none";
+
+  const noteExpanded = noteFocused || inviteNote.length > 0;
+
+  const captionVariant: InviteLayoutPlan["captionVariant"] =
+    editingSurface !== "none" ? "compact" : "normal";
+
+  /** Keyboard / editing + optional selected list — not followers filter. */
+  const stackTight =
+    editingSurface !== "none" || selectedDetailsOpen;
+
+  const stackGapClass = stackTight ? "gap-2" : "gap-3";
+  const panelPaddingClass = stackTight
+    ? "!p-2.5 sm:!p-3"
+    : "!p-3 sm:!p-3.5";
+  const resultsSpacingClass =
+    editingSurface !== "none" || selectedDetailsOpen
+      ? "space-y-1"
+      : "space-y-2";
+  const resultsSectionGapClass =
+    editingSurface !== "none" || selectedDetailsOpen
+      ? "mt-2 pt-2"
+      : "mt-3 pt-3";
+
+  let selectedDetailsMaxClass = "max-h-[min(40vh,280px)]";
+  if (selectedDetailsOpen) {
+    selectedDetailsMaxClass =
+      editingSurface === "note"
+        ? "max-h-[min(22dvh,176px)]"
+        : "max-h-[min(40vh,280px)]";
+  }
+
+  let resultsScrollMaxClass = "max-h-[min(45vh,320px)]";
+  if (editingSurface === "search") {
+    resultsScrollMaxClass = selectedDetailsOpen
+      ? "max-h-[min(14dvh,112px)]"
+      : "max-h-[min(28dvh,200px)]";
+  } else if (editingSurface === "note") {
+    resultsScrollMaxClass = selectedDetailsOpen
+      ? "max-h-[min(16dvh,124px)]"
+      : "max-h-[min(26dvh,168px)]";
+  } else if (selectedDetailsOpen) {
+    resultsScrollMaxClass = "max-h-[min(34vh,220px)]";
+  }
+
+  return {
+    editingSurface,
+    captionVariant,
+    selectedDetailsMaxClass,
+    resultsScrollMaxClass,
+    panelPaddingClass,
+    stackGapClass,
+    resultsSpacingClass,
+    resultsSectionGapClass,
+    footerActionGapClass: "mt-1.5",
+    noteExpanded,
+  };
+}
 
 type Props = {
   isOpen: boolean;
@@ -192,9 +293,45 @@ export default function InviteDrawer({
   const [inviteOutcomeSheet, setInviteOutcomeSheet] =
     useState<InviteOutcomeSheetState | null>(null);
 
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [noteFocused, setNoteFocused] = useState(false);
+  const blurClearSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const blurClearNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const clearSearchBlurTimer = useCallback(() => {
+    if (blurClearSearchTimerRef.current) {
+      clearTimeout(blurClearSearchTimerRef.current);
+      blurClearSearchTimerRef.current = null;
+    }
+  }, []);
+
+  const clearNoteBlurTimer = useCallback(() => {
+    if (blurClearNoteTimerRef.current) {
+      clearTimeout(blurClearNoteTimerRef.current);
+      blurClearNoteTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
-    if (!isOpen) setInviteOutcomeSheet(null);
-  }, [isOpen]);
+    if (!isOpen) {
+      setInviteOutcomeSheet(null);
+      clearSearchBlurTimer();
+      clearNoteBlurTimer();
+      setSearchFocused(false);
+      setNoteFocused(false);
+    }
+  }, [isOpen, clearSearchBlurTimer, clearNoteBlurTimer]);
+
+  useEffect(() => {
+    return () => {
+      clearSearchBlurTimer();
+      clearNoteBlurTimer();
+    };
+  }, [clearSearchBlurTimer, clearNoteBlurTimer]);
 
   // Load followers when component mounts
   const loadFollowers = async () => {
@@ -813,6 +950,52 @@ export default function InviteDrawer({
     }, 500);
   };
 
+  const handleSearchFocus = useCallback(
+    (e: FocusEvent<HTMLInputElement>) => {
+      e.stopPropagation();
+      clearSearchBlurTimer();
+      clearNoteBlurTimer();
+      setNoteFocused(false);
+      setSearchFocused(true);
+      setSelectedDetailsOpen(false);
+    },
+    [clearSearchBlurTimer, clearNoteBlurTimer],
+  );
+
+  const handleSearchBlur = useCallback(() => {
+    clearSearchBlurTimer();
+    blurClearSearchTimerRef.current = setTimeout(() => {
+      blurClearSearchTimerRef.current = null;
+      setSearchFocused(false);
+    }, FOCUS_BLUR_DEFER_MS);
+  }, [clearSearchBlurTimer]);
+
+  const handleNoteFocus = useCallback(
+    (e: FocusEvent<HTMLTextAreaElement>) => {
+      e.stopPropagation();
+      clearSearchBlurTimer();
+      clearNoteBlurTimer();
+      setSearchFocused(false);
+      setNoteFocused(true);
+    },
+    [clearSearchBlurTimer, clearNoteBlurTimer],
+  );
+
+  const handleNoteBlur = useCallback(() => {
+    clearNoteBlurTimer();
+    blurClearNoteTimerRef.current = setTimeout(() => {
+      blurClearNoteTimerRef.current = null;
+      setNoteFocused(false);
+    }, FOCUS_BLUR_DEFER_MS);
+  }, [clearNoteBlurTimer]);
+
+  const layout = getInviteLayoutPlan({
+    searchFocused,
+    noteFocused,
+    selectedDetailsOpen,
+    inviteNote,
+  });
+
   const headerOverlapCount = 5;
 
   return (
@@ -910,28 +1093,44 @@ export default function InviteDrawer({
         </div>
       }
       footer={
-        <div className="border-t border-[var(--border)]/20 px-4.5 pt-2 sm:px-5.5">
+        <div
+          className="border-t border-[var(--border)]/20 px-4.5 pt-2 sm:px-5.5"
+          style={{
+            /** Extra gap above system gesture / home indicator (sheet also pads safe area). */
+            paddingBottom: "calc(0.5rem + var(--safe-area-bottom-layout))",
+          }}
+        >
           <div className="relative" onClick={(e) => e.stopPropagation()}>
             <textarea
               id="invite-note"
-              rows={2}
+              rows={layout.noteExpanded ? 2 : 1}
               maxLength={INVITE_NOTE_MAX_LENGTH}
               value={inviteNote}
               onChange={(e) => setInviteNote(e.target.value)}
               onClick={(e) => e.stopPropagation()}
-              placeholder="Add a short note with your invite (optional)…"
+              onFocus={handleNoteFocus}
+              onBlur={handleNoteBlur}
+              placeholder="Add a note (optional)..."
               aria-label="Optional note to include with your invite"
-              className={messageBoxClass}
+              className={
+                layout.noteExpanded ? messageBoxClass : messageBoxCollapsedClass
+              }
               style={messageBoxStyle}
             />
             <span
-              className="pointer-events-none absolute bottom-2.5 right-3 text-[10px] tabular-nums text-[var(--text)]/45"
+              className={`pointer-events-none absolute tabular-nums text-[var(--text)]/45 ${
+                layout.noteExpanded
+                  ? "bottom-2.5 right-3 text-[10px]"
+                  : "right-2.5 top-1/2 -translate-y-1/2 text-[9px]"
+              }`}
               aria-hidden
             >
               {inviteNote.length}/{INVITE_NOTE_MAX_LENGTH}
             </span>
           </div>
-          <div className="mt-3 flex gap-2">
+          <div
+            className={`${layout.footerActionGapClass} flex shrink-0 gap-2`}
+          >
             <button
               type="button"
               onClick={(e) => {
@@ -939,7 +1138,7 @@ export default function InviteDrawer({
                 e.preventDefault();
                 handleClose();
               }}
-              className="flex h-9 min-h-9 min-w-0 flex-1 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80"
+              className="flex h-9 min-h-9 shrink-0 basis-0 flex-1 items-center justify-center whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 text-xs font-semibold text-[var(--text)] transition hover:bg-[var(--surface-2)]/80"
             >
               Cancel
             </button>
@@ -947,7 +1146,7 @@ export default function InviteDrawer({
               type="button"
               onClick={handleSendInvites}
               disabled={selectedUsers.size === 0 || sendingInvites}
-              className="flex h-9 min-h-9 min-w-0 flex-1 items-center justify-center rounded-full bg-yellow-500 px-3 text-xs font-semibold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-9 min-h-9 shrink-0 basis-0 flex-1 items-center justify-center whitespace-nowrap rounded-full bg-yellow-500 px-3 text-xs font-semibold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {sendingInvites
                 ? "Sending…"
@@ -957,14 +1156,16 @@ export default function InviteDrawer({
         </div>
       }
     >
-      <div className="flex w-full min-w-0 flex-col gap-3">
+      <div
+        className={`flex w-full min-w-0 flex-col ${layout.stackGapClass}`}
+      >
         {/* Expanded list: in-memory `selectedUsersData` only — no network */}
         {selectedUsers.size > 0 && selectedDetailsOpen ? (
           <div
             id="invite-selected-details"
             role="region"
             aria-labelledby="invite-selected-summary"
-            className={`${frostedModalPanelClassName} !max-w-none !p-0 max-h-[min(40vh,280px)] shrink-0 overflow-y-auto overscroll-contain border-[var(--glass-active-border,var(--border))]`}
+            className={`${frostedModalPanelClassName} !max-w-none !p-0 ${layout.selectedDetailsMaxClass} shrink-0 overflow-y-auto overscroll-contain border-[var(--glass-active-border,var(--border))]`}
             style={{
               ...inviteFrostedPanelStyle,
               backgroundColor:
@@ -1012,22 +1213,46 @@ export default function InviteDrawer({
           </div>
         ) : null}
 
-        {/* Panel: post + search + followers / select all */}
+        {/* Panel: post + search (with followers toggle) + results */}
         <div
-          className={`${frostedModalPanelClassName} !max-w-none shrink-0 p-3 sm:p-3.5`}
-          style={inviteFrostedPanelStyle}
+          className={`${frostedModalPanelClassName} !max-w-none flex min-h-0 shrink-0 flex-col overflow-hidden border-solid ${layout.panelPaddingClass}`}
+          style={{
+            ...inviteFrostedPanelStyle,
+            borderColor: "var(--glass-active-border, var(--border))",
+          }}
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
           }}
         >
-          <p className="text-xs text-[var(--text)]/50 line-clamp-2 break-words overflow-hidden mb-3">
-            {postType === "hangout" ? "Hangout" : "Experience"}:{" "}
-            {postCaption || "Untitled"}
-          </p>
+          <div className="shrink-0">
+            <p
+              className={`break-words text-[var(--text)]/50 overflow-hidden ${
+                layout.captionVariant === "compact"
+                  ? "mb-2 line-clamp-1 text-[10px] leading-snug"
+                  : "mb-3 line-clamp-2 text-xs"
+              }`}
+            >
+              {postType === "hangout" ? "Hangout" : "Experience"}:{" "}
+              {postCaption || "Untitled"}
+            </p>
 
-          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:gap-2">
-            <div className="relative min-w-0 flex-1">
+            <div
+              className={inviteSearchPillClass}
+              style={{
+                ...glassInputStyle,
+                borderWidth: 1,
+                borderStyle: "solid",
+                boxShadow:
+                  "inset 0 1px 0 color-mix(in oklab, var(--text) 6%, transparent)",
+              }}
+            >
+              <div
+                className="pointer-events-none absolute left-3 top-1/2 z-0 -translate-y-1/2 text-[var(--text)]/45"
+                aria-hidden
+              >
+                🔍
+              </div>
               <input
                 type="text"
                 placeholder="Search by name or username…"
@@ -1037,22 +1262,10 @@ export default function InviteDrawer({
                   e.stopPropagation();
                   e.preventDefault();
                 }}
-                onFocus={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                }}
-                className={glassInputClass}
-                style={glassInputStyle}
+                onFocus={handleSearchFocus}
+                onBlur={handleSearchBlur}
+                className={inviteSearchInputClass}
               />
-              <div
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text)]/45 pointer-events-none"
-                aria-hidden
-              >
-                🔍
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2 sm:shrink-0 sm:justify-end sm:pt-0">
               <button
                 type="button"
                 role="switch"
@@ -1063,11 +1276,8 @@ export default function InviteDrawer({
                   e.preventDefault();
                   setShowFollowersOnly(!showFollowersOnly);
                 }}
-                className="flex h-7 shrink-0 items-center gap-2 rounded-lg pl-0.5 pr-1 py-0.5 text-left transition hover:bg-[var(--text)]/5"
+                className="relative z-[1] flex h-10 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full pl-0.5 pr-2 transition hover:bg-[var(--text)]/6 active:bg-[var(--text)]/10"
               >
-                <span className="text-[11px] font-semibold leading-none text-[var(--text)]/90">
-                  Followers
-                </span>
                 <span
                   className={`relative inline-flex h-[1.125rem] w-8 shrink-0 items-center rounded-full border transition-colors ${
                     showFollowersOnly
@@ -1083,7 +1293,9 @@ export default function InviteDrawer({
                   />
                 </span>
               </button>
+            </div>
 
+            <div className="mt-0.5 flex min-h-[1.125rem] items-center justify-end gap-2 pr-1">
               {showFollowersOnly && followers.length > 0 ? (
                 <button
                   type="button"
@@ -1105,74 +1317,89 @@ export default function InviteDrawer({
                     : "Select all"}
                 </button>
               ) : null}
+              <span
+                className={
+                  showFollowersOnly
+                    ? "text-[10px] font-semibold text-yellow-700/95 drop-shadow-[0_0_8px_rgba(234,179,8,0.35)] dark:text-yellow-300/95"
+                    : "text-[10px] font-medium text-[var(--text)]/45"
+                }
+              >
+                Followers
+              </span>
             </div>
           </div>
 
           {loading || users.length > 0 || searchQuery.trim().length > 0 ? (
             <div
-              className="mt-3 -mx-0.5 max-h-[min(45vh,320px)] overflow-y-auto overscroll-contain px-0.5"
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
+              className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-t border-[var(--border)]/25 ${layout.resultsSectionGapClass}`}
             >
-              {loading ? (
-                <div className="py-2 text-center text-xs text-[var(--text)]/60">
-                  Searching…
-                </div>
-              ) : users.length === 0 ? (
-                <div className="py-2 text-center text-xs text-[var(--text)]/60">
-                  No users found matching your search
-                </div>
-              ) : (
-                <div className="space-y-2 pb-1">
-                  {users.map((user) => (
-                    <DrawerProfileCard
-                      key={user.id}
-                      id={user.id}
-                      username={user.username || null}
-                      display_name={user.display_name || null}
-                      avatar_url={user.avatar_url || null}
-                      rowShape="pill"
-                      followStatus={
-                        batchedFollowStatuses[user.id] ??
-                        (user.id === viewerProfileId ? "self" : "none")
-                      }
-                      onClick={(e) => {
-                        e?.stopPropagation?.();
-                        handleUserSelect(user.user_id);
-                      }}
-                      showFollowButton={true}
-                      showCustomBadge={
-                        selectedUsers.has(user.user_id) ? (
-                          <div
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--text)] text-[var(--bg)] text-xs font-bold leading-none shadow-sm"
-                            aria-hidden
-                          >
-                            ✓
-                          </div>
-                        ) : undefined
-                      }
-                    />
-                  ))}
-                  {hasMoreList && !loading && users.length > 0 ? (
-                    <div className="pt-1 text-center">
-                      <button
-                        type="button"
+              <div
+                className={`min-h-0 ${layout.resultsScrollMaxClass} overflow-y-auto overscroll-contain px-0.5 pb-2`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                }}
+              >
+                {loading ? (
+                  <div className="py-2 text-center text-xs text-[var(--text)]/60">
+                    Searching…
+                  </div>
+                ) : users.length === 0 ? (
+                  <div className="py-2 text-center text-xs text-[var(--text)]/60">
+                    No users found matching your search
+                  </div>
+                ) : (
+                  <div
+                    className={`pb-1 ${layout.resultsSpacingClass}`}
+                  >
+                    {users.map((user) => (
+                      <DrawerProfileCard
+                        key={user.id}
+                        id={user.id}
+                        username={user.username || null}
+                        display_name={user.display_name || null}
+                        avatar_url={user.avatar_url || null}
+                        rowShape="pill"
+                        followStatus={
+                          batchedFollowStatuses[user.id] ??
+                          (user.id === viewerProfileId ? "self" : "none")
+                        }
                         onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          void loadUsers(true);
+                          e?.stopPropagation?.();
+                          handleUserSelect(user.user_id);
                         }}
-                        disabled={loadingMore}
-                        className="text-xs font-semibold text-[var(--text)]/80 underline decoration-[var(--text)]/30 underline-offset-2 transition hover:text-[var(--text)] disabled:opacity-50"
-                      >
-                        {loadingMore ? "Loading…" : "See more"}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              )}
+                        showFollowButton={true}
+                        showCustomBadge={
+                          selectedUsers.has(user.user_id) ? (
+                            <div
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--text)] text-[var(--bg)] text-xs font-bold leading-none shadow-sm"
+                              aria-hidden
+                            >
+                              ✓
+                            </div>
+                          ) : undefined
+                        }
+                      />
+                    ))}
+                    {hasMoreList && !loading && users.length > 0 ? (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            void loadUsers(true);
+                          }}
+                          disabled={loadingMore}
+                          className="text-xs font-semibold text-[var(--text)]/80 underline decoration-[var(--text)]/30 underline-offset-2 transition hover:text-[var(--text)] disabled:opacity-50"
+                        >
+                          {loadingMore ? "Loading…" : "See more"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
             </div>
           ) : null}
         </div>

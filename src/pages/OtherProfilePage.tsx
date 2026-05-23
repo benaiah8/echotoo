@@ -353,20 +353,15 @@ export default function OtherProfilePage({
   useEffect(() => {
     const onTabRefresh = () => {
       if (!isOtherProfileVisible) return;
-      const uid = profile?.user_id;
-      if (uid) {
-        try {
-          dataCache.delete(`profile_created_${uid}`);
-          dataCache.delete(`profile_interacted_${uid}`);
-        } catch {
-          /* noop */
-        }
-      }
+      /** Keep profile_* feed keys during refresh remount; fresh load overwrites via setCachedItems */
       if (profile?.id) invalidateProfile(profile.id);
       setProfileReloadNonce((n) => n + 1);
       setOtherProfileFeedRefreshEpoch((n) => n + 1);
       if (import.meta.env.DEV) {
-        console.debug("[profile-tab-refresh] other", { uid, username });
+        console.debug("[profile-tab-refresh] other", {
+          uid: profile?.user_id,
+          username,
+        });
       }
     };
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);

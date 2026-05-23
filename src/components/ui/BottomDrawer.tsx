@@ -5,6 +5,9 @@ import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
 import { isAndroid } from "../../lib/storage/utils/capacitorDetection";
 
+/** Aligns with `useCreateKeyboardInset` — treat as “keyboard open” for layout. */
+const KEYBOARD_MAX_HEIGHT_THRESHOLD_PX = 48;
+
 interface BottomDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -86,11 +89,23 @@ export default function BottomDrawer({
   const blurBackdropClickRef = useRef(false);
   const { keyboardInsetPx } = useCreateKeyboardInset();
   const rawKeyboardOffsetPx = Math.round(keyboardInsetPx);
-  const drawerKeyboardOffsetPx = isAndroid() ? 0 : rawKeyboardOffsetPx;
-  const resolvedMaxHeight =
-    drawerKeyboardOffsetPx > 0
-      ? `min(${maxHeight}, calc(100dvh - ${drawerKeyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
-      : maxHeight;
+  /**
+   * Lift sheet from viewport bottom on keyboard (iOS). Android keeps 0 so we do not
+   * stack with WebView resize; instead we shrink `maxHeight` using the same inset below.
+   */
+  const drawerBottomOffsetPx = isAndroid() ? 0 : rawKeyboardOffsetPx;
+  const keyboardShrinksSheet =
+    rawKeyboardOffsetPx > KEYBOARD_MAX_HEIGHT_THRESHOLD_PX;
+  const resolvedMaxHeight = keyboardShrinksSheet
+    ? `min(${maxHeight}, calc(100dvh - ${rawKeyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
+    : maxHeight;
+
+  const shrinkContentBodyMaxHeight =
+    footer != null && shrinkSheetToContent
+      ? keyboardShrinksSheet
+        ? `min(58vh, calc(100dvh - 13rem - ${rawKeyboardOffsetPx}px))`
+        : "min(58vh, calc(100dvh - 13rem))"
+      : undefined;
 
   // Mount/unmount and body scroll lock
   useEffect(() => {
@@ -161,7 +176,7 @@ export default function BottomDrawer({
       <div
         className={`absolute inset-x-0 rounded-t-2xl overflow-hidden ${className}`}
         style={{
-          bottom: drawerKeyboardOffsetPx,
+          bottom: drawerBottomOffsetPx,
           maxHeight: resolvedMaxHeight,
           transition: "bottom 220ms ease-out, max-height 220ms ease-out",
           // With `footer` and full-height mode: fixed height so flex-1 middle works.
@@ -233,8 +248,13 @@ export default function BottomDrawer({
             <div
               className={
                 shrinkSheetToContent
-                  ? `min-h-0 min-w-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain max-h-[min(58vh,calc(100dvh-13rem))] ${contentClassName}`
+                  ? `min-h-0 min-w-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain ${contentClassName}`
                   : `min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden ${contentClassName}`
+              }
+              style={
+                shrinkContentBodyMaxHeight != null
+                  ? { maxHeight: shrinkContentBodyMaxHeight }
+                  : undefined
               }
             >
               {children}

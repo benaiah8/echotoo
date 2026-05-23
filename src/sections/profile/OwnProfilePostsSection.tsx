@@ -231,11 +231,16 @@ export default function OwnProfilePostsSection({
 
   // [PHASE B.1] Separate cache callbacks for each tab (preparation for multi-ProgressiveFeed pattern)
 
+  /** Single Created-tab dataCache key — shared by hydrate, persist, discard, sync warm initialItems */
+  const profileCreatedDataCacheKey = useMemo(
+    () => `profile_created_${userId}`,
+    [userId]
+  );
+
   // Created tab cache
   // [FIX] Only depend on primitives, not entire profile object - prevents infinite loops
   const getCachedCreated = useCallback(() => {
-    const cacheKey = `profile_created_${userId}`;
-    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
 
     // Only add drafts for Created tab
     if (cached) {
@@ -289,18 +294,30 @@ export default function OwnProfilePostsSection({
     }
 
     return cached || null;
-  }, [userId, profileUsername, profileDisplayName, profileAvatarUrl]); // [FIX] Use primitives, not entire profile object
+  }, [
+    profileCreatedDataCacheKey,
+    profileUsername,
+    profileDisplayName,
+    profileAvatarUrl,
+    userId,
+  ]);
 
   const setCachedCreated = useCallback(
     (items: FeedItem[]) => {
-      const cacheKey = `profile_created_${userId}`;
       // Filter out drafts for Created tab - they're managed by localStorage
       const itemsToCache = items.filter((item: any) => !item.isDraft);
       const persisted = itemsToCache.slice(0, 20);
-      dataCache.set(cacheKey, persisted, 10 * 60 * 1000); // 10min TTL, cache 20 items
+      dataCache.set(profileCreatedDataCacheKey, persisted, 10 * 60 * 1000); // 10min TTL, cache 20 items
     },
-    [userId]
+    [profileCreatedDataCacheKey]
   );
+
+  /** Warm memory hits — same bare key as setCached hydrate; skips empty caches (avoid offset skew). */
+  const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (!userId) return undefined;
+    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+  }, [userId, profileCreatedDataCacheKey]);
 
   /**
    * First paint merge: prepend marker (peek-only) + `profile_created_${userId}` + drafts parity with load offset 0.
@@ -313,8 +330,8 @@ export default function OwnProfilePostsSection({
     if (peek.kind !== "pending") return null;
 
     const localItem = buildLocalPrependedFeedItem(profile, peek.payload);
-    const cacheKey = `profile_created_${userId}`;
-    const cachedBare = dataCache.get<FeedItem[]>(cacheKey) ?? [];
+    const cachedBare =
+      dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) ?? [];
 
     const drafts = getDraftsFromStorage();
 
@@ -333,6 +350,7 @@ export default function OwnProfilePostsSection({
   }, [
     visible,
     userId,
+    profileCreatedDataCacheKey,
     profile?.user_id,
     profile?.id,
     profile?.username,
@@ -402,7 +420,7 @@ export default function OwnProfilePostsSection({
   useEffect(() => {
     const onLocalDraftDiscarded = () => {
       if (userId) {
-        dataCache.delete(`profile_created_${userId}`);
+        dataCache.delete(profileCreatedDataCacheKey);
       }
       setLocalDraftEpoch((n) => n + 1);
     };
@@ -412,7 +430,7 @@ export default function OwnProfilePostsSection({
         LOCAL_DRAFT_DISCARDED_EVENT,
         onLocalDraftDiscarded
       );
-  }, [userId]);
+  }, [userId, profileCreatedDataCacheKey]);
 
   // [PHASE 4.1.3] Listen for invite accepted events to clear cache
   useEffect(() => {
@@ -802,6 +820,7 @@ export default function OwnProfilePostsSection({
               renderItem={renderCreatedItem} // [FIX] Use memoized function
               getCachedItems={getCachedCreated}
               setCachedItems={setCachedCreated}
+              initialItems={profileCreatedWarmInitialItems}
               authoritativeHydratedSeed={
                 publishHydratedCreatedRows ?? undefined
               }

@@ -121,9 +121,15 @@ BEGIN
           AND EXISTS (
             SELECT 1
             FROM unnest(COALESCE(p.recurrence_days, ARRAY[]::text[])) AS rec(code)
-            WHERE trim(rec.code) = (
-              ARRAY['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'])[EXTRACT(ISODOW FROM p_occurs_on)::int]
-            )
+            WHERE trim(rec.code) = CASE EXTRACT(ISODOW FROM p_occurs_on)::int
+              WHEN 1 THEN 'MO'
+              WHEN 2 THEN 'TU'
+              WHEN 3 THEN 'WE'
+              WHEN 4 THEN 'TH'
+              WHEN 5 THEN 'FR'
+              WHEN 6 THEN 'SA'
+              WHEN 7 THEN 'SU'
+            END
           )
         )
       )

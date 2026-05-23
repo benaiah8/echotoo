@@ -166,18 +166,34 @@ export default function OtherProfilePostsSection({
   }, [tab, userId]);
 
   // [PHASE C.1] Cache callbacks for Created tab using dataCache (migrating from profilePostsCache)
+  /** Single Created-tab key — bare store; shared by warm initialItems (no drift from get/set). */
+  const profileCreatedDataCacheKey = useMemo(
+    () => `profile_created_${userId}`,
+    [userId]
+  );
+
   const getCachedCreated = useCallback(() => {
-    const cacheKey = `profile_created_${userId}`;
-    return dataCache.get<FeedItem[]>(cacheKey) || null;
-  }, [userId]);
+    return dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) || null;
+  }, [profileCreatedDataCacheKey]);
 
   const setCachedCreated = useCallback(
     (items: FeedItem[]) => {
-      const cacheKey = `profile_created_${userId}`;
-      dataCache.set(cacheKey, items.slice(0, 20), 10 * 60 * 1000); // 10min TTL, cache 20 items
+      dataCache.set(
+        profileCreatedDataCacheKey,
+        items.slice(0, 20),
+        10 * 60 * 1000
+      ); // 10min TTL, cache 20 items
     },
-    [userId]
+    [profileCreatedDataCacheKey]
   );
+
+  /** Warm memory hits — only when viewer can see Created; skips empty caches. */
+  const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (!viewerHasAccess) return undefined;
+    if (!userId) return undefined;
+    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+  }, [viewerHasAccess, userId, profileCreatedDataCacheKey]);
 
   // [PHASE C.2] Cache callbacks for Interacted tab using dataCache (migrating from profilePostsCache)
   const getCachedInteracted = useCallback(() => {
@@ -557,6 +573,7 @@ export default function OtherProfilePostsSection({
               renderItem={renderCreatedItem} // [FIX] Use memoized function
               getCachedItems={getCachedCreated}
               setCachedItems={setCachedCreated}
+              initialItems={profileCreatedWarmInitialItems}
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
               enableScrollStopDetection={true}
               enableLazyLoading={true}

@@ -61,7 +61,6 @@ import { shareUrl } from "../lib/shareUrl";
 import toast from "react-hot-toast";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
-import { dataCache } from "../lib/dataCache";
 import { SKIP_WELCOME_ONBOARDING } from "../lib/featureFlags";
 import { Paths } from "../router/Paths";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
@@ -84,7 +83,7 @@ export default function OwnProfilePage() {
   // [FIX] Use parent tab active status from PersistentTabContainer - stops background fetches when Profile tab is display:none
   const isProfileTabVisible = useTabActive("profile");
 
-  /** Tap profile tab again / pull-to-refresh → remount feeds + purge post caches */
+  /** Tap profile tab again / pull-to-refresh → remount feeds (feed dataCache retained until fresh load replaces) */
   const [profileFeedRefreshEpoch, setProfileFeedRefreshEpoch] = useState(0);
   /** Bumps to re-fetch hero profile (counts, avatar, etc.) */
   const [meRefreshNonce, setMeRefreshNonce] = useState(0);
@@ -230,16 +229,7 @@ export default function OwnProfilePage() {
     const onTabRefresh = () => {
       if (!isProfileTabVisible) return;
 
-      const uid = profile?.user_id;
-      if (uid) {
-        try {
-          dataCache.delete(`profile_created_${uid}`);
-          dataCache.delete(`profile_interacted_${uid}`);
-          dataCache.delete(`profile_saved_${uid}`);
-        } catch {
-          /* noop */
-        }
-      }
+      /** Keep profile_* feed keys in memory for initialItems/getCachedItems during epoch remount; success overwrites via setCachedItems */
       if (profile?.id) invalidateProfile(profile.id);
       setMeRefreshNonce((n) => n + 1);
       setProfileFeedRefreshEpoch((n) => n + 1);
@@ -247,7 +237,7 @@ export default function OwnProfilePage() {
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
     return () =>
       window.removeEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
-  }, [isProfileTabVisible, profile?.user_id, profile?.id]);
+  }, [isProfileTabVisible, profile?.id]);
 
   const {
     pullPx,
