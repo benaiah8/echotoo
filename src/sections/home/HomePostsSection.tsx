@@ -141,31 +141,19 @@ export default function HomePostsSection({
       // Extract items from result (handles both array and OffsetAwareLoadResult formats)
       const allItems = Array.isArray(result) ? result : result.items;
 
-      // For injected rails: when viewMode is "all", show mixed content (like top rail)
-      // When viewMode is "hangouts" or "experiences", the loadItems already filtered by type
-      if (viewMode === "all") {
-        // Mix hangouts and experiences for injected rails (same as top rail)
-        const hangoutPosts = allItems.filter((p) => p.type === "hangout");
-        const experiencePosts = allItems.filter(
-          (p) => p.type === "experience"
-        );
-        const mixedPosts: FeedItem[] = [];
-        const maxLength = Math.max(
-          hangoutPosts.length,
-          experiencePosts.length
-        );
-        for (let i = 0; i < maxLength && mixedPosts.length < limit; i++) {
-          if (hangoutPosts[i]) mixedPosts.push(hangoutPosts[i]);
-          if (experiencePosts[i] && mixedPosts.length < limit)
-            mixedPosts.push(experiencePosts[i]);
-        }
-        return mixedPosts;
+      // Fallback only: mix hangouts + experiences (never use vertical segment loadItems for rails)
+      const hangoutPosts = allItems.filter((p) => p.type === "hangout");
+      const experiencePosts = allItems.filter((p) => p.type === "experience");
+      const mixedPosts: FeedItem[] = [];
+      const maxLength = Math.max(hangoutPosts.length, experiencePosts.length);
+      for (let i = 0; i < maxLength && mixedPosts.length < limit; i++) {
+        if (hangoutPosts[i]) mixedPosts.push(hangoutPosts[i]);
+        if (experiencePosts[i] && mixedPosts.length < limit)
+          mixedPosts.push(experiencePosts[i]);
       }
-
-      // For hangouts/experiences viewMode, return items as-is (already filtered by loadItems)
-      return allItems;
+      return mixedPosts;
     },
-    [loadItems, viewMode]
+    [loadItems]
   );
 
   const railLoadItems = railLoadItemsProp ?? fallbackRailLoadItems;
@@ -174,9 +162,7 @@ export default function HomePostsSection({
   const renderItemWithRail = useCallback(
     (item: FeedItem, index: number) => {
       renderedItemsCountRef.current = index + 1;
-      // [FIX: Phase 1.2] Always show injected rails when viewMode is "all" (removed hangouts dependency)
       const shouldInjectRail =
-        viewMode === "all" &&
         renderedItemsCountRef.current % INJECT_EVERY === 0;
 
       if (DEBUG_RSVP_POST_ID && item.id === DEBUG_RSVP_POST_ID) {
@@ -283,13 +269,9 @@ export default function HomePostsSection({
     ]
   );
 
-  const todayFilterActive = selectedFilters.includes("today");
-
-  const verticalEmptyMessage = todayFilterActive
-    ? "Nothing scheduled for today."
-    : hasActiveFilters
-      ? "No posts match your current filters."
-      : "No posts to show right now.";
+  const verticalEmptyMessage = hasActiveFilters
+    ? "No posts match your current filters."
+    : "No posts to show right now.";
 
   // Legacy mode: prefetch logic
   useEffect(() => {
@@ -459,7 +441,7 @@ export default function HomePostsSection({
           />
 
           {/* Inject horizontal rail every 8 posts - Legacy mode (not used when useProgressiveFeed=true) */}
-          {viewMode === "all" && (idx + 1) % INJECT_EVERY === 0 && (
+          {(idx + 1) % INJECT_EVERY === 0 && (
             <>
               {/* Add spacing and separator line */}
               <div className="mt-6 mb-4">

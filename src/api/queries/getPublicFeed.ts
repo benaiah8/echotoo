@@ -10,6 +10,13 @@ import { filterExpiredHangouts } from "../../lib/feedExpiryFilters";
 
 const IS_DEV_BUILD = Boolean(import.meta.env.DEV);
 
+/** Non-empty feed pages only — empty `[]` must not short-circuit network fetches (Phase 1.1). */
+function isNonemptyFeedCache<T>(
+  cached: T[] | null | undefined
+): cached is T[] {
+  return Array.isArray(cached) && cached.length > 0;
+}
+
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
 
@@ -150,7 +157,7 @@ export async function getPublicFeed(
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
     const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-    if (cachedData) {
+    if (isNonemptyFeedCache(cachedData)) {
       // console.log("[getPublicFeed] Returning cached data for key:", cacheKey);
       return cachedData;
     }
@@ -275,7 +282,7 @@ export async function getPublicFeed(
       // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
       const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
       const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-      if (cachedData) {
+      if (isNonemptyFeedCache(cachedData)) {
         if (IS_DEV_BUILD) {
           console.log(
             "[getPublicFeed] Returning cached data after query failure"
@@ -343,8 +350,8 @@ export async function getPublicFeed(
 
   const finalData = filteredData as FeedItem[];
 
-  // Cache the result for first page queries only
-  if (offset === 0) {
+  // Cache the result for first page queries only (non-empty — avoid false empty after chip toggles)
+  if (offset === 0 && finalData.length > 0) {
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
     const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
     cacheFeedResult(cacheKey, finalData, 2 * 60 * 1000); // Cache for 2 minutes
@@ -425,7 +432,7 @@ export async function getPublicFeedOptimizedWithCount(
     // Step 2: Check exact cache key (fast path for exact matches)
     const cacheKey = dataCache.generateFeedKey(opts);
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-    if (cachedData) {
+    if (isNonemptyFeedCache(cachedData)) {
       // SILENCED: Too verbose - only log misses
       // console.log('[DIAG-FeedCache] ✅ EXACT CACHE HIT (offset=0):', {
       //   cacheKey,
@@ -482,7 +489,7 @@ export async function getPublicFeedOptimizedWithCount(
     // Safety: Only cache offset < 100 to prevent memory bloat, 30s TTL for freshness
     const cacheKey = dataCache.generateFeedKey(opts);
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-    if (cachedData) {
+    if (isNonemptyFeedCache(cachedData)) {
       // SILENCED: Too verbose - only log misses
       // console.log('[DIAG-FeedCache] ✅ PAGINATED CACHE HIT:', {
       //   cacheKey,
@@ -578,7 +585,7 @@ export async function getPublicFeedOptimizedWithCount(
           // Step 2: Check exact cache key
           const cacheKey = dataCache.generateFeedKey(opts);
           const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-          if (cachedData) {
+          if (isNonemptyFeedCache(cachedData)) {
             // SILENCED: Too verbose
             // console.log('[DIAG-RequestManager] ✅ CACHE HIT inside RequestManager (race condition handled):', {
             //   dedupeKey,
@@ -1096,8 +1103,8 @@ export async function getPublicFeedOptimizedWithCount(
             });
           }
 
-          // Cache the result for first page queries (offset === 0)
-          if (offset === 0) {
+          // Cache the result for first page queries (offset === 0, non-empty only)
+          if (offset === 0 && finalData.length > 0) {
             const cacheKey = dataCache.generateFeedKey(opts);
             // Cache the exact result (sliced if applicable)
             cacheFeedResult(cacheKey, finalData, 2 * 60 * 1000); // Cache for 2 minutes
@@ -1137,7 +1144,7 @@ export async function getPublicFeedOptimizedWithCount(
             // ProgressiveFeed handles loading efficiently with small batches (2-3 items)
             // Prefetching causes race conditions and multiple calls with offset 0
             // dataCache.prefetchFeedData(opts);
-          } else if (offset > 0 && offset < 100) {
+          } else if (offset > 0 && offset < 100 && finalData.length > 0) {
             // [OPTIMIZATION: Phase 2] Cache paginated results with shorter TTL
             // Why: Reduces duplicate pagination requests when user scrolls or multiple rails load
             // Safety: Only cache offset < 100 to prevent memory bloat, 30s TTL for freshness
@@ -1177,7 +1184,7 @@ export async function getPublicFeedOptimizedWithCount(
           if (offset === 0 || (offset > 0 && offset < 100)) {
             const cacheKey = dataCache.generateFeedKey(opts);
             const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
-            if (cachedData) {
+            if (isNonemptyFeedCache(cachedData)) {
               if (IS_DEV_BUILD) {
                 console.log(
                   "[getPublicFeedOptimizedWithCount] Returning cached data after error",

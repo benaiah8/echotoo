@@ -201,17 +201,7 @@ export default function HomePage() {
   );
   const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
 
-  /** Vertical-feed Today only: passed into `get_feed_with_related_data` when Today chip selected. */
-  const verticalOccurrenceParams = useMemo((): Pick<
-    FeedOptions,
-    "occursOn" | "occursTz"
-  > => {
-    if (!selectedFilters.includes("today")) {
-      return { occursOn: null, occursTz: null };
-    }
-    const o = viewerLocalOccurrenceForTodayChip();
-    return o ? { occursOn: o.occursOn, occursTz: o.occursTz } : { occursOn: null, occursTz: null };
-  }, [selectedFilters]);
+  // Today spotlight: `viewerLocalOccurrenceForTodayChip` + FeedOptions.occursOn/Tz kept for Phase 3 (chip is visual-only).
 
   const userSearchOverlayOpen =
     searchMode === "users" &&
@@ -435,10 +425,10 @@ export default function HomePage() {
         limit: HOME_FEED_FIRST_PAGE,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
-        occursOn: verticalOccurrenceParams.occursOn,
-        occursTz: verticalOccurrenceParams.occursTz,
+        occursOn: null,
+        occursTz: null,
       }) as Parameters<typeof dataCache.generateFeedKey>[0],
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId, verticalOccurrenceParams]
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
   );
 
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
@@ -912,28 +902,26 @@ export default function HomePage() {
             paddingBottom: FOOTER_HEIGHT,
           }}
         >
-          {/* HORIZONTAL RAIL AT TOP - shows mixed recent content */}
-          {viewMode === "all" && (
-            <div className="w-full max-w-[640px] mx-auto px-0">
-              <HomeHangoutSection
-                key={`rail-top-${railAppliedFiltersSortedKey}-${selectedTags.join(
-                  ","
-                )}-${feedSearchQ ?? ""}-e${homeRefreshEpoch}`}
-                items={[]}
-                loading={false}
-                batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
-                // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Progressive loading with client-side filtering
-                useProgressiveLoading={true}
-                isVisible={isHomeVisible}
-                tabId="home"
-                filteredCount={railFilteredCountRef.current}
-                hasActiveFilters={railHasActiveDiscoveryFilters}
-                loadItems={topRailLoadItems}
-                getCachedItems={topRailGetCachedItems}
-                setCachedItems={topRailSetCachedItems}
-              />
-            </div>
-          )}
+          {/* HORIZONTAL RAIL AT TOP — independent of Today / Hangouts / Experiences vertical chips */}
+          <div className="w-full max-w-[640px] mx-auto px-0">
+            <HomeHangoutSection
+              key={`rail-top-${railAppliedFiltersSortedKey}-${selectedTags.join(
+                ","
+              )}-${feedSearchQ ?? ""}-e${homeRefreshEpoch}`}
+              items={[]}
+              loading={false}
+              batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
+              // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Progressive loading with client-side filtering
+              useProgressiveLoading={true}
+              isVisible={isHomeVisible}
+              tabId="home"
+              filteredCount={railFilteredCountRef.current}
+              hasActiveFilters={railHasActiveDiscoveryFilters}
+              loadItems={topRailLoadItems}
+              getCachedItems={topRailGetCachedItems}
+              setCachedItems={topRailSetCachedItems}
+            />
+          </div>
 
           {/* POSTS & INJECTIONS */}
           <div className="w-full max-w-[640px] mx-auto px-0">
@@ -975,23 +963,16 @@ export default function HomePage() {
                     limit,
                     offset,
                     viewerProfileId: viewerProfileId || undefined, // Use state
-                    ...((verticalOccurrenceParams.occursOn &&
-                      verticalOccurrenceParams.occursTz && {
-                      occursOn: verticalOccurrenceParams.occursOn,
-                      occursTz: verticalOccurrenceParams.occursTz,
-                    }) ||
-                      {}),
+                    // occursOn/occursTz omitted until Phase 3 Today spotlight
                   };
                   if (USE_OPTIMIZED_FEED) {
                     const { items, consumedOffset, count } =
                       await getPublicFeedOptimizedWithCount(feedOptions);
 
-                    // [PHASE 4 + B2] Skip personalization while Today narrows RPC — keep strict server ordering.
                     const shouldPersonalize =
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
-                      viewMode === "all" &&
-                      !selectedFilters.includes("today");
+                      viewMode === "all";
 
                     const personalizedItemsRaw = shouldPersonalize
                       ? personalizeFeedBatch(items)
@@ -1025,12 +1006,10 @@ export default function HomePage() {
                   } else {
                     const items = await getPublicFeed(feedOptions);
 
-                    // [PHASE 4 + B2] Skip personalization while Today narrows RPC — keep strict server ordering.
                     const shouldPersonalize =
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
-                      viewMode === "all" &&
-                      !selectedFilters.includes("today");
+                      viewMode === "all";
 
                     const personalizedItemsRaw = shouldPersonalize
                       ? personalizeFeedBatch(items)
@@ -1049,14 +1028,7 @@ export default function HomePage() {
                     };
                   }
                 },
-                [
-                  feedSearchQ,
-                  selectedTags,
-                  viewMode,
-                  viewerProfileId,
-                  verticalOccurrenceParams,
-                  selectedFilters,
-                ] // Vertical Today + personalization guard
+                [feedSearchQ, selectedTags, viewMode, viewerProfileId]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
@@ -1079,17 +1051,12 @@ export default function HomePage() {
                 q: feedSearchQ,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
                 currentUserId: viewerProfileId ?? null, // Use state for feedKey
-                occursOn: verticalOccurrenceParams.occursOn,
-                occursTz: verticalOccurrenceParams.occursTz,
+                occursOn: null,
+                occursTz: null,
               }}
-              // [FIX: Phase 1.2 - Horizontal Rail] Pass railLoadItems and cache functions for injected rails
-              railLoadItems={viewMode === "all" ? railLoadItems : undefined}
-              railGetCachedItems={
-                viewMode === "all" ? railGetCachedItems : undefined
-              }
-              railSetCachedItems={
-                viewMode === "all" ? railSetCachedItems : undefined
-              }
+              railLoadItems={railLoadItems}
+              railGetCachedItems={railGetCachedItems}
+              railSetCachedItems={railSetCachedItems}
               railHasActiveFilters={railHasActiveDiscoveryFilters}
               selectedFilters={selectedFilters}
             />
