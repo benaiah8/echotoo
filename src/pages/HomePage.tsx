@@ -51,6 +51,7 @@ import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import { HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
+import { loadHomeVerticalPage } from "../lib/homeTodaySpotlight";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
@@ -189,7 +190,7 @@ export default function HomePage() {
     [searchMode, search]
   );
 
-  /** Social filters applied to rails only (Hangouts/Discover); Today affects vertical feed in later phases. */
+  /** Social filters applied to rails only (Hangouts/Discover); Today is vertical spotlight only. */
   const railAppliedFilters = useMemo(
     (): FilterType[] =>
       selectedFilters.filter((f) => f !== "today") as FilterType[],
@@ -201,7 +202,11 @@ export default function HomePage() {
   );
   const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
 
-  // Today spotlight: `viewerLocalOccurrenceForTodayChip` + FeedOptions.occursOn/Tz kept for Phase 3 (chip is visual-only).
+  const todayChipActive = selectedFilters.includes("today");
+  const todayOccurrence = useMemo(
+    () => (todayChipActive ? viewerLocalOccurrenceForTodayChip() : null),
+    [todayChipActive]
+  );
 
   const userSearchOverlayOpen =
     searchMode === "users" &&
@@ -425,10 +430,11 @@ export default function HomePage() {
         limit: HOME_FEED_FIRST_PAGE,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
-        occursOn: null,
-        occursTz: null,
+        // Today-on uses occurrence segments so remount/cache never overwrites the normal key.
+        occursOn: todayChipActive && todayOccurrence ? todayOccurrence.occursOn : null,
+        occursTz: todayChipActive && todayOccurrence ? todayOccurrence.occursTz : null,
       }) as Parameters<typeof dataCache.generateFeedKey>[0],
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId, todayChipActive, todayOccurrence]
   );
 
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
@@ -438,11 +444,12 @@ export default function HomePage() {
     [homeVerticalFirstPageFeedKeyOptions]
   );
 
-  /** Warm memory hits only — same key as ProgressiveFeed hydrate; avoids empty-array initialItems misleading offset. */
+  /** Warm memory hits only — skip when Today spotlight is on (merged page must not hydrate from stale slice). */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (todayChipActive) return undefined;
     const cached = dataCache.get<FeedItem[]>(feedCacheKey);
     return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
-  }, [feedCacheKey]);
+  }, [feedCacheKey, todayChipActive]);
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
@@ -939,74 +946,60 @@ export default function HomePage() {
               useProgressiveFeed={true}
               loadItems={useCallback(
                 async (offset: number, limit: number) => {
-                  // [DIAG: Phase 2.2] Check what limits are being requested
-                  // SILENCED: Too verbose
-                  // console.log('[DIAG-HomePage] Feed load request:', {
-                  //   offset,
-                  //   limit,
-                  //   viewMode,
-                  //   hasSearch: !!search,
-                  //   tagsCount: selectedTags.length,
-                  //   hasViewer: !!viewerProfileId,
-                  // });
+                  const segmentType =
+                    viewMode === "hangouts"
+                      ? ("hangout" as const)
+                      : viewMode === "experiences"
+                      ? ("experience" as const)
+                      : undefined;
 
-                  // [FIX] Use resolved viewerProfileId state, not getViewerId() per load
-                  const feedOptions: FeedOptions = {
-                    type:
-                      viewMode === "hangouts"
-                        ? ("hangout" as const)
-                        : viewMode === "experiences"
-                        ? ("experience" as const)
-                        : undefined,
-                    q: feedSearchQ,
-                    tags: selectedTags.length > 0 ? selectedTags : undefined,
-                    limit,
-                    offset,
-                    viewerProfileId: viewerProfileId || undefined, // Use state
-                    // occursOn/occursTz omitted until Phase 3 Today spotlight
-                  };
-                  if (USE_OPTIMIZED_FEED) {
-                    const { items, consumedOffset, count } =
-                      await getPublicFeedOptimizedWithCount(feedOptions);
+                  const loadNormalVertical = async (opts: FeedOptions) => {
+                    const hasOccurrenceFilter = Boolean(
+                      opts.occursOn && opts.occursTz
+                    );
+                    if (USE_OPTIMIZED_FEED) {
+                      const { items, consumedOffset, count } =
+                        await getPublicFeedOptimizedWithCount(opts);
 
-                    const shouldPersonalize =
-                      !feedSearchQ &&
-                      selectedTags.length === 0 &&
-                      viewMode === "all";
+                      const shouldPersonalize =
+                        !hasOccurrenceFilter &&
+                        !feedSearchQ &&
+                        selectedTags.length === 0 &&
+                        viewMode === "all";
 
-                    const personalizedItemsRaw = shouldPersonalize
-                      ? personalizeFeedBatch(items)
-                      : items;
+                      const personalizedItemsRaw = shouldPersonalize
+                        ? personalizeFeedBatch(items)
+                        : items;
 
-                    const personalizedItems =
-                      shouldPersonalize &&
-                      personalizedItemsRaw.length !== items.length
-                        ? items
-                        : personalizedItemsRaw;
+                      const personalizedItems =
+                        shouldPersonalize &&
+                        personalizedItemsRaw.length !== items.length
+                          ? items
+                          : personalizedItemsRaw;
 
-                    // Feed pipeline instrumentation (dev only — avoids noisy / costly logs in prod)
-                    if (import.meta.env.DEV) {
-                      console.log("[FeedPipeline] HomePage loadItems", {
-                        offset,
-                        limit,
-                        itemsFromRpc: items.length,
-                        afterPersonalization: personalizedItems.length,
-                        consumedOffset: consumedOffset ?? items.length,
+                      if (import.meta.env.DEV) {
+                        console.log("[FeedPipeline] HomePage loadNormal", {
+                          offset: opts.offset,
+                          limit: opts.limit,
+                          hasOccurrenceFilter,
+                          itemsFromRpc: items.length,
+                          afterPersonalization: personalizedItems.length,
+                          consumedOffset: consumedOffset ?? items.length,
+                          count,
+                        });
+                      }
+
+                      return {
+                        items: personalizedItems,
+                        consumedOffset:
+                          consumedOffset ?? personalizedItems.length,
                         count,
-                      });
+                      };
                     }
 
-                    // consumedOffset = raw RPC length for correct pagination
-                    return {
-                      items: personalizedItems,
-                      consumedOffset:
-                        consumedOffset ?? personalizedItems.length,
-                      count,
-                    };
-                  } else {
-                    const items = await getPublicFeed(feedOptions);
-
+                    const items = await getPublicFeed(opts);
                     const shouldPersonalize =
+                      !hasOccurrenceFilter &&
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
                       viewMode === "all";
@@ -1026,9 +1019,31 @@ export default function HomePage() {
                       consumedOffset: personalizedItems.length,
                       count: personalizedItems.length,
                     };
-                  }
+                  };
+
+                  return loadHomeVerticalPage({
+                    offset,
+                    limit,
+                    todayActive: todayChipActive,
+                    occurrence: todayOccurrence,
+                    baseFeedOptions: {
+                      type: segmentType,
+                      q: feedSearchQ,
+                      tags:
+                        selectedTags.length > 0 ? selectedTags : undefined,
+                      viewerProfileId: viewerProfileId || undefined,
+                    },
+                    loadNormal: loadNormalVertical,
+                  });
                 },
-                [feedSearchQ, selectedTags, viewMode, viewerProfileId]
+                [
+                  feedSearchQ,
+                  selectedTags,
+                  viewMode,
+                  viewerProfileId,
+                  todayChipActive,
+                  todayOccurrence,
+                ]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
@@ -1037,9 +1052,12 @@ export default function HomePage() {
               }, [feedCacheKey])}
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
+                  // Normal feed key only — Today spotlight uses occurrence segments in feedCacheKey.
+                  if (todayChipActive) return;
+                  if (!Array.isArray(items) || items.length === 0) return;
                   dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
                 },
-                [feedCacheKey]
+                [feedCacheKey, todayChipActive]
               )}
               feedOptions={{
                 type:
@@ -1051,8 +1069,14 @@ export default function HomePage() {
                 q: feedSearchQ,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
                 currentUserId: viewerProfileId ?? null, // Use state for feedKey
-                occursOn: null,
-                occursTz: null,
+                occursOn:
+                  todayChipActive && todayOccurrence
+                    ? todayOccurrence.occursOn
+                    : null,
+                occursTz:
+                  todayChipActive && todayOccurrence
+                    ? todayOccurrence.occursTz
+                    : null,
               }}
               railLoadItems={railLoadItems}
               railGetCachedItems={railGetCachedItems}
