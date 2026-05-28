@@ -71,6 +71,11 @@ interface Props {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
+  /** Today spotlight above normal feed — does not remount ProgressiveFeed */
+  todayChipActive?: boolean;
+  todaySpotlightItems?: FeedItem[];
+  todaySpotlightLoading?: boolean;
+  todaySpotlightResolved?: boolean;
 }
 
 const INJECT_EVERY = 8;
@@ -102,6 +107,10 @@ export default function HomePostsSection({
   railFilteredCount,
   isVisible = true,
   tabId = "home",
+  todayChipActive = false,
+  todaySpotlightItems = [],
+  todaySpotlightLoading = false,
+  todaySpotlightResolved = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const renderedItemsCountRef = useRef(0);
@@ -323,6 +332,34 @@ export default function HomePostsSection({
     displayItems.length === 0 &&
     (!showTagFallback || fallbackItems.length === 0);
 
+  const renderSpotlightPost = useCallback(
+    (item: FeedItem) => (
+      <Post
+        key={`today-spotlight-${item.id}`}
+        postId={item.id}
+        caption={item.caption || "(no caption)"}
+        createdAt={item.created_at}
+        authorId={item.author_id}
+        author={item.author}
+        type={item.type}
+        isAnonymous={item.is_anonymous || false}
+        anonymousName={item.anonymous_name}
+        anonymousAvatar={item.anonymous_avatar}
+        selectedDates={item.selected_dates}
+        post={item}
+        slideshowHostVisible={isVisible}
+        isOwner={authUserId != null && authUserId === item.author_id}
+      />
+    ),
+    [isVisible, authUserId]
+  );
+
+  const showTodayEmptyNotice =
+    todayChipActive &&
+    todaySpotlightResolved &&
+    !todaySpotlightLoading &&
+    todaySpotlightItems.length === 0;
+
   // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveFeed if enabled
   if (useProgressiveFeed && loadItems) {
     return (
@@ -330,6 +367,17 @@ export default function HomePostsSection({
         ref={containerRef}
         className="flex flex-col w-full px-1.5 gap-4 mt-3"
       >
+        {todayChipActive ? (
+          <div className="flex flex-col gap-4">
+            {showTodayEmptyNotice ? (
+              <p className="py-2 text-center text-sm text-[var(--text)]/70">
+                Nothing scheduled for today.
+              </p>
+            ) : null}
+            {todaySpotlightItems.map((item) => renderSpotlightPost(item))}
+          </div>
+        ) : null}
+
         <ProgressiveFeed
           key={feedKey} // Reset when filters change
           loadItems={loadItems} // PostgreSQL already filters by type

@@ -51,7 +51,10 @@ import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import { HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
-import { loadHomeVerticalPage } from "../lib/homeTodaySpotlight";
+import {
+  fetchTodaySpotlightItems,
+  logTodaySpotlight,
+} from "../lib/homeTodaySpotlight";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
@@ -203,9 +206,21 @@ export default function HomePage() {
   const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
 
   const todayChipActive = selectedFilters.includes("today");
-  const todayOccurrence = useMemo(
-    () => (todayChipActive ? viewerLocalOccurrenceForTodayChip() : null),
-    [todayChipActive]
+
+  const [todaySpotlightItems, setTodaySpotlightItems] = useState<FeedItem[]>(
+    []
+  );
+  const [todaySpotlightLoading, setTodaySpotlightLoading] = useState(false);
+  const [todaySpotlightResolved, setTodaySpotlightResolved] = useState(false);
+
+  const verticalSegmentType = useMemo(
+    (): FeedOptions["type"] =>
+      viewMode === "hangouts"
+        ? "hangout"
+        : viewMode === "experiences"
+        ? "experience"
+        : undefined,
+    [viewMode]
   );
 
   const userSearchOverlayOpen =
@@ -430,11 +445,10 @@ export default function HomePage() {
         limit: HOME_FEED_FIRST_PAGE,
         offset: 0,
         viewerProfileId: viewerProfileId ?? null,
-        // Today-on uses occurrence segments so remount/cache never overwrites the normal key.
-        occursOn: todayChipActive && todayOccurrence ? todayOccurrence.occursOn : null,
-        occursTz: todayChipActive && todayOccurrence ? todayOccurrence.occursTz : null,
+        occursOn: null,
+        occursTz: null,
       }) as Parameters<typeof dataCache.generateFeedKey>[0],
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId, todayChipActive, todayOccurrence]
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
   );
 
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
@@ -444,12 +458,105 @@ export default function HomePage() {
     [homeVerticalFirstPageFeedKeyOptions]
   );
 
-  /** Warm memory hits only — skip when Today spotlight is on (merged page must not hydrate from stale slice). */
+  /** Warm memory hits only — same key as ProgressiveFeed hydrate; avoids empty-array initialItems misleading offset. */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
-    if (todayChipActive) return undefined;
     const cached = dataCache.get<FeedItem[]>(feedCacheKey);
     return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
-  }, [feedCacheKey, todayChipActive]);
+  }, [feedCacheKey]);
+
+  /** Today spotlight fetch — independent of ProgressiveFeed; refetch when segment/search/tags change. */
+  useEffect(() => {
+    if (!todayChipActive) {
+      setTodaySpotlightItems([]);
+      setTodaySpotlightLoading(false);
+      setTodaySpotlightResolved(false);
+      logTodaySpotlight({
+        todayActive: false,
+        todaySpotlightCount: 0,
+        todaySpotlightLoading: false,
+        todaySpotlightResolved: false,
+      });
+      return;
+    }
+
+    const occurrence = viewerLocalOccurrenceForTodayChip();
+    if (!occurrence) {
+      setTodaySpotlightItems([]);
+      setTodaySpotlightLoading(false);
+      setTodaySpotlightResolved(true);
+      logTodaySpotlight({
+        todayActive: true,
+        verticalSegment: viewMode,
+        occursOn: null,
+        occursTz: null,
+        todaySpotlightCount: 0,
+        todaySpotlightLoading: false,
+        todaySpotlightResolved: true,
+        note: "no-occurrence-window",
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setTodaySpotlightLoading(true);
+    setTodaySpotlightResolved(false);
+
+    void (async () => {
+      try {
+        const items = await fetchTodaySpotlightItems(
+          {
+            type: verticalSegmentType,
+            q: feedSearchQ,
+            tags: selectedTags.length > 0 ? selectedTags : undefined,
+            viewerProfileId: viewerProfileId || undefined,
+          },
+          occurrence,
+          USE_OPTIMIZED_FEED
+        );
+        if (cancelled) return;
+        setTodaySpotlightItems(items);
+        logTodaySpotlight({
+          todayActive: true,
+          verticalSegment: viewMode,
+          verticalType: verticalSegmentType ?? "all",
+          occursOn: occurrence.occursOn,
+          occursTz: occurrence.occursTz,
+          todaySpotlightCount: items.length,
+          todaySpotlightLoading: false,
+          todaySpotlightResolved: true,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        console.error("[HomePage] Today spotlight fetch failed:", err);
+        setTodaySpotlightItems([]);
+        logTodaySpotlight({
+          todayActive: true,
+          verticalSegment: viewMode,
+          occursOn: occurrence.occursOn,
+          occursTz: occurrence.occursTz,
+          todaySpotlightCount: 0,
+          error: true,
+          todaySpotlightResolved: true,
+        });
+      } finally {
+        if (!cancelled) {
+          setTodaySpotlightLoading(false);
+          setTodaySpotlightResolved(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    todayChipActive,
+    viewMode,
+    verticalSegmentType,
+    feedSearchQ,
+    selectedTags,
+    viewerProfileId,
+  ]);
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
@@ -946,60 +1053,20 @@ export default function HomePage() {
               useProgressiveFeed={true}
               loadItems={useCallback(
                 async (offset: number, limit: number) => {
-                  const segmentType =
-                    viewMode === "hangouts"
-                      ? ("hangout" as const)
-                      : viewMode === "experiences"
-                      ? ("experience" as const)
-                      : undefined;
+                  const feedOptions: FeedOptions = {
+                    type: verticalSegmentType,
+                    q: feedSearchQ,
+                    tags:
+                      selectedTags.length > 0 ? selectedTags : undefined,
+                    limit,
+                    offset,
+                    viewerProfileId: viewerProfileId || undefined,
+                  };
+                  if (USE_OPTIMIZED_FEED) {
+                    const { items, consumedOffset, count } =
+                      await getPublicFeedOptimizedWithCount(feedOptions);
 
-                  const loadNormalVertical = async (opts: FeedOptions) => {
-                    const hasOccurrenceFilter = Boolean(
-                      opts.occursOn && opts.occursTz
-                    );
-                    if (USE_OPTIMIZED_FEED) {
-                      const { items, consumedOffset, count } =
-                        await getPublicFeedOptimizedWithCount(opts);
-
-                      const shouldPersonalize =
-                        !hasOccurrenceFilter &&
-                        !feedSearchQ &&
-                        selectedTags.length === 0 &&
-                        viewMode === "all";
-
-                      const personalizedItemsRaw = shouldPersonalize
-                        ? personalizeFeedBatch(items)
-                        : items;
-
-                      const personalizedItems =
-                        shouldPersonalize &&
-                        personalizedItemsRaw.length !== items.length
-                          ? items
-                          : personalizedItemsRaw;
-
-                      if (import.meta.env.DEV) {
-                        console.log("[FeedPipeline] HomePage loadNormal", {
-                          offset: opts.offset,
-                          limit: opts.limit,
-                          hasOccurrenceFilter,
-                          itemsFromRpc: items.length,
-                          afterPersonalization: personalizedItems.length,
-                          consumedOffset: consumedOffset ?? items.length,
-                          count,
-                        });
-                      }
-
-                      return {
-                        items: personalizedItems,
-                        consumedOffset:
-                          consumedOffset ?? personalizedItems.length,
-                        count,
-                      };
-                    }
-
-                    const items = await getPublicFeed(opts);
                     const shouldPersonalize =
-                      !hasOccurrenceFilter &&
                       !feedSearchQ &&
                       selectedTags.length === 0 &&
                       viewMode === "all";
@@ -1014,36 +1081,48 @@ export default function HomePage() {
                         ? items
                         : personalizedItemsRaw;
 
+                    if (import.meta.env.DEV) {
+                      console.log("[FeedPipeline] HomePage loadItems", {
+                        offset,
+                        limit,
+                        itemsFromRpc: items.length,
+                        afterPersonalization: personalizedItems.length,
+                        consumedOffset: consumedOffset ?? items.length,
+                        count,
+                      });
+                    }
+
                     return {
                       items: personalizedItems,
-                      consumedOffset: personalizedItems.length,
-                      count: personalizedItems.length,
+                      consumedOffset:
+                        consumedOffset ?? personalizedItems.length,
+                      count,
                     };
-                  };
+                  }
 
-                  return loadHomeVerticalPage({
-                    offset,
-                    limit,
-                    todayActive: todayChipActive,
-                    occurrence: todayOccurrence,
-                    baseFeedOptions: {
-                      type: segmentType,
-                      q: feedSearchQ,
-                      tags:
-                        selectedTags.length > 0 ? selectedTags : undefined,
-                      viewerProfileId: viewerProfileId || undefined,
-                    },
-                    loadNormal: loadNormalVertical,
-                  });
+                  const items = await getPublicFeed(feedOptions);
+                  const shouldPersonalize =
+                    !feedSearchQ &&
+                    selectedTags.length === 0 &&
+                    viewMode === "all";
+
+                  const personalizedItemsRaw = shouldPersonalize
+                    ? personalizeFeedBatch(items)
+                    : items;
+
+                  const personalizedItems =
+                    shouldPersonalize &&
+                    personalizedItemsRaw.length !== items.length
+                      ? items
+                      : personalizedItemsRaw;
+
+                  return {
+                    items: personalizedItems,
+                    consumedOffset: personalizedItems.length,
+                    count: personalizedItems.length,
+                  };
                 },
-                [
-                  feedSearchQ,
-                  selectedTags,
-                  viewMode,
-                  viewerProfileId,
-                  todayChipActive,
-                  todayOccurrence,
-                ]
+                [feedSearchQ, selectedTags, viewMode, viewerProfileId, verticalSegmentType]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
@@ -1052,32 +1131,23 @@ export default function HomePage() {
               }, [feedCacheKey])}
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
-                  // Normal feed key only — Today spotlight uses occurrence segments in feedCacheKey.
-                  if (todayChipActive) return;
                   if (!Array.isArray(items) || items.length === 0) return;
                   dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
                 },
-                [feedCacheKey, todayChipActive]
+                [feedCacheKey]
               )}
               feedOptions={{
-                type:
-                  viewMode === "hangouts"
-                    ? "hangout"
-                    : viewMode === "experiences"
-                    ? "experience"
-                    : undefined,
+                type: verticalSegmentType,
                 q: feedSearchQ,
                 tags: selectedTags.length > 0 ? selectedTags : undefined,
-                currentUserId: viewerProfileId ?? null, // Use state for feedKey
-                occursOn:
-                  todayChipActive && todayOccurrence
-                    ? todayOccurrence.occursOn
-                    : null,
-                occursTz:
-                  todayChipActive && todayOccurrence
-                    ? todayOccurrence.occursTz
-                    : null,
+                currentUserId: viewerProfileId ?? null,
+                occursOn: null,
+                occursTz: null,
               }}
+              todayChipActive={todayChipActive}
+              todaySpotlightItems={todaySpotlightItems}
+              todaySpotlightLoading={todaySpotlightLoading}
+              todaySpotlightResolved={todaySpotlightResolved}
               railLoadItems={railLoadItems}
               railGetCachedItems={railGetCachedItems}
               railSetCachedItems={railSetCachedItems}
