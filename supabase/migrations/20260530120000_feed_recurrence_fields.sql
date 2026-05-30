@@ -1,47 +1,20 @@
--- ============================================
--- OPTIMIZED FEED FUNCTION
--- Replaces 6-10 separate queries with 1 optimized PostgreSQL function
--- Expected: 60-70% egress reduction, 60-75% faster load times
---
--- [FIX B1/B2] Paginate on distinct post IDs first; count = true total
--- - B1: LIMIT/OFFSET on joined rows caused short pages after DISTINCT collapse
--- - B2: count was jsonb_array_length(posts) = page size, not total
---
--- [Option A] Hangout eligibility in eligible_base (server-side)
--- - Exclude: PAST scheduled non-recurring hangouts
--- - Keep: UNSCHEDULED, RECURRING, UPCOMING, experiences
--- - After migration: run verify_feed_pagination.sql to compare true_total before/after
---
--- Effective rating (type = experience; must match profile/user RPCs):
---   count = COALESCE(demo.demo_rating_count,0) + COALESCE(p.rating_count,0)
---   average = ROUND(((demo_avg*demo_n)+(real_avg*real_n))/(demo_n+real_n), 2) with real from posts.rating_*
--- ============================================
+-- Return is_recurring and recurrence_days in get_feed_with_related_data JSON (feed schedule labels).
+-- Same 8-param signature and logic as 20260521120000_feed_occurrence_params.sql.
 
--- Drop old six-argument signature first so existing callers bind to defaults on the unified eight-arg function.
-DROP FUNCTION IF EXISTS public.get_feed_with_related_data(
-  public.post_type,
-  TEXT[],
-  TEXT,
-  INTEGER,
-  INTEGER,
-  UUID
-);
-
--- Create the optimized feed function (optional occurrence params appended; callers may omit — Today filter off)
 CREATE OR REPLACE FUNCTION public.get_feed_with_related_data(
   p_type public.post_type DEFAULT NULL,
-  p_tags TEXT[] DEFAULT NULL,
-  p_search TEXT DEFAULT NULL,
-  p_limit INTEGER DEFAULT 12,
-  p_offset INTEGER DEFAULT 0,
-  p_viewer_user_id UUID DEFAULT NULL,
-  p_occurs_on DATE DEFAULT NULL,
-  p_occurs_tz TEXT DEFAULT NULL
+  p_tags text[] DEFAULT NULL,
+  p_search text DEFAULT NULL,
+  p_limit integer DEFAULT 12,
+  p_offset integer DEFAULT 0,
+  p_viewer_user_id uuid DEFAULT NULL,
+  p_occurs_on date DEFAULT NULL,
+  p_occurs_tz text DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
-SECURITY DEFINER -- Run with function owner's permissions (bypasses RLS for reads)
-STABLE -- Function doesn't modify data, results are stable within a transaction
+SECURITY DEFINER
+STABLE
 AS $$
 DECLARE
   v_viewer_profile_id UUID;
@@ -49,7 +22,6 @@ DECLARE
   v_posts JSONB;
   v_true_total INTEGER;
 BEGIN
-  -- Step 1: Get viewer's profile ID if viewer_user_id is provided (exclude soft-deleted)
   IF p_viewer_user_id IS NOT NULL THEN
     SELECT id INTO v_viewer_profile_id
     FROM profiles
@@ -57,11 +29,7 @@ BEGIN
     LIMIT 1;
   END IF;
 
-  -- Step 2: Paginate on distinct post IDs first (B1 fix), then join for full data
-  -- Step 3: Compute true total from same filtered base (B2 fix)
   WITH
-  -- Base: distinct eligible post IDs with same filters (privacy, visibility, type, tags, search)
-  -- [Option A] Hangout eligibility: exclude PAST scheduled non-recurring; keep UNSCHEDULED, RECURRING, UPCOMING
   eligible_base AS (
     SELECT DISTINCT p.id, p.created_at
     FROM posts p
@@ -75,7 +43,6 @@ BEGIN
     WHERE
       (p_type IS NULL OR p.type = p_type)
       AND (p_tags IS NULL OR (p.tags IS NOT NULL AND p.tags && p_tags))
-      -- Free-text search: caption OR post-level tags; whitespace tokens OR'd; # ignored on query/tags; case-insensitive
       AND (
         p_search IS NULL
         OR EXISTS (
@@ -108,7 +75,6 @@ BEGIN
         OR v_viewer_profile_id = author_profile.id
         OR (p.visibility = 'friends' AND mutual_follow.status = 'approved' AND reverse_follow.status = 'approved')
       )
-      -- [Option A] Hangout eligibility: exclude only PAST scheduled non-recurring
       AND (
         p.type != 'hangout'
         OR (
@@ -124,7 +90,6 @@ BEGIN
           )
         )
       )
-      -- v1 user_blocks: hide posts where viewer and author are a blocked pair (symmetric)
       AND (
         p_viewer_user_id IS NULL
         OR NOT public.users_are_blocked_pair(p_viewer_user_id, p.author_id)
@@ -160,20 +125,15 @@ BEGIN
         )
       )
   ),
-  -- True total count (B2: stable across pages)
   true_total_cte AS (
     SELECT COUNT(*)::INTEGER AS cnt FROM eligible_base
   ),
-  -- Page of IDs for this request (B1: guarantees fetchedLen ≈ p_limit until end)
-  -- Deterministic tie-breaker: id DESC for stable ordering across pages
   page_ids AS (
     SELECT id FROM eligible_base
     ORDER BY created_at DESC, id DESC
     LIMIT p_limit
     OFFSET p_offset
   ),
-  -- Join page_ids to get full post data with related tables
-  -- [SHRINK] Minimal fields only; NO full activities.images; rsvp_data = going_count + currentUserStatus only
   filtered_posts AS (
     SELECT
       p.id,
@@ -217,7 +177,6 @@ BEGIN
         ELSE COALESCE(p.save_count, 0)
       END AS effective_save_count,
       COALESCE(p.comment_count, 0) AS comment_count,
-      -- [SHRINK] Activity summary only; NO full activities.images arrays
       (SELECT COUNT(*)::int FROM activities a WHERE a.post_id = p.id) AS activity_count,
       EXISTS(
         SELECT 1 FROM activities a
@@ -235,7 +194,6 @@ BEGIN
         FROM activities a
         WHERE a.post_id = p.id
       ) AS image_count,
-      -- [SHRINK] rsvp_data: going_count + currentUserStatus only (no user list/avatars)
       CASE
         WHEN p.type = 'hangout' THEN
           jsonb_build_object(
@@ -342,7 +300,6 @@ BEGIN
   FROM true_total_cte
   LIMIT 1;
 
-  -- Step 4: Build result with true total count (B2)
   v_result := jsonb_build_object(
     'posts', COALESCE(v_posts, '[]'::jsonb),
     'count', COALESCE(v_true_total, 0)
@@ -352,29 +309,39 @@ BEGIN
 END;
 $$;
 
--- Add comment for documentation
 COMMENT ON FUNCTION public.get_feed_with_related_data(
   public.post_type,
-  TEXT[],
-  TEXT,
-  INTEGER,
-  INTEGER,
-  UUID,
-  DATE,
-  TEXT
+  text[],
+  text,
+  integer,
+  integer,
+  uuid,
+  date,
+  text
 ) IS
 'Optimized feed function that returns posts with all related data (follows, likes, saves, RSVPs) in a single query.
 [B1] Paginates on distinct post IDs first to guarantee full pages.
 [B2] count = true total of eligible posts (stable across pages).
 [Option A] Hangout eligibility in eligible_base: exclude PAST scheduled non-recurring; keep UNSCHEDULED, RECURRING, UPCOMING.
 [B1 occurrences] Optional p_occurs_on + p_occurs_tz: viewer-local calendar filter (Today); both required to apply.
+Returns is_recurring and recurrence_days for feed schedule labels.
+
 Parameters:
+
 - p_type: Filter by post type (experience/hangout)
+
 - p_tags: Filter by tags (array)
+
 - p_search: Free-text search in caption OR posts.tags (tokens whitespace-split, OR across tokens; # stripped, case-insensitive)
+
 - p_limit: Number of posts to return
+
 - p_offset: Pagination offset
+
 - p_viewer_user_id: Auth user ID for privacy/follow checks
+
 - p_occurs_on: Viewer-local occurrence date for optional Today filtering (omit with NULL to disable)
+
 - p_occurs_tz: IANA timezone for interpreting selected_dates timestamps (omit with NULL to disable)
+
 Returns: JSONB with posts array and count (true total)';

@@ -175,6 +175,8 @@ export async function getPublicFeed(
        anonymous_avatar,
        created_at,
        selected_dates,
+       is_recurring,
+       recurrence_days,
        tags,
        author_id,
        rsvp_capacity,
@@ -231,6 +233,8 @@ export async function getPublicFeed(
              anonymous_avatar,
              created_at,
              selected_dates,
+             is_recurring,
+             recurrence_days,
              tags,
              author_id,
              rsvp_capacity,
@@ -992,6 +996,8 @@ export async function getPublicFeedOptimizedWithCount(
               effective_rating_count:
                 post.effective_rating_count ?? (post.rating_count ?? null),
               viewer_rating: post.viewer_rating ?? null,
+              is_recurring: post.is_recurring ?? null,
+              recurrence_days: post.recurrence_days ?? null,
             };
 
             if (DEBUG_RSVP_POST_ID && post.id === DEBUG_RSVP_POST_ID) {
