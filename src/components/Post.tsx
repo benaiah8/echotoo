@@ -44,6 +44,7 @@ import {
 } from "../lib/activitiesCache";
 import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
+import { getPostScheduleLabel } from "../lib/postScheduleLabel";
 import { requestManager } from "../lib/requestManager";
 import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
@@ -246,75 +247,34 @@ function Post({
       : author?.display_name || author?.username || "User";
   }, [isAnonymous, anonymousName, author?.display_name, author?.username]);
 
-  // [OPTIMIZATION: Phase 6.2 - React] Memoize date calculation
-  // Why: Date calculation involves Date objects and comparisons, memoization improves performance
-  const dateText = useMemo(() => {
-    if (type === "hangout" && selectedDates && selectedDates.length > 0) {
-      // For hangouts, show the event date(s) with special formatting
-      const eventDate = new Date(selectedDates[0]);
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-      const eventDay = new Date(
-        eventDate.getFullYear(),
-        eventDate.getMonth(),
-        eventDate.getDate()
-      );
+  const postType = (post?.type ?? type) === "experience" ? "experience" : "hangout";
 
-      // Check if the event has already passed
-      if (eventDay.getTime() < today.getTime()) {
-        return "Event Passed";
-      }
+  const scheduleLabel = useMemo(
+    () =>
+      getPostScheduleLabel({
+        type: postType,
+        createdAt: post?.created_at ?? createdAt,
+        selectedDates: post?.selected_dates ?? selectedDates,
+        isRecurring: post?.is_recurring,
+        recurrenceDays: post?.recurrence_days,
+      }),
+    [
+      postType,
+      post?.created_at,
+      post?.selected_dates,
+      post?.is_recurring,
+      post?.recurrence_days,
+      createdAt,
+      selectedDates,
+    ]
+  );
 
-      // Format relative dates for hangouts
-      if (eventDay.getTime() === today.getTime()) {
-        return "Today";
-      } else if (eventDay.getTime() === tomorrow.getTime()) {
-        return "Tomorrow";
-      } else {
-        // Check if it's this weekend
-        const eventDayOfWeek = eventDate.getDay(); // 0 = Sunday, 6 = Saturday
-        const todayOfWeek = now.getDay();
-        const daysUntilWeekend = 6 - todayOfWeek; // Days until Saturday
-        const eventDayTime = eventDate.getTime();
-        const weekendStart = new Date(
-          today.getTime() + daysUntilWeekend * 24 * 60 * 60 * 1000
-        );
-        const weekendEnd = new Date(
-          weekendStart.getTime() + 24 * 60 * 60 * 1000
-        );
+  const dateText = scheduleLabel.label;
 
-        if (
-          eventDayTime >= weekendStart.getTime() &&
-          eventDayTime <= weekendEnd.getTime()
-        ) {
-          return "This Weekend";
-        }
-
-        // Default to formatted date for hangouts
-        return eventDate.toLocaleDateString();
-      }
-    } else {
-      // For experiences or hangouts without event dates, show created date (no special formatting)
-      const createdDate = new Date(createdAt);
-      return createdDate.toLocaleDateString();
-    }
-  }, [type, selectedDates, createdAt]);
-
-  // [OPTIMIZATION: Phase 6.2 - React] Memoize special date check
-  // Why: Prevents recalculation when other props change
   const shouldHighlight = useMemo(() => {
-    // Only highlight special dates for hangouts, not for experiences
-    if (type !== "hangout") return false;
-
-    return (
-      dateText === "Today" ||
-      dateText === "Tomorrow" ||
-      dateText === "This Weekend" ||
-      dateText === "Event Passed"
-    );
-  }, [type, dateText]);
+    if (postType !== "hangout") return false;
+    return scheduleLabel.highlight;
+  }, [postType, scheduleLabel.highlight]);
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo

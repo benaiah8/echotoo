@@ -27,7 +27,7 @@ import {
 } from "../lib/editPostBootstrap";
 import toast from "react-hot-toast";
 import { emitPostDeleted } from "../lib/postEvents";
-import { getDatePriorityLabel } from "../lib/feedSorting";
+import { getPostScheduleLabel } from "../lib/postScheduleLabel";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
 import { discardAllDrafts } from "../lib/drafts";
@@ -63,9 +63,6 @@ function getRailPriorityPillClass(label: string) {
   })();
   return `backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] text-[var(--text)] shadow-[var(--rail-card-pill-shadow)] border ${accent}`;
 }
-
-const RAIL_DATE_PILL_CLASS =
-  "backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] border border-[var(--border)] text-[var(--text)] shadow-[var(--rail-card-pill-shadow)]";
 
 type Props = {
   id: string; // NEW
@@ -147,9 +144,30 @@ export default function Hangout({
   const railRsvpConfigured =
     type === "hangout" && typeof rsvpCap === "number";
 
-  const priorityLabel = getDatePriorityLabel({
-    selected_dates: selectedDates,
-  } as any);
+  const authorRowType: "hangout" | "experience" =
+    (post?.type ?? type) === "experience" ? "experience" : "hangout";
+
+  const scheduleLabel = useMemo(
+    () =>
+      getPostScheduleLabel({
+        type: authorRowType,
+        createdAt: post?.created_at ?? createdAt,
+        selectedDates: post?.selected_dates ?? selectedDates,
+        isRecurring: post?.is_recurring,
+        recurrenceDays: post?.recurrence_days,
+      }),
+    [
+      authorRowType,
+      post?.created_at,
+      post?.selected_dates,
+      post?.is_recurring,
+      post?.recurrence_days,
+      createdAt,
+      selectedDates,
+    ]
+  );
+
+  const datePillLabel = scheduleLabel.label;
 
   const railCoverUrl = useMemo(() => getRailCardCoverUrl(post), [post]);
   const showRailCover = Boolean(railCoverUrl && !railImageFailed);
@@ -327,27 +345,15 @@ export default function Hangout({
         <div className="relative z-10 flex flex-col gap-2">
           {/* Date / priority strip — compact pill above avatar row */}
           <div className="w-full min-w-0 mb-2">
-            {priorityLabel ? (
-              <span
-                className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${
-                  showRailCover
-                    ? getRailPriorityPillClass(priorityLabel)
-                    : getPriorityColorClass(priorityLabel)
-                }`}
-              >
-                {priorityLabel}
-              </span>
-            ) : (
-              <span
-                className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full border whitespace-nowrap overflow-hidden text-ellipsis ${
-                  showRailCover
-                    ? RAIL_DATE_PILL_CLASS
-                    : "text-[var(--text)]/60 border-[var(--border)]/60 bg-[var(--text)]/[0.04]"
-                }`}
-              >
-                {new Date(createdAt).toLocaleDateString()}
-              </span>
-            )}
+            <span
+              className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${
+                showRailCover
+                  ? getRailPriorityPillClass(datePillLabel)
+                  : getPriorityColorClass(datePillLabel)
+              }`}
+            >
+              {datePillLabel}
+            </span>
           </div>
 
           {/* author row */}
