@@ -17,10 +17,8 @@ import WelcomeModal from "../components/ui/WelcomeModal";
 import ProfileTopBar from "../components/profile/ProfileTopBar";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import {
-  getProfileCached,
   getCachedProfile,
   setCachedProfile,
-  primeProfileCache,
   invalidateProfile,
 } from "../lib/profileCache";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
@@ -85,11 +83,10 @@ export default function OwnProfilePage() {
 
   /** Tap profile tab again / pull-to-refresh → remount feeds (feed dataCache retained until fresh load replaces) */
   const [profileFeedRefreshEpoch, setProfileFeedRefreshEpoch] = useState(0);
-  /** Bumps to re-fetch hero profile (counts, avatar, etc.) */
-  const [meRefreshNonce, setMeRefreshNonce] = useState(0);
-
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
+  /** False until the visible-tab profile load effect finishes (avoids false error before first fetch). */
+  const [profileHeroLoadSettled, setProfileHeroLoadSettled] = useState(false);
 
   // [FIX] Stabilize profile reference to prevent cascading re-renders
   // ProfileProvider value changes on every profile reference change, causing all consumers to re-render
@@ -196,6 +193,10 @@ export default function OwnProfilePage() {
    * Avoids showing "Sign in…" when profile row is late/missing but OAuth session exists.
    */
   const hasSignedInIdentity = !!(authState?.user?.id || viewerId);
+  const showProfileHeroLoading =
+    loading ||
+    authLoading ||
+    (hasSignedInIdentity && !profile && !profileHeroLoadSettled);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [isReportReviewer, setIsReportReviewer] = useState(false);
 
@@ -231,7 +232,6 @@ export default function OwnProfilePage() {
 
       /** Keep profile_* feed keys in memory for initialItems/getCachedItems during epoch remount; success overwrites via setCachedItems */
       if (profile?.id) invalidateProfile(profile.id);
-      setMeRefreshNonce((n) => n + 1);
       setProfileFeedRefreshEpoch((n) => n + 1);
     };
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
@@ -254,6 +254,7 @@ export default function OwnProfilePage() {
   // Load profile for /u/me - STALE-WHILE-REVALIDATE pattern
   useEffect(() => {
     if (!isProfileTabVisible) return;
+    setProfileHeroLoadSettled(false);
     if (DEBUG_PROFILE_LOAD) {
       console.log("[PROFILEDBG] profile load effect start", {
         t: Date.now(),
@@ -424,6 +425,7 @@ export default function OwnProfilePage() {
             });
           }
           setLoading(false);
+          setProfileHeroLoadSettled(true);
         }
       }
     })();
@@ -951,7 +953,7 @@ export default function OwnProfilePage() {
                   </div>
                 )}
 
-                {loading || authLoading ? (
+                {showProfileHeroLoading ? (
                   <>
                     {/* Loading skeleton (profile fetch and/or Redux session hydrate) */}
                     <div className="mx-auto mb-2 w-max px-6 py-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)]/50">

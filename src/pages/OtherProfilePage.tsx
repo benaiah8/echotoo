@@ -427,14 +427,18 @@ export default function OtherProfilePage({
         const { getProfileByIdOrUsername } = await import(
           "../api/services/follows"
         );
-        console.log("[OtherProfilePage] 🔍 Fetching profile for username:", q);
+        if (import.meta.env.DEV) {
+          console.log("[OtherProfilePage] 🔍 Fetching profile for username:", q);
+        }
         const prof = await getProfileByIdOrUsername(q);
-        console.log("[OtherProfilePage] 📥 Profile fetch result:", {
-          found: !!prof,
-          username: prof?.username || "null",
-          userId: prof?.user_id || "null",
-          profileId: prof?.id || "null",
-        });
+        if (import.meta.env.DEV) {
+          console.log("[OtherProfilePage] 📥 Profile fetch result:", {
+            found: !!prof,
+            username: prof?.username || "null",
+            userId: prof?.user_id || "null",
+            profileId: prof?.id || "null",
+          });
+        }
 
         setSafe(() =>
           setProfile(
@@ -585,10 +589,12 @@ export default function OtherProfilePage({
     // Load cached counts immediately (synchronous, instant)
     const cachedCounts = getCachedFollowCounts(profile.id);
     if (cachedCounts) {
-      console.log(
-        "[OtherProfilePage] Using cached follow counts (stale-while-revalidate):",
-        cachedCounts
-      );
+      if (import.meta.env.DEV) {
+        console.log(
+          "[OtherProfilePage] Using cached follow counts (stale-while-revalidate):",
+          cachedCounts
+        );
+      }
       setCounts(cachedCounts);
       setCountsLoading(false);
     } else {
@@ -637,10 +643,12 @@ export default function OtherProfilePage({
         // Load cached status immediately (synchronous, instant)
         cachedStatus = getCachedFollowStatus(viewerProfileId, profile.id);
         if (cachedStatus) {
-          console.log(
-            "[OtherProfilePage] Using cached follow status (instant):",
-            cachedStatus
-          );
+          if (import.meta.env.DEV) {
+            console.log(
+              "[OtherProfilePage] Using cached follow status (instant):",
+              cachedStatus
+            );
+          }
           setFollowStatus(cachedStatus);
           setFollowStatusLoading(false);
         } else {

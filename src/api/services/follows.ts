@@ -33,6 +33,11 @@ function clearLocalStorageProfileCacheRowsForAuthUserId(
 
 // [OPTIMIZATION] Dedupe + cooldown for profiles?select=... to prevent burst calls
 const DEBUG_PROFILE_FETCH = false;
+/** Verbose getProfileByUserId tracing. Off by default. */
+const pfDbg = (...args: Parameters<typeof console.log>) => {
+  if (!DEBUG_PROFILE_FETCH) return;
+  console.log(...args);
+};
 /** Verbose getViewerId / getViewerAuthUserId tracing ([VIEWERDBG]). Off by default. */
 const DEBUG_VIEWER_AUTH = false;
 const vDbg = (...args: Parameters<typeof console.log>) => {
@@ -705,7 +710,7 @@ export async function getProfileByUserId(userId: string): Promise<{
           // Check cache again inside RequestManager (another call might have populated it)
           const cachedAgain = searchCacheByUserId(userId);
           if (cachedAgain) {
-            console.log(
+            pfDbg(
               `[getProfileByUserId] ✅ Cache HIT (during RequestManager execution) for userId: ${userId}`
             );
             if (await profileHiddenByUserBlocksForSession(cachedAgain.user_id)) {
@@ -716,7 +721,7 @@ export async function getProfileByUserId(userId: string): Promise<{
 
           // Check if aborted before making request
           if (signal.aborted) {
-            console.log(
+            pfDbg(
               `[getProfileByUserId] Request aborted for userId: ${userId}`
             );
             return null;
@@ -725,7 +730,7 @@ export async function getProfileByUserId(userId: string): Promise<{
           // Step 3: Fetch full profile from database (including onboarding fields)
           // [PHASE 2.3 - OPTIMIZATION] Fetch ALL fields so all components can reuse this function
           // Strategy: One network request with all fields is better than 5 separate requests
-          console.log(
+          pfDbg(
             `[getProfileByUserId] 🚀 Making actual DB call for userId: ${userId}`
           );
           const { data: profile, error: profileError } = await supabase
@@ -739,7 +744,7 @@ export async function getProfileByUserId(userId: string): Promise<{
 
           // Check if aborted after async operation
           if (signal.aborted) {
-            console.log(
+            pfDbg(
               `[getProfileByUserId] Request aborted after DB call for userId: ${userId}`
             );
             return null;
@@ -754,7 +759,7 @@ export async function getProfileByUserId(userId: string): Promise<{
           }
 
           if (!profile) {
-            console.log(
+            pfDbg(
               `[getProfileByUserId] No profile found in DB for userId: ${userId}`
             );
             return null;
@@ -784,7 +789,7 @@ export async function getProfileByUserId(userId: string): Promise<{
             onboarding_completed: profile.onboarding_completed,
             onboarding_step: profile.onboarding_step,
           });
-          console.log(
+          pfDbg(
             `[getProfileByUserId] ✅ Profile cached for userId: ${userId}`
           );
 

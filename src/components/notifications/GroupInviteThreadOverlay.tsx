@@ -39,13 +39,22 @@ import {
 import {
   InviteThreadScrollContext,
   InviteThreadTopHeader,
+  INVITE_HEADER_PILL_OUTER_HEIGHT_PX,
   inviteThreadHeaderBackArrowClass,
   inviteThreadHeaderBackButtonClass,
   GROUP_QUOTA_UI_SEGMENT_TOTAL,
   groupQuotaActiveSegmentsCount,
 } from "./invite-thread/InviteThreadOverlayLayout";
 import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
-import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
+import {
+  filterMentionParticipants,
+  mentionInsertForParticipant,
+  parseActiveMentionQuery,
+} from "./invite-thread/inviteThreadMentionAutocomplete";
+import {
+  inviteThreadOverlayEdgeSwipeStripOptions,
+  useOverlayEdgeSwipeDismiss,
+} from "../../hooks/useOverlayEdgeSwipeDismiss";
 const DRAFT_TEXTAREA_MAX_PX = 220;
 const COMPOSER_MULTILINE_CORNER_PX = 21;
 const COMPOSER_PILL_INSET_PX = 6;
@@ -124,6 +133,9 @@ export default function GroupInviteThreadOverlay({
     "pill" | "multiline"
   >("pill");
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [composerCaret, setComposerCaret] = useState(0);
+  const [mentionSuggestionsDismissed, setMentionSuggestionsDismissed] =
+    useState(false);
 
   const bundleRef = useRef<InviteThreadBundle | null>(null);
   const suppressSilentThreadRefreshRef = useRef(false);
@@ -152,6 +164,8 @@ export default function GroupInviteThreadOverlay({
   }, []);
 
   const draftTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingCaretAfterMentionRef = useRef<number | null>(null);
+  const prevMentionAtIndexRef = useRef<number | null>(null);
 
   const syncDraftTextareaHeight = useCallback(() => {
     const el = draftTextareaRef.current;
@@ -181,6 +195,16 @@ export default function GroupInviteThreadOverlay({
   }, []);
 
   useLayoutEffect(() => {
+    const pending = pendingCaretAfterMentionRef.current;
+    if (pending != null) {
+      pendingCaretAfterMentionRef.current = null;
+      const el = draftTextareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(pending, pending);
+        setComposerCaret(pending);
+      }
+    }
     if (!open || !bundle?.can_compose) return;
     syncDraftTextareaHeight();
   }, [open, bundle?.can_compose, draft, syncDraftTextareaHeight]);
@@ -312,6 +336,7 @@ export default function GroupInviteThreadOverlay({
   useEffect(() => {
     if (!open) {
       setDraft("");
+      setComposerCaret(0);
       setSubmitError(null);
       setSubmitting(false);
       setReactingMessageId(null);
@@ -327,6 +352,7 @@ export default function GroupInviteThreadOverlay({
       setError(null);
       setLoading(false);
       setDraft("");
+      setComposerCaret(0);
       setSubmitError(null);
       setSubmitting(false);
       setReactingMessageId(null);
@@ -337,6 +363,7 @@ export default function GroupInviteThreadOverlay({
     }
 
     setDraft("");
+    setComposerCaret(0);
     setSubmitError(null);
     setSubmitting(false);
     setReactingMessageId(null);
@@ -467,7 +494,6 @@ export default function GroupInviteThreadOverlay({
     remeasureDeps: [
       threadId,
       bundle?.can_compose,
-      draft,
       submitError,
       loading,
       composerInputShape,
@@ -479,10 +505,7 @@ export default function GroupInviteThreadOverlay({
     active: open,
     engageSwipe: engageInviteBack,
     gestureDisabled: keyboardOpen || composerFocused,
-    /** Inset strip from physical edge so mobile web / Chrome are less likely to steal the gesture. */
-    edgeStripLeftInsetPx: 12,
-    edgeTouchInsetPx: 52,
-    edgeMaxWidthPx: 56,
+    ...inviteThreadOverlayEdgeSwipeStripOptions(INVITE_HEADER_PILL_OUTER_HEIGHT_PX),
     tryConsumeDismissLayer: dismissParticipantsIfNeeded,
     onDismiss: onClose,
   });
@@ -499,6 +522,45 @@ export default function GroupInviteThreadOverlay({
   const visibleParticipants = participants.slice(0, MAX_VISIBLE_STACK);
   const participantCount = bundle?.participant_count ?? participants.length;
   const extraCount = Math.max(0, participantCount - visibleParticipants.length);
+
+  const activeMentionToken = useMemo(
+    () => parseActiveMentionQuery(draft, composerCaret),
+    [draft, composerCaret],
+  );
+
+  const mentionSuggestions = useMemo(
+    () =>
+      filterMentionParticipants(
+        participants,
+        viewerUserId,
+        activeMentionToken?.query ?? "",
+        5,
+      ),
+    [participants, viewerUserId, activeMentionToken?.query],
+  );
+
+  const showInviteMentionSuggestions =
+    bundle?.can_compose === true &&
+    !participantsOpen &&
+    activeMentionToken != null &&
+    !mentionSuggestionsDismissed &&
+    mentionSuggestions.length > 0;
+
+  useEffect(() => {
+    const at = activeMentionToken?.atIndex ?? null;
+    if (at == null) {
+      setMentionSuggestionsDismissed(false);
+      prevMentionAtIndexRef.current = null;
+      return;
+    }
+    if (
+      prevMentionAtIndexRef.current !== null &&
+      prevMentionAtIndexRef.current !== at
+    ) {
+      setMentionSuggestionsDismissed(false);
+    }
+    prevMentionAtIndexRef.current = at;
+  }, [activeMentionToken?.atIndex]);
 
   const reactionsInteractive =
     bundle != null &&
@@ -547,10 +609,12 @@ export default function GroupInviteThreadOverlay({
           ),
         );
         setDraft("");
+        setComposerCaret(0);
         return;
       }
       setBundle(refreshed);
       setDraft("");
+      setComposerCaret(0);
       if (draftTextareaRef.current) draftTextareaRef.current.style.height = "";
       scrollToBottomAfterSend();
     } catch (e) {
@@ -569,6 +633,25 @@ export default function GroupInviteThreadOverlay({
     trimmedDraft,
     scrollToBottomAfterSend,
   ]);
+
+  const insertMentionParticipant = useCallback(
+    (p: InviteThreadParticipant) => {
+      const el = draftTextareaRef.current;
+      const currentDraft = el?.value ?? draft;
+      const sel = el?.selectionStart ?? composerCaret;
+      const token = parseActiveMentionQuery(currentDraft, sel);
+      if (!token) return;
+      const ins = mentionInsertForParticipant(p);
+      const before = currentDraft.slice(0, token.atIndex);
+      const after = currentDraft.slice(sel);
+      const next = before + ins + after;
+      const pos = before.length + ins.length;
+      pendingCaretAfterMentionRef.current = pos;
+      setMentionSuggestionsDismissed(false);
+      setDraft(next);
+    },
+    [draft, composerCaret],
+  );
 
   const handleReactionToggle = useCallback(
     async (messageId: string) => {
@@ -933,50 +1016,107 @@ export default function GroupInviteThreadOverlay({
             ref={bottomChromeContentRef}
             className="flex w-full flex-col items-center gap-1.5 pb-1"
           >
-          <div className="space-y-1.5">
-            <InviteThreadReadOnlyComposerNotice
-              bundle={bundle}
-              readOnlyExplanation={readOnlyExplanation}
-            />
-            {submitError ? (
-              <p
-                className="pointer-events-auto max-w-lg text-center text-xs text-red-500/95"
-                role="alert"
-              >
-                {submitError}
-              </p>
-            ) : null}
-          </div>
+            <div className="space-y-1.5">
+              <InviteThreadReadOnlyComposerNotice
+                bundle={bundle}
+                readOnlyExplanation={readOnlyExplanation}
+              />
+              {submitError ? (
+                <p
+                  className="pointer-events-auto max-w-lg text-center text-xs text-red-500/95"
+                  role="alert"
+                >
+                  {submitError}
+                </p>
+              ) : null}
+            </div>
 
-          {bundle.can_compose ? (
-            <>
-              <div
-                className="pointer-events-auto relative w-full max-w-lg py-0"
-                role="toolbar"
-                aria-label="Quick replies"
-              >
-                <div className="-mx-0.5 [mask-image:linear-gradient(90deg,transparent,black_14px,black_calc(100%-26px),transparent)] [-webkit-mask-image:linear-gradient(90deg,transparent,black_14px,black_calc(100%-26px),transparent)]">
-                  <div className="flex gap-1.5 overflow-x-auto scroll-hide px-1 py-px [-webkit-overflow-scrolling:touch]">
-                    {QUICK_REPLY_CHIPS.map((label) => (
-                      <button
-                        key={label}
-                        type="button"
-                        disabled={submitting}
-                        onClick={() => {
-                          setDraft(label);
-                          setSubmitError(null);
-                        }}
-                        className="shrink-0 rounded-full border border-neutral-900/8 bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] px-2.5 py-px text-[11px] font-medium text-[var(--text)]/70 backdrop-blur-md transition-opacity hover:bg-[color-mix(in_oklab,var(--surface-2)_36%,transparent)] disabled:pointer-events-none disabled:opacity-45 app-dark:border-white/10 app-dark:bg-white/[0.04]"
-                      >
-                        {label}
-                      </button>
-                    ))}
+            {bundle.can_compose ? (
+              <>
+                <div
+                  className="pointer-events-auto relative w-full max-w-lg py-0"
+                  role="toolbar"
+                  aria-label="Quick replies"
+                >
+                  <div className="-mx-0.5 [mask-image:linear-gradient(90deg,transparent,black_14px,black_calc(100%-26px),transparent)] [-webkit-mask-image:linear-gradient(90deg,transparent,black_14px,black_calc(100%-26px),transparent)]">
+                    <div className="flex gap-1.5 overflow-x-auto scroll-hide px-1 py-px [-webkit-overflow-scrolling:touch]">
+                      {QUICK_REPLY_CHIPS.map((label) => (
+                        <button
+                          key={label}
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => {
+                            setDraft(label);
+                            setComposerCaret(label.length);
+                            setSubmitError(null);
+                          }}
+                          className="shrink-0 rounded-full border border-neutral-900/8 bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] px-2.5 py-px text-[11px] font-medium text-[var(--text)]/70 backdrop-blur-md transition-opacity hover:bg-[color-mix(in_oklab,var(--surface-2)_36%,transparent)] disabled:pointer-events-none disabled:opacity-45 app-dark:border-white/10 app-dark:bg-white/[0.04]"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div
-                className={`pointer-events-auto flex w-full max-w-lg gap-2 border-2 border-neutral-900/17 bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] backdrop-blur-xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)] app-dark:border-white/28 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] ${
+                <div className="pointer-events-auto relative w-full max-w-lg">
+                  {showInviteMentionSuggestions ? (
+                    <div
+                      className="absolute bottom-full left-0 right-0 z-[25] mb-1 overflow-hidden rounded-xl border border-neutral-900/17 bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-xl app-dark:border-white/22 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]"
+                      role="listbox"
+                      aria-label="Mention suggestions"
+                    >
+                      <div className="max-h-[min(200px,36dvh)] overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] py-1">
+                        {mentionSuggestions.map((p, idx) => {
+                          const rowKey = `${p.user_id ?? p.username ?? `m-${idx}`}`;
+                          const primary = participantPrimaryLine(p);
+                          const secondary = participantSecondaryLine(p);
+                          return (
+                            <button
+                              key={rowKey}
+                              type="button"
+                              role="option"
+                              onPointerDown={(e) => {
+                                if (e.pointerType === "mouse") {
+                                  e.preventDefault();
+                                }
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                queueMicrotask(() => {
+                                  insertMentionParticipant(p);
+                                });
+                              }}
+                              className="flex w-full min-h-[44px] items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-[color-mix(in_oklab,var(--surface-2)_40%,transparent)] app-dark:hover:bg-white/[0.06]"
+                            >
+                              <Avatar
+                                variant="default"
+                                url={p.avatar_url || undefined}
+                                name={participantLabel(p)}
+                                size={34}
+                                tightLineBox
+                                className="shrink-0 rounded-full"
+                                userId={p.user_id ?? undefined}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium leading-snug text-[var(--text)]">
+                                  {primary}
+                                </p>
+                                {secondary ? (
+                                  <p className="truncate text-xs text-[var(--text)]/55">
+                                    {secondary}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div
+                    className={`pointer-events-auto flex w-full max-w-lg gap-2 border-2 border-neutral-900/17 bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] backdrop-blur-xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)] app-dark:border-white/28 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] ${
                   composerInputShape === "pill"
                     ? "overflow-visible p-0"
                     : "p-1.5"
@@ -1074,12 +1214,39 @@ export default function GroupInviteThreadOverlay({
                           : {}),
                       }}
                       onChange={(e) => {
-                        setDraft(e.target.value);
+                        const v = e.target.value;
+                        const sel =
+                          e.target.selectionStart ?? v.length;
+                        setDraft(v);
+                        setComposerCaret(sel);
                         if (submitError) setSubmitError(null);
+                      }}
+                      onSelect={(e) => {
+                        setComposerCaret(
+                          e.currentTarget.selectionStart ?? draft.length,
+                        );
+                      }}
+                      onClick={(e) => {
+                        setComposerCaret(
+                          e.currentTarget.selectionStart ?? draft.length,
+                        );
+                      }}
+                      onKeyUp={(e) => {
+                        setComposerCaret(
+                          e.currentTarget.selectionStart ?? draft.length,
+                        );
                       }}
                       onFocus={onComposerFocus}
                       onBlur={onComposerBlur}
                       onKeyDown={(e) => {
+                        if (
+                          e.key === "Escape" &&
+                          showInviteMentionSuggestions
+                        ) {
+                          e.preventDefault();
+                          setMentionSuggestionsDismissed(true);
+                          return;
+                        }
                         if (e.key !== "Enter" || e.shiftKey) return;
                         if (sendDisabled) return;
                         e.preventDefault();
@@ -1140,8 +1307,9 @@ export default function GroupInviteThreadOverlay({
                   )}
                 </button>
               </div>
-            </>
-          ) : null}
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       ) : open && threadId && !bundle && !loading && !error ? (

@@ -6,26 +6,40 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 
 /** If vertical movement exceeds this and beats horizontal, treat as scroll — cancel gesture. */
-const VERTICAL_SLOP_PX = 10;
+const VERTICAL_SLOP_PX = 16;
 /** Vertical must exceed horizontal by this ratio to cancel (avoid hijacking message scroll). */
-const VERTICAL_DOMINANCE_OVER_DX = 1.12;
+const VERTICAL_DOMINANCE_OVER_DX = 1.38;
 /** Minimum rightward dx before we show any overlay translation (preview). */
-const HORIZONTAL_PREVIEW_MIN_DX = 3;
+const HORIZONTAL_PREVIEW_MIN_DX = 2;
 /** Lock to full horizontal tracking once dx is this large and leads vertical motion. */
-const HORIZONTAL_LOCK_MIN_DX = 5;
-/** For lock: dx must exceed |dy| times this (looser than before so motion starts sooner). */
-const HORIZONTAL_LOCK_DOMINANCE = 1.05;
+const HORIZONTAL_LOCK_MIN_DX = 3;
+/** For lock: dx must meet or exceed |dy| times this. */
+const HORIZONTAL_LOCK_DOMINANCE = 1.0;
+/** Preview: dx must be at least |dy| times this (allows natural diagonal starts). */
+const HORIZONTAL_PREVIEW_DY_RATIO = 0.85;
 /** Cancel if user swipes meaningfully left from start. */
 const LEFTWARD_CANCEL_DX = 8;
+/** Release past this fraction of commit threshold to dismiss. */
+const COMMIT_THRESHOLD_RATIO = 0.87;
 const SNAP_BACK_MS = 320;
 const COMMIT_EXIT_MS = 260;
 const COMMIT_NAV_DELAY_MS = 280;
 
+/** Minimum strip width floor (px) before safe-area; used when `edgeMaxWidthVw` is 0 or as `max()` floor. */
 const DEFAULT_EDGE_TOUCH_INSET_PX = 14;
 const DEFAULT_EDGE_TOP_BELOW_SAFE_PX = 52;
+/** Hard cap (px) when caller omits `edgeMaxWidthPx` and does not use a wide `edgeMaxWidthVw`. */
 const DEFAULT_EDGE_MAX_WIDTH_PX = 48;
+
+/** Wide swipe strip defaults for invite thread overlays (personal + group). */
+export const INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW = 0.42;
+export const INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX = 180;
+const INVITE_OVERLAY_EDGE_STRIP_LEFT_INSET_WEB_PX = 12;
+const INVITE_OVERLAY_EDGE_STRIP_LEFT_INSET_NATIVE_PX = 8;
+const INVITE_OVERLAY_EDGE_TOP_BELOW_HEADER_PX = 8;
 
 /** No scale polish until this fraction of commit threshold (avoids early “shrink”). */
 const POLISH_START_THRESHOLD_FRACTION = 0.4;
@@ -56,13 +70,37 @@ function computePolishScale(
 }
 
 export function defaultOverlayEdgeSwipeCommitThresholdPx(): number {
-  if (typeof window === "undefined") return 108;
-  return Math.max(96, Math.min(120, Math.round(window.innerWidth * 0.25)));
+  if (typeof window === "undefined") return 100;
+  return Math.max(88, Math.min(110, Math.round(window.innerWidth * 0.21)));
 }
 
 export function defaultOverlayEdgeSwipeMaxDragPx(): number {
   if (typeof window === "undefined") return 480;
   return Math.round(window.innerWidth * 0.92);
+}
+
+/**
+ * Shared invisible strip layout for full-screen invite thread overlays.
+ * Pair with `active`, `engageSwipe`, `gestureDisabled`, and `onDismiss` at the call site.
+ */
+export function inviteThreadOverlayEdgeSwipeStripOptions(
+  headerPillOuterHeightPx: number,
+): Pick<
+  UseOverlayEdgeSwipeDismissOptions,
+  | "edgeStripLeftInsetPx"
+  | "edgeMaxWidthVw"
+  | "edgeMaxWidthPx"
+  | "edgeTopBelowSafeAreaPx"
+> {
+  return {
+    edgeStripLeftInsetPx: isNativeApp()
+      ? INVITE_OVERLAY_EDGE_STRIP_LEFT_INSET_NATIVE_PX
+      : INVITE_OVERLAY_EDGE_STRIP_LEFT_INSET_WEB_PX,
+    edgeMaxWidthVw: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
+    edgeMaxWidthPx: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
+    edgeTopBelowSafeAreaPx:
+      headerPillOuterHeightPx + INVITE_OVERLAY_EDGE_TOP_BELOW_HEADER_PX,
+  };
 }
 
 export type UseOverlayEdgeSwipeDismissOptions = {
@@ -85,18 +123,24 @@ export type UseOverlayEdgeSwipeDismissOptions = {
    * (e.g. group participants); overlay should snap back and stay open.
    */
   tryConsumeDismissLayer?: () => boolean;
-  /** Added to env(safe-area-inset-left) for strip width; default 14 */
+  /**
+   * Minimum strip width floor (px), combined with `env(safe-area-inset-left)` in CSS.
+   * When `edgeMaxWidthVw` is set, width is `min(max(floor, Nvw), edgeMaxWidthPx)`.
+   */
   edgeTouchInsetPx?: number;
   /**
-   * Extra horizontal inset (px) after `env(safe-area-inset-left)` where the strip begins.
-   * Default `0`. On mobile web, `8`–`16` helps avoid the browser/OS reserved left-edge
-   * “back” gesture zone so the swipe is handled by this hook instead of native navigation.
+   * Horizontal offset (px) after `env(safe-area-inset-left)` where the strip begins —
+   * inset away from the browser/OS physical edge-back zone (often 8–16 on mobile web).
    */
   edgeStripLeftInsetPx?: number;
-  /** Pixels below safe-area top where the strip starts; default 52 */
+  /** Pixels below safe-area top where the strip starts (keeps header/back tappable). */
   edgeTopBelowSafeAreaPx?: number;
-  /** Max total strip width; default 48 */
+  /** Hard cap on strip width (px). */
   edgeMaxWidthPx?: number;
+  /**
+   * Preferred strip width as a viewport fraction (e.g. `0.42` ≈ 42vw), capped by `edgeMaxWidthPx`.
+   */
+  edgeMaxWidthVw?: number;
   /** Tailwind z-index class for the strip; default z-[28] */
   edgeStripZClass?: string;
   /** Override commit threshold (px) or factory */
@@ -119,7 +163,7 @@ export type OverlayEdgeSwipeDismissStripProps = {
 export type UseOverlayEdgeSwipeDismissResult = {
   /** Apply to the full-screen overlay root (entire subtree moves together). */
   overlayMotionStyle: CSSProperties;
-  /** Narrow invisible left-edge hit target — render as last child with z above scroll. */
+  /** Invisible left-edge capture strip — render as last child with z above scroll. */
   edgeStripProps: OverlayEdgeSwipeDismissStripProps;
   /** True while a horizontal dismiss gesture is active (after angle lock). */
   isDragging: boolean;
@@ -244,7 +288,7 @@ export function useOverlayEdgeSwipeDismiss(
 
       const t = resolveCommitThresholdPx();
       const x = translateRef.current;
-      if (x >= t * 0.92) {
+      if (x >= t * COMMIT_THRESHOLD_RATIO) {
         const consumed = tryConsumeRef.current?.() === true;
         if (consumed) {
           if (x <= 1) {
@@ -336,7 +380,7 @@ export function useOverlayEdgeSwipeDismiss(
 
         if (
           dx >= HORIZONTAL_PREVIEW_MIN_DX &&
-          dx > Math.abs(dy)
+          dx >= Math.abs(dy) * HORIZONTAL_PREVIEW_DY_RATIO
         ) {
           setTranslateX(Math.max(0, Math.min(dx, cap)));
           return;
@@ -359,8 +403,15 @@ export function useOverlayEdgeSwipeDismiss(
   const topPad =
     options.edgeTopBelowSafeAreaPx ?? DEFAULT_EDGE_TOP_BELOW_SAFE_PX;
   const maxW = options.edgeMaxWidthPx ?? DEFAULT_EDGE_MAX_WIDTH_PX;
+  const edgeMaxWidthVw = options.edgeMaxWidthVw ?? 0;
   const edgeStripLeftInsetPx = options.edgeStripLeftInsetPx ?? 0;
   const zClass = options.edgeStripZClass ?? "z-[28]";
+
+  const minStripWidthCss = `calc(${inset}px + env(safe-area-inset-left, 0px))`;
+  const stripWidthCss =
+    edgeMaxWidthVw > 0
+      ? `min(max(${minStripWidthCss}, ${edgeMaxWidthVw * 100}vw), ${maxW}px)`
+      : `min(${minStripWidthCss}, ${maxW}px)`;
 
   const commitThresholdPx = resolveCommitThresholdPx();
   const scaleProgress = dragDismissScaleProgress(translateX, commitThresholdPx);
@@ -397,7 +448,7 @@ export function useOverlayEdgeSwipeDismiss(
     style: {
       left: `calc(env(safe-area-inset-left, 0px) + ${edgeStripLeftInsetPx}px)`,
       top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
-      width: `min(calc(${inset}px + env(safe-area-inset-left, 0px)), ${maxW}px)`,
+      width: stripWidthCss,
       /** `none` keeps WebViews/browsers from claiming horizontal pans before our listeners. */
       touchAction: "none",
       WebkitTapHighlightColor: "transparent",

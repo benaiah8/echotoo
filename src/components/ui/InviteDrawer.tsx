@@ -30,7 +30,13 @@ import {
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
 import toast from "react-hot-toast";
-import { PiCaretDown, PiCaretRight } from "react-icons/pi";
+import {
+  PiCaretDown,
+  PiCaretRight,
+  PiChats,
+  PiMegaphone,
+  PiUser,
+} from "react-icons/pi";
 
 const inviteFrostedPanelStyle: CSSProperties = {
   ...frostedModalPanelStyle,
@@ -54,6 +60,26 @@ const glassInputStyle: CSSProperties = {
 };
 
 const INVITE_SEARCH_PAGE_SIZE = 10;
+
+/** Compact invite-type label from selection count (RPC may differ after filtering). */
+function getInviteSelectionHeaderLabel(selectionCount: number): {
+  text: string;
+  variant: "personal" | "group" | "announcement";
+} {
+  if (selectionCount === 1) {
+    return { text: "1 Direct", variant: "personal" };
+  }
+  if (selectionCount <= 10) {
+    return {
+      text: `${selectionCount.toLocaleString()} Chat`,
+      variant: "group",
+    };
+  }
+  return {
+    text: `${selectionCount.toLocaleString()} Echo`,
+    variant: "announcement",
+  };
+}
 
 function isInviteeFkError(err: unknown): boolean {
   const msg =
@@ -1056,9 +1082,37 @@ export default function InviteDrawer({
                   ) : null}
                 </div>
                 <div className="flex min-w-0 flex-1 items-center gap-1 text-sm font-medium text-[var(--text)]">
-                  <span className="truncate">
-                    {selectedUsers.size.toLocaleString()} selected
-                  </span>
+                  {(() => {
+                    const headerLabel = getInviteSelectionHeaderLabel(
+                      selectedUsers.size
+                    );
+                    const Icon =
+                      headerLabel.variant === "announcement"
+                        ? PiMegaphone
+                        : headerLabel.variant === "personal"
+                          ? PiUser
+                          : PiChats;
+                    const iconClass =
+                      headerLabel.variant === "announcement"
+                        ? "text-pink-500/85 dark:text-pink-400/85"
+                        : "text-[var(--text)]/55";
+                    return (
+                      <>
+                        <Icon
+                          size={15}
+                          className={`shrink-0 ${iconClass}`}
+                          aria-hidden
+                        />
+                        <span
+                          className="truncate"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {headerLabel.text}
+                        </span>
+                      </>
+                    );
+                  })()}
                   {selectedDetailsOpen ? (
                     <PiCaretDown
                       className="shrink-0 text-[var(--text)]/60"
@@ -1086,7 +1140,7 @@ export default function InviteDrawer({
             ) : null}
           </div>
           {selectedUsers.size > 0 ? (
-            <p className="text-[10px] text-[var(--text)]/45 mt-1.5 pl-0.5">
+            <p className="mt-0.5 pl-0.5 text-[9px] leading-none text-[var(--text)]/38">
               Max {INVITE_MAX_PER_SEND.toLocaleString()} per send
             </p>
           ) : null}
