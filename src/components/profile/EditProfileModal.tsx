@@ -5,15 +5,9 @@ import { uploadImage } from "../../api/services/mediaUpload";
 import {
   assertPlainTextAllowedForUgc,
 } from "../../lib/ugcTextPolicy";
+import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
-
-function mapProfileAvatarUploadError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("not authenticated")) return msg;
-  if (msg.includes("Supabase Storage")) return msg;
-  return "Could not prepare image. Try a different photo.";
-}
 
 type Props = {
   open: boolean;
@@ -251,7 +245,7 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
                     phase,
                     message: msg,
                   });
-                  setError(mapProfileAvatarUploadError(err));
+                  setError(mapMediaUploadError(err, "avatar"));
                 } finally {
                   setUploading(false);
                   // reset input so selecting the same file again still triggers change

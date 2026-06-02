@@ -40,7 +40,7 @@ export default function CreateActivityImagesSection({
   hideHelperCopy = false,
 }: CreateActivityImagesSectionProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { startPostImageUploads, getPendingJobsForActivity } =
+  const { startPostImageUploads, getPendingJobsForActivity, dismissFailedUpload } =
     useCreatePostMedia();
 
   const openLibrary = () => fileInputRef.current?.click();
@@ -168,10 +168,24 @@ export default function CreateActivityImagesSection({
       </div>
 
       {errors.length > 0 && (
-        <div className="text-xs text-red-500/90 space-y-1">
+        <div className="text-xs text-red-500/90 space-y-1.5">
           {errors.map((j) => (
-            <div key={j.id}>
-              {j.fileName}: {j.errorMessage || "Upload failed"}
+            <div
+              key={j.id}
+              className="flex items-start justify-between gap-2 rounded-md border border-red-500/20 bg-red-500/5 px-2 py-1.5"
+            >
+              <p className="min-w-0 flex-1 leading-snug">
+                <span className="font-medium">{j.fileName}</span>
+                {": "}
+                {j.errorMessage || "We couldn't upload this photo. Please try again."}
+              </p>
+              <button
+                type="button"
+                onClick={() => dismissFailedUpload(j.id)}
+                className="shrink-0 text-[11px] font-semibold text-red-600/90 underline underline-offset-2 hover:text-red-600 app-dark:text-red-400/95"
+              >
+                Dismiss
+              </button>
             </div>
           ))}
         </div>

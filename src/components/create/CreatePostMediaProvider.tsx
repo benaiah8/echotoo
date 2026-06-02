@@ -6,8 +6,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import toast from "react-hot-toast";
 import { uploadNormalizedPostImage } from "../../api/services/mediaUpload";
 import { prepareImageForUpload } from "../../lib/prepareImageForUpload";
+import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
 import { isProbablyPostImageFile } from "../../lib/postImagePipeline";
 import { supabase } from "../../lib/supabaseClient";
 import {
@@ -35,6 +37,8 @@ export type CreatePostMediaContextValue = {
     activityIndex: number
   ) => Promise<void>;
   getPendingJobsForActivity: (activityIndex: number) => PostImageUploadJob[];
+  /** Remove a failed upload job from the inline error list (re-add via picker). */
+  dismissFailedUpload: (jobId: string) => void;
 };
 
 const CreatePostMediaContext =
@@ -56,6 +60,32 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
           (j.status === "uploading" || j.status === "error")
       ),
     [jobs]
+  );
+
+  const dismissFailedUpload = useCallback((jobId: string) => {
+    setJobs((prev) => prev.filter((j) => j.id !== jobId));
+  }, []);
+
+  const markJobError = useCallback(
+    (jobId: string, err: unknown, logLabel: string, logExtra?: object) => {
+      const raw =
+        err instanceof Error ? err.message : String(err ?? "unknown error");
+      const friendly = mapMediaUploadError(err, "post");
+      console.error(`[CreatePostMedia] ${logLabel}`, {
+        ...logExtra,
+        raw,
+        friendly,
+      });
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? { ...j, status: "error" as const, errorMessage: friendly }
+            : j
+        )
+      );
+      toast.error(friendly);
+    },
+    []
   );
 
   const startPostImageUploads = useCallback(
@@ -80,8 +110,9 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
       if (!userId) {
+        const friendly = mapMediaUploadError(new Error("not authenticated"), "post");
         console.error("[CreatePostMedia] not authenticated");
-        alert("User not authenticated");
+        toast.error(friendly);
         return;
       }
 
@@ -106,22 +137,9 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
           try {
             normalized = await prepareImageForUpload(file, "post");
           } catch (normErr) {
-            const message =
-              normErr instanceof Error
-                ? normErr.message
-                : "Could not process this image. Try another photo.";
-            console.error("[CreatePostMedia] normalization failed", {
+            markJobError(id, normErr, "normalization failed", {
               file: file.name,
-              message,
             });
-            setJobs((prev) =>
-              prev.map((j) =>
-                j.id === id
-                  ? { ...j, status: "error" as const, errorMessage: message }
-                  : j
-              )
-            );
-            alert(message);
             continue;
           }
 
@@ -136,23 +154,17 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
           );
           if (!mergedImages) {
             uploadedInBatch.pop();
-            const msg =
-              "Upload succeeded but could not attach image to this activity. Try again or go back a step.";
-            console.error(
-              "[CreatePostMedia] merge returned null after upload",
+            markJobError(
+              id,
+              new Error(
+                "Upload succeeded but could not attach image to this activity."
+              ),
+              "merge returned null after upload",
               {
                 activityIndex,
                 path: path.slice(0, 80),
               }
             );
-            setJobs((prev) =>
-              prev.map((j) =>
-                j.id === id
-                  ? { ...j, status: "error" as const, errorMessage: msg }
-                  : j
-              )
-            );
-            alert(msg);
             continue;
           }
 
@@ -167,22 +179,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
             path: path.slice(0, 80),
           });
         } catch (e) {
-          const message =
-            e instanceof Error
-              ? e.message
-              : "Image upload failed. Please try again.";
-          console.error("[CreatePostMedia] upload failed", {
-            file: file.name,
-            message,
-          });
-          setJobs((prev) =>
-            prev.map((j) =>
-              j.id === id
-                ? { ...j, status: "error" as const, errorMessage: message }
-                : j
-            )
-          );
-          alert(message);
+          markJobError(id, e, "upload failed", { file: file.name });
         }
       }
 
@@ -190,7 +187,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
         activityIndex,
       });
     },
-    []
+    [markJobError]
   );
 
   const value = useMemo<CreatePostMediaContextValue>(
@@ -199,8 +196,15 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
       hasPendingUploads,
       startPostImageUploads,
       getPendingJobsForActivity,
+      dismissFailedUpload,
     }),
-    [jobs, hasPendingUploads, startPostImageUploads, getPendingJobsForActivity]
+    [
+      jobs,
+      hasPendingUploads,
+      startPostImageUploads,
+      getPendingJobsForActivity,
+      dismissFailedUpload,
+    ]
   );
 
   return (

@@ -23,6 +23,7 @@ import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplainerModal";
 import { getNativePushReceiveState } from "../../lib/explicitNativePushRegistration";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
 
 const DISPLAY_NAME_MAX = 40;
 const USERNAME_MAX = 24;
@@ -70,13 +71,6 @@ function isEditorNotifNudgeDismissed(userId: string): boolean {
   } catch {
     return false;
   }
-}
-
-function mapProfileAvatarUploadError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("not authenticated")) return msg;
-  if (msg.includes("Supabase Storage")) return msg;
-  return "Could not prepare image. Try a different photo.";
 }
 
 type Props = {
@@ -264,7 +258,7 @@ export default function FullScreenProfileCreation({
           phase,
           message: msg,
         });
-        setError(mapProfileAvatarUploadError(err));
+        setError(mapMediaUploadError(err, "avatar"));
         revokeAvatarCropObjectUrl();
       } finally {
         setUploading(false);

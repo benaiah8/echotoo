@@ -18,19 +18,12 @@ import {
 } from "../../lib/appSafeAreaBottom";
 import { scrollCommentsSectionIntoView } from "../../lib/postDetailCommentsScroll";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
+import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
 
 const COMMENT_IMAGE_UPLOAD_LOG = "[CommentImageUpload]";
 
 /** Align with useCreateKeyboardInset — keyboard "open" for follow-up scroll. */
 const KEYBOARD_LIFT_SCROLL_THRESHOLD_PX = 48;
-
-function mapCommentImageUploadError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes("not authenticated")) return msg;
-  if (msg.includes("Supabase Storage"))
-    return "Could not upload image. Try again.";
-  return "Could not prepare image. Try a different photo.";
-}
 
 interface Props {
   postId: string;
@@ -268,7 +261,7 @@ export default function FloatingCommentInput({
         ? "auth"
         : "preparation_or_unknown";
       console.warn(COMMENT_IMAGE_UPLOAD_LOG, "failed", { phase, message: msg });
-      toast.error(mapCommentImageUploadError(error));
+      toast.error(mapMediaUploadError(error, "comment"));
     } finally {
       setIsUploadingImage(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
