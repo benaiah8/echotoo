@@ -28,41 +28,12 @@ import {
 import toast from "react-hot-toast";
 import { emitPostDeleted } from "../lib/postEvents";
 import { getPostScheduleLabel } from "../lib/postScheduleLabel";
+import { getPostScheduleLabelClasses } from "../lib/postScheduleLabelStyles";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
 import { discardAllDrafts } from "../lib/drafts";
 import RailCardImageBackdrop from "./RailCardImageBackdrop";
 import useAuthActionGate from "../hooks/useAuthActionGate";
-
-function getPriorityColorClass(label: string) {
-  switch (label) {
-    case "Today":
-      return "bg-green-500/20 text-green-600 border-green-500/30";
-    case "Tomorrow":
-      return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
-    case "This Weekend":
-      return "bg-purple-500/20 text-purple-600 border-purple-500/30";
-    default:
-      return "bg-gray-500/20 text-gray-600 border-gray-500/30";
-  }
-}
-
-/** Frosted glass + accent border when rail card has a cover image */
-function getRailPriorityPillClass(label: string) {
-  const accent = (() => {
-    switch (label) {
-      case "Today":
-        return "border-green-500/55 ring-1 ring-inset ring-green-500/35";
-      case "Tomorrow":
-        return "border-amber-400/65 ring-1 ring-inset ring-amber-400/45";
-      case "This Weekend":
-        return "border-purple-500/55 ring-1 ring-inset ring-purple-500/40";
-      default:
-        return "border-[var(--border)]";
-    }
-  })();
-  return `backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] text-[var(--text)] shadow-[var(--rail-card-pill-shadow)] border ${accent}`;
-}
 
 type Props = {
   id: string; // NEW
@@ -171,6 +142,15 @@ export default function Hangout({
 
   const railCoverUrl = useMemo(() => getRailCardCoverUrl(post), [post]);
   const showRailCover = Boolean(railCoverUrl && !railImageFailed);
+
+  const railLabelClassName = useMemo(
+    () =>
+      getPostScheduleLabelClasses(
+        scheduleLabel.kind,
+        showRailCover ? "railCover" : "rail"
+      ),
+    [scheduleLabel.kind, showRailCover]
+  );
 
   useEffect(() => {
     setRailImageFailed(false);
@@ -346,11 +326,7 @@ export default function Hangout({
           {/* Date / priority strip — compact pill above avatar row */}
           <div className="w-full min-w-0 mb-2">
             <span
-              className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${
-                showRailCover
-                  ? getRailPriorityPillClass(datePillLabel)
-                  : getPriorityColorClass(datePillLabel)
-              }`}
+              className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${railLabelClassName}`}
             >
               {datePillLabel}
             </span>

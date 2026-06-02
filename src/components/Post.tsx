@@ -45,6 +45,7 @@ import {
 import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getPostScheduleLabel } from "../lib/postScheduleLabel";
+import { getPostScheduleLabelClasses } from "../lib/postScheduleLabelStyles";
 import { requestManager } from "../lib/requestManager";
 import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
@@ -271,10 +272,10 @@ function Post({
 
   const dateText = scheduleLabel.label;
 
-  const shouldHighlight = useMemo(() => {
-    if (postType !== "hangout") return false;
-    return scheduleLabel.highlight;
-  }, [postType, scheduleLabel.highlight]);
+  const scheduleLabelClassName = useMemo(
+    () => getPostScheduleLabelClasses(scheduleLabel.kind, "feed"),
+    [scheduleLabel.kind]
+  );
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
@@ -724,19 +725,7 @@ function Post({
             </button>
             <PostTypeMetaChip type={type} />
             <span
-              className={`text-[10px] ${
-                shouldHighlight
-                  ? "px-2 py-0.5 rounded-md font-medium"
-                  : "text-[var(--text)]/60"
-              }`}
-              style={
-                shouldHighlight
-                  ? {
-                      backgroundColor: "var(--date-highlight-bg)",
-                      color: "var(--date-highlight-text)",
-                    }
-                  : {}
-              }
+              className={`text-[10px] ${scheduleLabelClassName}`}
             >
               · {dateText}
             </span>
