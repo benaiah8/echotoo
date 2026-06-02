@@ -202,33 +202,33 @@ function formatPostedAgo(createdAt: string, now: Date, timeZone: string): PostSc
   const diff = dayOffset(createdKey, todayKey, timeZone);
 
   if (diff <= 0) {
-    return { label: "today", kind: "posted_ago", highlight: false };
+    return { label: "posted today", kind: "posted_ago", highlight: false };
   }
   if (diff === 1) {
-    return { label: "1 day ago", kind: "posted_ago", highlight: false };
+    return { label: "posted 1 day ago", kind: "posted_ago", highlight: false };
   }
   if (diff < 7) {
     return {
-      label: `${diff} days ago`,
+      label: `posted ${diff} days ago`,
       kind: "posted_ago",
       highlight: false,
     };
   }
   if (diff < 30) {
-    return { label: "a week ago", kind: "posted_ago", highlight: false };
+    return { label: "posted a week ago", kind: "posted_ago", highlight: false };
   }
   if (diff < 60) {
-    return { label: "a month ago", kind: "posted_ago", highlight: false };
+    return { label: "posted a month ago", kind: "posted_ago", highlight: false };
   }
   const months = Math.floor(diff / 30);
   if (months < 12) {
     return {
-      label: `${months} months ago`,
+      label: `posted ${months} months ago`,
       kind: "posted_ago",
       highlight: false,
     };
   }
-  return { label: "a year ago", kind: "posted_ago", highlight: false };
+  return { label: "posted a year ago", kind: "posted_ago", highlight: false };
 }
 
 function hasAnyValidSelectedDate(selectedDates: string[] | null | undefined): boolean {

@@ -20,7 +20,7 @@ const RAIL_KIND_CLASSES: Record<PostScheduleLabelKind, string> = {
   next_weekday:
     "bg-[var(--text)]/10 text-[var(--text)]/85 border-[var(--border)]",
   in_days: "bg-[var(--text)]/5 text-[var(--text)]/65 border-[var(--border)]/80",
-  posted_ago: "bg-transparent text-[var(--text)]/45 border-[var(--border)]/60",
+  posted_ago: "text-[var(--text)]/45 font-normal",
   passed: "bg-gray-500/10 text-[var(--text)]/40 border-gray-500/25 italic",
 };
 
@@ -32,12 +32,17 @@ const RAIL_COVER_KIND_CLASSES: Record<PostScheduleLabelKind, string> = {
   next_weekday:
     "border-[var(--border)] text-[var(--text)]/90 ring-1 ring-inset ring-[var(--text)]/10",
   in_days: "border-[var(--border)]/90 text-[var(--text)]/70",
-  posted_ago: "border-[var(--border)]/50 text-[var(--text)]/45",
+  posted_ago: "text-[var(--text)]/45 font-normal",
   passed: "border-gray-500/30 text-[var(--text)]/40 italic",
 };
 
 const RAIL_COVER_BASE =
   "backdrop-blur-[var(--glass-blur)] bg-[var(--glass-bg)] shadow-[var(--rail-card-pill-shadow)] border";
+
+/** Rail/cover: schedule kinds use pill/chip treatment; posted-age is plain metadata text. */
+export function railScheduleLabelUsesPill(kind: PostScheduleLabelKind): boolean {
+  return kind !== "posted_ago";
+}
 
 /**
  * Tailwind classes for schedule/date labels by urgency kind and surface.
@@ -48,6 +53,9 @@ export function getPostScheduleLabelClasses(
 ): string {
   if (surface === "feed") {
     return FEED_KIND_CLASSES[kind];
+  }
+  if (kind === "posted_ago") {
+    return RAIL_KIND_CLASSES.posted_ago;
   }
   if (surface === "railCover") {
     return `${RAIL_COVER_BASE} ${RAIL_COVER_KIND_CLASSES[kind]}`;

@@ -28,7 +28,10 @@ import {
 import toast from "react-hot-toast";
 import { emitPostDeleted } from "../lib/postEvents";
 import { getPostScheduleLabel } from "../lib/postScheduleLabel";
-import { getPostScheduleLabelClasses } from "../lib/postScheduleLabelStyles";
+import {
+  getPostScheduleLabelClasses,
+  railScheduleLabelUsesPill,
+} from "../lib/postScheduleLabelStyles";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
 import { discardAllDrafts } from "../lib/drafts";
@@ -326,7 +329,11 @@ export default function Hangout({
           {/* Date / priority strip — compact pill above avatar row */}
           <div className="w-full min-w-0 mb-2">
             <span
-              className={`block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${railLabelClassName}`}
+              className={
+                railScheduleLabelUsesPill(scheduleLabel.kind)
+                  ? `block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${railLabelClassName}`
+                  : `block w-full text-center text-[9px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${railLabelClassName}`
+              }
             >
               {datePillLabel}
             </span>
