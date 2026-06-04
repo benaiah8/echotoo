@@ -471,6 +471,26 @@
   font-weight: 600 !important;
 }
 
+/* react-day-picker v9: today in create modal (not selected) */
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-today:not(.rdp-selected) .rdp-day_button {
+  background-color: var(--calendar-today-bg) !important;
+  color: var(--calendar-today-text) !important;
+  border: 2px solid color-mix(in oklab, var(--brand) 50%, transparent) !important;
+  border-radius: 0.5rem !important;
+  font-weight: 600 !important;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 22%, transparent) !important;
+}
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-today:not(.rdp-selected) .rdp-day_button * {
+  color: var(--calendar-today-text) !important;
+  background: transparent !important;
+  opacity: 1 !important;
+}
+/* Today + selected: brand fill wins (see .rdp-selected rules above) */
+.rdp-theme.rdp-theme--modal td.rdp-day.rdp-today.rdp-selected .rdp-day_button {
+  border: none !important;
+  box-shadow: none !important;
+}
+
 /* Modal: stop square cell borders / outlines from clashing with rounded fills */
 .rdp-theme.rdp-theme--modal [role="gridcell"] {
   border: none !important;

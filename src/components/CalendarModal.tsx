@@ -38,6 +38,11 @@ export default function CalendarModal({
   const [mode, setMode] = useState<PickMode>("multi");
   /** Range mode only: waiting for end tap after start is chosen. */
   const [rangePendingStart, setRangePendingStart] = useState<Date | null>(null);
+  /** Viewer-local "today" for DayPicker highlight (refreshed on open / Today tap). */
+  const [todayDate, setTodayDate] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  });
 
   const normalize = (d: Date) =>
     new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -60,9 +65,16 @@ export default function CalendarModal({
     return out;
   };
 
+  const goToToday = useCallback(() => {
+    const now = new Date();
+    setTodayDate(normalize(now));
+    setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+  }, []);
+
   useEffect(() => {
     if (show) {
       const now = new Date();
+      setTodayDate(normalize(now));
       setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
       setRangePendingStart(null);
       setMode("multi");
@@ -184,6 +196,7 @@ export default function CalendarModal({
               onDayClick={handleDayClick}
               month={currentMonth}
               onMonthChange={setCurrentMonth}
+              today={todayDate}
               className="rdp-theme rdp-theme--modal w-full"
               modifiers={modifiers}
               modifiersClassNames={{
@@ -202,9 +215,9 @@ export default function CalendarModal({
           ) : null}
 
           <div
-            className="grid w-full min-w-0 grid-cols-3 gap-1 rounded-full border border-[color-mix(in_oklab,var(--border)_42%,transparent)] bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] px-1.5 py-1.5 sm:gap-1.5 sm:px-2 sm:py-2 dark:border-[color-mix(in_oklab,var(--border)_48%,transparent)] dark:bg-[color-mix(in_oklab,var(--surface)_14%,transparent)]"
+            className="grid w-full min-w-0 grid-cols-4 gap-1 rounded-full border border-[color-mix(in_oklab,var(--border)_42%,transparent)] bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] px-1.5 py-1.5 sm:gap-1.5 sm:px-2 sm:py-2 dark:border-[color-mix(in_oklab,var(--border)_48%,transparent)] dark:bg-[color-mix(in_oklab,var(--surface)_14%,transparent)]"
             role="group"
-            aria-label="Date selection and clear"
+            aria-label="Date selection, today shortcut, and clear"
           >
             <button
               type="button"
@@ -231,6 +244,17 @@ export default function CalendarModal({
                 aria-hidden
               />
               <span className="truncate">Range</span>
+            </button>
+            <button
+              type="button"
+              className={modePillClass(false)}
+              aria-label="Go to today"
+              onClick={(e) => {
+                e.preventDefault();
+                goToToday();
+              }}
+            >
+              <span className="truncate">Today</span>
             </button>
             <button
               type="button"
