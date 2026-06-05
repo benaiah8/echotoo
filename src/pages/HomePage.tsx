@@ -21,7 +21,6 @@ import {
   getPublicFeedOptimized,
   getPublicFeedOptimizedWithCount,
   type FeedItem,
-  type FeedOptions,
 } from "../api/queries/getPublicFeed";
 import { supabase } from "../lib/supabaseClient";
 import { getViewerId } from "../api/services/follows";
@@ -50,11 +49,29 @@ import {
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
-import { HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
 import {
   fetchTodaySpotlightItems,
   logTodaySpotlight,
 } from "../lib/homeTodaySpotlight";
+import {
+  buildHomeRailFilterContext,
+  buildHomeVerticalFilterContext,
+  buildHomeVerticalFirstPageFeedKeyOptions,
+  buildRailCacheFeedKeyOptions,
+  buildRailFetchFeedOptions,
+  buildTodaySpotlightBaseOptions,
+  buildVerticalFeedOptionsProp,
+  buildVerticalLoadFeedOptions,
+  getFeedSearchQ,
+  getRailAppliedFilters,
+  getRailAppliedFiltersSortedKey,
+  getVerticalSegmentType,
+  hasActiveHomeFilters,
+  isTodayChipActive,
+  railHasActiveDiscoveryFilters as getRailHasActiveDiscoveryFilters,
+  shouldPersonalizeHomeVerticalFeed,
+  viewerLocalOccurrenceForTodayChip,
+} from "../lib/homeVerticalFilters";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
@@ -69,36 +86,6 @@ const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
   noisePx: 2,
   maxDeltaPerEvent: 22,
 };
-
-/**
- * Viewer-local calendar date YYYY-MM-DD + IANA zone for Phase B vertical Today RPC.
- * Matches backend `AT TIME ZONE` interpretation of scheduled instants.
- */
-function viewerLocalOccurrenceForTodayChip(): {
-  occursOn: string;
-  occursTz: string;
-} | null {
-  try {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (!timeZone) return null;
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date());
-    const year = parts.find((p) => p.type === "year")?.value;
-    const month = parts.find((p) => p.type === "month")?.value;
-    const day = parts.find((p) => p.type === "day")?.value;
-    if (!year || !month || !day) return null;
-    return {
-      occursOn: `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`,
-      occursTz: timeZone,
-    };
-  } catch {
-    return null;
-  }
-}
 
 // Feature flag: Enable optimized PostgreSQL function
 // Set to false to use the original getPublicFeed function
@@ -189,23 +176,21 @@ export default function HomePage() {
 
   /** Post/hangout/experience feed `q` only in posts mode; never send home search text as post `q` in users mode. */
   const feedSearchQ = useMemo(
-    () => (searchMode === "posts" ? search || undefined : undefined),
+    () => getFeedSearchQ(searchMode, search),
     [searchMode, search]
   );
 
   /** Social filters applied to rails only (Hangouts/Discover); Today is vertical spotlight only. */
   const railAppliedFilters = useMemo(
-    (): FilterType[] =>
-      selectedFilters.filter((f) => f !== "today") as FilterType[],
+    () => getRailAppliedFilters(selectedFilters),
     [selectedFilters]
   );
   const railAppliedFiltersSortedKey = useMemo(
-    () => [...railAppliedFilters].sort().join(","),
+    () => getRailAppliedFiltersSortedKey(railAppliedFilters),
     [railAppliedFilters]
   );
-  const railHasActiveDiscoveryFilters = railAppliedFilters.length > 0;
 
-  const todayChipActive = selectedFilters.includes("today");
+  const todayChipActive = isTodayChipActive(selectedFilters);
 
   const [todaySpotlightItems, setTodaySpotlightItems] = useState<FeedItem[]>(
     []
@@ -214,12 +199,7 @@ export default function HomePage() {
   const [todaySpotlightResolved, setTodaySpotlightResolved] = useState(false);
 
   const verticalSegmentType = useMemo(
-    (): FeedOptions["type"] =>
-      viewMode === "hangouts"
-        ? "hangout"
-        : viewMode === "experiences"
-        ? "experience"
-        : undefined,
+    () => getVerticalSegmentType(viewMode),
     [viewMode]
   );
 
@@ -339,6 +319,32 @@ export default function HomePage() {
     };
   }, [isHomeVisible]);
 
+  const verticalFilterCtx = useMemo(
+    () =>
+      buildHomeVerticalFilterContext({
+        viewMode,
+        feedSearchQ,
+        selectedTags,
+        viewerProfileId,
+      }),
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+  );
+
+  const railFilterCtx = useMemo(
+    () =>
+      buildHomeRailFilterContext({
+        feedSearchQ,
+        selectedTags,
+        railAppliedFilters,
+        viewerProfileId,
+      }),
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+  );
+
+  const railHasActiveDiscoveryFilters = getRailHasActiveDiscoveryFilters(
+    railAppliedFilters
+  );
+
   /**
    * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Friends added.
    * Bounded slice only — not a guarantee against deeper feed pages.
@@ -354,14 +360,13 @@ export default function HomePage() {
         : [...selectedFilters, "friends"]
     ) as FilterType[];
 
-    const feedOptions: FeedOptions = {
-      type: undefined,
-      q: feedSearchQ,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      limit: FRIENDS_PREFLIGHT_LOAD_LIMIT * 2,
+    const feedOptions = buildRailFetchFeedOptions({
+      feedSearchQ,
+      selectedTags,
+      viewerProfileId,
       offset: 0,
-      viewerProfileId: viewerProfileId || undefined,
-    };
+      limit: FRIENDS_PREFLIGHT_LOAD_LIMIT * 2,
+    });
     const fetchedItems = USE_OPTIMIZED_FEED
       ? await getPublicFeedOptimized(feedOptions)
       : await getPublicFeed(feedOptions);
@@ -432,23 +437,8 @@ export default function HomePage() {
 
   /** Single options object for Home vertical first-page cache key — shared by scroll purge, sync initialItems, get/set callbacks. */
   const homeVerticalFirstPageFeedKeyOptions = useMemo(
-    () =>
-      ({
-        type:
-          viewMode === "hangouts"
-            ? "hangout"
-            : viewMode === "experiences"
-            ? "experience"
-            : undefined,
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        limit: HOME_FEED_FIRST_PAGE,
-        offset: 0,
-        viewerProfileId: viewerProfileId ?? null,
-        occursOn: null,
-        occursTz: null,
-      }) as Parameters<typeof dataCache.generateFeedKey>[0],
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+    () => buildHomeVerticalFirstPageFeedKeyOptions(verticalFilterCtx),
+    [verticalFilterCtx]
   );
 
   // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
@@ -504,12 +494,7 @@ export default function HomePage() {
     void (async () => {
       try {
         const items = await fetchTodaySpotlightItems(
-          {
-            type: verticalSegmentType,
-            q: feedSearchQ,
-            tags: selectedTags.length > 0 ? selectedTags : undefined,
-            viewerProfileId: viewerProfileId || undefined,
-          },
+          buildTodaySpotlightBaseOptions(verticalFilterCtx),
           occurrence,
           USE_OPTIMIZED_FEED
         );
@@ -725,7 +710,8 @@ export default function HomePage() {
   // [OPTIMIZATION: Phase 6.2 - React] Memoize computed values
   // Why: Prevents recalculation on every render
   const hasActiveFilters = useMemo(
-    () => viewMode !== "all" || search.trim() !== "" || selectedTags.length > 0,
+    () =>
+      hasActiveHomeFilters({ viewMode, search, selectedTags }),
     [viewMode, search, selectedTags]
   );
 
@@ -734,14 +720,13 @@ export default function HomePage() {
   const railLoadItems = useCallback(
     async (offset: number, limit: number) => {
       // 1. Fetch mixed content (both hangouts and experiences)
-      const feedOptions: FeedOptions = {
-        type: undefined, // Get both types
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        limit: limit * 2, // Fetch more to allow for filtering
+      const feedOptions = buildRailFetchFeedOptions({
+        feedSearchQ,
+        selectedTags,
+        viewerProfileId,
         offset,
-        viewerProfileId: viewerProfileId || undefined,
-      };
+        limit: limit * 2,
+      });
 
       const fetchedItems = USE_OPTIMIZED_FEED
         ? await getPublicFeedOptimized(feedOptions)
@@ -771,58 +756,41 @@ export default function HomePage() {
       railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(fetchedItems, limit);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId, railFilterCtx]
   );
 
   const railGetCachedItems = useCallback(
     (offset: number = 0) => {
-      const feedOptions = {
-        type: undefined,
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters:
-          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
-        limit: 20,
-        offset,
-        viewerProfileId: viewerProfileId ?? null,
-      };
-      const cacheKey = dataCache.generateFeedKey(feedOptions);
+      const cacheKey = dataCache.generateFeedKey(
+        buildRailCacheFeedKeyOptions(railFilterCtx, { offset, limit: 20 })
+      );
       const cached = dataCache.get<FeedItem[]>(cacheKey);
       return Array.isArray(cached) ? cached : null;
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+    [railFilterCtx]
   );
 
   const railSetCachedItems = useCallback(
     (items: FeedItem[], offset: number = 0) => {
-      const feedOptions = {
-        type: undefined,
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters:
-          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
-        limit: 20,
-        offset,
-        viewerProfileId: viewerProfileId ?? null,
-      };
-      const cacheKey = dataCache.generateFeedKey(feedOptions);
+      const cacheKey = dataCache.generateFeedKey(
+        buildRailCacheFeedKeyOptions(railFilterCtx, { offset, limit: 20 })
+      );
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+    [railFilterCtx]
   );
 
   // Top horizontal rail only (viewMode === "all") — must be unconditional hooks; see HomeHangoutSection JSX.
   const topRailLoadItems = useCallback(
     async (offset: number, limit: number) => {
       // 1. Fetch mixed content (both hangouts and experiences)
-      const feedOptions: FeedOptions = {
-        type: undefined, // Get both types
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        limit: limit * 2, // Fetch more to allow for filtering
+      const feedOptions = buildRailFetchFeedOptions({
+        feedSearchQ,
+        selectedTags,
+        viewerProfileId,
         offset,
-        viewerProfileId: viewerProfileId || undefined,
-      };
+        limit: limit * 2,
+      });
 
       const fetchedItems = USE_OPTIMIZED_FEED
         ? await getPublicFeedOptimized(feedOptions)
@@ -859,41 +827,25 @@ export default function HomePage() {
       railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(railsFilteredItems, limit);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId, railFilterCtx]
   );
 
   const topRailGetCachedItems = useCallback(() => {
-    const feedOptions = {
-      type: undefined, // Mixed content
-      q: feedSearchQ,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      filters:
-        railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
-      limit: 20,
-      offset: 0,
-      viewerProfileId: viewerProfileId ?? null,
-    };
-    const cacheKey = dataCache.generateFeedKey(feedOptions);
+    const cacheKey = dataCache.generateFeedKey(
+      buildRailCacheFeedKeyOptions(railFilterCtx, { offset: 0, limit: 20 })
+    );
     const cached = dataCache.get<FeedItem[]>(cacheKey);
     return Array.isArray(cached) ? cached : null;
-  }, [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]);
+  }, [railFilterCtx]);
 
   const topRailSetCachedItems = useCallback(
     (items: FeedItem[]) => {
-      const feedOptions = {
-        type: undefined, // Mixed content
-        q: feedSearchQ,
-        tags: selectedTags.length > 0 ? selectedTags : undefined,
-        filters:
-          railAppliedFilters.length > 0 ? railAppliedFilters : undefined,
-        limit: 20,
-        offset: 0,
-        viewerProfileId: viewerProfileId ?? null,
-      };
-      const cacheKey = dataCache.generateFeedKey(feedOptions);
+      const cacheKey = dataCache.generateFeedKey(
+        buildRailCacheFeedKeyOptions(railFilterCtx, { offset: 0, limit: 20 })
+      );
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
+    [railFilterCtx]
   );
 
   const showSearchKindToggle =
@@ -1053,23 +1005,19 @@ export default function HomePage() {
               useProgressiveFeed={true}
               loadItems={useCallback(
                 async (offset: number, limit: number) => {
-                  const feedOptions: FeedOptions = {
-                    type: verticalSegmentType,
-                    q: feedSearchQ,
-                    tags:
-                      selectedTags.length > 0 ? selectedTags : undefined,
-                    limit,
-                    offset,
-                    viewerProfileId: viewerProfileId || undefined,
-                  };
+                  const feedOptions = buildVerticalLoadFeedOptions(
+                    verticalFilterCtx,
+                    { offset, limit }
+                  );
                   if (USE_OPTIMIZED_FEED) {
                     const { items, consumedOffset, count } =
                       await getPublicFeedOptimizedWithCount(feedOptions);
 
-                    const shouldPersonalize =
-                      !feedSearchQ &&
-                      selectedTags.length === 0 &&
-                      viewMode === "all";
+                    const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
+                      feedSearchQ,
+                      selectedTags,
+                      viewMode,
+                    });
 
                     const personalizedItemsRaw = shouldPersonalize
                       ? personalizeFeedBatch(items)
@@ -1101,10 +1049,11 @@ export default function HomePage() {
                   }
 
                   const items = await getPublicFeed(feedOptions);
-                  const shouldPersonalize =
-                    !feedSearchQ &&
-                    selectedTags.length === 0 &&
-                    viewMode === "all";
+                  const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
+                    feedSearchQ,
+                    selectedTags,
+                    viewMode,
+                  });
 
                   const personalizedItemsRaw = shouldPersonalize
                     ? personalizeFeedBatch(items)
@@ -1122,7 +1071,7 @@ export default function HomePage() {
                     count: personalizedItems.length,
                   };
                 },
-                [feedSearchQ, selectedTags, viewMode, viewerProfileId, verticalSegmentType]
+                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
@@ -1136,14 +1085,7 @@ export default function HomePage() {
                 },
                 [feedCacheKey]
               )}
-              feedOptions={{
-                type: verticalSegmentType,
-                q: feedSearchQ,
-                tags: selectedTags.length > 0 ? selectedTags : undefined,
-                currentUserId: viewerProfileId ?? null,
-                occursOn: null,
-                occursTz: null,
-              }}
+              feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
               todayChipActive={todayChipActive}
               todaySpotlightItems={todaySpotlightItems}
               todaySpotlightLoading={todaySpotlightLoading}
