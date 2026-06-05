@@ -12,7 +12,14 @@ import CommentList from "../ui/CommentList";
 import { buildCarouselImages } from "../../lib/carouselImages";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { supabase } from "../../lib/supabaseClient";
 import { emitPostChanged } from "../../lib/postEvents";
@@ -45,7 +52,29 @@ import { getTimelineStopHeadingText } from "../../lib/createFlowMeaningfulActivi
 import { ReadOnlyActivityTagLine } from "./ReadOnlyActivityTagLine";
 import { AdditionalInfoSemanticRows } from "./AdditionalInfoSemanticRows";
 import { PiCalendarBlank, PiListBullets, PiMapPin } from "react-icons/pi";
+import {
+  getPostScheduleLabel,
+  type PostScheduleLabelKind,
+} from "../../lib/postScheduleLabel";
 // [OPTIMIZATION: Phase 3.4] Removed BatchLoadResult - PostgreSQL function provides all data
+
+/** Light emphasis for detail author subline (no feed pills). */
+function detailHeaderScheduleLabelClass(kind: PostScheduleLabelKind): string {
+  switch (kind) {
+    case "today":
+      return "font-medium text-green-600";
+    case "tomorrow":
+      return "font-medium text-amber-600";
+    case "next_weekday":
+      return "font-medium text-[var(--text)]/80";
+    case "in_days":
+      return "text-[var(--text)]/70";
+    case "passed":
+      return "italic text-[var(--text)]/50";
+    default:
+      return "";
+  }
+}
 
 // ---- Types the component will accept (all extras are optional) ----
 // [OPTIMIZATION: Phase 3.4] Post type now extends FeedItem for consistency
@@ -314,6 +343,26 @@ export default function PostDetailBody({
     composeFinalizeShell && composeFinalizeShowActivityTimeline === false;
   const hasActivities = (post.activities ?? []).length > 0;
 
+  const detailPostType = post.type === "hangout" ? "hangout" : "experience";
+
+  const headerScheduleLabel = useMemo(
+    () =>
+      getPostScheduleLabel({
+        type: detailPostType,
+        createdAt: post.created_at,
+        selectedDates: post.selected_dates,
+        isRecurring: post.is_recurring,
+        recurrenceDays: post.recurrence_days,
+      }),
+    [
+      detailPostType,
+      post.created_at,
+      post.selected_dates,
+      post.is_recurring,
+      post.recurrence_days,
+    ]
+  );
+
   const scheduleDates = (post.selected_dates || []).map((s) => new Date(s));
   const recurrenceCodes = (post.recurrence_days || [])
     .map(String)
@@ -562,7 +611,13 @@ export default function PostDetailBody({
             </div>
             <div className="text-xs text-[var(--text)]/60">
               {anon ? "" : `@${post.author?.username || "user"} · `}
-              {new Date(post.created_at).toLocaleDateString()}
+              <span
+                className={detailHeaderScheduleLabelClass(
+                  headerScheduleLabel.kind
+                )}
+              >
+                {headerScheduleLabel.label}
+              </span>
             </div>
           </div>
 
