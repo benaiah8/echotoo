@@ -56,7 +56,7 @@ const drawerChipButtonClass = (
   options?: { disabled?: boolean }
 ) => {
   const base =
-    "py-1 px-3 rounded-full text-[10px] font-medium leading-none transition-colors whitespace-nowrap border";
+    "py-1 px-3 rounded-md text-[10px] font-medium leading-none transition-colors whitespace-nowrap border";
   if (options?.disabled) {
     return [
       base,
@@ -512,12 +512,12 @@ export default function HomeTopBar({
               />
             </div>
 
-            <div className="flex justify-center pt-0.5">
+            <div className="pt-0.5">
               <button
                 type="button"
                 onClick={onClearAllFilters}
                 className={[
-                  "inline-flex h-7 items-center justify-center rounded-full px-4",
+                  "flex h-7 w-full items-center justify-center rounded-full px-4",
                   "text-[10px] font-medium leading-none tracking-tight",
                   "border border-rose-500/28 bg-rose-500/10 text-rose-700",
                   "transition-colors hover:bg-rose-500/16 hover:border-rose-500/38",
