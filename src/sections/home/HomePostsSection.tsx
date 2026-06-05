@@ -63,10 +63,6 @@ interface Props {
   railLoadItems?: (offset: number, limit: number) => Promise<FeedItem[]>;
   railGetCachedItems?: (offset: number) => FeedItem[] | null;
   railSetCachedItems?: (items: FeedItem[], offset: number) => void;
-  friendsFilter?: boolean;
-  /** Rail-only: social/extra filters excluding Today (Today is vertical-only during Phase A). */
-  railHasActiveFilters?: boolean;
-  railFilteredCount?: number; // [ENHANCEMENT: Empty State + Visual Distinction] Filtered count for injected rails
   /** When false (e.g. Home tab hidden on /u/me), ProgressiveFeed does not run initial load */
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
@@ -102,9 +98,6 @@ export default function HomePostsSection({
   railLoadItems: railLoadItemsProp,
   railGetCachedItems: railGetCachedItemsProp,
   railSetCachedItems: railSetCachedItemsProp,
-  friendsFilter = false,
-  railHasActiveFilters,
-  railFilteredCount,
   isVisible = true,
   tabId = "home",
   todayChipActive = false,
@@ -228,12 +221,7 @@ export default function HomePostsSection({
                       ? (items: FeedItem[]) => railSetCachedItemsProp(items, 0)
                       : setCachedItems
                   }
-                  filteredCount={railFilteredCount}
-                  hasActiveFilters={
-                    railHasActiveFilters !== undefined
-                      ? railHasActiveFilters
-                      : friendsFilter
-                  }
+                  hasActiveFilters={false}
                 />
               </div>
             </React.Fragment>
@@ -249,9 +237,6 @@ export default function HomePostsSection({
       railSetCachedItemsProp,
       getCachedItems,
       setCachedItems,
-      railFilteredCount,
-      railHasActiveFilters,
-      friendsFilter,
       isVisible,
       authUserId,
     ]

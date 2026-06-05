@@ -30,7 +30,6 @@ import WelcomeModal from "../components/ui/WelcomeModal";
 import { dataCache } from "../lib/dataCache";
 import { getMutualFriends } from "../lib/mutualFriendsCache";
 import {
-  applyFilters,
   applyFiltersWithFallback,
   mixHangoutsAndExperiences,
   type FilterType,
@@ -54,23 +53,19 @@ import {
   logTodaySpotlight,
 } from "../lib/homeTodaySpotlight";
 import {
-  buildHomeRailFilterContext,
   buildHomeVerticalFilterContext,
   buildHomeVerticalFirstPageFeedKeyOptions,
-  buildRailCacheFeedKeyOptions,
-  buildRailFetchFeedOptions,
+  buildRailDiscoveryCacheKeyOptions,
+  buildRailDiscoveryFeedOptions,
   buildTodaySpotlightBaseOptions,
   buildVerticalFeedOptionsProp,
   buildVerticalLoadFeedOptions,
   getFeedSearchQ,
-  getRailAppliedFilters,
-  getRailAppliedFiltersSortedKey,
   getVerticalSegmentType,
   hasActiveHomeFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
   isTodayChipActive,
-  railHasActiveDiscoveryFilters as getRailHasActiveDiscoveryFilters,
   shouldPersonalizeHomeVerticalFeed,
   toggleHomeDateFilter,
   viewerLocalOccurrenceForTodayChip,
@@ -169,10 +164,6 @@ export default function HomePage() {
   const [tagFallbackLoading, setTagFallbackLoading] = useState(false);
   const [showTagFallback, setShowTagFallback] = useState(false);
 
-  // [ENHANCEMENT: Empty State + Visual Distinction] Track filteredCount for horizontal rails
-  // Used to show empty card and visual distinction for filtered items
-  const railFilteredCountRef = useRef<number | undefined>(undefined);
-
   /** Inline banner when Friends preflight finds zero matches (client-side slice; not DB-wide). */
   const [noFriendsInlineBannerVisible, setNoFriendsInlineBannerVisible] =
     useState(false);
@@ -185,16 +176,6 @@ export default function HomePage() {
   const feedSearchQ = useMemo(
     () => getFeedSearchQ(searchMode, search),
     [searchMode, search]
-  );
-
-  /** Social filters applied to rails only; date filters are vertical-only. */
-  const railAppliedFilters = useMemo(
-    () => getRailAppliedFilters(friendsFilter),
-    [friendsFilter]
-  );
-  const railAppliedFiltersSortedKey = useMemo(
-    () => getRailAppliedFiltersSortedKey(railAppliedFilters),
-    [railAppliedFilters]
   );
 
   const todayChipActive = isTodayChipActive(dateFilter);
@@ -337,24 +318,9 @@ export default function HomePage() {
     [viewMode, feedSearchQ, selectedTags, viewerProfileId]
   );
 
-  const railFilterCtx = useMemo(
-    () =>
-      buildHomeRailFilterContext({
-        feedSearchQ,
-        selectedTags,
-        railAppliedFilters,
-        viewerProfileId,
-      }),
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId]
-  );
-
-  const railHasActiveDiscoveryFilters = getRailHasActiveDiscoveryFilters(
-    railAppliedFilters
-  );
-
   /**
-   * Same pipeline as top rail first page: fetch + filterRailsItems + applyFiltersWithFallback with Friends added.
-   * Bounded slice only — not a guarantee against deeper feed pages.
+   * Bounded discovery slice + Friends client filter — not vertical wiring yet.
+   * Uses fixed discovery fetch (no tags/search) so preflight is independent of Home filters.
    */
   const runFriendsPreflight = useCallback(async (): Promise<boolean> => {
     if (!viewerProfileId) return false;
@@ -363,9 +329,7 @@ export default function HomePage() {
 
     const filtersWithFriends: FilterType[] = ["friends"];
 
-    const feedOptions = buildRailFetchFeedOptions({
-      feedSearchQ,
-      selectedTags,
+    const feedOptions = buildRailDiscoveryFeedOptions({
       viewerProfileId,
       offset: 0,
       limit: FRIENDS_PREFLIGHT_LOAD_LIMIT * 2,
@@ -382,7 +346,7 @@ export default function HomePage() {
       true
     );
     return result.filteredCount > 0;
-  }, [feedSearchQ, selectedTags, viewerProfileId]);
+  }, [viewerProfileId]);
 
   const handleFriendsChipClick = useCallback(async () => {
     if (friendsPreflightInFlightRef.current) return;
@@ -738,14 +702,10 @@ export default function HomePage() {
     [dateFilter, viewMode, friendsFilter, search, selectedTags]
   );
 
-  // [FIX: Phase 1.2 - Horizontal Rail] Create railLoadItems for injected rails
-  // Uses same filtering logic as top rail, but with offset to avoid duplicates
+  // [FIX: Phase 1.2 - Horizontal Rail] Fixed discovery fetch for injected rails
   const railLoadItems = useCallback(
     async (offset: number, limit: number) => {
-      // 1. Fetch mixed content (both hangouts and experiences)
-      const feedOptions = buildRailFetchFeedOptions({
-        feedSearchQ,
-        selectedTags,
+      const feedOptions = buildRailDiscoveryFeedOptions({
         viewerProfileId,
         offset,
         limit: limit * 2,
@@ -755,61 +715,45 @@ export default function HomePage() {
         ? await getPublicFeedOptimized(feedOptions)
         : await getPublicFeed(feedOptions);
 
-      // 2. Apply rail-only filters client-side if any are active (excludes Today)
-      if (railAppliedFilters.length > 0) {
-        // Get mutual friends if needed
-        let mutualFriends: Set<string> | null = null;
-        if (railAppliedFilters.includes("friends") && viewerProfileId) {
-          mutualFriends = await getMutualFriends(viewerProfileId);
-        }
-
-        const result = applyFiltersWithFallback(
-          fetchedItems,
-          railAppliedFilters,
-          mutualFriends,
-          3,
-          true
-        );
-
-        railFilteredCountRef.current = result.filteredCount;
-
-        return result.items;
-      }
-
-      railFilteredCountRef.current = undefined;
-      return mixHangoutsAndExperiences(fetchedItems, limit);
+      const railsFilteredItems = filterRailsItems(fetchedItems);
+      return mixHangoutsAndExperiences(railsFilteredItems, limit);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId, railFilterCtx]
+    [viewerProfileId]
   );
 
   const railGetCachedItems = useCallback(
     (offset: number = 0) => {
       const cacheKey = dataCache.generateFeedKey(
-        buildRailCacheFeedKeyOptions(railFilterCtx, { offset, limit: 20 })
+        buildRailDiscoveryCacheKeyOptions({
+          viewerProfileId,
+          offset,
+          limit: 20,
+        })
       );
       const cached = dataCache.get<FeedItem[]>(cacheKey);
       return Array.isArray(cached) ? cached : null;
     },
-    [railFilterCtx]
+    [viewerProfileId]
   );
 
   const railSetCachedItems = useCallback(
     (items: FeedItem[], offset: number = 0) => {
       const cacheKey = dataCache.generateFeedKey(
-        buildRailCacheFeedKeyOptions(railFilterCtx, { offset, limit: 20 })
+        buildRailDiscoveryCacheKeyOptions({
+          viewerProfileId,
+          offset,
+          limit: 20,
+        })
       );
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [railFilterCtx]
+    [viewerProfileId]
   );
 
-  // Top horizontal rail only (viewMode === "all") — must be unconditional hooks; see HomeHangoutSection JSX.
+  // Top horizontal rail — fixed discovery; must be unconditional hooks; see HomeHangoutSection JSX.
   const topRailLoadItems = useCallback(
     async (offset: number, limit: number) => {
-      // 1. Fetch mixed content (both hangouts and experiences)
-      const feedOptions = buildRailFetchFeedOptions({
-        feedSearchQ,
-        selectedTags,
+      const feedOptions = buildRailDiscoveryFeedOptions({
         viewerProfileId,
         offset,
         limit: limit * 2,
@@ -819,56 +763,36 @@ export default function HomePage() {
         ? await getPublicFeedOptimized(feedOptions)
         : await getPublicFeed(feedOptions);
 
-      // [PHASE 1] Filter rails: exclude unscheduled and expired hangouts (even via fallback)
-      // Why: Rails should only show scheduled, non-expired events
-      // This prevents fallback from reintroducing unscheduled/expired hangouts
       const railsFilteredItems = filterRailsItems(fetchedItems);
-
-      // 2. Apply rail-only filters client-side if any are active (excludes Today)
-      if (railAppliedFilters.length > 0) {
-        let mutualFriends: Set<string> | null = null;
-        if (
-          railAppliedFilters.includes("friends") &&
-          viewerProfileId
-        ) {
-          mutualFriends = await getMutualFriends(viewerProfileId);
-        }
-
-        const result = applyFiltersWithFallback(
-          railsFilteredItems,
-          railAppliedFilters,
-          mutualFriends,
-          3,
-          true
-        );
-
-        railFilteredCountRef.current = result.filteredCount;
-
-        return result.items;
-      }
-
-      railFilteredCountRef.current = undefined;
       return mixHangoutsAndExperiences(railsFilteredItems, limit);
     },
-    [feedSearchQ, selectedTags, railAppliedFilters, viewerProfileId, railFilterCtx]
+    [viewerProfileId]
   );
 
   const topRailGetCachedItems = useCallback(() => {
     const cacheKey = dataCache.generateFeedKey(
-      buildRailCacheFeedKeyOptions(railFilterCtx, { offset: 0, limit: 20 })
+      buildRailDiscoveryCacheKeyOptions({
+        viewerProfileId,
+        offset: 0,
+        limit: 20,
+      })
     );
     const cached = dataCache.get<FeedItem[]>(cacheKey);
     return Array.isArray(cached) ? cached : null;
-  }, [railFilterCtx]);
+  }, [viewerProfileId]);
 
   const topRailSetCachedItems = useCallback(
     (items: FeedItem[]) => {
       const cacheKey = dataCache.generateFeedKey(
-        buildRailCacheFeedKeyOptions(railFilterCtx, { offset: 0, limit: 20 })
+        buildRailDiscoveryCacheKeyOptions({
+          viewerProfileId,
+          offset: 0,
+          limit: 20,
+        })
       );
       dataCache.set(cacheKey, items, 10 * 60 * 1000);
     },
-    [railFilterCtx]
+    [viewerProfileId]
   );
 
   const showSearchKindToggle =
@@ -997,18 +921,14 @@ export default function HomePage() {
           {/* HORIZONTAL RAIL AT TOP — independent of Today / Hangouts / Experiences vertical chips */}
           <div className="w-full max-w-[640px] mx-auto px-0">
             <HomeHangoutSection
-              key={`rail-top-${railAppliedFiltersSortedKey}-${selectedTags.join(
-                ","
-              )}-${feedSearchQ ?? ""}-e${homeRefreshEpoch}`}
+              key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
               items={[]}
               loading={false}
               batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
-              // [OPTIMIZATION: Phase 1.2 - Horizontal Rail] Progressive loading with client-side filtering
               useProgressiveLoading={true}
               isVisible={isHomeVisible}
               tabId="home"
-              filteredCount={railFilteredCountRef.current}
-              hasActiveFilters={railHasActiveDiscoveryFilters}
+              hasActiveFilters={false}
               loadItems={topRailLoadItems}
               getCachedItems={topRailGetCachedItems}
               setCachedItems={topRailSetCachedItems}
@@ -1119,8 +1039,6 @@ export default function HomePage() {
               railLoadItems={railLoadItems}
               railGetCachedItems={railGetCachedItems}
               railSetCachedItems={railSetCachedItems}
-              railHasActiveFilters={railHasActiveDiscoveryFilters}
-              friendsFilter={friendsFilter}
             />
           </div>
         </div>

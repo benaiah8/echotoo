@@ -281,6 +281,34 @@ export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
   };
 }
 
+/** Fixed discovery rail fetch — no Home filters (search, tags, friends, date, type). */
+export function buildRailDiscoveryFeedOptions(params: {
+  viewerProfileId: string | null;
+  offset: number;
+  limit: number;
+}): FeedOptions {
+  return {
+    type: undefined,
+    limit: params.limit,
+    offset: params.offset,
+    viewerProfileId: params.viewerProfileId || undefined,
+  };
+}
+
+/** Stable rail cache key — discovery only; no q/tags/filters. */
+export function buildRailDiscoveryCacheKeyOptions(params: {
+  viewerProfileId: string | null;
+  offset: number;
+  limit: number;
+}): Parameters<typeof dataCache.generateFeedKey>[0] {
+  return {
+    type: undefined,
+    limit: params.limit,
+    offset: params.offset,
+    viewerProfileId: params.viewerProfileId,
+  };
+}
+
 /** Mixed-type rail fetch (no occurrence params). */
 export function buildRailFetchFeedOptions(params: {
   feedSearchQ?: string;
