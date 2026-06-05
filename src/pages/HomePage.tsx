@@ -66,7 +66,7 @@ import {
   getRailAppliedFilters,
   getRailAppliedFiltersSortedKey,
   getVerticalSegmentType,
-  hasActiveHomeFiltersFunnelDot,
+  hasActiveHomeFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
   isTodayChipActive,
@@ -728,12 +728,14 @@ export default function HomePage() {
   // Why: Prevents recalculation on every render
   const hasActiveFilters = useMemo(
     () =>
-      hasActiveHomeFiltersFunnelDot({
+      hasActiveHomeFilters({
+        dateFilter,
         typeFilter: viewMode,
+        friendsFilter,
         search,
         selectedTags,
       }),
-    [viewMode, search, selectedTags]
+    [dateFilter, viewMode, friendsFilter, search, selectedTags]
   );
 
   // [FIX: Phase 1.2 - Horizontal Rail] Create railLoadItems for injected rails

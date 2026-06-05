@@ -49,29 +49,42 @@ const chipButtonClass = (isSelected: boolean) =>
   ].join(" ");
 
 const drawerSectionLabelClass =
-  "mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65";
+  "mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text)]/82";
 
 const drawerChipButtonClass = (
   isSelected: boolean,
   options?: { disabled?: boolean }
 ) => {
   const base =
-    "py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap border";
+    "py-1 px-3 rounded-full text-[10px] font-medium leading-none transition-colors whitespace-nowrap border";
   if (options?.disabled) {
     return [
       base,
-      "cursor-not-allowed opacity-45 text-[var(--text)]/50 bg-transparent border-white/15",
+      "cursor-not-allowed pointer-events-none",
+      "border-[color-mix(in_oklab,var(--border)_70%,transparent)]",
+      "bg-[color-mix(in_oklab,var(--text)_5%,transparent)]",
+      "text-[var(--text)]/38",
+      "app-dark:text-white/32 app-dark:border-white/10 app-dark:bg-white/[0.04]",
     ].join(" ");
   }
   if (isSelected) {
     return [
       base,
-      "bg-[var(--brand)] text-[var(--brand-ink)] border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)] shadow-[var(--glass-active-shadow)]",
+      "bg-[var(--brand)] text-[var(--brand-ink)]",
+      "border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)]",
+      "shadow-[0_1px_8px_rgba(0,0,0,0.22)] app-dark:shadow-[0_2px_10px_rgba(0,0,0,0.45)]",
     ].join(" ");
   }
   return [
     base,
-    "text-[var(--text)] bg-transparent border-white/25 hover:bg-[rgba(255,255,255,0.08)]",
+    "text-[var(--text)]/92",
+    "border-[color-mix(in_oklab,var(--border)_88%,var(--text))]",
+    "bg-[color-mix(in_oklab,var(--surface-2)_55%,var(--bg))]",
+    "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+    "hover:bg-[color-mix(in_oklab,var(--surface-2)_72%,var(--bg))]",
+    "app-dark:text-white/90 app-dark:border-white/22",
+    "app-dark:bg-[color-mix(in_oklab,#1c1c1f_78%,transparent)]",
+    "app-dark:hover:bg-[color-mix(in_oklab,#242428_82%,transparent)]",
   ].join(" ");
 };
 
@@ -400,9 +413,12 @@ export default function HomeTopBar({
         <div
           className={[
             "w-[80%] pointer-events-auto overflow-hidden transition-all duration-300",
-            "bg-[color-mix(in_oklab,var(--glass-bg)_88%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
-            "border border-[var(--bottom-tab-border)]",
-            "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
+            "backdrop-blur-[var(--glass-blur)] backdrop-saturate-150",
+            "bg-[color-mix(in_oklab,var(--bg)_78%,var(--glass-bg))]",
+            "app-dark:bg-[color-mix(in_oklab,#0c0c0e_88%,var(--glass-bg))]",
+            "border border-[color-mix(in_oklab,var(--bottom-tab-border)_85%,var(--text))]",
+            "app-dark:border-white/16",
+            "shadow-[0_8px_28px_rgba(0,0,0,0.22)] app-dark:shadow-[0_12px_32px_rgba(0,0,0,0.55)]",
             "rounded-2xl",
             filtersOpen
               ? "max-h-[min(420px,72vh)] opacity-100 flex flex-col"
@@ -418,10 +434,9 @@ export default function HomeTopBar({
               <p className={drawerSectionLabelClass}>Date / Time</p>
               <div className="flex flex-wrap gap-1.5">
                 {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
-                  const isSelected = isHomeDateFilterActive(
-                    dateFilter,
-                    option.value
-                  );
+                  const isSelected =
+                    option.enabled &&
+                    isHomeDateFilterActive(dateFilter, option.value);
                   return (
                     <button
                       key={option.value}
@@ -497,11 +512,18 @@ export default function HomeTopBar({
               />
             </div>
 
-            <div className="pt-0.5">
+            <div className="flex justify-center pt-0.5">
               <button
                 type="button"
                 onClick={onClearAllFilters}
-                className="w-full rounded-lg border border-[var(--border)] py-2 text-[10px] font-medium text-[var(--text)]/80 transition-colors hover:bg-[color-mix(in_oklab,var(--text)_8%,transparent)]"
+                className={[
+                  "inline-flex h-7 items-center justify-center rounded-full px-4",
+                  "text-[10px] font-medium leading-none tracking-tight",
+                  "border border-rose-500/28 bg-rose-500/10 text-rose-700",
+                  "transition-colors hover:bg-rose-500/16 hover:border-rose-500/38",
+                  "app-dark:border-rose-400/24 app-dark:bg-rose-500/14 app-dark:text-rose-200",
+                  "app-dark:hover:bg-rose-500/22 app-dark:hover:border-rose-400/34",
+                ].join(" ")}
               >
                 Clear all filters
               </button>
