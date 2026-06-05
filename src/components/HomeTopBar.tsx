@@ -6,6 +6,12 @@ import {
 } from "react-icons/pi";
 import Logo from "./ui/Logo";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
+import {
+  isTodayChipActive,
+  toggleHomeTypeFilter,
+  type HomeDateFilter,
+  type HomeViewMode,
+} from "../lib/homeVerticalFilters";
 
 const TOP_BAR_MAX_WIDTH = 640;
 
@@ -60,10 +66,12 @@ export interface HomeTopBarProps {
   selectedTags: string[];
   onTagsChange: (tags: string[]) => void;
   onClearFilters: () => void;
-  viewMode: "all" | "hangouts" | "experiences";
-  setViewMode: (m: "all" | "hangouts" | "experiences") => void;
-  selectedFilters: string[];
-  onFilterChange: (filters: string[]) => void;
+  viewMode: HomeViewMode;
+  setViewMode: (m: HomeViewMode) => void;
+  dateFilter: HomeDateFilter;
+  onToggleTodayChip: () => void;
+  friendsFilter: boolean;
+  onFriendsFilterDeactivate: () => void;
   /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
   onSearchFocusChange?: (focused: boolean) => void;
   /** Inline notice below quick chips when Friends preflight finds no matches (client-side). */
@@ -93,29 +101,24 @@ export default function HomeTopBar({
   onClearFilters,
   viewMode,
   setViewMode,
-  selectedFilters,
-  onFilterChange,
+  dateFilter,
+  onToggleTodayChip,
+  friendsFilter,
+  onFriendsFilterDeactivate,
   onSearchFocusChange,
   noFriendsInlineBannerVisible = false,
   onFriendsChipClick,
   friendsPreflightPending = false,
 }: HomeTopBarProps) {
-  const handleTodayChipClick = () => {
-    if (selectedFilters.includes("today")) {
-      onFilterChange(selectedFilters.filter((v) => v !== "today"));
-      return;
-    }
-    onFilterChange([...selectedFilters, "today"]);
-  };
+  const todayActive = isTodayChipActive(dateFilter);
 
-  const friendsFilterActive = selectedFilters.includes("friends");
-  /** Visual only: match banner during empty Friends preflight without putting "friends" in selectedFilters. */
+  /** Visual only: match banner during empty Friends preflight without activating friendsFilter. */
   const friendsIsVisuallyActive =
-    friendsFilterActive || noFriendsInlineBannerVisible;
+    friendsFilter || noFriendsInlineBannerVisible;
 
   const handleFriendsFilterClick = () => {
-    if (friendsFilterActive) {
-      onFilterChange(selectedFilters.filter((f) => f !== "friends"));
+    if (friendsFilter) {
+      onFriendsFilterDeactivate();
       return;
     }
     if (friendsPreflightPending) return;
@@ -185,9 +188,9 @@ export default function HomeTopBar({
           <div
             className={[
               "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-              /* Floating pill: same outer ring as bottom tab. Full-width: subtle hairline only. */
+              /* Floating pill: same outer ring as bottom tab. Full-width at top: no outer ring. */
               atTop
-                ? "border border-[var(--bottom-tab-border)] shadow-none"
+                ? "border border-transparent shadow-none"
                 : "border border-transparent shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
             ].join(" ")}
             style={{
@@ -317,15 +320,15 @@ export default function HomeTopBar({
             <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
               <button
                 type="button"
-                onClick={handleTodayChipClick}
-                className={chipButtonClass(selectedFilters.includes("today"))}
+                onClick={onToggleTodayChip}
+                className={chipButtonClass(todayActive)}
               >
                 Today
               </button>
               <button
                 type="button"
                 onClick={() =>
-                  setViewMode(viewMode === "hangouts" ? "all" : "hangouts")
+                  setViewMode(toggleHomeTypeFilter(viewMode, "hangouts"))
                 }
                 className={chipButtonClass(viewMode === "hangouts")}
               >
@@ -334,7 +337,7 @@ export default function HomeTopBar({
               <button
                 type="button"
                 onClick={() =>
-                  setViewMode(viewMode === "experiences" ? "all" : "experiences")
+                  setViewMode(toggleHomeTypeFilter(viewMode, "experiences"))
                 }
                 className={chipButtonClass(viewMode === "experiences")}
               >

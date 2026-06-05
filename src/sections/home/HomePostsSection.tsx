@@ -63,7 +63,7 @@ interface Props {
   railLoadItems?: (offset: number, limit: number) => Promise<FeedItem[]>;
   railGetCachedItems?: (offset: number) => FeedItem[] | null;
   railSetCachedItems?: (items: FeedItem[], offset: number) => void;
-  selectedFilters?: string[];
+  friendsFilter?: boolean;
   /** Rail-only: social/extra filters excluding Today (Today is vertical-only during Phase A). */
   railHasActiveFilters?: boolean;
   railFilteredCount?: number; // [ENHANCEMENT: Empty State + Visual Distinction] Filtered count for injected rails
@@ -102,7 +102,7 @@ export default function HomePostsSection({
   railLoadItems: railLoadItemsProp,
   railGetCachedItems: railGetCachedItemsProp,
   railSetCachedItems: railSetCachedItemsProp,
-  selectedFilters = [],
+  friendsFilter = false,
   railHasActiveFilters,
   railFilteredCount,
   isVisible = true,
@@ -232,7 +232,7 @@ export default function HomePostsSection({
                   hasActiveFilters={
                     railHasActiveFilters !== undefined
                       ? railHasActiveFilters
-                      : selectedFilters.length > 0
+                      : friendsFilter
                   }
                 />
               </div>
@@ -251,7 +251,7 @@ export default function HomePostsSection({
       setCachedItems,
       railFilteredCount,
       railHasActiveFilters,
-      selectedFilters,
+      friendsFilter,
       isVisible,
       authUserId,
     ]

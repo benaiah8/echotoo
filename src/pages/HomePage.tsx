@@ -66,11 +66,15 @@ import {
   getRailAppliedFilters,
   getRailAppliedFiltersSortedKey,
   getVerticalSegmentType,
-  hasActiveHomeFilters,
+  hasActiveHomeFiltersFunnelDot,
+  INITIAL_HOME_DATE_FILTER,
+  INITIAL_HOME_TYPE_FILTER,
   isTodayChipActive,
   railHasActiveDiscoveryFilters as getRailHasActiveDiscoveryFilters,
   shouldPersonalizeHomeVerticalFeed,
+  toggleHomeDateFilter,
   viewerLocalOccurrenceForTodayChip,
+  type HomeDateFilter,
 } from "../lib/homeVerticalFilters";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
@@ -138,7 +142,10 @@ export default function HomePage() {
   const [debouncedUserSearchQuery, setDebouncedUserSearchQuery] =
     useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedFilters, setSelectedFilters] = useState<string[]>([]);
+  const [dateFilter, setDateFilter] = useState<HomeDateFilter>(
+    INITIAL_HOME_DATE_FILTER
+  );
+  const [friendsFilter, setFriendsFilter] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const homeTopBarRef = useRef<HTMLDivElement>(null);
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
@@ -180,17 +187,17 @@ export default function HomePage() {
     [searchMode, search]
   );
 
-  /** Social filters applied to rails only (Hangouts/Discover); Today is vertical spotlight only. */
+  /** Social filters applied to rails only; date filters are vertical-only. */
   const railAppliedFilters = useMemo(
-    () => getRailAppliedFilters(selectedFilters),
-    [selectedFilters]
+    () => getRailAppliedFilters(friendsFilter),
+    [friendsFilter]
   );
   const railAppliedFiltersSortedKey = useMemo(
     () => getRailAppliedFiltersSortedKey(railAppliedFilters),
     [railAppliedFilters]
   );
 
-  const todayChipActive = isTodayChipActive(selectedFilters);
+  const todayChipActive = isTodayChipActive(dateFilter);
 
   const [todaySpotlightItems, setTodaySpotlightItems] = useState<FeedItem[]>(
     []
@@ -354,11 +361,7 @@ export default function HomePage() {
     const mutualFriends = await getMutualFriends(viewerProfileId);
     if (mutualFriends.size === 0) return false;
 
-    const filtersWithFriends = (
-      selectedFilters.includes("friends")
-        ? selectedFilters
-        : [...selectedFilters, "friends"]
-    ) as FilterType[];
+    const filtersWithFriends: FilterType[] = ["friends"];
 
     const feedOptions = buildRailFetchFeedOptions({
       feedSearchQ,
@@ -379,7 +382,7 @@ export default function HomePage() {
       true
     );
     return result.filteredCount > 0;
-  }, [feedSearchQ, selectedTags, selectedFilters, viewerProfileId]);
+  }, [feedSearchQ, selectedTags, viewerProfileId]);
 
   const handleFriendsChipClick = useCallback(async () => {
     if (friendsPreflightInFlightRef.current) return;
@@ -388,9 +391,7 @@ export default function HomePage() {
     try {
       const hasMatches = await runFriendsPreflight();
       if (hasMatches) {
-        setSelectedFilters((prev) =>
-          prev.includes("friends") ? prev : [...prev, "friends"]
-        );
+        setFriendsFilter(true);
       } else {
         setNoFriendsInlineBannerVisible(true);
         if (noFriendsBannerTimerRef.current !== null) {
@@ -409,16 +410,15 @@ export default function HomePage() {
   }, [runFriendsPreflight]);
 
   useEffect(() => {
-    const hasFriends = selectedFilters.includes("friends");
-    if (hadFriendsInFiltersRef.current && !hasFriends) {
+    if (hadFriendsInFiltersRef.current && !friendsFilter) {
       setNoFriendsInlineBannerVisible(false);
       if (noFriendsBannerTimerRef.current !== null) {
         clearTimeout(noFriendsBannerTimerRef.current);
         noFriendsBannerTimerRef.current = null;
       }
     }
-    hadFriendsInFiltersRef.current = hasFriends;
-  }, [selectedFilters]);
+    hadFriendsInFiltersRef.current = friendsFilter;
+  }, [friendsFilter]);
 
   useEffect(() => {
     return () => {
@@ -543,6 +543,23 @@ export default function HomePage() {
     viewerProfileId,
   ]);
 
+  const clearAllHomeFilters = useCallback(() => {
+    setDateFilter(INITIAL_HOME_DATE_FILTER);
+    setViewMode(INITIAL_HOME_TYPE_FILTER);
+    setFriendsFilter(false);
+    setSelectedTags([]);
+    setSearch("");
+    setSearchMode("posts");
+  }, []);
+
+  const handleToggleTodayChip = useCallback(() => {
+    setDateFilter((current) => toggleHomeDateFilter(current, "today"));
+  }, []);
+
+  const handleFriendsFilterDeactivate = useCallback(() => {
+    setFriendsFilter(false);
+  }, []);
+
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
 
@@ -558,8 +575,7 @@ export default function HomePage() {
       }
       const detail = (e as CustomEvent<HomeTabRefreshDetail>).detail;
       if (detail?.source === "home-tab") {
-        setSearch("");
-        setSearchMode("posts");
+        clearAllHomeFilters();
       }
       if (import.meta.env.DEV) {
         console.debug(
@@ -573,7 +589,7 @@ export default function HomePage() {
     return () => {
       window.removeEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     };
-  }, [isHomeTabActive]);
+  }, [isHomeTabActive, clearAllHomeFilters]);
 
   const {
     pullPx,
@@ -693,6 +709,7 @@ export default function HomePage() {
     }
   }, [effectiveHomeTopHidden]);
 
+  /** Popular-tags Clear All: tags + search only (legacy drawer behavior). */
   const handleClearFilters = useCallback(() => {
     setSelectedTags([]);
     setSearch("");
@@ -711,7 +728,11 @@ export default function HomePage() {
   // Why: Prevents recalculation on every render
   const hasActiveFilters = useMemo(
     () =>
-      hasActiveHomeFilters({ viewMode, search, selectedTags }),
+      hasActiveHomeFiltersFunnelDot({
+        typeFilter: viewMode,
+        search,
+        selectedTags,
+      }),
     [viewMode, search, selectedTags]
   );
 
@@ -901,8 +922,10 @@ export default function HomePage() {
           onClearFilters={handleClearFilters}
           viewMode={viewMode}
           setViewMode={setViewMode}
-          selectedFilters={selectedFilters}
-          onFilterChange={setSelectedFilters}
+          dateFilter={dateFilter}
+          onToggleTodayChip={handleToggleTodayChip}
+          friendsFilter={friendsFilter}
+          onFriendsFilterDeactivate={handleFriendsFilterDeactivate}
           onFriendsChipClick={handleFriendsChipClick}
           friendsPreflightPending={friendsPreflightPending}
           noFriendsInlineBannerVisible={noFriendsInlineBannerVisible}
@@ -1094,7 +1117,7 @@ export default function HomePage() {
               railGetCachedItems={railGetCachedItems}
               railSetCachedItems={railSetCachedItems}
               railHasActiveFilters={railHasActiveDiscoveryFilters}
-              selectedFilters={selectedFilters}
+              friendsFilter={friendsFilter}
             />
           </div>
         </div>

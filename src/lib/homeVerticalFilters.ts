@@ -9,7 +9,21 @@ import type { FilterType } from "./horizontalRailFilters";
 import { HOME_FEED_FIRST_PAGE } from "./homeFeedConstants";
 import type { TodaySpotlightBaseOptions } from "./homeTodaySpotlight";
 
-export type HomeViewMode = "all" | "hangouts" | "experiences";
+export type HomeDateFilter =
+  | "none"
+  | "today"
+  | "tomorrow"
+  | "this_week"
+  | "this_weekend"
+  | "next_week";
+
+export type HomeTypeFilter = "all" | "hangouts" | "experiences";
+
+/** Alias for vertical segment / viewMode. */
+export type HomeViewMode = HomeTypeFilter;
+
+export const INITIAL_HOME_DATE_FILTER: HomeDateFilter = "none";
+export const INITIAL_HOME_TYPE_FILTER: HomeTypeFilter = "all";
 
 export type ViewerLocalOccurrence = {
   occursOn: string;
@@ -71,8 +85,24 @@ export function viewerLocalOccurrence(
   }
 }
 
-export function isTodayChipActive(selectedFilters: readonly string[]): boolean {
-  return selectedFilters.includes("today");
+export function isTodayChipActive(dateFilter: HomeDateFilter): boolean {
+  return dateFilter === "today";
+}
+
+/** Mutually exclusive date chips: active chip toggles off; otherwise selects `next`. */
+export function toggleHomeDateFilter(
+  current: HomeDateFilter,
+  next: Exclude<HomeDateFilter, "none">
+): HomeDateFilter {
+  return current === next ? "none" : next;
+}
+
+/** Mutually exclusive type chips: active segment toggles to all; otherwise selects `next`. */
+export function toggleHomeTypeFilter(
+  current: HomeTypeFilter,
+  next: "hangouts" | "experiences"
+): HomeTypeFilter {
+  return current === next ? "all" : next;
 }
 
 export function getVerticalSegmentType(
@@ -83,11 +113,9 @@ export function getVerticalSegmentType(
   return undefined;
 }
 
-/** Social filters for rails; Today is vertical spotlight only. */
-export function getRailAppliedFilters(
-  selectedFilters: readonly string[]
-): FilterType[] {
-  return selectedFilters.filter((f) => f !== "today") as FilterType[];
+/** Social filters for rails (Friends only today; date filters are vertical-only). */
+export function getRailAppliedFilters(friendsFilter: boolean): FilterType[] {
+  return friendsFilter ? ["friends"] : [];
 }
 
 export function getRailAppliedFiltersSortedKey(
@@ -116,13 +144,36 @@ export function tagsForFeedOptions(
   return selectedTags.length > 0 ? [...selectedTags] : undefined;
 }
 
-export function hasActiveHomeFilters(params: {
-  viewMode: HomeViewMode;
+export type HasActiveHomeFiltersInput = {
+  dateFilter: HomeDateFilter;
+  typeFilter: HomeTypeFilter;
+  friendsFilter: boolean;
+  search: string;
+  selectedTags: readonly string[];
+};
+
+/** True when any home filter dimension is active (canonical). */
+export function hasActiveHomeFilters(params: HasActiveHomeFiltersInput): boolean {
+  return (
+    params.dateFilter !== "none" ||
+    params.typeFilter !== "all" ||
+    params.friendsFilter ||
+    params.search.trim() !== "" ||
+    params.selectedTags.length > 0
+  );
+}
+
+/**
+ * Legacy funnel-dot indicator: type, search, and tags only (excludes date/friends).
+ * Preserves pre-drawer-upgrade visible behavior until drawer UI adopts full clear-all.
+ */
+export function hasActiveHomeFiltersFunnelDot(params: {
+  typeFilter: HomeTypeFilter;
   search: string;
   selectedTags: readonly string[];
 }): boolean {
   return (
-    params.viewMode !== "all" ||
+    params.typeFilter !== "all" ||
     params.search.trim() !== "" ||
     params.selectedTags.length > 0
   );
