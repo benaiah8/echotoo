@@ -38,6 +38,10 @@ import { discardAllDrafts } from "../lib/drafts";
 import RailCardImageBackdrop from "./RailCardImageBackdrop";
 import useAuthActionGate from "../hooks/useAuthActionGate";
 
+/** Fixed rail top label row height (pill + plain posted-age share the same footprint). */
+const RAIL_LABEL_ROW_CLASS =
+  "mb-2 flex h-[26px] w-full min-w-0 items-center justify-center";
+
 type Props = {
   id: string; // NEW
   caption: string;
@@ -326,14 +330,15 @@ export default function Hangout({
         </div>
 
         <div className="relative z-10 flex flex-col gap-2">
-          {/* Date / priority strip — compact pill above avatar row */}
-          <div className="w-full min-w-0 mb-2">
+          {/* Date / priority strip — fixed row height for pill vs plain posted-age */}
+          <div className={RAIL_LABEL_ROW_CLASS}>
             <span
-              className={
+              className={[
+                "flex h-full w-full min-w-0 items-center justify-center text-center text-[9px] leading-none whitespace-nowrap overflow-hidden text-ellipsis",
                 railScheduleLabelUsesPill(scheduleLabel.kind)
-                  ? `block w-full text-center px-2.5 py-1 text-[9px] leading-tight rounded-full whitespace-nowrap overflow-hidden text-ellipsis border ${railLabelClassName}`
-                  : `block w-full text-center text-[9px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${railLabelClassName}`
-              }
+                  ? `rounded-full border px-2.5 ${railLabelClassName}`
+                  : railLabelClassName,
+              ].join(" ")}
             >
               {datePillLabel}
             </span>
