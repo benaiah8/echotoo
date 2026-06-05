@@ -7,6 +7,9 @@ import {
 import Logo from "./ui/Logo";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
 import {
+  HOME_DATE_FILTER_DRAWER_OPTIONS,
+  isHomeDateFilterActive,
+  isHomeTypeFilterActive,
   isTodayChipActive,
   toggleHomeTypeFilter,
   type HomeDateFilter,
@@ -45,6 +48,33 @@ const chipButtonClass = (isSelected: boolean) =>
         ].join(" "),
   ].join(" ");
 
+const drawerSectionLabelClass =
+  "mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65";
+
+const drawerChipButtonClass = (
+  isSelected: boolean,
+  options?: { disabled?: boolean }
+) => {
+  const base =
+    "py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap border";
+  if (options?.disabled) {
+    return [
+      base,
+      "cursor-not-allowed opacity-45 text-[var(--text)]/50 bg-transparent border-white/15",
+    ].join(" ");
+  }
+  if (isSelected) {
+    return [
+      base,
+      "bg-[var(--brand)] text-[var(--brand-ink)] border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)] shadow-[var(--glass-active-shadow)]",
+    ].join(" ");
+  }
+  return [
+    base,
+    "text-[var(--text)] bg-transparent border-white/25 hover:bg-[rgba(255,255,255,0.08)]",
+  ].join(" ");
+};
+
 export interface HomeTopBarProps {
   /** Root wrapper ref for outside-press detection handled by parent. */
   containerRef?: React.RefObject<HTMLDivElement | null>;
@@ -80,6 +110,8 @@ export interface HomeTopBarProps {
   onFriendsChipClick?: () => void;
   /** Dim/disable Friends while preflight fetch runs */
   friendsPreflightPending?: boolean;
+  /** Resets date, type, friends, tags, and search. */
+  onClearAllFilters: () => void;
 }
 
 export default function HomeTopBar({
@@ -109,6 +141,7 @@ export default function HomeTopBar({
   noFriendsInlineBannerVisible = false,
   onFriendsChipClick,
   friendsPreflightPending = false,
+  onClearAllFilters,
 }: HomeTopBarProps) {
   const todayActive = isTodayChipActive(dateFilter);
 
@@ -372,7 +405,7 @@ export default function HomeTopBar({
             "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
             "rounded-2xl",
             filtersOpen
-              ? "max-h-[240px] opacity-100 flex flex-col"
+              ? "max-h-[min(420px,72vh)] opacity-100 flex flex-col"
               : "max-h-0 opacity-0",
           ].join(" ")}
           style={{
@@ -382,34 +415,96 @@ export default function HomeTopBar({
         >
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
             <div>
-              <p className="mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65">
-                Popular tags
-              </p>
-              <HomeCategorySection
-                selected={selectedTags}
-                onTagsChange={onTagsChange}
-                onClear={onClearFilters}
-              />
+              <p className={drawerSectionLabelClass}>Date / Time</p>
+              <div className="flex flex-wrap gap-1.5">
+                {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
+                  const isSelected = isHomeDateFilterActive(
+                    dateFilter,
+                    option.value
+                  );
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={!option.enabled}
+                      aria-disabled={!option.enabled || undefined}
+                      title={option.enabled ? undefined : "Coming soon"}
+                      onClick={() => {
+                        if (!option.enabled) return;
+                        if (option.value === "today") {
+                          onToggleTodayChip();
+                        }
+                      }}
+                      className={drawerChipButtonClass(isSelected, {
+                        disabled: !option.enabled,
+                      })}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
+
             <div>
-              <p className="mb-1.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text)]/65">
-                Social
-              </p>
+              <p className={drawerSectionLabelClass}>Social</p>
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
                   onClick={handleFriendsFilterClick}
                   disabled={friendsPreflightPending}
                   aria-busy={friendsPreflightPending || undefined}
-                  className={`py-1 px-3 rounded-md text-[10px] font-medium transition-colors whitespace-nowrap border ${
-                    friendsIsVisuallyActive
-                      ? "bg-[var(--brand)] text-[var(--brand-ink)] border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)] shadow-[var(--glass-active-shadow)]"
-                      : "text-[var(--text)] bg-transparent border-white/25 hover:bg-[rgba(255,255,255,0.08)]"
-                  } ${friendsPreflightPending ? "opacity-60 pointer-events-none" : ""}`}
+                  className={[
+                    drawerChipButtonClass(friendsIsVisuallyActive),
+                    friendsPreflightPending
+                      ? "opacity-60 pointer-events-none"
+                      : "",
+                  ].join(" ")}
                 >
                   Friends
                 </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setViewMode(toggleHomeTypeFilter(viewMode, "hangouts"))
+                  }
+                  className={drawerChipButtonClass(
+                    isHomeTypeFilterActive(viewMode, "hangouts")
+                  )}
+                >
+                  Hangouts
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setViewMode(toggleHomeTypeFilter(viewMode, "experiences"))
+                  }
+                  className={drawerChipButtonClass(
+                    isHomeTypeFilterActive(viewMode, "experiences")
+                  )}
+                >
+                  Experiences
+                </button>
               </div>
+            </div>
+
+            <div>
+              <p className={drawerSectionLabelClass}>Popular Tags</p>
+              <HomeCategorySection
+                selected={selectedTags}
+                onTagsChange={onTagsChange}
+                onClear={onClearFilters}
+              />
+            </div>
+
+            <div className="pt-0.5">
+              <button
+                type="button"
+                onClick={onClearAllFilters}
+                className="w-full rounded-lg border border-[var(--border)] py-2 text-[10px] font-medium text-[var(--text)]/80 transition-colors hover:bg-[color-mix(in_oklab,var(--text)_8%,transparent)]"
+              >
+                Clear all filters
+              </button>
             </div>
           </div>
         </div>

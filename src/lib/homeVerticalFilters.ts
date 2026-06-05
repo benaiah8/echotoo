@@ -89,6 +89,33 @@ export function isTodayChipActive(dateFilter: HomeDateFilter): boolean {
   return dateFilter === "today";
 }
 
+export function isHomeDateFilterActive(
+  dateFilter: HomeDateFilter,
+  target: Exclude<HomeDateFilter, "none">
+): boolean {
+  return dateFilter === target;
+}
+
+/** Drawer date chips — only Today is implemented in Phase 2. */
+export const HOME_DATE_FILTER_DRAWER_OPTIONS: ReadonlyArray<{
+  value: Exclude<HomeDateFilter, "none">;
+  label: string;
+  enabled: boolean;
+}> = [
+  { value: "today", label: "Today", enabled: true },
+  { value: "tomorrow", label: "Tomorrow", enabled: false },
+  { value: "this_week", label: "This Week", enabled: false },
+  { value: "this_weekend", label: "This Weekend", enabled: false },
+  { value: "next_week", label: "Next Week", enabled: false },
+];
+
+export function isHomeTypeFilterActive(
+  viewMode: HomeViewMode,
+  target: "hangouts" | "experiences"
+): boolean {
+  return viewMode === target;
+}
+
 /** Mutually exclusive date chips: active chip toggles off; otherwise selects `next`. */
 export function toggleHomeDateFilter(
   current: HomeDateFilter,

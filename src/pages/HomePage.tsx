@@ -929,6 +929,7 @@ export default function HomePage() {
           onFriendsChipClick={handleFriendsChipClick}
           friendsPreflightPending={friendsPreflightPending}
           noFriendsInlineBannerVisible={noFriendsInlineBannerVisible}
+          onClearAllFilters={clearAllHomeFilters}
         />
 
         {userSearchOverlayOpen ? (
