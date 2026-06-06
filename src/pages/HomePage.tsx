@@ -65,7 +65,7 @@ import {
   toggleHomeDateFilter,
   viewerLocalOccurrenceForDateFilter,
   type HomeDateFilter,
-  type HomeDateSpotlightFilter,
+  type HomeDateFilterChip,
 } from "../lib/homeVerticalFilters";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
@@ -303,12 +303,13 @@ export default function HomePage() {
     () =>
       buildHomeVerticalFilterContext({
         viewMode,
+        dateFilter,
         feedSearchQ,
         selectedTags,
         viewerProfileId,
         friendsFilter,
       }),
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
+    [viewMode, dateFilter, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
   );
 
   /** Vertical-shaped probe: current type/search/tags + server-side friends-only. */
@@ -317,6 +318,7 @@ export default function HomePage() {
 
     const probeCtx = buildHomeVerticalFilterContext({
       viewMode,
+      dateFilter,
       feedSearchQ,
       selectedTags,
       viewerProfileId,
@@ -334,7 +336,7 @@ export default function HomePage() {
 
     const items = await getPublicFeed(feedOptions);
     return items.length > 0;
-  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]);
+  }, [viewMode, dateFilter, feedSearchQ, selectedTags, viewerProfileId]);
 
   const handleFriendsChipClick = useCallback(async () => {
     if (friendsPreflightInFlightRef.current) return;
@@ -511,12 +513,9 @@ export default function HomePage() {
     setSearchMode("posts");
   }, []);
 
-  const handleToggleDateFilter = useCallback(
-    (target: HomeDateSpotlightFilter) => {
-      setDateFilter((current) => toggleHomeDateFilter(current, target));
-    },
-    []
-  );
+  const handleToggleDateFilter = useCallback((target: HomeDateFilterChip) => {
+    setDateFilter((current) => toggleHomeDateFilter(current, target));
+  }, []);
 
   const handleFriendsFilterDeactivate = useCallback(() => {
     setFriendsFilter(false);
@@ -962,6 +961,7 @@ export default function HomePage() {
                       selectedTags,
                       viewMode,
                       friendsFilter,
+                      dateFilter,
                     });
 
                     const personalizedItemsRaw = shouldPersonalize
@@ -1000,6 +1000,7 @@ export default function HomePage() {
                     selectedTags,
                     viewMode,
                     friendsFilter,
+                    dateFilter,
                   });
 
                   const personalizedItemsRaw = shouldPersonalize
@@ -1018,7 +1019,7 @@ export default function HomePage() {
                     count: personalizedItems.length,
                   };
                 },
-                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
+                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter, dateFilter]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {

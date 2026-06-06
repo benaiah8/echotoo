@@ -145,6 +145,10 @@ export type FeedOptions = {
   occursOn?: string | null;
   /** IANA timezone (RPC `p_occurs_tz`). With `occursOn`, enables server-side Today filtering. */
   occursTz?: string | null;
+  /** Inclusive viewer-local range start for week filters (RPC `p_occurs_from`). */
+  occursFrom?: string | null;
+  /** Inclusive viewer-local range end for week filters (RPC `p_occurs_to`). */
+  occursTo?: string | null;
   /** When true, RPC returns only posts from mutual approved follows (`p_friends_only`). */
   friendsOnly?: boolean;
 };
@@ -153,8 +157,19 @@ export type FeedOptions = {
 export function feedOptionsForCacheKey(
   opts: FeedOptions
 ): Parameters<typeof dataCache.generateFeedKey>[0] {
-  const { friendsOnly, type, q, tags, limit, offset, viewerProfileId, occursOn, occursTz } =
-    opts;
+  const {
+    friendsOnly,
+    type,
+    q,
+    tags,
+    limit,
+    offset,
+    viewerProfileId,
+    occursOn,
+    occursTz,
+    occursFrom,
+    occursTo,
+  } = opts;
   return {
     type,
     q,
@@ -164,6 +179,8 @@ export function feedOptionsForCacheKey(
     viewerProfileId,
     occursOn,
     occursTz,
+    occursFrom,
+    occursTo,
     filters: friendsOnly ? ["friends"] : undefined,
   };
 }
@@ -419,6 +436,8 @@ export async function getPublicFeedOptimizedWithCount(
     viewerProfileId,
     occursOn = null,
     occursTz = null,
+    occursFrom = null,
+    occursTo = null,
     friendsOnly,
   } = opts;
 
@@ -573,7 +592,7 @@ export async function getPublicFeedOptimizedWithCount(
     tags?.join(",") || ""
   }:${normalizedLimitForDedup}:${offset}:${viewerProfileId || "guest"}:${occursOn || ""}:${
     occursTz || ""
-  }:${friendsOnly ? "friends" : ""}`;
+  }:${occursFrom || ""}:${occursTo || ""}:${friendsOnly ? "friends" : ""}`;
 
   // [Top-level in-flight dedupe] Same requestKey → one RPC even if called twice back-to-back (e.g. StrictMode)
   const existingPromise = feedRpcInFlight.get(dedupeKey);
@@ -760,6 +779,8 @@ export async function getPublicFeedOptimizedWithCount(
             p_occurs_on: occursOn ?? null,
             p_occurs_tz: occursTz ?? null,
             p_friends_only: friendsOnly ?? false,
+            p_occurs_from: occursFrom ?? null,
+            p_occurs_to: occursTo ?? null,
           };
 
           const { data, error } = await supabase.rpc(

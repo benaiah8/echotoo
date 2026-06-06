@@ -19,6 +19,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { HOME_FEED_FIRST_PAGE } from "../../lib/homeFeedConstants";
 import {
   getDateSpotlightEmptyNotice,
+  getDateVerticalEmptyNotice,
   type HomeDateFilter,
 } from "../../lib/homeVerticalFilters";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
@@ -62,6 +63,8 @@ interface Props {
     currentUserId?: string | null; // Include for feedKey to reset on auth change
     occursOn?: string | null;
     occursTz?: string | null;
+    occursFrom?: string | null;
+    occursTo?: string | null;
     friendsFilter?: boolean;
   };
   // [FIX: Phase 1.2 - Horizontal Rail] Props for injected rails filtering
@@ -257,23 +260,29 @@ export default function HomePostsSection({
   const feedKey = useMemo(
     () =>
       `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${feedOptions?.occursOn || ""
-      }@${feedOptions?.occursTz || ""}-${
-        feedOptions?.currentUserId || "guest"
-      }-${feedOptions?.friendsFilter ? "friends" : ""}`,
+      }@${feedOptions?.occursTz || ""}-${feedOptions?.occursFrom || ""}..${
+        feedOptions?.occursTo || ""
+      }-${feedOptions?.currentUserId || "guest"}-${
+        feedOptions?.friendsFilter ? "friends" : ""
+      }`,
     [
       viewMode,
       selectedTags,
       feedOptions?.q,
       feedOptions?.occursOn,
       feedOptions?.occursTz,
+      feedOptions?.occursFrom,
+      feedOptions?.occursTo,
       feedOptions?.currentUserId,
       feedOptions?.friendsFilter,
     ]
   );
 
-  const verticalEmptyMessage = hasActiveFilters
-    ? "No posts match your current filters."
-    : "No posts to show right now.";
+  const verticalEmptyMessage =
+    getDateVerticalEmptyNotice(dateFilter) ??
+    (hasActiveFilters
+      ? "No posts match your current filters."
+      : "No posts to show right now.");
 
   // Legacy mode: prefetch logic
   useEffect(() => {

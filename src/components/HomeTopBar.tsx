@@ -8,13 +8,12 @@ import Logo from "./ui/Logo";
 import HomeCategorySection from "../sections/home/HomeCategorySection";
 import {
   HOME_DATE_FILTER_DRAWER_OPTIONS,
-  isDateSpotlightFilter,
   isHomeDateFilterActive,
   isHomeTypeFilterActive,
   isTodayChipActive,
   toggleHomeTypeFilter,
   type HomeDateFilter,
-  type HomeDateSpotlightFilter,
+  type HomeDateFilterChip,
   type HomeViewMode,
 } from "../lib/homeVerticalFilters";
 
@@ -114,7 +113,7 @@ export interface HomeTopBarProps {
   viewMode: HomeViewMode;
   setViewMode: (m: HomeViewMode) => void;
   dateFilter: HomeDateFilter;
-  onToggleDateFilter: (target: HomeDateSpotlightFilter) => void;
+  onToggleDateFilter: (target: HomeDateFilterChip) => void;
   friendsFilter: boolean;
   onFriendsFilterDeactivate: () => void;
   /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
@@ -448,9 +447,7 @@ export default function HomeTopBar({
                       title={option.enabled ? undefined : "Coming soon"}
                       onClick={() => {
                         if (!option.enabled) return;
-                        if (isDateSpotlightFilter(option.value)) {
-                          onToggleDateFilter(option.value);
-                        }
+                        onToggleDateFilter(option.value);
                       }}
                       className={drawerChipButtonClass(isSelected, {
                         disabled: !option.enabled,

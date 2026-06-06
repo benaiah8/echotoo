@@ -30,9 +30,19 @@ export type ViewerLocalOccurrence = {
   occursTz: string;
 };
 
+export type ViewerLocalDateRange = {
+  occursFrom: string;
+  occursTo: string;
+  occursTz: string;
+};
+
+/** Drawer / toggle target — all mutually exclusive date chips except none. */
+export type HomeDateFilterChip = Exclude<HomeDateFilter, "none">;
+
 /** Inputs shared by vertical feed, cache keys, and Today spotlight. */
 export type HomeVerticalFilterContext = {
   viewMode: HomeViewMode;
+  dateFilter: HomeDateFilter;
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
@@ -92,6 +102,156 @@ export function getDateSpotlightEmptyNotice(dateFilter: HomeDateFilter): string 
   return "Nothing scheduled for today.";
 }
 
+/** Date filters that hard-filter the vertical feed via RPC range params. */
+export const HOME_DATE_VERTICAL_FILTERS = [
+  "this_week",
+  "this_weekend",
+  "next_week",
+] as const;
+
+export type HomeDateVerticalFilter = (typeof HOME_DATE_VERTICAL_FILTERS)[number];
+
+export function isDateVerticalFilter(
+  dateFilter: HomeDateFilter
+): dateFilter is HomeDateVerticalFilter {
+  return (
+    dateFilter === "this_week" ||
+    dateFilter === "this_weekend" ||
+    dateFilter === "next_week"
+  );
+}
+
+export function getDateVerticalEmptyNotice(
+  dateFilter: HomeDateFilter
+): string | null {
+  if (dateFilter === "this_week") {
+    return "No posts scheduled for this week.";
+  }
+  if (dateFilter === "this_weekend") {
+    return "No posts scheduled for this weekend.";
+  }
+  if (dateFilter === "next_week") {
+    return "No posts scheduled for next week.";
+  }
+  return null;
+}
+
+function viewerLocalTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+function viewerLocalDateString(dayOffsetFromToday = 0): string | null {
+  return viewerLocalOccurrence(dayOffsetFromToday)?.occursOn ?? null;
+}
+
+/** Postgres ISODOW in viewer TZ: Mon=1 … Sun=7. */
+function viewerLocalIsodow(dayOffsetFromToday = 0): number | null {
+  try {
+    const timeZone = viewerLocalTimeZone();
+    if (!timeZone) return null;
+    const anchor = new Date();
+    if (dayOffsetFromToday !== 0) {
+      anchor.setDate(anchor.getDate() + dayOffsetFromToday);
+    }
+    const dayName = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+    }).format(anchor);
+    const isodowByName: Record<string, number> = {
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+      Sun: 7,
+    };
+    return isodowByName[dayName] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Viewer-local inclusive date range for week vertical filters.
+ * Returns null for spotlight filters, none, or when TZ/date parts are unavailable.
+ */
+export function getDateRangeForFilter(
+  dateFilter: HomeDateFilter
+): ViewerLocalDateRange | null {
+  if (!isDateVerticalFilter(dateFilter)) return null;
+
+  const occursTz = viewerLocalTimeZone();
+  if (!occursTz) return null;
+
+  const isodow = viewerLocalIsodow(0);
+  if (isodow === null) return null;
+
+  if (dateFilter === "this_week") {
+    const occursFrom = viewerLocalDateString(0);
+    const occursTo = viewerLocalDateString(7 - isodow);
+    if (!occursFrom || !occursTo) return null;
+    return { occursFrom, occursTo, occursTz };
+  }
+
+  if (dateFilter === "this_weekend") {
+    if (isodow <= 5) {
+      const occursFrom = viewerLocalDateString(6 - isodow);
+      const occursTo = viewerLocalDateString(7 - isodow);
+      if (!occursFrom || !occursTo) return null;
+      return { occursFrom, occursTo, occursTz };
+    }
+    if (isodow === 6) {
+      const occursFrom = viewerLocalDateString(0);
+      const occursTo = viewerLocalDateString(1);
+      if (!occursFrom || !occursTo) return null;
+      return { occursFrom, occursTo, occursTz };
+    }
+    const occursFrom = viewerLocalDateString(0);
+    if (!occursFrom) return null;
+    return { occursFrom, occursTo: occursFrom, occursTz };
+  }
+
+  const nextMondayOffset = 7 - isodow + 1;
+  const nextSundayOffset = nextMondayOffset + 6;
+  const occursFrom = viewerLocalDateString(nextMondayOffset);
+  const occursTo = viewerLocalDateString(nextSundayOffset);
+  if (!occursFrom || !occursTo) return null;
+  return { occursFrom, occursTo, occursTz };
+}
+
+function getVerticalOccurrenceFeedParams(
+  dateFilter: HomeDateFilter
+): Pick<FeedOptions, "occursOn" | "occursTz" | "occursFrom" | "occursTo"> {
+  if (!isDateVerticalFilter(dateFilter)) {
+    return {
+      occursOn: null,
+      occursTz: null,
+      occursFrom: null,
+      occursTo: null,
+    };
+  }
+  const range = getDateRangeForFilter(dateFilter);
+  if (!range) {
+    return {
+      occursOn: null,
+      occursTz: null,
+      occursFrom: null,
+      occursTo: null,
+    };
+  }
+  return {
+    occursOn: null,
+    occursTz: range.occursTz,
+    occursFrom: range.occursFrom,
+    occursTo: range.occursTo,
+  };
+}
+
 /**
  * Viewer-local occurrence for a calendar day offset from today (0 = today).
  */
@@ -135,17 +295,17 @@ export function isHomeDateFilterActive(
   return dateFilter === target;
 }
 
-/** Drawer date chips — Today and Tomorrow use occurrence spotlight; week filters coming later. */
+/** Drawer date chips — Today/Tomorrow spotlight; week filters hard-filter vertical feed. */
 export const HOME_DATE_FILTER_DRAWER_OPTIONS: ReadonlyArray<{
-  value: Exclude<HomeDateFilter, "none">;
+  value: HomeDateFilterChip;
   label: string;
   enabled: boolean;
 }> = [
   { value: "today", label: "Today", enabled: true },
   { value: "tomorrow", label: "Tomorrow", enabled: true },
-  { value: "this_week", label: "This Week", enabled: false },
-  { value: "this_weekend", label: "This Weekend", enabled: false },
-  { value: "next_week", label: "Next Week", enabled: false },
+  { value: "this_week", label: "This Week", enabled: true },
+  { value: "this_weekend", label: "This Weekend", enabled: true },
+  { value: "next_week", label: "Next Week", enabled: true },
 ];
 
 export function isHomeTypeFilterActive(
@@ -245,18 +405,20 @@ export function hasActiveHomeFiltersFunnelDot(params: {
   );
 }
 
-/** Personalization applies only on the default vertical segment with no search/tags/friends. */
+/** Personalization applies only on the default vertical segment with no search/tags/friends/date range. */
 export function shouldPersonalizeHomeVerticalFeed(params: {
   feedSearchQ?: string;
   selectedTags: readonly string[];
   viewMode: HomeViewMode;
   friendsFilter?: boolean;
+  dateFilter?: HomeDateFilter;
 }): boolean {
   return (
     !params.feedSearchQ &&
     params.selectedTags.length === 0 &&
     params.viewMode === "all" &&
-    !params.friendsFilter
+    !params.friendsFilter &&
+    !isDateVerticalFilter(params.dateFilter ?? "none")
   );
 }
 
@@ -267,10 +429,11 @@ export function verticalFriendsCacheFilters(
   return friendsFilter ? ["friends"] : undefined;
 }
 
-/** First-page vertical cache key options (occurrence params always null for now). */
+/** First-page vertical cache key options (range params when week date filter active). */
 export function buildHomeVerticalFirstPageFeedKeyOptions(
   ctx: HomeVerticalFilterContext
 ): Parameters<typeof dataCache.generateFeedKey>[0] {
+  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
@@ -279,8 +442,10 @@ export function buildHomeVerticalFirstPageFeedKeyOptions(
     limit: HOME_FEED_FIRST_PAGE,
     offset: 0,
     viewerProfileId: ctx.viewerProfileId,
-    occursOn: null,
-    occursTz: null,
+    occursOn: occurrence.occursOn,
+    occursTz: occurrence.occursTz,
+    occursFrom: occurrence.occursFrom,
+    occursTo: occurrence.occursTo,
   };
 }
 
@@ -305,6 +470,7 @@ export function buildVerticalLoadFeedOptions(
   ctx: HomeVerticalFilterContext,
   page: { offset: number; limit: number }
 ): FeedOptions {
+  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
@@ -313,6 +479,10 @@ export function buildVerticalLoadFeedOptions(
     offset: page.offset,
     viewerProfileId: ctx.viewerProfileId || undefined,
     friendsOnly: ctx.friendsFilter || undefined,
+    occursOn: occurrence.occursOn,
+    occursTz: occurrence.occursTz,
+    occursFrom: occurrence.occursFrom,
+    occursTo: occurrence.occursTo,
   };
 }
 
@@ -322,17 +492,22 @@ export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
   q?: string;
   tags?: string[];
   currentUserId: string | null;
-  occursOn: null;
-  occursTz: null;
+  occursOn: string | null;
+  occursTz: string | null;
+  occursFrom: string | null;
+  occursTo: string | null;
   friendsFilter: boolean;
 } {
+  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     currentUserId: ctx.viewerProfileId,
-    occursOn: null,
-    occursTz: null,
+    occursOn: occurrence.occursOn ?? null,
+    occursTz: occurrence.occursTz ?? null,
+    occursFrom: occurrence.occursFrom ?? null,
+    occursTo: occurrence.occursTo ?? null,
     friendsFilter: ctx.friendsFilter,
   };
 }
@@ -402,6 +577,7 @@ export function buildRailCacheFeedKeyOptions(
 
 export function buildHomeVerticalFilterContext(params: {
   viewMode: HomeViewMode;
+  dateFilter?: HomeDateFilter;
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
@@ -409,6 +585,7 @@ export function buildHomeVerticalFilterContext(params: {
 }): HomeVerticalFilterContext {
   return {
     viewMode: params.viewMode,
+    dateFilter: params.dateFilter ?? "none",
     feedSearchQ: params.feedSearchQ,
     selectedTags: params.selectedTags,
     viewerProfileId: params.viewerProfileId,
