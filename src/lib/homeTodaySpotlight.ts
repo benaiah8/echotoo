@@ -1,6 +1,6 @@
 /**
- * Home vertical date spotlight (Today / Tomorrow) — separate from ProgressiveFeed.
- * Fetches occurrence-qualified rows only (RPC `p_occurs_on` / `p_occurs_tz`).
+ * Home vertical date spotlight — separate from ProgressiveFeed.
+ * Fetches occurrence-qualified rows via RPC single-day or range params.
  */
 
 import {
@@ -9,6 +9,7 @@ import {
   type FeedItem,
   type FeedOptions,
 } from "../api/queries/getPublicFeed";
+import type { DateSpotlightOccurrenceParams } from "./homeVerticalFilters";
 
 /** Max spotlight rows for the block above the normal feed. */
 export const DATE_SPOTLIGHT_FETCH_CAP = 30;
@@ -16,6 +17,7 @@ export const DATE_SPOTLIGHT_FETCH_CAP = 30;
 /** @deprecated Use DATE_SPOTLIGHT_FETCH_CAP */
 export const TODAY_SPOTLIGHT_FETCH_CAP = DATE_SPOTLIGHT_FETCH_CAP;
 
+/** @deprecated Use DateSpotlightOccurrenceParams from homeVerticalFilters */
 export type OccurrenceWindow = {
   occursOn: string;
   occursTz: string;
@@ -23,7 +25,7 @@ export type OccurrenceWindow = {
 
 export type DateSpotlightBaseOptions = Omit<
   FeedOptions,
-  "offset" | "limit" | "occursOn" | "occursTz"
+  "offset" | "limit" | "occursOn" | "occursTz" | "occursFrom" | "occursTo"
 >;
 
 /** @deprecated Use DateSpotlightBaseOptions */
@@ -52,15 +54,25 @@ export function dedupeFeedItemsById(items: FeedItem[]): FeedItem[] {
  */
 export async function fetchDateSpotlightItems(
   baseFeedOptions: DateSpotlightBaseOptions,
-  occurrence: OccurrenceWindow,
+  occurrence: DateSpotlightOccurrenceParams,
   useOptimizedFeed: boolean
 ): Promise<FeedItem[]> {
   const opts: FeedOptions = {
     ...baseFeedOptions,
     offset: 0,
     limit: DATE_SPOTLIGHT_FETCH_CAP,
-    occursOn: occurrence.occursOn,
     occursTz: occurrence.occursTz,
+    ...(occurrence.mode === "day"
+      ? {
+          occursOn: occurrence.occursOn,
+          occursFrom: null,
+          occursTo: null,
+        }
+      : {
+          occursOn: null,
+          occursFrom: occurrence.occursFrom,
+          occursTo: occurrence.occursTo,
+        }),
   };
 
   const items = useOptimizedFeed

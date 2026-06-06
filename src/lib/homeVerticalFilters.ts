@@ -65,18 +65,38 @@ export function viewerLocalOccurrenceForTodayChip(): ViewerLocalOccurrence | nul
 }
 
 /** Date filters that use the occurrence spotlight block above the normal feed. */
-export const HOME_DATE_SPOTLIGHT_FILTERS = ["today", "tomorrow"] as const;
+export const HOME_DATE_SPOTLIGHT_FILTERS = [
+  "today",
+  "tomorrow",
+  "this_week",
+  "this_weekend",
+  "next_week",
+] as const;
 
 export type HomeDateSpotlightFilter = (typeof HOME_DATE_SPOTLIGHT_FILTERS)[number];
 
 export function isDateSpotlightFilter(
   dateFilter: HomeDateFilter
-): dateFilter is HomeDateSpotlightFilter {
-  return (
-    dateFilter === "today" ||
-    dateFilter === "tomorrow"
-  );
+): dateFilter is HomeDateFilterChip {
+  return dateFilter !== "none";
 }
+
+export type DateSpotlightDayParams = {
+  mode: "day";
+  occursOn: string;
+  occursTz: string;
+};
+
+export type DateSpotlightRangeParams = {
+  mode: "range";
+  occursFrom: string;
+  occursTo: string;
+  occursTz: string;
+};
+
+export type DateSpotlightOccurrenceParams =
+  | DateSpotlightDayParams
+  | DateSpotlightRangeParams;
 
 /** Calendar day offset for spotlight RPC (`0` = today, `1` = tomorrow). */
 export function getDateSpotlightDayOffset(
@@ -96,44 +116,46 @@ export function viewerLocalOccurrenceForDateFilter(
 }
 
 export function getDateSpotlightEmptyNotice(dateFilter: HomeDateFilter): string {
-  if (dateFilter === "tomorrow") {
-    return "Nothing scheduled for tomorrow.";
+  switch (dateFilter) {
+    case "tomorrow":
+      return "Nothing scheduled for tomorrow.";
+    case "this_week":
+      return "No posts scheduled for this week.";
+    case "this_weekend":
+      return "No posts scheduled for this weekend.";
+    case "next_week":
+      return "No posts scheduled for next week.";
+    case "today":
+    default:
+      return "Nothing scheduled for today.";
   }
-  return "Nothing scheduled for today.";
 }
 
-/** Date filters that hard-filter the vertical feed via RPC range params. */
-export const HOME_DATE_VERTICAL_FILTERS = [
-  "this_week",
-  "this_weekend",
-  "next_week",
-] as const;
-
-export type HomeDateVerticalFilter = (typeof HOME_DATE_VERTICAL_FILTERS)[number];
-
-export function isDateVerticalFilter(
+/** Spotlight RPC occurrence params for any active date filter. */
+export function getDateSpotlightOccurrenceParams(
   dateFilter: HomeDateFilter
-): dateFilter is HomeDateVerticalFilter {
-  return (
-    dateFilter === "this_week" ||
-    dateFilter === "this_weekend" ||
-    dateFilter === "next_week"
-  );
-}
+): DateSpotlightOccurrenceParams | null {
+  if (!isDateSpotlightFilter(dateFilter)) return null;
 
-export function getDateVerticalEmptyNotice(
-  dateFilter: HomeDateFilter
-): string | null {
-  if (dateFilter === "this_week") {
-    return "No posts scheduled for this week.";
+  const dayOffset = getDateSpotlightDayOffset(dateFilter);
+  if (dayOffset !== null) {
+    const occurrence = viewerLocalOccurrence(dayOffset);
+    if (!occurrence) return null;
+    return {
+      mode: "day",
+      occursOn: occurrence.occursOn,
+      occursTz: occurrence.occursTz,
+    };
   }
-  if (dateFilter === "this_weekend") {
-    return "No posts scheduled for this weekend.";
-  }
-  if (dateFilter === "next_week") {
-    return "No posts scheduled for next week.";
-  }
-  return null;
+
+  const range = getDateRangeForFilter(dateFilter);
+  if (!range) return null;
+  return {
+    mode: "range",
+    occursFrom: range.occursFrom,
+    occursTo: range.occursTo,
+    occursTz: range.occursTz,
+  };
 }
 
 function viewerLocalTimeZone(): string | null {
@@ -177,13 +199,19 @@ function viewerLocalIsodow(dayOffsetFromToday = 0): number | null {
 }
 
 /**
- * Viewer-local inclusive date range for week vertical filters.
- * Returns null for spotlight filters, none, or when TZ/date parts are unavailable.
+ * Viewer-local inclusive date range for week spotlight filters.
+ * Returns null for single-day/none filters or when TZ/date parts are unavailable.
  */
 export function getDateRangeForFilter(
   dateFilter: HomeDateFilter
 ): ViewerLocalDateRange | null {
-  if (!isDateVerticalFilter(dateFilter)) return null;
+  if (
+    dateFilter !== "this_week" &&
+    dateFilter !== "this_weekend" &&
+    dateFilter !== "next_week"
+  ) {
+    return null;
+  }
 
   const occursTz = viewerLocalTimeZone();
   if (!occursTz) return null;
@@ -222,34 +250,6 @@ export function getDateRangeForFilter(
   const occursTo = viewerLocalDateString(nextSundayOffset);
   if (!occursFrom || !occursTo) return null;
   return { occursFrom, occursTo, occursTz };
-}
-
-function getVerticalOccurrenceFeedParams(
-  dateFilter: HomeDateFilter
-): Pick<FeedOptions, "occursOn" | "occursTz" | "occursFrom" | "occursTo"> {
-  if (!isDateVerticalFilter(dateFilter)) {
-    return {
-      occursOn: null,
-      occursTz: null,
-      occursFrom: null,
-      occursTo: null,
-    };
-  }
-  const range = getDateRangeForFilter(dateFilter);
-  if (!range) {
-    return {
-      occursOn: null,
-      occursTz: null,
-      occursFrom: null,
-      occursTo: null,
-    };
-  }
-  return {
-    occursOn: null,
-    occursTz: range.occursTz,
-    occursFrom: range.occursFrom,
-    occursTo: range.occursTo,
-  };
 }
 
 /**
@@ -405,20 +405,18 @@ export function hasActiveHomeFiltersFunnelDot(params: {
   );
 }
 
-/** Personalization applies only on the default vertical segment with no search/tags/friends/date range. */
+/** Personalization applies only on the default vertical segment with no search/tags/friends. */
 export function shouldPersonalizeHomeVerticalFeed(params: {
   feedSearchQ?: string;
   selectedTags: readonly string[];
   viewMode: HomeViewMode;
   friendsFilter?: boolean;
-  dateFilter?: HomeDateFilter;
 }): boolean {
   return (
     !params.feedSearchQ &&
     params.selectedTags.length === 0 &&
     params.viewMode === "all" &&
-    !params.friendsFilter &&
-    !isDateVerticalFilter(params.dateFilter ?? "none")
+    !params.friendsFilter
   );
 }
 
@@ -429,11 +427,10 @@ export function verticalFriendsCacheFilters(
   return friendsFilter ? ["friends"] : undefined;
 }
 
-/** First-page vertical cache key options (range params when week date filter active). */
+/** First-page vertical cache key options (date filters use spotlight only — no occurrence params). */
 export function buildHomeVerticalFirstPageFeedKeyOptions(
   ctx: HomeVerticalFilterContext
 ): Parameters<typeof dataCache.generateFeedKey>[0] {
-  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
@@ -442,10 +439,10 @@ export function buildHomeVerticalFirstPageFeedKeyOptions(
     limit: HOME_FEED_FIRST_PAGE,
     offset: 0,
     viewerProfileId: ctx.viewerProfileId,
-    occursOn: occurrence.occursOn,
-    occursTz: occurrence.occursTz,
-    occursFrom: occurrence.occursFrom,
-    occursTo: occurrence.occursTo,
+    occursOn: null,
+    occursTz: null,
+    occursFrom: null,
+    occursTo: null,
   };
 }
 
@@ -465,12 +462,11 @@ export function buildDateSpotlightBaseOptions(
 /** @deprecated Use buildDateSpotlightBaseOptions */
 export const buildTodaySpotlightBaseOptions = buildDateSpotlightBaseOptions;
 
-/** ProgressiveFeed vertical loader RPC options. */
+/** ProgressiveFeed vertical loader RPC options (no date occurrence params). */
 export function buildVerticalLoadFeedOptions(
   ctx: HomeVerticalFilterContext,
   page: { offset: number; limit: number }
 ): FeedOptions {
-  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
@@ -479,35 +475,30 @@ export function buildVerticalLoadFeedOptions(
     offset: page.offset,
     viewerProfileId: ctx.viewerProfileId || undefined,
     friendsOnly: ctx.friendsFilter || undefined,
-    occursOn: occurrence.occursOn,
-    occursTz: occurrence.occursTz,
-    occursFrom: occurrence.occursFrom,
-    occursTo: occurrence.occursTo,
   };
 }
 
-/** `feedOptions` prop for HomePostsSection / ProgressiveFeed feedKey. */
+/** `feedOptions` prop for HomePostsSection / ProgressiveFeed feedKey (no date occurrence params). */
 export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
   type?: FeedOptions["type"];
   q?: string;
   tags?: string[];
   currentUserId: string | null;
-  occursOn: string | null;
-  occursTz: string | null;
-  occursFrom: string | null;
-  occursTo: string | null;
+  occursOn: null;
+  occursTz: null;
+  occursFrom: null;
+  occursTo: null;
   friendsFilter: boolean;
 } {
-  const occurrence = getVerticalOccurrenceFeedParams(ctx.dateFilter);
   return {
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     currentUserId: ctx.viewerProfileId,
-    occursOn: occurrence.occursOn ?? null,
-    occursTz: occurrence.occursTz ?? null,
-    occursFrom: occurrence.occursFrom ?? null,
-    occursTo: occurrence.occursTo ?? null,
+    occursOn: null,
+    occursTz: null,
+    occursFrom: null,
+    occursTo: null,
     friendsFilter: ctx.friendsFilter,
   };
 }

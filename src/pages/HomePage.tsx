@@ -60,10 +60,10 @@ import {
   hasActiveHomeFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
+  getDateSpotlightOccurrenceParams,
   isDateSpotlightFilter,
   shouldPersonalizeHomeVerticalFeed,
   toggleHomeDateFilter,
-  viewerLocalOccurrenceForDateFilter,
   type HomeDateFilter,
   type HomeDateFilterChip,
 } from "../lib/homeVerticalFilters";
@@ -318,7 +318,7 @@ export default function HomePage() {
 
     const probeCtx = buildHomeVerticalFilterContext({
       viewMode,
-      dateFilter,
+      dateFilter: "none",
       feedSearchQ,
       selectedTags,
       viewerProfileId,
@@ -336,7 +336,7 @@ export default function HomePage() {
 
     const items = await getPublicFeed(feedOptions);
     return items.length > 0;
-  }, [viewMode, dateFilter, feedSearchQ, selectedTags, viewerProfileId]);
+  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]);
 
   const handleFriendsChipClick = useCallback(async () => {
     if (friendsPreflightInFlightRef.current) return;
@@ -408,7 +408,7 @@ export default function HomePage() {
     return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
   }, [feedCacheKey]);
 
-  /** Date spotlight fetch (Today / Tomorrow) — independent of ProgressiveFeed. */
+  /** Date spotlight fetch — independent of ProgressiveFeed; all date filters use spotlight. */
   useEffect(() => {
     if (!dateSpotlightActive) {
       setDateSpotlightItems([]);
@@ -424,7 +424,7 @@ export default function HomePage() {
       return;
     }
 
-    const occurrence = viewerLocalOccurrenceForDateFilter(dateFilter);
+    const occurrence = getDateSpotlightOccurrenceParams(dateFilter);
     if (!occurrence) {
       setDateSpotlightItems([]);
       setDateSpotlightLoading(false);
@@ -433,8 +433,6 @@ export default function HomePage() {
         dateSpotlightActive: true,
         dateFilter,
         verticalSegment: viewMode,
-        occursOn: null,
-        occursTz: null,
         spotlightCount: 0,
         spotlightLoading: false,
         spotlightResolved: true,
@@ -461,8 +459,7 @@ export default function HomePage() {
           dateFilter,
           verticalSegment: viewMode,
           verticalType: verticalSegmentType ?? "all",
-          occursOn: occurrence.occursOn,
-          occursTz: occurrence.occursTz,
+          occurrenceMode: occurrence.mode,
           spotlightCount: items.length,
           spotlightLoading: false,
           spotlightResolved: true,
@@ -475,8 +472,7 @@ export default function HomePage() {
           dateSpotlightActive: true,
           dateFilter,
           verticalSegment: viewMode,
-          occursOn: occurrence.occursOn,
-          occursTz: occurrence.occursTz,
+          occurrenceMode: occurrence.mode,
           spotlightCount: 0,
           error: true,
           spotlightResolved: true,
@@ -961,7 +957,6 @@ export default function HomePage() {
                       selectedTags,
                       viewMode,
                       friendsFilter,
-                      dateFilter,
                     });
 
                     const personalizedItemsRaw = shouldPersonalize
@@ -1000,7 +995,6 @@ export default function HomePage() {
                     selectedTags,
                     viewMode,
                     friendsFilter,
-                    dateFilter,
                   });
 
                   const personalizedItemsRaw = shouldPersonalize
@@ -1019,7 +1013,7 @@ export default function HomePage() {
                     count: personalizedItems.length,
                   };
                 },
-                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter, dateFilter]
+                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
