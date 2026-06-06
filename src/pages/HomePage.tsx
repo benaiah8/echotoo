@@ -44,15 +44,15 @@ import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import {
-  fetchTodaySpotlightItems,
+  fetchDateSpotlightItems,
   logTodaySpotlight,
 } from "../lib/homeTodaySpotlight";
 import {
+  buildDateSpotlightBaseOptions,
   buildHomeVerticalFilterContext,
   buildHomeVerticalFirstPageFeedKeyOptions,
   buildRailDiscoveryCacheKeyOptions,
   buildRailDiscoveryFeedOptions,
-  buildTodaySpotlightBaseOptions,
   buildVerticalFeedOptionsProp,
   buildVerticalLoadFeedOptions,
   getFeedSearchQ,
@@ -60,11 +60,12 @@ import {
   hasActiveHomeFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
-  isTodayChipActive,
+  isDateSpotlightFilter,
   shouldPersonalizeHomeVerticalFeed,
   toggleHomeDateFilter,
-  viewerLocalOccurrenceForTodayChip,
+  viewerLocalOccurrenceForDateFilter,
   type HomeDateFilter,
+  type HomeDateSpotlightFilter,
 } from "../lib/homeVerticalFilters";
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
@@ -171,13 +172,11 @@ export default function HomePage() {
     [searchMode, search]
   );
 
-  const todayChipActive = isTodayChipActive(dateFilter);
+  const dateSpotlightActive = isDateSpotlightFilter(dateFilter);
 
-  const [todaySpotlightItems, setTodaySpotlightItems] = useState<FeedItem[]>(
-    []
-  );
-  const [todaySpotlightLoading, setTodaySpotlightLoading] = useState(false);
-  const [todaySpotlightResolved, setTodaySpotlightResolved] = useState(false);
+  const [dateSpotlightItems, setDateSpotlightItems] = useState<FeedItem[]>([]);
+  const [dateSpotlightLoading, setDateSpotlightLoading] = useState(false);
+  const [dateSpotlightResolved, setDateSpotlightResolved] = useState(false);
 
   const verticalSegmentType = useMemo(
     () => getVerticalSegmentType(viewMode),
@@ -407,79 +406,83 @@ export default function HomePage() {
     return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
   }, [feedCacheKey]);
 
-  /** Today spotlight fetch — independent of ProgressiveFeed; refetch when segment/search/tags change. */
+  /** Date spotlight fetch (Today / Tomorrow) — independent of ProgressiveFeed. */
   useEffect(() => {
-    if (!todayChipActive) {
-      setTodaySpotlightItems([]);
-      setTodaySpotlightLoading(false);
-      setTodaySpotlightResolved(false);
+    if (!dateSpotlightActive) {
+      setDateSpotlightItems([]);
+      setDateSpotlightLoading(false);
+      setDateSpotlightResolved(false);
       logTodaySpotlight({
-        todayActive: false,
-        todaySpotlightCount: 0,
-        todaySpotlightLoading: false,
-        todaySpotlightResolved: false,
+        dateSpotlightActive: false,
+        dateFilter,
+        spotlightCount: 0,
+        spotlightLoading: false,
+        spotlightResolved: false,
       });
       return;
     }
 
-    const occurrence = viewerLocalOccurrenceForTodayChip();
+    const occurrence = viewerLocalOccurrenceForDateFilter(dateFilter);
     if (!occurrence) {
-      setTodaySpotlightItems([]);
-      setTodaySpotlightLoading(false);
-      setTodaySpotlightResolved(true);
+      setDateSpotlightItems([]);
+      setDateSpotlightLoading(false);
+      setDateSpotlightResolved(true);
       logTodaySpotlight({
-        todayActive: true,
+        dateSpotlightActive: true,
+        dateFilter,
         verticalSegment: viewMode,
         occursOn: null,
         occursTz: null,
-        todaySpotlightCount: 0,
-        todaySpotlightLoading: false,
-        todaySpotlightResolved: true,
+        spotlightCount: 0,
+        spotlightLoading: false,
+        spotlightResolved: true,
         note: "no-occurrence-window",
       });
       return;
     }
 
     let cancelled = false;
-    setTodaySpotlightLoading(true);
-    setTodaySpotlightResolved(false);
+    setDateSpotlightLoading(true);
+    setDateSpotlightResolved(false);
 
     void (async () => {
       try {
-        const items = await fetchTodaySpotlightItems(
-          buildTodaySpotlightBaseOptions(verticalFilterCtx),
+        const items = await fetchDateSpotlightItems(
+          buildDateSpotlightBaseOptions(verticalFilterCtx),
           occurrence,
           USE_OPTIMIZED_FEED
         );
         if (cancelled) return;
-        setTodaySpotlightItems(items);
+        setDateSpotlightItems(items);
         logTodaySpotlight({
-          todayActive: true,
+          dateSpotlightActive: true,
+          dateFilter,
           verticalSegment: viewMode,
           verticalType: verticalSegmentType ?? "all",
           occursOn: occurrence.occursOn,
           occursTz: occurrence.occursTz,
-          todaySpotlightCount: items.length,
-          todaySpotlightLoading: false,
-          todaySpotlightResolved: true,
+          spotlightCount: items.length,
+          spotlightLoading: false,
+          spotlightResolved: true,
         });
       } catch (err) {
         if (cancelled) return;
-        console.error("[HomePage] Today spotlight fetch failed:", err);
-        setTodaySpotlightItems([]);
+        console.error("[HomePage] Date spotlight fetch failed:", err);
+        setDateSpotlightItems([]);
         logTodaySpotlight({
-          todayActive: true,
+          dateSpotlightActive: true,
+          dateFilter,
           verticalSegment: viewMode,
           occursOn: occurrence.occursOn,
           occursTz: occurrence.occursTz,
-          todaySpotlightCount: 0,
+          spotlightCount: 0,
           error: true,
-          todaySpotlightResolved: true,
+          spotlightResolved: true,
         });
       } finally {
         if (!cancelled) {
-          setTodaySpotlightLoading(false);
-          setTodaySpotlightResolved(true);
+          setDateSpotlightLoading(false);
+          setDateSpotlightResolved(true);
         }
       }
     })();
@@ -488,7 +491,8 @@ export default function HomePage() {
       cancelled = true;
     };
   }, [
-    todayChipActive,
+    dateSpotlightActive,
+    dateFilter,
     viewMode,
     verticalSegmentType,
     feedSearchQ,
@@ -507,9 +511,12 @@ export default function HomePage() {
     setSearchMode("posts");
   }, []);
 
-  const handleToggleTodayChip = useCallback(() => {
-    setDateFilter((current) => toggleHomeDateFilter(current, "today"));
-  }, []);
+  const handleToggleDateFilter = useCallback(
+    (target: HomeDateSpotlightFilter) => {
+      setDateFilter((current) => toggleHomeDateFilter(current, target));
+    },
+    []
+  );
 
   const handleFriendsFilterDeactivate = useCallback(() => {
     setFriendsFilter(false);
@@ -840,7 +847,7 @@ export default function HomePage() {
           viewMode={viewMode}
           setViewMode={setViewMode}
           dateFilter={dateFilter}
-          onToggleTodayChip={handleToggleTodayChip}
+          onToggleDateFilter={handleToggleDateFilter}
           friendsFilter={friendsFilter}
           onFriendsFilterDeactivate={handleFriendsFilterDeactivate}
           onFriendsChipClick={handleFriendsChipClick}
@@ -1026,10 +1033,11 @@ export default function HomePage() {
                 [feedCacheKey]
               )}
               feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
-              todayChipActive={todayChipActive}
-              todaySpotlightItems={todaySpotlightItems}
-              todaySpotlightLoading={todaySpotlightLoading}
-              todaySpotlightResolved={todaySpotlightResolved}
+              dateSpotlightActive={dateSpotlightActive}
+              dateFilter={dateFilter}
+              dateSpotlightItems={dateSpotlightItems}
+              dateSpotlightLoading={dateSpotlightLoading}
+              dateSpotlightResolved={dateSpotlightResolved}
               railLoadItems={railLoadItems}
               railGetCachedItems={railGetCachedItems}
               railSetCachedItems={railSetCachedItems}

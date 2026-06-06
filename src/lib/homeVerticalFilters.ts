@@ -54,6 +54,44 @@ export function viewerLocalOccurrenceForTodayChip(): ViewerLocalOccurrence | nul
   return viewerLocalOccurrence(0);
 }
 
+/** Date filters that use the occurrence spotlight block above the normal feed. */
+export const HOME_DATE_SPOTLIGHT_FILTERS = ["today", "tomorrow"] as const;
+
+export type HomeDateSpotlightFilter = (typeof HOME_DATE_SPOTLIGHT_FILTERS)[number];
+
+export function isDateSpotlightFilter(
+  dateFilter: HomeDateFilter
+): dateFilter is HomeDateSpotlightFilter {
+  return (
+    dateFilter === "today" ||
+    dateFilter === "tomorrow"
+  );
+}
+
+/** Calendar day offset for spotlight RPC (`0` = today, `1` = tomorrow). */
+export function getDateSpotlightDayOffset(
+  dateFilter: HomeDateFilter
+): number | null {
+  if (dateFilter === "today") return 0;
+  if (dateFilter === "tomorrow") return 1;
+  return null;
+}
+
+export function viewerLocalOccurrenceForDateFilter(
+  dateFilter: HomeDateFilter
+): ViewerLocalOccurrence | null {
+  const offset = getDateSpotlightDayOffset(dateFilter);
+  if (offset === null) return null;
+  return viewerLocalOccurrence(offset);
+}
+
+export function getDateSpotlightEmptyNotice(dateFilter: HomeDateFilter): string {
+  if (dateFilter === "tomorrow") {
+    return "Nothing scheduled for tomorrow.";
+  }
+  return "Nothing scheduled for today.";
+}
+
 /**
  * Viewer-local occurrence for a calendar day offset from today (0 = today).
  */
@@ -97,14 +135,14 @@ export function isHomeDateFilterActive(
   return dateFilter === target;
 }
 
-/** Drawer date chips — only Today is implemented in Phase 2. */
+/** Drawer date chips — Today and Tomorrow use occurrence spotlight; week filters coming later. */
 export const HOME_DATE_FILTER_DRAWER_OPTIONS: ReadonlyArray<{
   value: Exclude<HomeDateFilter, "none">;
   label: string;
   enabled: boolean;
 }> = [
   { value: "today", label: "Today", enabled: true },
-  { value: "tomorrow", label: "Tomorrow", enabled: false },
+  { value: "tomorrow", label: "Tomorrow", enabled: true },
   { value: "this_week", label: "This Week", enabled: false },
   { value: "this_weekend", label: "This Weekend", enabled: false },
   { value: "next_week", label: "Next Week", enabled: false },
@@ -246,8 +284,8 @@ export function buildHomeVerticalFirstPageFeedKeyOptions(
   };
 }
 
-/** Base RPC options for Today spotlight (occurrence applied by fetchTodaySpotlightItems). */
-export function buildTodaySpotlightBaseOptions(
+/** Base RPC options for date spotlight (occurrence applied by fetchDateSpotlightItems). */
+export function buildDateSpotlightBaseOptions(
   ctx: HomeVerticalFilterContext
 ): TodaySpotlightBaseOptions {
   return {
@@ -258,6 +296,9 @@ export function buildTodaySpotlightBaseOptions(
     friendsOnly: ctx.friendsFilter || undefined,
   };
 }
+
+/** @deprecated Use buildDateSpotlightBaseOptions */
+export const buildTodaySpotlightBaseOptions = buildDateSpotlightBaseOptions;
 
 /** ProgressiveFeed vertical loader RPC options. */
 export function buildVerticalLoadFeedOptions(

@@ -17,6 +17,10 @@ import { type BatchLoadResult } from "../../types/legacy";
 import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
 import { supabase } from "../../lib/supabaseClient";
 import { HOME_FEED_FIRST_PAGE } from "../../lib/homeFeedConstants";
+import {
+  getDateSpotlightEmptyNotice,
+  type HomeDateFilter,
+} from "../../lib/homeVerticalFilters";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
@@ -68,11 +72,12 @@ interface Props {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
-  /** Today spotlight above normal feed — does not remount ProgressiveFeed */
-  todayChipActive?: boolean;
-  todaySpotlightItems?: FeedItem[];
-  todaySpotlightLoading?: boolean;
-  todaySpotlightResolved?: boolean;
+  /** Date spotlight (Today / Tomorrow) above normal feed — does not remount ProgressiveFeed */
+  dateSpotlightActive?: boolean;
+  dateFilter?: HomeDateFilter;
+  dateSpotlightItems?: FeedItem[];
+  dateSpotlightLoading?: boolean;
+  dateSpotlightResolved?: boolean;
 }
 
 const INJECT_EVERY = 8;
@@ -101,10 +106,11 @@ export default function HomePostsSection({
   railSetCachedItems: railSetCachedItemsProp,
   isVisible = true,
   tabId = "home",
-  todayChipActive = false,
-  todaySpotlightItems = [],
-  todaySpotlightLoading = false,
-  todaySpotlightResolved = false,
+  dateSpotlightActive = false,
+  dateFilter = "none",
+  dateSpotlightItems = [],
+  dateSpotlightLoading = false,
+  dateSpotlightResolved = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const renderedItemsCountRef = useRef(0);
@@ -341,11 +347,11 @@ export default function HomePostsSection({
     [isVisible, authUserId]
   );
 
-  const showTodayEmptyNotice =
-    todayChipActive &&
-    todaySpotlightResolved &&
-    !todaySpotlightLoading &&
-    todaySpotlightItems.length === 0;
+  const showDateSpotlightEmptyNotice =
+    dateSpotlightActive &&
+    dateSpotlightResolved &&
+    !dateSpotlightLoading &&
+    dateSpotlightItems.length === 0;
 
   // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveFeed if enabled
   if (useProgressiveFeed && loadItems) {
@@ -354,14 +360,14 @@ export default function HomePostsSection({
         ref={containerRef}
         className="flex flex-col w-full px-1.5 gap-4 mt-3"
       >
-        {todayChipActive ? (
+        {dateSpotlightActive ? (
           <div className="flex flex-col gap-4">
-            {showTodayEmptyNotice ? (
+            {showDateSpotlightEmptyNotice ? (
               <p className="py-2 text-center text-sm text-[var(--text)]/70">
-                Nothing scheduled for today.
+                {getDateSpotlightEmptyNotice(dateFilter)}
               </p>
             ) : null}
-            {todaySpotlightItems.map((item) => renderSpotlightPost(item))}
+            {dateSpotlightItems.map((item) => renderSpotlightPost(item))}
           </div>
         ) : null}
 
