@@ -28,12 +28,7 @@ import { Paths } from "../router/Paths";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import WelcomeModal from "../components/ui/WelcomeModal";
 import { dataCache } from "../lib/dataCache";
-import { getMutualFriends } from "../lib/mutualFriendsCache";
-import {
-  applyFiltersWithFallback,
-  mixHangoutsAndExperiences,
-  type FilterType,
-} from "../lib/horizontalRailFilters";
+import { mixHangoutsAndExperiences } from "../lib/horizontalRailFilters";
 import { filterRailsItems } from "../lib/feedExpiryFilters";
 import { preloadImages } from "../lib/imageOptimization";
 import { personalizeFeedBatch } from "../lib/feedPersonalization";
@@ -74,8 +69,6 @@ import {
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
-/** Bounded fetch size aligned with top rail first load (~visible+buffer). */
-const FRIENDS_PREFLIGHT_LOAD_LIMIT = 6;
 
 /** Cumulative scroll intent for Home chrome (stricter than default `useScrollDirection`). */
 const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
@@ -314,39 +307,35 @@ export default function HomePage() {
         feedSearchQ,
         selectedTags,
         viewerProfileId,
+        friendsFilter,
       }),
-    [viewMode, feedSearchQ, selectedTags, viewerProfileId]
+    [viewMode, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
   );
 
-  /**
-   * Bounded discovery slice + Friends client filter — not vertical wiring yet.
-   * Uses fixed discovery fetch (no tags/search) so preflight is independent of Home filters.
-   */
+  /** Vertical-shaped probe: current type/search/tags + server-side friends-only. */
   const runFriendsPreflight = useCallback(async (): Promise<boolean> => {
     if (!viewerProfileId) return false;
-    const mutualFriends = await getMutualFriends(viewerProfileId);
-    if (mutualFriends.size === 0) return false;
 
-    const filtersWithFriends: FilterType[] = ["friends"];
-
-    const feedOptions = buildRailDiscoveryFeedOptions({
+    const probeCtx = buildHomeVerticalFilterContext({
+      viewMode,
+      feedSearchQ,
+      selectedTags,
       viewerProfileId,
-      offset: 0,
-      limit: FRIENDS_PREFLIGHT_LOAD_LIMIT * 2,
+      friendsFilter: true,
     });
-    const fetchedItems = USE_OPTIMIZED_FEED
-      ? await getPublicFeedOptimized(feedOptions)
-      : await getPublicFeed(feedOptions);
-    const railsFilteredItems = filterRailsItems(fetchedItems);
-    const result = applyFiltersWithFallback(
-      railsFilteredItems,
-      filtersWithFriends,
-      mutualFriends,
-      3,
-      true
-    );
-    return result.filteredCount > 0;
-  }, [viewerProfileId]);
+    const feedOptions = buildVerticalLoadFeedOptions(probeCtx, {
+      offset: 0,
+      limit: 1,
+    });
+
+    if (USE_OPTIMIZED_FEED) {
+      const { items } = await getPublicFeedOptimizedWithCount(feedOptions);
+      return items.length > 0;
+    }
+
+    const items = await getPublicFeed(feedOptions);
+    return items.length > 0;
+  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]);
 
   const handleFriendsChipClick = useCallback(async () => {
     if (friendsPreflightInFlightRef.current) return;
@@ -505,6 +494,8 @@ export default function HomePage() {
     feedSearchQ,
     selectedTags,
     viewerProfileId,
+    friendsFilter,
+    verticalFilterCtx,
   ]);
 
   const clearAllHomeFilters = useCallback(() => {
@@ -963,6 +954,7 @@ export default function HomePage() {
                       feedSearchQ,
                       selectedTags,
                       viewMode,
+                      friendsFilter,
                     });
 
                     const personalizedItemsRaw = shouldPersonalize
@@ -983,6 +975,7 @@ export default function HomePage() {
                         afterPersonalization: personalizedItems.length,
                         consumedOffset: consumedOffset ?? items.length,
                         count,
+                        friendsFilter,
                       });
                     }
 
@@ -999,6 +992,7 @@ export default function HomePage() {
                     feedSearchQ,
                     selectedTags,
                     viewMode,
+                    friendsFilter,
                   });
 
                   const personalizedItemsRaw = shouldPersonalize
@@ -1017,7 +1011,7 @@ export default function HomePage() {
                     count: personalizedItems.length,
                   };
                 },
-                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode]
+                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
               )}
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {

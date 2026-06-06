@@ -58,6 +58,7 @@ interface Props {
     currentUserId?: string | null; // Include for feedKey to reset on auth change
     occursOn?: string | null;
     occursTz?: string | null;
+    friendsFilter?: boolean;
   };
   // [FIX: Phase 1.2 - Horizontal Rail] Props for injected rails filtering
   railLoadItems?: (offset: number, limit: number) => Promise<FeedItem[]>;
@@ -252,7 +253,7 @@ export default function HomePostsSection({
       `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${feedOptions?.occursOn || ""
       }@${feedOptions?.occursTz || ""}-${
         feedOptions?.currentUserId || "guest"
-      }`,
+      }-${feedOptions?.friendsFilter ? "friends" : ""}`,
     [
       viewMode,
       selectedTags,
@@ -260,6 +261,7 @@ export default function HomePostsSection({
       feedOptions?.occursOn,
       feedOptions?.occursTz,
       feedOptions?.currentUserId,
+      feedOptions?.friendsFilter,
     ]
   );
 

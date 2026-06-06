@@ -36,6 +36,7 @@ export type HomeVerticalFilterContext = {
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
+  friendsFilter: boolean;
 };
 
 export type HomeRailFilterContext = {
@@ -206,17 +207,26 @@ export function hasActiveHomeFiltersFunnelDot(params: {
   );
 }
 
-/** Personalization applies only on the default vertical segment with no search/tags. */
+/** Personalization applies only on the default vertical segment with no search/tags/friends. */
 export function shouldPersonalizeHomeVerticalFeed(params: {
   feedSearchQ?: string;
   selectedTags: readonly string[];
   viewMode: HomeViewMode;
+  friendsFilter?: boolean;
 }): boolean {
   return (
     !params.feedSearchQ &&
     params.selectedTags.length === 0 &&
-    params.viewMode === "all"
+    params.viewMode === "all" &&
+    !params.friendsFilter
   );
+}
+
+/** Cache key `filters` segment when Friends is active on vertical feed. */
+export function verticalFriendsCacheFilters(
+  friendsFilter: boolean
+): FilterType[] | undefined {
+  return friendsFilter ? ["friends"] : undefined;
 }
 
 /** First-page vertical cache key options (occurrence params always null for now). */
@@ -227,6 +237,7 @@ export function buildHomeVerticalFirstPageFeedKeyOptions(
     type: getVerticalSegmentType(ctx.viewMode),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
+    filters: verticalFriendsCacheFilters(ctx.friendsFilter),
     limit: HOME_FEED_FIRST_PAGE,
     offset: 0,
     viewerProfileId: ctx.viewerProfileId,
@@ -244,6 +255,7 @@ export function buildTodaySpotlightBaseOptions(
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     viewerProfileId: ctx.viewerProfileId || undefined,
+    friendsOnly: ctx.friendsFilter || undefined,
   };
 }
 
@@ -259,6 +271,7 @@ export function buildVerticalLoadFeedOptions(
     limit: page.limit,
     offset: page.offset,
     viewerProfileId: ctx.viewerProfileId || undefined,
+    friendsOnly: ctx.friendsFilter || undefined,
   };
 }
 
@@ -270,6 +283,7 @@ export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
   currentUserId: string | null;
   occursOn: null;
   occursTz: null;
+  friendsFilter: boolean;
 } {
   return {
     type: getVerticalSegmentType(ctx.viewMode),
@@ -278,6 +292,7 @@ export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
     currentUserId: ctx.viewerProfileId,
     occursOn: null,
     occursTz: null,
+    friendsFilter: ctx.friendsFilter,
   };
 }
 
@@ -349,12 +364,14 @@ export function buildHomeVerticalFilterContext(params: {
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
+  friendsFilter: boolean;
 }): HomeVerticalFilterContext {
   return {
     viewMode: params.viewMode,
     feedSearchQ: params.feedSearchQ,
     selectedTags: params.selectedTags,
     viewerProfileId: params.viewerProfileId,
+    friendsFilter: params.friendsFilter,
   };
 }
 

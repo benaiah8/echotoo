@@ -145,7 +145,28 @@ export type FeedOptions = {
   occursOn?: string | null;
   /** IANA timezone (RPC `p_occurs_tz`). With `occursOn`, enables server-side Today filtering. */
   occursTz?: string | null;
+  /** When true, RPC returns only posts from mutual approved follows (`p_friends_only`). */
+  friendsOnly?: boolean;
 };
+
+/** Map FeedOptions to dataCache.generateFeedKey input (`friendsOnly` → `filters` segment). */
+export function feedOptionsForCacheKey(
+  opts: FeedOptions
+): Parameters<typeof dataCache.generateFeedKey>[0] {
+  const { friendsOnly, type, q, tags, limit, offset, viewerProfileId, occursOn, occursTz } =
+    opts;
+  return {
+    type,
+    q,
+    tags,
+    limit,
+    offset,
+    viewerProfileId,
+    occursOn,
+    occursTz,
+    filters: friendsOnly ? ["friends"] : undefined,
+  };
+}
 
 export async function getPublicFeed(
   opts: FeedOptions = {}
@@ -155,7 +176,9 @@ export async function getPublicFeed(
   const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
   if (offset === 0) {
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
-    const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
+    const cacheKey = dataCache.generateFeedKey(
+      feedOptionsForCacheKey({ ...opts, viewerProfileId })
+    );
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
       // console.log("[getPublicFeed] Returning cached data for key:", cacheKey);
@@ -284,7 +307,9 @@ export async function getPublicFeed(
     // Why: User still sees content even if network request fails
     if (offset === 0) {
       // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
-      const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
+      const cacheKey = dataCache.generateFeedKey(
+        feedOptionsForCacheKey({ ...opts, viewerProfileId })
+      );
       const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
       if (isNonemptyFeedCache(cachedData)) {
         if (IS_DEV_BUILD) {
@@ -357,7 +382,9 @@ export async function getPublicFeed(
   // Cache the result for first page queries only (non-empty — avoid false empty after chip toggles)
   if (offset === 0 && finalData.length > 0) {
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
-    const cacheKey = dataCache.generateFeedKey({ ...opts, viewerProfileId });
+    const cacheKey = dataCache.generateFeedKey(
+      feedOptionsForCacheKey({ ...opts, viewerProfileId })
+    );
     cacheFeedResult(cacheKey, finalData, 2 * 60 * 1000); // Cache for 2 minutes
 
     // DISABLED: Prefetching conflicts with ProgressiveFeed's loading mechanism
@@ -392,6 +419,7 @@ export async function getPublicFeedOptimizedWithCount(
     viewerProfileId,
     occursOn = null,
     occursTz = null,
+    friendsOnly,
   } = opts;
 
   // [PHASE 2.3 - FIX] Wait for cache preload to complete before checking cache
@@ -413,17 +441,19 @@ export async function getPublicFeedOptimizedWithCount(
     // This allows limit:5 and limit:10 to share limit:20 cache
     // Only check if normalization would change the limit
     if (normalizedLimitForCache > limit) {
-      const normalizedCacheKey = dataCache.generateFeedKey({
-        ...opts,
-        limit: normalizedLimitForCache,
-      });
+      const normalizedCacheKey = dataCache.generateFeedKey(
+        feedOptionsForCacheKey({
+          ...opts,
+          limit: normalizedLimitForCache,
+        })
+      );
       const normalizedCachedData =
         getCachedFeedResult<FeedItem>(normalizedCacheKey);
       if (normalizedCachedData && normalizedCachedData.length >= limit) {
         // Found normalized cache - slice to requested size
         const slicedData = normalizedCachedData.slice(0, limit);
         // Cache the sliced result for future exact matches
-        const exactCacheKey = dataCache.generateFeedKey(opts);
+        const exactCacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
         cacheFeedResult(exactCacheKey, slicedData, 2 * 60 * 1000);
         return {
           items: slicedData,
@@ -434,7 +464,7 @@ export async function getPublicFeedOptimizedWithCount(
     }
 
     // Step 2: Check exact cache key (fast path for exact matches)
-    const cacheKey = dataCache.generateFeedKey(opts);
+    const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
       // SILENCED: Too verbose - only log misses
@@ -458,10 +488,12 @@ export async function getPublicFeedOptimizedWithCount(
     const largerLimits = [20, 40, 60, 80, 100];
     for (const largerLimit of largerLimits) {
       if (largerLimit > limit) {
-        const largerCacheKey = dataCache.generateFeedKey({
-          ...opts,
-          limit: largerLimit,
-        });
+        const largerCacheKey = dataCache.generateFeedKey(
+          feedOptionsForCacheKey({
+            ...opts,
+            limit: largerLimit,
+          })
+        );
         const largerCachedData = getCachedFeedResult<FeedItem>(largerCacheKey);
         if (largerCachedData && largerCachedData.length >= limit) {
           // Found cache with larger limit - slice to requested size
@@ -491,7 +523,7 @@ export async function getPublicFeedOptimizedWithCount(
     // [OPTIMIZATION: Phase 2] Cache lookup for paginated results (offset > 0)
     // Why: Reduces duplicate pagination requests when user scrolls or multiple rails load
     // Safety: Only cache offset < 100 to prevent memory bloat, 30s TTL for freshness
-    const cacheKey = dataCache.generateFeedKey(opts);
+    const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
       // SILENCED: Too verbose - only log misses
@@ -541,7 +573,7 @@ export async function getPublicFeedOptimizedWithCount(
     tags?.join(",") || ""
   }:${normalizedLimitForDedup}:${offset}:${viewerProfileId || "guest"}:${occursOn || ""}:${
     occursTz || ""
-  }`;
+  }:${friendsOnly ? "friends" : ""}`;
 
   // [Top-level in-flight dedupe] Same requestKey → one RPC even if called twice back-to-back (e.g. StrictMode)
   const existingPromise = feedRpcInFlight.get(dedupeKey);
@@ -568,15 +600,17 @@ export async function getPublicFeedOptimizedWithCount(
         if (offset === 0) {
           // Step 1: Check normalized cache first (if normalization applies)
           if (normalizedLimitForCache > limit) {
-            const normalizedCacheKey = dataCache.generateFeedKey({
-              ...opts,
-              limit: normalizedLimitForCache,
-            });
+            const normalizedCacheKey = dataCache.generateFeedKey(
+              feedOptionsForCacheKey({
+                ...opts,
+                limit: normalizedLimitForCache,
+              })
+            );
             const normalizedCachedData =
               getCachedFeedResult<FeedItem>(normalizedCacheKey);
             if (normalizedCachedData && normalizedCachedData.length >= limit) {
               const slicedData = normalizedCachedData.slice(0, limit);
-              const exactCacheKey = dataCache.generateFeedKey(opts);
+              const exactCacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
               cacheFeedResult(exactCacheKey, slicedData, 2 * 60 * 1000);
               return {
                 items: slicedData,
@@ -587,7 +621,7 @@ export async function getPublicFeedOptimizedWithCount(
           }
 
           // Step 2: Check exact cache key
-          const cacheKey = dataCache.generateFeedKey(opts);
+          const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
           const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
           if (isNonemptyFeedCache(cachedData)) {
             // SILENCED: Too verbose
@@ -608,10 +642,12 @@ export async function getPublicFeedOptimizedWithCount(
           const largerLimits = [20, 40, 60, 80, 100];
           for (const largerLimit of largerLimits) {
             if (largerLimit > limit) {
-              const largerCacheKey = dataCache.generateFeedKey({
-                ...opts,
-                limit: largerLimit,
-              });
+              const largerCacheKey = dataCache.generateFeedKey(
+                feedOptionsForCacheKey({
+                  ...opts,
+                  limit: largerLimit,
+                })
+              );
               const largerCachedData =
                 getCachedFeedResult<FeedItem>(largerCacheKey);
               if (largerCachedData && largerCachedData.length >= limit) {
@@ -723,6 +759,7 @@ export async function getPublicFeedOptimizedWithCount(
             p_viewer_user_id: viewerUserId || null,
             p_occurs_on: occursOn ?? null,
             p_occurs_tz: occursTz ?? null,
+            p_friends_only: friendsOnly ?? false,
           };
 
           const { data, error } = await supabase.rpc(
@@ -1111,7 +1148,7 @@ export async function getPublicFeedOptimizedWithCount(
 
           // Cache the result for first page queries (offset === 0, non-empty only)
           if (offset === 0 && finalData.length > 0) {
-            const cacheKey = dataCache.generateFeedKey(opts);
+            const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
             // Cache the exact result (sliced if applicable)
             cacheFeedResult(cacheKey, finalData, 2 * 60 * 1000); // Cache for 2 minutes
 
@@ -1122,10 +1159,12 @@ export async function getPublicFeedOptimizedWithCount(
               fullDataForCache &&
               fullDataForCache.length > finalData.length
             ) {
-              const fullCacheKey = dataCache.generateFeedKey({
-                ...opts,
-                limit: normalizedLimitForDedup,
-              });
+              const fullCacheKey = dataCache.generateFeedKey(
+                feedOptionsForCacheKey({
+                  ...opts,
+                  limit: normalizedLimitForDedup,
+                })
+              );
               cacheFeedResult(fullCacheKey, fullDataForCache, 2 * 60 * 1000); // Cache for 2 minutes
               // SILENCED: Too verbose
               // console.log('[DIAG-Cache] ✅ Full cache saved (offset=0, normalized limit):', {
@@ -1154,7 +1193,7 @@ export async function getPublicFeedOptimizedWithCount(
             // [OPTIMIZATION: Phase 2] Cache paginated results with shorter TTL
             // Why: Reduces duplicate pagination requests when user scrolls or multiple rails load
             // Safety: Only cache offset < 100 to prevent memory bloat, 30s TTL for freshness
-            const cacheKey = dataCache.generateFeedKey(opts);
+            const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
             cacheFeedResult(cacheKey, finalData, 30 * 1000); // Cache for 30 seconds (shorter than offset 0)
 
             // SILENCED: Too verbose
@@ -1188,7 +1227,7 @@ export async function getPublicFeedOptimizedWithCount(
           // Graceful degradation: return cached data on error
           // Check cache for both offset 0 and paginated results
           if (offset === 0 || (offset > 0 && offset < 100)) {
-            const cacheKey = dataCache.generateFeedKey(opts);
+            const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
             const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
             if (isNonemptyFeedCache(cachedData)) {
               if (IS_DEV_BUILD) {
