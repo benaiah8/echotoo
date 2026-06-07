@@ -35,6 +35,12 @@ const ACTION_WEIGHTS: Record<ActionType, number> = {
 // Max score cap to prevent runaway preferences
 const MAX_SCORE = 50;
 
+// For You scoring: recency + gentle engagement (default Home only)
+const RECENCY_MAX_BOOST = 4;
+const RECENCY_DECAY_DAYS = 2.5; // Favor posts from the last ~2–3 days
+const ENGAGEMENT_MAX_BOOST = 4; // Cap so old viral posts cannot dominate
+const UPCOMING_HANGOUT_BOOST = 0.5; // Tiny nudge; schedule sort already runs first
+
 /**
  * Clamp a score to prevent runaway values
  * @param score - Score to clamp
@@ -155,6 +161,81 @@ export function recordSignal(
   }
 }
 
+function getEffectiveCount(
+  effective: number | null | undefined,
+  fallback: number | null | undefined
+): number {
+  const value = effective ?? fallback ?? 0;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Recency boost: exponential decay favoring posts from the last 2–3 days.
+ */
+function recencyBoost(createdAt: string | null | undefined): number {
+  if (!createdAt) return 0;
+  const created = new Date(createdAt);
+  if (isNaN(created.getTime())) return 0;
+
+  const ageDays = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24);
+  if (ageDays < 0) return RECENCY_MAX_BOOST;
+
+  // exp(-age/decay): ~4 at now, ~1.5 at 3 days, ~0.2 at 7 days
+  return RECENCY_MAX_BOOST * Math.exp(-ageDays / RECENCY_DECAY_DAYS);
+}
+
+/**
+ * Gentle log-scaled engagement boost, capped so popularity cannot swamp recency.
+ */
+function engagementBoost(post: FeedItem): number {
+  const likes = getEffectiveCount(post.effective_like_count, post.like_count);
+  const saves = getEffectiveCount(post.effective_save_count, post.save_count);
+  const comments = getEffectiveCount(post.comment_count, 0);
+
+  let raw =
+    Math.log1p(comments) * 0.7 +
+    Math.log1p(likes) * 0.4 +
+    Math.log1p(saves) * 0.5;
+
+  if (post.type === "hangout") {
+    const going = getEffectiveCount(post.rsvp_data?.going_count, 0);
+    raw += Math.log1p(going) * 0.6;
+  } else if (post.type === "experience") {
+    const ratings = getEffectiveCount(
+      post.effective_rating_count,
+      post.rating_count
+    );
+    raw += Math.log1p(ratings) * 0.25;
+  }
+
+  return Math.min(raw, ENGAGEMENT_MAX_BOOST);
+}
+
+/**
+ * Very small boost for scheduled hangouts with a future date (non-time-critical only
+ * in practice; time-critical items are pinned before scoring reorder).
+ */
+function upcomingHangoutBoost(post: FeedItem): number {
+  if (post.type !== "hangout" || isUnscheduledHangout(post)) return 0;
+  if (!post.selected_dates?.length) return 0;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const hasFutureDate = post.selected_dates.some((dateStr) => {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return false;
+    const dateOnly = new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate()
+    );
+    return dateOnly >= today;
+  });
+
+  return hasFutureDate ? UPCOMING_HANGOUT_BOOST : 0;
+}
+
 /**
  * Calculate personalization score for a post
  * Higher score = more relevant to user preferences
@@ -197,8 +278,20 @@ export function scorePost(post: FeedItem, prefs?: FeedPreferences): number {
       unscheduledPenalty = -5;
     }
 
+    const freshnessScore = recencyBoost(post.created_at);
+    const popularityScore = engagementBoost(post);
+    const scheduleScore = upcomingHangoutBoost(post);
+
     // Total score
-    return tagScore + authorScore + followBoost + unscheduledPenalty;
+    return (
+      tagScore +
+      authorScore +
+      followBoost +
+      unscheduledPenalty +
+      freshnessScore +
+      popularityScore +
+      scheduleScore
+    );
   } catch (error) {
     console.error("[FeedPersonalization] Error scoring post:", error);
     return 0; // Return neutral score on error
