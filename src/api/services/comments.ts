@@ -223,16 +223,55 @@ async function fetchCommentsForPostImpl(
   return commentTree;
 }
 
+export type GetCommentsForPostOptions = {
+  /** Skip the 5-minute localStorage cache (realtime / focus refresh only). */
+  bypassCache?: boolean;
+};
+
+/** Lightweight like aggregates for open-thread reconciliation. */
+export async function fetchCommentLikeCounts(
+  commentIds: string[],
+  viewerUserId: string | null
+): Promise<Record<string, { like_count: number; is_liked: boolean }>> {
+  const result: Record<string, { like_count: number; is_liked: boolean }> = {};
+  if (commentIds.length === 0) return result;
+
+  for (const id of commentIds) {
+    result[id] = { like_count: 0, is_liked: false };
+  }
+
+  const { data: likes, error } = await supabase
+    .from("comment_likes")
+    .select("comment_id, user_id")
+    .in("comment_id", commentIds);
+
+  if (error) throw error;
+
+  for (const like of likes ?? []) {
+    const entry = result[like.comment_id];
+    if (!entry) continue;
+    entry.like_count += 1;
+    if (viewerUserId && like.user_id === viewerUserId) {
+      entry.is_liked = true;
+    }
+  }
+
+  return result;
+}
+
 // Get comments for a post with author details and like counts
 export const getCommentsForPost = async (
-  postId: string
+  postId: string,
+  options?: GetCommentsForPostOptions
 ): Promise<CommentWithDetails[]> => {
-  // Check cache first - return immediately, no in-flight map
-  const cached = getCachedComments(postId);
-  if (cached) return cached;
+  if (!options?.bypassCache) {
+    const cached = getCachedComments(postId);
+    if (cached) return cached;
+  }
 
-  // Check in-flight deduplication
-  const key = `comments:${postId}`;
+  const key = options?.bypassCache
+    ? `comments:${postId}:refresh`
+    : `comments:${postId}`;
   let promise = commentsInFlight.get(key);
   if (!promise) {
     promise = fetchCommentsForPostImpl(postId).finally(() => {
@@ -392,8 +431,14 @@ export const deleteComment = async (commentId: string): Promise<void> => {
 // Like a comment
 export const likeComment = async (commentId: string): Promise<void> => {
   try {
+    const userId = await getViewerAuthUserId();
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
     const { error } = await supabase.from("comment_likes").insert({
       comment_id: commentId,
+      user_id: userId,
     });
 
     if (error) throw error;
@@ -417,10 +462,16 @@ export const likeComment = async (commentId: string): Promise<void> => {
 // Unlike a comment
 export const unlikeComment = async (commentId: string): Promise<void> => {
   try {
+    const userId = await getViewerAuthUserId();
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
     const { error } = await supabase
       .from("comment_likes")
       .delete()
-      .eq("comment_id", commentId);
+      .eq("comment_id", commentId)
+      .eq("user_id", userId);
 
     if (error) throw error;
 

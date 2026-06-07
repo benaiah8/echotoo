@@ -21,7 +21,6 @@ import CreateFinalizePage from "../pages/CreateFinalizePage";
 import CreateMapPage from "../pages/CreateMapPage";
 import PreviewPage from "../pages/PreviewPage";
 import ExperiencePage from "../pages/ExperiencePage";
-import HangoutPage from "../pages/HangoutPage";
 import FeedTestPage from "../pages/FeedTestPage";
 import ReportsReviewPage from "../pages/reviews/ReportsReviewPage";
 import AppUpdatesPage from "../pages/internal/AppUpdatesPage";
@@ -29,6 +28,16 @@ import InternalLandingPage from "../pages/internal/InternalLandingPage";
 import AuthCallback from "../pages/AuthCallback";
 import PostDetailModal from "../components/PostDetailModal";
 import CreateFlowLayout from "../components/create/CreateFlowLayout";
+import { isPostDetailRoutePath } from "../lib/inviteOverlayHistory";
+
+/** Cold/direct post detail opens: home tab stays mounted behind PostDetailModal. */
+const DEFAULT_POST_DETAIL_BACKGROUND: Location = {
+  pathname: "/",
+  search: "",
+  hash: "",
+  key: "default",
+  state: null,
+};
 
 // Policy & legal pages
 import PrivacyPage from "../pages/policy/PrivacyPage";
@@ -77,17 +86,21 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
   const location = useLocation();
   const state = location.state as { backgroundLocation?: Location } | null;
   const backgroundLocation = state?.backgroundLocation;
+  const isDetailRoute = isPostDetailRoutePath(location.pathname);
+  const effectiveBackground =
+    backgroundLocation ??
+    (isDetailRoute ? DEFAULT_POST_DETAIL_BACKGROUND : undefined);
 
-  const mainRoutesLocation = backgroundLocation || location;
+  const mainRoutesLocation = effectiveBackground ?? location;
   const isTabRoute = isTabPath(location.pathname);
   const isMainTabPath = isTabPath(mainRoutesLocation.pathname);
 
   return (
     <>
       {/* Tab container: on tab routes, or when modal overlay (show background) */}
-      {contentReady && (isTabRoute || backgroundLocation) && (
+      {contentReady && (isTabRoute || effectiveBackground) && (
         <PersistentTabContainer
-          backgroundPath={backgroundLocation?.pathname}
+          backgroundPath={effectiveBackground?.pathname}
           mountHomeTab={contentReady}
         />
       )}
@@ -124,16 +137,10 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
         />
         <Route path={Paths.me} element={<Navigate to="/u/me" replace />} />
 
-        {/* Detail pages: full page when no background (direct visit) */}
+        {/* Bare /experience unchanged; :id detail is PostDetailModal overlay only */}
         <Route path={Paths.experience} element={<ExperiencePage />} />
-        <Route
-          path={Paths.experienceDetail}
-          element={!backgroundLocation ? <ExperiencePage /> : null}
-        />
-        <Route
-          path={Paths.hangoutDetail}
-          element={!backgroundLocation ? <HangoutPage /> : null}
-        />
+        <Route path={Paths.experienceDetail} element={null} />
+        <Route path={Paths.hangoutDetail} element={null} />
 
         {/* Create flow: single parent keeps CreateFlowLayout + CreatePostMediaProvider mounted */}
         <Route
@@ -202,8 +209,8 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
         <Route path="*" element={<Navigate to={Paths.home} replace />} />
       </Routes>
 
-      {/* Modal overlay routes: when backgroundLocation exists, match current location for modal */}
-      {backgroundLocation && (
+      {/* Post detail overlay: always modal for /experience/:id and /hangout/:id */}
+      {isDetailRoute && (
         <Routes>
           <Route path={Paths.experienceDetail} element={<PostDetailModal />} />
           <Route path={Paths.hangoutDetail} element={<PostDetailModal />} />

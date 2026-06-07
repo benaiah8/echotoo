@@ -17,6 +17,10 @@ export default function Avatar({
   userId, // [OPTIMIZATION: Phase 3.2] Optional userId for cache lookup
   className = "",
   tightLineBox = false,
+  /** When true, omit inner click/keyboard handlers (e.g. parent row handles taps). */
+  disableInnerPointer = false,
+  /** When false, sets `draggable={false}` on the avatar image. Default true (browser default). */
+  imageDraggable = true,
 }: {
   url?: string | null;
   name?: string | null;
@@ -33,6 +37,8 @@ export default function Avatar({
    * Default `false` keeps prior layout everywhere else.
    */
   tightLineBox?: boolean;
+  disableInnerPointer?: boolean;
+  imageDraggable?: boolean;
 }) {
   const letter =
     variant === "anon" && anonymousAvatar
@@ -120,23 +126,27 @@ export default function Avatar({
       >
         <div
           className={`relative rounded-full overflow-hidden ${
-            onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""
+            onClick && !disableInnerPointer
+              ? "cursor-pointer hover:opacity-80 transition-opacity"
+              : ""
           }`}
           style={{ width: s, height: s, ...getBorderStyle() }}
           aria-label="avatar"
-          onClick={handleClick}
-          role={onClick ? "button" : undefined}
-          tabIndex={onClick ? 0 : undefined}
-          onKeyDown={
-            onClick
-              ? (e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleClick();
-                  }
-                }
-              : undefined
-          }
+          {...(disableInnerPointer
+            ? {}
+            : {
+                onClick: handleClick,
+                role: onClick ? ("button" as const) : undefined,
+                tabIndex: onClick ? 0 : undefined,
+                onKeyDown: onClick
+                  ? (e: React.KeyboardEvent<HTMLDivElement>) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleClick();
+                      }
+                    }
+                  : undefined,
+              })}
         >
           {resolvedAvatarSrc ? (
             <img
@@ -144,6 +154,7 @@ export default function Avatar({
               alt=""
               className="w-full h-full object-cover rounded-full"
               loading="lazy"
+              draggable={imageDraggable ? undefined : false}
               onLoad={() => {
                 // [OPTIMIZATION: Phase 3.2] Cache the URL when it loads successfully (if userId provided)
                 if (userId && variant !== "anon" && displayUrl) {

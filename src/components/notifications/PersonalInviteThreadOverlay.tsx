@@ -226,13 +226,18 @@ export default function PersonalInviteThreadOverlay({
     ],
   });
 
-  const { overlayMotionStyle, edgeStripProps } = useOverlayEdgeSwipeDismiss({
-    active: open,
-    engageSwipe: engageInviteBack,
-    gestureDisabled: keyboardOpen || composerFocused,
-    ...inviteThreadOverlayEdgeSwipeStripOptions(INVITE_HEADER_PILL_OUTER_HEIGHT_PX),
-    onDismiss: onClose,
-  });
+  // useOverlayEdgeSwipeDismiss: `active: open` is correct — when `open` is false we `return null`
+  // immediately, so nothing stays mounted that still applies `overlayMotionStyle`.
+  const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
+    useOverlayEdgeSwipeDismiss({
+      active: open,
+      engageSwipe: engageInviteBack,
+      gestureDisabled: keyboardOpen || composerFocused,
+      ...inviteThreadOverlayEdgeSwipeStripOptions(
+        INVITE_HEADER_PILL_OUTER_HEIGHT_PX,
+      ),
+      onDismiss: onClose,
+    });
 
   useEffect(() => {
     if (!open) return;
@@ -687,7 +692,7 @@ export default function PersonalInviteThreadOverlay({
             back={
               <button
                 type="button"
-                onClick={onClose}
+                onClick={playAnimatedDismiss}
                 className={inviteThreadHeaderBackButtonClass}
                 aria-label="Back"
               >

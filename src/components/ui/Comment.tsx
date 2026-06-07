@@ -13,6 +13,7 @@ interface Props {
   onReply?: (parentId: string) => void;
   onEdit?: (commentId: string, content: string) => void;
   onDelete?: (commentId: string) => void;
+  onLikeChange?: (commentId: string, liked: boolean, count: number) => void;
   currentUserId?: string;
   depth?: number;
 }
@@ -22,6 +23,7 @@ export default function Comment({
   onReply,
   onEdit,
   onDelete,
+  onLikeChange,
   currentUserId,
   depth = 0,
 }: Props) {
@@ -78,8 +80,7 @@ export default function Comment({
   };
 
   const handleLikeChange = (liked: boolean, count: number) => {
-    // Update local state if needed
-    // The parent component will handle the actual state update
+    onLikeChange?.(comment.id, liked, count);
   };
 
   return (
@@ -265,6 +266,7 @@ export default function Comment({
               onReply={onReply}
               onEdit={onEdit}
               onDelete={onDelete}
+              onLikeChange={onLikeChange}
               currentUserId={currentUserId}
               depth={depth + 1}
             />

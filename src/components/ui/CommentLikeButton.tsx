@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PiHeartFill } from "react-icons/pi";
 import { likeComment, unlikeComment } from "../../api/services/comments";
 
@@ -21,16 +21,20 @@ export default function CommentLikeButton({
   const [currentCount, setCurrentCount] = useState(initialCount);
   const [isAnimating, setIsAnimating] = useState(false);
 
+  useEffect(() => {
+    setIsLiked(initialLiked);
+    setCurrentCount(initialCount);
+  }, [initialLiked, initialCount]);
+
   const handleToggleLike = async () => {
-    // Optimistic update
-    const newLiked = !isLiked;
-    const newCount = newLiked ? currentCount + 1 : currentCount - 1;
+    const prevLiked = isLiked;
+    const prevCount = currentCount;
+    const newLiked = !prevLiked;
+    const newCount = newLiked ? prevCount + 1 : prevCount - 1;
 
     setIsLiked(newLiked);
     setCurrentCount(newCount);
     setIsAnimating(true);
-
-    // Notify parent component
     onLikeChange?.(newLiked, newCount);
 
     try {
@@ -40,10 +44,9 @@ export default function CommentLikeButton({
         await unlikeComment(commentId);
       }
     } catch (error) {
-      // Revert on error
-      setIsLiked(initialLiked);
-      setCurrentCount(initialCount);
-      onLikeChange?.(initialLiked, initialCount);
+      setIsLiked(prevLiked);
+      setCurrentCount(prevCount);
+      onLikeChange?.(prevLiked, prevCount);
       console.error("Error toggling comment like:", error);
     } finally {
       // Reset animation after a short delay

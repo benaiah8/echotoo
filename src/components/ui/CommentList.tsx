@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { CommentWithDetails } from "../../types/comment";
 import {
   getCommentsForPost,
+  fetchCommentLikeCounts,
   updateComment,
   deleteComment,
 } from "../../api/services/comments";
 import Comment from "./Comment";
 import FloatingCommentInput from "./FloatingCommentInput";
-import { supabase } from "../../lib/supabaseClient";
 import { getViewerAuthUserId } from "../../api/services/follows";
+import { useCommentThreadRealtime } from "../../hooks/useCommentThreadRealtime";
 
 interface Props {
   postId: string;
@@ -17,6 +18,121 @@ interface Props {
   autoFocusCommentComposer?: boolean;
   /** Parent stores the latest focus() for the modal sticky bar. */
   setFocusComposer?: (focus: () => void) => void;
+}
+
+function countCommentsInTree(comments: CommentWithDetails[]): number {
+  return comments.reduce(
+    (total, comment) =>
+      total + 1 + countCommentsInTree(comment.replies || []),
+    0
+  );
+}
+
+function collectAllCommentIds(comments: CommentWithDetails[]): string[] {
+  const ids: string[] = [];
+  const walk = (list: CommentWithDetails[]) => {
+    for (const comment of list) {
+      ids.push(comment.id);
+      if (comment.replies?.length) walk(comment.replies);
+    }
+  };
+  walk(comments);
+  return ids;
+}
+
+function mergeLikeCountsIntoTree(
+  comments: CommentWithDetails[],
+  counts: Record<string, { like_count: number; is_liked: boolean }>
+): CommentWithDetails[] {
+  return comments.map((comment) => ({
+    ...comment,
+    like_count: counts[comment.id]?.like_count ?? comment.like_count,
+    is_liked: counts[comment.id]?.is_liked ?? comment.is_liked,
+    replies: comment.replies
+      ? mergeLikeCountsIntoTree(comment.replies, counts)
+      : [],
+  }));
+}
+
+function patchLikeInTree(
+  comments: CommentWithDetails[],
+  commentId: string,
+  liked: boolean,
+  count: number
+): CommentWithDetails[] {
+  return comments.map((comment) => {
+    if (comment.id === commentId) {
+      return { ...comment, is_liked: liked, like_count: count };
+    }
+    if (comment.replies?.length) {
+      return {
+        ...comment,
+        replies: patchLikeInTree(comment.replies, commentId, liked, count),
+      };
+    }
+    return comment;
+  });
+}
+
+function insertCommentInTree(
+  comments: CommentWithDetails[],
+  newComment: CommentWithDetails,
+  parentId?: string
+): CommentWithDetails[] {
+  if (!parentId) {
+    return [...comments, newComment];
+  }
+
+  return comments.map((comment) => {
+    if (comment.id === parentId) {
+      return {
+        ...comment,
+        replies: [...(comment.replies || []), newComment],
+      };
+    }
+    if (comment.replies?.length) {
+      return {
+        ...comment,
+        replies: insertCommentInTree(comment.replies, newComment, parentId),
+      };
+    }
+    return comment;
+  });
+}
+
+function patchContentInTree(
+  comments: CommentWithDetails[],
+  commentId: string,
+  content: string
+): CommentWithDetails[] {
+  return comments.map((comment) => {
+    if (comment.id === commentId) {
+      return { ...comment, content, updated_at: new Date().toISOString() };
+    }
+    if (comment.replies?.length) {
+      return {
+        ...comment,
+        replies: patchContentInTree(comment.replies, commentId, content),
+      };
+    }
+    return comment;
+  });
+}
+
+function removeCommentFromTree(
+  comments: CommentWithDetails[],
+  commentId: string
+): CommentWithDetails[] {
+  return comments
+    .filter((comment) => comment.id !== commentId)
+    .map((comment) =>
+      comment.replies?.length
+        ? {
+            ...comment,
+            replies: removeCommentFromTree(comment.replies, commentId),
+          }
+        : comment
+    );
 }
 
 export default function CommentList({
@@ -33,14 +149,21 @@ export default function CommentList({
   const [editingComment, setEditingComment] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const focusComposerRef = useRef<(() => void) | null>(null);
 
-  // Get current user ID and profile
+  const handleFocusComposerReady = useCallback(
+    (fn: () => void) => {
+      focusComposerRef.current = fn;
+      setFocusComposer?.(fn);
+    },
+    [setFocusComposer]
+  );
+
   useEffect(() => {
     const getUser = async () => {
       const userId = await getViewerAuthUserId();
       setCurrentUserId(userId);
 
-      // Get user profile from cache
       const cachedProfile = localStorage.getItem("my_avatar_url");
       const cachedUsername = localStorage.getItem("my_username");
       const cachedDisplayName = localStorage.getItem("my_display_name");
@@ -56,33 +179,65 @@ export default function CommentList({
     getUser();
   }, []);
 
-  // Load comments
+  const loadComments = useCallback(
+    async (opts?: { bypassCache?: boolean; silent?: boolean }) => {
+      try {
+        if (!opts?.silent) {
+          setLoading(true);
+          setError(null);
+        }
+        const commentsData = await getCommentsForPost(postId, {
+          bypassCache: opts?.bypassCache,
+        });
+        setComments(commentsData);
+        onCommentCountChange?.(countCommentsInTree(commentsData));
+      } catch (err) {
+        console.error("Error loading comments:", err);
+        if (!opts?.silent) setError("Failed to load comments");
+      } finally {
+        if (!opts?.silent) setLoading(false);
+      }
+    },
+    [postId, onCommentCountChange]
+  );
+
   useEffect(() => {
-    loadComments();
-  }, [postId]);
+    void loadComments();
+  }, [loadComments]);
 
-  const loadComments = async () => {
+  const commentIds = useMemo(
+    () => collectAllCommentIds(comments),
+    [comments]
+  );
+
+  const reconcileLikeCounts = useCallback(async () => {
+    if (commentIds.length === 0) return;
     try {
-      setLoading(true);
-      setError(null);
-      console.log("Loading comments for post:", postId); // Debug log
-      const commentsData = await getCommentsForPost(postId);
-      console.log("Comments loaded:", commentsData); // Debug log
-      setComments(commentsData);
-
-      // Calculate total comment count (including replies)
-      const totalCount = commentsData.reduce((total, comment) => {
-        return total + 1 + (comment.replies?.length || 0);
-      }, 0);
-
-      onCommentCountChange?.(totalCount);
+      const counts = await fetchCommentLikeCounts(commentIds, currentUserId);
+      setComments((prev) => mergeLikeCountsIntoTree(prev, counts));
     } catch (err) {
-      console.error("Error loading comments:", err); // Debug log
-      setError("Failed to load comments");
-    } finally {
-      setLoading(false);
+      console.error("Error reconciling comment like counts:", err);
     }
-  };
+  }, [commentIds, currentUserId]);
+
+  useCommentThreadRealtime({
+    postId,
+    commentIds,
+    enabled: !loading && !error,
+    onCommentsChanged: () => {
+      void loadComments({ bypassCache: true, silent: true });
+    },
+    onLikesChanged: () => {
+      void reconcileLikeCounts();
+    },
+  });
+
+  const handleLikeChange = useCallback(
+    (commentId: string, liked: boolean, count: number) => {
+      setComments((prev) => patchLikeInTree(prev, commentId, liked, count));
+    },
+    []
+  );
 
   const handleNewComment = (
     content: string,
@@ -90,8 +245,7 @@ export default function CommentList({
     commentData?: any
   ) => {
     if (commentData && userProfile) {
-      // Optimistic update: add new comment to the list immediately
-      const newComment = {
+      const newComment: CommentWithDetails = {
         ...commentData,
         author: {
           id: commentData.author_id,
@@ -99,12 +253,16 @@ export default function CommentList({
           display_name: userProfile.display_name,
           avatar_url: userProfile.avatar_url,
         },
-        likes_count: 0,
-        is_liked_by_me: false,
+        like_count: 0,
+        is_liked: false,
         replies: [],
       };
 
-      setComments((prevComments) => [...prevComments, newComment]);
+      setComments((prevComments) => {
+        const next = insertCommentInTree(prevComments, newComment, parentId);
+        onCommentCountChange?.(countCommentsInTree(next));
+        return next;
+      });
     }
     setReplyingTo(null);
   };
@@ -112,13 +270,8 @@ export default function CommentList({
   const handleEditComment = async (commentId: string, content: string) => {
     try {
       await updateComment(commentId, { content });
-      // Optimistic update: update the comment in the list
       setComments((prevComments) =>
-        prevComments.map((comment) =>
-          comment.id === commentId
-            ? { ...comment, content, updated_at: new Date().toISOString() }
-            : comment
-        )
+        patchContentInTree(prevComments, commentId, content)
       );
       setEditingComment(null);
     } catch (err) {
@@ -128,22 +281,25 @@ export default function CommentList({
 
   const handleDeleteComment = async (commentId: string) => {
     try {
-      // Optimistic update: remove comment from list immediately
-      setComments((prevComments) =>
-        prevComments.filter((comment) => comment.id !== commentId)
-      );
-
-      // Then perform the actual deletion
+      setComments((prevComments) => {
+        const next = removeCommentFromTree(prevComments, commentId);
+        onCommentCountChange?.(countCommentsInTree(next));
+        return next;
+      });
       await deleteComment(commentId);
     } catch (err) {
       console.error("Error deleting comment:", err);
-      // Revert optimistic update on error
-      loadComments();
+      void loadComments();
     }
   };
 
   const handleReply = (parentId: string) => {
     setReplyingTo(parentId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        focusComposerRef.current?.();
+      });
+    });
   };
 
   if (loading) {
@@ -169,25 +325,22 @@ export default function CommentList({
     return (
       <div className="mt-6 border-t border-[var(--border)]">
         <div className="p-4 pb-24 text-center">
-          {" "}
-          {/* Add bottom padding for floating input */}
           <p className="text-sm text-red-500">{error}</p>
           <button
-            onClick={loadComments}
+            onClick={() => void loadComments()}
             className="mt-2 px-3 py-1 text-xs bg-[var(--primary)] text-[var(--primaryText)] rounded-lg hover:bg-[var(--primary)]/90"
           >
             Try Again
           </button>
         </div>
 
-        {/* Always show comment input even on error */}
         <FloatingCommentInput
           postId={postId}
           onComment={handleNewComment}
           placeholder="Write a comment..."
           isModal={isModal}
           autoFocusComposer={autoFocusCommentComposer}
-          onFocusComposerReady={setFocusComposer}
+          onFocusComposerReady={handleFocusComposerReady}
         />
       </div>
     );
@@ -195,10 +348,7 @@ export default function CommentList({
 
   return (
     <div className="mt-6 border-t border-[var(--border)]">
-      {/* Comments */}
       <div className="p-4 pb-24">
-        {" "}
-        {/* Add bottom padding for floating input */}
         {comments.length === 0 ? (
           <div className="text-center py-8">
             <p className="text-sm text-[var(--text)]/60">No comments yet</p>
@@ -215,6 +365,7 @@ export default function CommentList({
                 onReply={handleReply}
                 onEdit={handleEditComment}
                 onDelete={handleDeleteComment}
+                onLikeChange={handleLikeChange}
                 currentUserId={currentUserId || undefined}
               />
             ))}
@@ -222,7 +373,6 @@ export default function CommentList({
         )}
       </div>
 
-      {/* Floating comment input - always visible */}
       <FloatingCommentInput
         postId={postId}
         parentId={replyingTo}
@@ -231,7 +381,7 @@ export default function CommentList({
         placeholder={replyingTo ? "Write a reply..." : "Write a comment..."}
         isModal={isModal}
         autoFocusComposer={autoFocusCommentComposer}
-        onFocusComposerReady={setFocusComposer}
+        onFocusComposerReady={handleFocusComposerReady}
       />
     </div>
   );

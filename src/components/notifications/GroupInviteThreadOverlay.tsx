@@ -174,6 +174,10 @@ export default function GroupInviteThreadOverlay({
     valueLength: number;
   }>({ start: 0, end: 0, valueLength: 0 });
 
+  const mentionListboxRef = useRef<HTMLDivElement | null>(null);
+  const mentionHeaderStackRef = useRef<HTMLDivElement | null>(null);
+  const composerRowRef = useRef<HTMLDivElement | null>(null);
+
   const captureComposerSelection = useCallback(
     (el: HTMLTextAreaElement | null, valueLength: number) => {
       if (!el) return;
@@ -535,15 +539,6 @@ export default function GroupInviteThreadOverlay({
     ],
   });
 
-  const { overlayMotionStyle, edgeStripProps } = useOverlayEdgeSwipeDismiss({
-    active: open,
-    engageSwipe: engageInviteBack,
-    gestureDisabled: keyboardOpen || composerFocused,
-    ...inviteThreadOverlayEdgeSwipeStripOptions(INVITE_HEADER_PILL_OUTER_HEIGHT_PX),
-    tryConsumeDismissLayer: dismissParticipantsIfNeeded,
-    onDismiss: onClose,
-  });
-
   const linkToPost = useMemo(() => {
     if (!bundle?.post_peek.post_id) return null;
     return postDetailPath(
@@ -580,6 +575,23 @@ export default function GroupInviteThreadOverlay({
     !mentionSuggestionsDismissed &&
     mentionSuggestions.length > 0;
 
+  // useOverlayEdgeSwipeDismiss: `active: open` is correct — when `open` is false we `return null`
+  // immediately, so nothing stays mounted that still applies `overlayMotionStyle`.
+  const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
+    useOverlayEdgeSwipeDismiss({
+      active: open,
+      engageSwipe: engageInviteBack,
+      gestureDisabled:
+        keyboardOpen ||
+        composerFocused ||
+        showInviteMentionSuggestions,
+      ...inviteThreadOverlayEdgeSwipeStripOptions(
+        INVITE_HEADER_PILL_OUTER_HEIGHT_PX,
+      ),
+      tryConsumeDismissLayer: dismissParticipantsIfNeeded,
+      onDismiss: onClose,
+    });
+
   useEffect(() => {
     const at = activeMentionToken?.atIndex ?? null;
     const q = activeMentionToken?.query ?? "";
@@ -604,6 +616,9 @@ export default function GroupInviteThreadOverlay({
     prevMentionAtIndexRef.current = at;
     prevMentionQueryRef.current = q;
   }, [activeMentionToken?.atIndex, activeMentionToken?.query]);
+
+  const safeHorizontalPad =
+    "pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))]";
 
   const reactionsInteractive =
     bundle != null &&
@@ -809,9 +824,6 @@ export default function GroupInviteThreadOverlay({
     [reactionsInteractive, threadId],
   );
 
-  const safeHorizontalPad =
-    "pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))]";
-
   if (!open) return null;
 
   const readOnlyExplanation = (): string[] => {
@@ -911,6 +923,7 @@ export default function GroupInviteThreadOverlay({
       ) : null}
 
       <div
+        ref={mentionHeaderStackRef}
         className={`pointer-events-none absolute left-0 right-0 flex flex-col items-center ${safeHorizontalPad} ${
           participantsOpen ? "z-[40]" : "z-[35]"
         }`}
@@ -932,7 +945,7 @@ export default function GroupInviteThreadOverlay({
             back={
               <button
                 type="button"
-                onClick={onClose}
+                onClick={playAnimatedDismiss}
                 className={inviteThreadHeaderBackButtonClass}
                 aria-label="Back"
               >
@@ -1135,6 +1148,7 @@ export default function GroupInviteThreadOverlay({
                 <div className="pointer-events-auto relative w-full max-w-lg">
                   {showInviteMentionSuggestions ? (
                     <div
+                      ref={mentionListboxRef}
                       className="absolute bottom-full left-0 right-0 z-[25] mb-1 overflow-hidden rounded-xl border border-neutral-900/17 bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-xl app-dark:border-white/22 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]"
                       role="listbox"
                       aria-label="Mention suggestions"
@@ -1144,11 +1158,25 @@ export default function GroupInviteThreadOverlay({
                           const rowKey = `${p.user_id ?? p.username ?? `m-${idx}`}`;
                           const primary = participantPrimaryLine(p);
                           const secondary = participantSecondaryLine(p);
+                          const isLast =
+                            idx === mentionSuggestions.length - 1;
+                          const optionLabel =
+                            secondary != null
+                              ? `${primary}, ${secondary}`
+                              : primary;
                           return (
-                            <button
+                            <div
                               key={rowKey}
-                              type="button"
                               role="option"
+                              tabIndex={0}
+                              aria-label={optionLabel}
+                              data-mention-row="true"
+                              data-mention-zone="row"
+                              className={`flex w-full min-h-[44px] cursor-pointer select-none items-center px-3 py-2 text-left outline-none transition-colors hover:bg-[color-mix(in_oklab,var(--surface-2)_40%,transparent)] app-dark:hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-amber-400/40 ${
+                                isLast
+                                  ? ""
+                                  : "border-b border-neutral-900/10 app-dark:border-white/[0.08]"
+                              }`}
                               onPointerDown={(e) => {
                                 if (e.pointerType === "mouse") {
                                   e.preventDefault();
@@ -1158,28 +1186,45 @@ export default function GroupInviteThreadOverlay({
                                 e.preventDefault();
                                 insertMentionParticipant(p);
                               }}
-                              className="flex w-full min-h-[44px] touch-pan-y cursor-pointer items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-[color-mix(in_oklab,var(--surface-2)_40%,transparent)] [&_*]:pointer-events-none app-dark:hover:bg-white/[0.06]"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  insertMentionParticipant(p);
+                                }
+                              }}
                             >
-                              <Avatar
-                                variant="default"
-                                url={p.avatar_url || undefined}
-                                name={participantLabel(p)}
-                                size={34}
-                                tightLineBox
-                                className="shrink-0 rounded-full"
-                                userId={p.user_id ?? undefined}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-medium leading-snug text-[var(--text)]">
-                                  {primary}
-                                </p>
-                                {secondary ? (
-                                  <p className="truncate text-xs text-[var(--text)]/55">
-                                    {secondary}
+                              <div
+                                data-mention-zone="content"
+                                className="flex min-w-0 shrink items-center gap-2.5"
+                              >
+                                <Avatar
+                                  variant="default"
+                                  url={p.avatar_url || undefined}
+                                  name={participantLabel(p)}
+                                  size={34}
+                                  tightLineBox
+                                  className="shrink-0 rounded-full"
+                                  userId={p.user_id ?? undefined}
+                                  disableInnerPointer
+                                  imageDraggable={false}
+                                />
+                                <div className="min-w-0 max-w-[min(100%,18rem)] flex-1">
+                                  <p className="truncate text-sm font-medium leading-snug text-[var(--text)]">
+                                    {primary}
                                   </p>
-                                ) : null}
+                                  {secondary ? (
+                                    <p className="truncate text-xs text-[var(--text)]/55">
+                                      {secondary}
+                                    </p>
+                                  ) : null}
+                                </div>
                               </div>
-                            </button>
+                              <div
+                                data-mention-zone="empty"
+                                className="min-h-0 min-w-0 flex-1 self-stretch"
+                                aria-hidden
+                              />
+                            </div>
                           );
                         })}
                       </div>
@@ -1187,6 +1232,7 @@ export default function GroupInviteThreadOverlay({
                   ) : null}
 
                   <div
+                    ref={composerRowRef}
                     className={`pointer-events-auto flex w-full max-w-lg gap-2 border-2 border-neutral-900/17 bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)] backdrop-blur-xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)] app-dark:border-white/28 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_18%,transparent)] app-dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] ${
                   composerInputShape === "pill"
                     ? "overflow-visible p-0"
@@ -1314,8 +1360,12 @@ export default function GroupInviteThreadOverlay({
                         setComposerCaret(sel);
                         captureComposerSelection(e.currentTarget, len);
                       }}
-                      onFocus={onComposerFocus}
-                      onBlur={onComposerBlur}
+                      onFocus={() => {
+                        onComposerFocus();
+                      }}
+                      onBlur={() => {
+                        onComposerBlur();
+                      }}
                       onKeyDown={(e) => {
                         if (
                           e.key === "Escape" &&

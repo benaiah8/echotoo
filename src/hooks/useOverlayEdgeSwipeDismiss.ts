@@ -42,9 +42,9 @@ const INVITE_OVERLAY_EDGE_STRIP_LEFT_INSET_NATIVE_PX = 8;
 const INVITE_OVERLAY_EDGE_TOP_BELOW_HEADER_PX = 8;
 
 /** No scale polish until this fraction of commit threshold (avoids early “shrink”). */
-const POLISH_START_THRESHOLD_FRACTION = 0.4;
+const POLISH_START_THRESHOLD_FRACTION = 0.35;
 /** Subtle shrink at full delayed progress (in `transform` only; no root opacity). */
-const POLISH_SCALE_MIN = 0.993;
+const POLISH_SCALE_MIN = 0.985;
 const REDUCED_MOTION_TRANSITION_CAP_MS = 120;
 
 /**
@@ -79,6 +79,18 @@ export function defaultOverlayEdgeSwipeMaxDragPx(): number {
   return Math.round(window.innerWidth * 0.92);
 }
 
+/** Past the right viewport edge so commit / programmatic exit does not stall with sheet still visible (~92vw max drag). */
+const EXIT_TRANSLATE_OVERSHOOT_PX = 48;
+
+/**
+ * Horizontal translate for the committed dismiss animation only — fully off-screen to the right.
+ * Live finger drag still uses {@link defaultOverlayEdgeSwipeMaxDragPx} / `maxDragPx`.
+ */
+export function defaultOverlayEdgeSwipeExitTranslatePx(): number {
+  if (typeof window === "undefined") return 560;
+  return Math.round(window.innerWidth + EXIT_TRANSLATE_OVERSHOOT_PX);
+}
+
 /**
  * Shared invisible strip layout for full-screen invite thread overlays.
  * Pair with `active`, `engageSwipe`, `gestureDisabled`, and `onDismiss` at the call site.
@@ -104,11 +116,30 @@ export function inviteThreadOverlayEdgeSwipeStripOptions(
 }
 
 export type UseOverlayEdgeSwipeDismissOptions = {
-  /** Overlay mounted and visible */
+  /**
+   * Keep `true` while the element that receives `overlayMotionStyle` is still mounted and
+   * should preserve hook-driven transform state (`translateX`, transition timing).
+   *
+   * When `active` becomes `false`, the hook **resets** `translateX` to 0 and clears gesture
+   * state in an effect — if the overlay is still visible, that reads as a post-close snap/glitch.
+   *
+   * - **Delayed exit:** If the parent `open` prop becomes `false` but the portal stays mounted
+   *   for an exit animation, `active` must follow that mounted lifetime (e.g. CreateChooserOverlay
+   *   uses `active: visible`, not `open` alone).
+   * - **Immediate unmount:** If `!open` means `return null` and the portal is gone, `active: open`
+   *   is safe (PersonalInviteThreadOverlay / GroupInviteThreadOverlay).
+   */
   active: boolean;
   /**
-   * When false, the gesture is disabled (e.g. invite overlays off post-detail routes).
-   * Defaults to true when omitted.
+   * When `false`, the user **cannot start** a new edge swipe (strip stays inert via
+   * `pointer-events-none` unless a strip gesture is already in flight). Defaults to `true`
+   * when omitted.
+   *
+   * May be `false` during **entry or exit** while `active` stays `true` — e.g. CreateChooserOverlay
+   * uses `engageSwipe: open && animateIn` so new swipes are off during exit even though
+   * `active` stays `visible` until unmount.
+   *
+   * Invite thread overlays typically use `engageSwipe: engageInviteBack` (`open` plus route gate).
    */
   engageSwipe?: boolean;
   /**
@@ -147,6 +178,11 @@ export type UseOverlayEdgeSwipeDismissOptions = {
   commitThresholdPx?: number | (() => number);
   /** Override max drag (px) or factory */
   maxDragPx?: number | (() => number);
+  /**
+   * Override exit translate (px) for committed swipe / `playAnimatedDismiss` only.
+   * Default: {@link defaultOverlayEdgeSwipeExitTranslatePx} (fully off-screen right).
+   */
+  exitTranslatePx?: number | (() => number);
 };
 
 export type OverlayEdgeSwipeDismissStripProps = {
@@ -163,10 +199,16 @@ export type OverlayEdgeSwipeDismissStripProps = {
 export type UseOverlayEdgeSwipeDismissResult = {
   /** Apply to the full-screen overlay root (entire subtree moves together). */
   overlayMotionStyle: CSSProperties;
-  /** Invisible left-edge capture strip — render as last child with z above scroll. */
+  /** Invisible left-edge capture strip — render as last child with z above scroll. Pass-through when swipe cannot start. */
   edgeStripProps: OverlayEdgeSwipeDismissStripProps;
   /** True while a horizontal dismiss gesture is active (after angle lock). */
   isDragging: boolean;
+  /**
+   * Programmatic close with the same rightward exit motion and delayed `onDismiss` as a
+   * committed edge swipe (`COMMIT_EXIT_MS` + `COMMIT_NAV_DELAY_MS`). No-op if inactive,
+   * a strip gesture is in flight, a commit timer is already pending, or `tryConsumeDismissLayer` consumes.
+   */
+  playAnimatedDismiss: () => void;
 };
 
 /**
@@ -179,6 +221,13 @@ export type UseOverlayEdgeSwipeDismissResult = {
  * - A native OS/browser “back” chevron may still appear if touches start in the system’s
  *   reserved edge zone; use `edgeStripLeftInsetPx` (e.g. 8–16 on mobile web) to start the
  *   invisible strip slightly inward. Full suppression may still require Capacitor/WKWebView tuning.
+ * - When `!active`, `engageSwipe === false`, or `gestureDisabled`, the strip uses
+ *   `pointer-events-none` so it does not intercept taps (callers often disable while the
+ *   composer or mention UI is active). During an in-flight strip gesture, the strip stays
+ *   interactive until pointer-up.
+ * - `playAnimatedDismiss()` runs the same exit transform + delayed `onDismiss` as a committed
+ *   swipe (for in-app Back / Escape wiring). It is a no-op while `!active`, during an edge-strip
+ *   pointer session, or while a commit timer is already pending.
  */
 export function useOverlayEdgeSwipeDismiss(
   options: UseOverlayEdgeSwipeDismissOptions,
@@ -190,6 +239,9 @@ export function useOverlayEdgeSwipeDismiss(
   const [transitionMs, setTransitionMs] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
+  /** True from edge-strip pointerdown until gesture end — keeps strip interactive if `gestureDisabled` flips mid-gesture. */
+  const [edgeStripPointerSession, setEdgeStripPointerSession] =
+    useState(false);
 
   const draggingRef = useRef(false);
   const gestureModeRef = useRef<"undecided" | "horizontal" | "cancelled">(
@@ -214,6 +266,7 @@ export function useOverlayEdgeSwipeDismiss(
       setTranslateX(0);
       setTransitionMs(0);
       setIsDragging(false);
+      setEdgeStripPointerSession(false);
       draggingRef.current = false;
       gestureModeRef.current = "undecided";
       if (commitTimerRef.current) {
@@ -241,6 +294,9 @@ export function useOverlayEdgeSwipeDismiss(
   const engage = options.engageSwipe !== false;
   const canStartSwipe =
     options.active && engage && !options.gestureDisabled;
+  /** Strip must not block underlying UI unless a swipe may start or a strip gesture is in flight. */
+  const edgeStripReceivesPointers =
+    canStartSwipe || edgeStripPointerSession;
 
   const resolveCommitThresholdPx = useCallback(() => {
     const o = optsRef.current.commitThresholdPx;
@@ -256,20 +312,48 @@ export function useOverlayEdgeSwipeDismiss(
     return defaultOverlayEdgeSwipeMaxDragPx();
   }, []);
 
+  const resolveExitTranslatePx = useCallback(() => {
+    const o = optsRef.current.exitTranslatePx;
+    if (typeof o === "function") return o();
+    if (typeof o === "number") return o;
+    return defaultOverlayEdgeSwipeExitTranslatePx();
+  }, []);
+
   const resetGestureState = useCallback(() => {
     draggingRef.current = false;
     gestureModeRef.current = "undecided";
     setIsDragging(false);
   }, []);
 
+  const playAnimatedDismiss = useCallback(() => {
+    if (!optsRef.current.active) return;
+    if (commitTimerRef.current) return;
+    if (draggingRef.current) return;
+    if (tryConsumeRef.current?.() === true) return;
+
+    const exitX = resolveExitTranslatePx();
+    setTransitionMs(COMMIT_EXIT_MS);
+    setTranslateX(exitX);
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(() => {
+      commitTimerRef.current = null;
+      onDismissRef.current();
+    }, COMMIT_NAV_DELAY_MS);
+  }, [resolveExitTranslatePx]);
+
   const endPointerGesture = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (!draggingRef.current) return;
+      if (!draggingRef.current) {
+        setEdgeStripPointerSession(false);
+        return;
+      }
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {
         /* already released */
       }
+
+      setEdgeStripPointerSession(false);
 
       const mode = gestureModeRef.current;
       resetGestureState();
@@ -300,7 +384,7 @@ export function useOverlayEdgeSwipeDismiss(
           setTranslateX(0);
           return;
         }
-        const exitX = resolveMaxDragPx();
+        const exitX = resolveExitTranslatePx();
         setTransitionMs(COMMIT_EXIT_MS);
         setTranslateX(exitX);
         if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
@@ -319,7 +403,11 @@ export function useOverlayEdgeSwipeDismiss(
       setTransitionMs(SNAP_BACK_MS);
       setTranslateX(0);
     },
-    [resetGestureState, resolveCommitThresholdPx, resolveMaxDragPx],
+    [
+      resetGestureState,
+      resolveCommitThresholdPx,
+      resolveExitTranslatePx,
+    ],
   );
 
   const onPointerDown = useCallback(
@@ -329,6 +417,7 @@ export function useOverlayEdgeSwipeDismiss(
       if (commitTimerRef.current) return;
 
       e.preventDefault();
+      setEdgeStripPointerSession(true);
       (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
       draggingRef.current = true;
       gestureModeRef.current = "undecided";
@@ -441,7 +530,10 @@ export function useOverlayEdgeSwipeDismiss(
 
   const edgeStripProps: OverlayEdgeSwipeDismissStripProps = {
     className: [
-      "pointer-events-auto select-none outline-none absolute bottom-0",
+      edgeStripReceivesPointers
+        ? "pointer-events-auto"
+        : "pointer-events-none",
+      "select-none outline-none absolute bottom-0",
       "bg-transparent",
       zClass,
     ].join(" "),
@@ -449,8 +541,8 @@ export function useOverlayEdgeSwipeDismiss(
       left: `calc(env(safe-area-inset-left, 0px) + ${edgeStripLeftInsetPx}px)`,
       top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
       width: stripWidthCss,
-      /** `none` keeps WebViews/browsers from claiming horizontal pans before our listeners. */
-      touchAction: "none",
+      /** When interactive, block browser horizontal pan hijack; when inert, avoid affecting hit-testing quirks. */
+      touchAction: edgeStripReceivesPointers ? "none" : "auto",
       WebkitTapHighlightColor: "transparent",
     },
     onPointerDown,
@@ -461,5 +553,5 @@ export function useOverlayEdgeSwipeDismiss(
     "aria-hidden": true,
   };
 
-  return { overlayMotionStyle, edgeStripProps, isDragging };
+  return { overlayMotionStyle, edgeStripProps, isDragging, playAnimatedDismiss };
 }
