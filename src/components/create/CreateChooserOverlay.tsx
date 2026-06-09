@@ -13,6 +13,8 @@ import { useCreateDraftEntryGate } from "../../hooks/useCreateDraftEntryGate";
 
 const EXIT_MS = 300;
 const NAV_DELAY_MS = 280;
+/** Backdrop: cancel tap-to-close if pointer moves farther than this (px) from down position. */
+const BACKDROP_TAP_MAX_MOVE_PX = 10;
 
 type Props = {
   open: boolean;
@@ -21,7 +23,7 @@ type Props = {
 
 /**
  * Full-screen dim + blur below bottom tab (z-40); z-[38] so tab bar stays tappable.
- * Body scroll locked while open. Enter/exit transitions; backdrop tap closes smoothly.
+ * Body scroll locked while open. Enter/exit transitions; confirmed backdrop tap closes smoothly.
  */
 export default function CreateChooserOverlay({ open, onClose }: Props) {
   const { onPickerContinue, draftEntryDialogProps } = useCreateDraftEntryGate({
@@ -110,13 +112,102 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     });
   }, [open, playAnimatedDismiss]);
 
-  const handleBackdropPointerDown = (e: React.PointerEvent) => {
+  const backdropTapRef = useRef<{
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    cancelled: boolean;
+  }>({ pointerId: null, startX: 0, startY: 0, cancelled: false });
+
+  const releaseBackdropPointerCapture = (
+    el: HTMLDivElement,
+    pointerId: number,
+  ) => {
+    try {
+      if (el.hasPointerCapture(pointerId)) {
+        el.releasePointerCapture(pointerId);
+      }
+    } catch {
+      /* already released */
+    }
+  };
+
+  const handleBackdropPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+
+    const el = e.currentTarget;
+    backdropTapRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      cancelled: false,
+    };
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      backdropTapRef.current = {
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        cancelled: false,
+      };
+    }
+  };
+
+  const handleBackdropPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = backdropTapRef.current;
+    if (s.pointerId !== e.pointerId) return;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    if (Math.hypot(dx, dy) > BACKDROP_TAP_MAX_MOVE_PX) {
+      s.cancelled = true;
+    }
+  };
+
+  const handleBackdropPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    releaseBackdropPointerCapture(el, e.pointerId);
+
+    const s = backdropTapRef.current;
+    if (s.pointerId !== e.pointerId) return;
+
+    const cancelled = s.cancelled;
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    const movedTooMuch = Math.hypot(dx, dy) > BACKDROP_TAP_MAX_MOVE_PX;
+
+    backdropTapRef.current = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      cancelled: false,
+    };
+
+    if (cancelled || movedTooMuch) return;
+
     if (draftDialogOpenRef.current) {
       onDismissDraftRef.current();
       return;
     }
     playAnimatedDismiss();
+  };
+
+  const handleBackdropPointerCancel = (
+    e: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    const el = e.currentTarget;
+    releaseBackdropPointerCapture(el, e.pointerId);
+
+    const s = backdropTapRef.current;
+    if (s.pointerId !== e.pointerId) return;
+
+    backdropTapRef.current = {
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      cancelled: false,
+    };
   };
 
   const handleContinue = (type: "hangout" | "experience") => {
@@ -149,6 +240,9 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
           WebkitBackdropFilter: "blur(22px) saturate(1.15)",
         }}
         onPointerDown={handleBackdropPointerDown}
+        onPointerMove={handleBackdropPointerMove}
+        onPointerUp={handleBackdropPointerUp}
+        onPointerCancel={handleBackdropPointerCancel}
         aria-hidden
       />
       <div

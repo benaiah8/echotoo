@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { CommentWithDetails } from "../../types/comment";
 import { imgUrlPublic } from "../../lib/img";
 import Avatar from "./Avatar";
@@ -7,6 +7,12 @@ import ConfirmDialog from "./ConfirmDialog";
 import ImageLightbox from "../ImageLightbox";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
+
+const COMMENT_REPLY_LOG = "[CommentReply]";
+
+function devReplyLog(...args: unknown[]) {
+  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
+}
 
 interface Props {
   comment: CommentWithDetails;
@@ -34,6 +40,7 @@ export default function Comment({
   const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
   const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
   const navigate = useNavigate();
+  const lastReplyActivationRef = useRef(0);
 
   const isOwner = currentUserId === comment.author_id;
   const maxDepth = 3; // Limit nesting depth
@@ -82,6 +89,19 @@ export default function Comment({
   const handleLikeChange = (liked: boolean, count: number) => {
     onLikeChange?.(comment.id, liked, count);
   };
+
+  const handleReplyPress = useCallback(
+    (via: "pointerdown" | "click") => {
+      const now = Date.now();
+      if (via === "click" && now - lastReplyActivationRef.current < 500) {
+        return;
+      }
+      lastReplyActivationRef.current = now;
+      devReplyLog("button press", comment.id, via);
+      onReply?.(comment.id);
+    },
+    [comment.id, onReply]
+  );
 
   return (
     <div
@@ -199,7 +219,7 @@ export default function Comment({
           )}
 
           {/* Actions */}
-          <div className="flex items-center gap-4">
+          <div className="relative z-10 flex items-center gap-4">
             {/* Like button */}
             <CommentLikeButton
               commentId={comment.id}
@@ -211,8 +231,13 @@ export default function Comment({
             {/* Reply button */}
             {canReply && (
               <button
-                onClick={() => onReply?.(comment.id)}
-                className="text-xs text-[var(--text)]/60 hover:text-[var(--text)] transition-colors"
+                type="button"
+                onPointerDown={(e) => {
+                  if (e.pointerType === "mouse" && e.button !== 0) return;
+                  handleReplyPress("pointerdown");
+                }}
+                onClick={() => handleReplyPress("click")}
+                className="relative z-10 pointer-events-auto touch-manipulation text-xs text-[var(--text)]/70 hover:text-[var(--text)] active:text-[var(--text)] transition-colors"
               >
                 Reply
               </button>

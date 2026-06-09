@@ -11,6 +11,20 @@ import FloatingCommentInput from "./FloatingCommentInput";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { useCommentThreadRealtime } from "../../hooks/useCommentThreadRealtime";
 
+const COMMENT_REPLY_LOG = "[CommentReply]";
+const RECENT_OPTIMISTIC_TTL_MS = 2000;
+
+function devReplyLog(...args: unknown[]) {
+  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
+}
+
+type RecentOptimisticEntry = {
+  id: string;
+  comment: CommentWithDetails;
+  parentId?: string;
+  at: number;
+};
+
 interface Props {
   postId: string;
   onCommentCountChange?: (count: number) => void;
@@ -78,26 +92,68 @@ function insertCommentInTree(
   comments: CommentWithDetails[],
   newComment: CommentWithDetails,
   parentId?: string
-): CommentWithDetails[] {
+): { tree: CommentWithDetails[]; inserted: boolean } {
   if (!parentId) {
-    return [...comments, newComment];
+    return { tree: [...comments, newComment], inserted: true };
   }
 
-  return comments.map((comment) => {
+  let inserted = false;
+  const tree = comments.map((comment) => {
     if (comment.id === parentId) {
+      inserted = true;
       return {
         ...comment,
         replies: [...(comment.replies || []), newComment],
       };
     }
     if (comment.replies?.length) {
-      return {
-        ...comment,
-        replies: insertCommentInTree(comment.replies, newComment, parentId),
-      };
+      const child = insertCommentInTree(comment.replies, newComment, parentId);
+      if (child.inserted) inserted = true;
+      return { ...comment, replies: child.tree };
     }
     return comment;
   });
+
+  return { tree, inserted };
+}
+
+function commentExistsInTree(
+  comments: CommentWithDetails[],
+  commentId: string
+): boolean {
+  for (const comment of comments) {
+    if (comment.id === commentId) return true;
+    if (comment.replies?.length && commentExistsInTree(comment.replies, commentId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pruneRecentOptimistic(entries: RecentOptimisticEntry[]): RecentOptimisticEntry[] {
+  const now = Date.now();
+  return entries.filter((entry) => now - entry.at < RECENT_OPTIMISTIC_TTL_MS);
+}
+
+function mergeRecentOptimisticIntoTree(
+  serverTree: CommentWithDetails[],
+  recent: RecentOptimisticEntry[]
+): CommentWithDetails[] {
+  const fresh = pruneRecentOptimistic(recent);
+  let tree = serverTree;
+
+  for (const entry of fresh) {
+    if (commentExistsInTree(tree, entry.id)) continue;
+    const result = insertCommentInTree(tree, entry.comment, entry.parentId);
+    if (result.inserted) {
+      tree = result.tree;
+    } else {
+      devReplyLog("merge optimistic fallback root", entry.id, entry.parentId);
+      tree = [...tree, entry.comment];
+    }
+  }
+
+  return tree;
 }
 
 function patchContentInTree(
@@ -135,6 +191,32 @@ function removeCommentFromTree(
     );
 }
 
+function buildOptimisticCommentAuthor(
+  commentData: { author_id?: string },
+  userProfile: {
+    username?: string;
+    display_name?: string;
+    avatar_url?: string;
+  } | null,
+  currentUserId: string | null
+): CommentWithDetails["author"] {
+  const cachedUsername = localStorage.getItem("my_username") ?? "";
+  const cachedDisplayName = localStorage.getItem("my_display_name") ?? "";
+  const cachedAvatar = localStorage.getItem("my_avatar_url") ?? undefined;
+
+  return {
+    id: commentData.author_id ?? currentUserId ?? "",
+    username: userProfile?.username || cachedUsername,
+    display_name:
+      userProfile?.display_name ||
+      cachedDisplayName ||
+      userProfile?.username ||
+      cachedUsername ||
+      "You",
+    avatar_url: userProfile?.avatar_url || cachedAvatar,
+  };
+}
+
 export default function CommentList({
   postId,
   onCommentCountChange,
@@ -150,6 +232,7 @@ export default function CommentList({
   const [userProfile, setUserProfile] = useState<any>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const focusComposerRef = useRef<(() => void) | null>(null);
+  const recentOptimisticRef = useRef<RecentOptimisticEntry[]>([]);
 
   const handleFocusComposerReady = useCallback(
     (fn: () => void) => {
@@ -189,8 +272,25 @@ export default function CommentList({
         const commentsData = await getCommentsForPost(postId, {
           bypassCache: opts?.bypassCache,
         });
-        setComments(commentsData);
-        onCommentCountChange?.(countCommentsInTree(commentsData));
+
+        if (opts?.silent) {
+          devReplyLog("silent reload");
+          recentOptimisticRef.current = recentOptimisticRef.current.filter(
+            (entry) => !commentExistsInTree(commentsData, entry.id)
+          );
+          recentOptimisticRef.current = pruneRecentOptimistic(
+            recentOptimisticRef.current
+          );
+          const merged = mergeRecentOptimisticIntoTree(
+            commentsData,
+            recentOptimisticRef.current
+          );
+          setComments(merged);
+          onCommentCountChange?.(countCommentsInTree(merged));
+        } else {
+          setComments(commentsData);
+          onCommentCountChange?.(countCommentsInTree(commentsData));
+        }
       } catch (err) {
         console.error("Error loading comments:", err);
         if (!opts?.silent) setError("Failed to load comments");
@@ -244,22 +344,43 @@ export default function CommentList({
     parentId?: string,
     commentData?: any
   ) => {
-    if (commentData && userProfile) {
+    devReplyLog("handleNewComment parentId", parentId);
+
+    if (commentData) {
       const newComment: CommentWithDetails = {
         ...commentData,
-        author: {
-          id: commentData.author_id,
-          username: userProfile.username,
-          display_name: userProfile.display_name,
-          avatar_url: userProfile.avatar_url,
-        },
+        author: buildOptimisticCommentAuthor(
+          commentData,
+          userProfile,
+          currentUserId
+        ),
         like_count: 0,
         is_liked: false,
         replies: [],
       };
 
+      recentOptimisticRef.current = pruneRecentOptimistic([
+        ...recentOptimisticRef.current,
+        {
+          id: newComment.id,
+          comment: newComment,
+          parentId,
+          at: Date.now(),
+        },
+      ]);
+
       setComments((prevComments) => {
-        const next = insertCommentInTree(prevComments, newComment, parentId);
+        const result = insertCommentInTree(prevComments, newComment, parentId);
+        let next = result.tree;
+        if (parentId && !result.inserted) {
+          devReplyLog("insert parent not found", parentId);
+          if (import.meta.env.DEV) {
+            console.warn(COMMENT_REPLY_LOG, "parent not found, appending at root", parentId);
+          }
+          next = [...prevComments, newComment];
+        } else {
+          devReplyLog("insert ok", { parentId, inserted: result.inserted });
+        }
         onCommentCountChange?.(countCommentsInTree(next));
         return next;
       });
@@ -294,13 +415,23 @@ export default function CommentList({
   };
 
   const handleReply = (parentId: string) => {
+    devReplyLog("reply clicked", parentId);
     setReplyingTo(parentId);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    focusComposerRef.current?.();
+    window.setTimeout(() => {
+      const active = document.activeElement;
+      if (active?.tagName !== "INPUT" && active?.tagName !== "TEXTAREA") {
         focusComposerRef.current?.();
-      });
-    });
+      }
+    }, 0);
   };
+
+  useEffect(() => {
+    devReplyLog("replyingTo changed", replyingTo);
+    if (replyingTo) {
+      focusComposerRef.current?.();
+    }
+  }, [replyingTo]);
 
   if (loading) {
     return (

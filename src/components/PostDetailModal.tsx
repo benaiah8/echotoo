@@ -1,59 +1,31 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  useParams,
-  useLocation,
-  useNavigate,
-  type Location,
-} from "react-router-dom";
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  type PointerEvent,
+} from "react";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { getPostByIdOptimized } from "../api/queries/getPostById";
 import PostDetailBody, { type Post } from "./detail/PostDetailBody";
 import PostDetailSkeleton from "./skeletons/PostDetailSkeleton";
 import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 import { supabase } from "../lib/supabaseClient";
-import { type FeedItem } from "../api/queries/getPublicFeed";
 import { onPostChanged } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
 import { mergeUiCriticalPostFields } from "../lib/mergeUiCriticalPostFields";
 import { PostDetailDismissContext } from "../context/PostDetailDismissContext";
-import { hapticImpactLight } from "../lib/hapticsLight";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
 import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
+import {
+  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
+  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
+  useOverlayEdgeSwipeDismiss,
+} from "../hooks/useOverlayEdgeSwipeDismiss";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
-
-/** Thumb-sized gesture: small movement arms; short drag commits */
-const DISMISS_ARM_PX = 14;
-const DISMISS_COMMIT_PX = 72;
-/** Visual polish (fade / scale / blur) reaches ~full by this drag distance */
-const DISMISS_VISUAL_RANGE_PX = 140;
-
-/** Bottom-handle drag commit — keep in sync with finishDismiss delay (+~20ms buffer) */
-const EXIT_MS_DRAG = 420;
-const EXIT_NAV_MS_DRAG = 440;
-/**
- * Back / backdrop / Escape: slower than drag dismiss; `finishDismiss` adds a buffer so
- * `navigate` runs after CSS finishes (WebViews can lag — see buffers below).
- */
-const EXIT_MS_PROGRAMMATIC = 800;
-/** Extra ms after transition before `navigate` — browser */
-const PROGRAMMATIC_NAV_BUFFER_WEB_MS = 100;
-/**
- * iOS WKWebView / Android System WebView often finish compositor work slightly after the
- * nominal transition duration; extra slack avoids popping the route before the sheet settles.
- */
-const PROGRAMMATIC_NAV_BUFFER_NATIVE_MS = 260;
-
-function maxDismissDragPx(): number {
-  if (typeof window === "undefined") return 480;
-  return Math.min(640, Math.round(window.innerHeight * 0.62));
-}
-
-function exitTranslatePx(fromOffset: number): number {
-  const h = typeof window !== "undefined" ? window.innerHeight : 640;
-  const far = Math.round(h * 0.72 + 40);
-  return fromOffset <= 0 ? -far : far;
-}
 
 export default function PostDetailModal() {
   const { id } = useParams<{ id: string }>();
@@ -74,27 +46,19 @@ export default function PostDetailModal() {
   const [loadAttempt, setLoadAttempt] = useState(0);
 
   const [composerFocused, setComposerFocused] = useState(false);
-  const [handlePressed, setHandlePressed] = useState(false);
-  const [dragOffset, setDragOffset] = useState(0);
-  const [isPointerDragging, setIsPointerDragging] = useState(false);
-  const [isExiting, setIsExiting] = useState(false);
 
-  const startYRef = useRef(0);
-  const dragOffsetRef = useRef(0);
-  const armedHapticRef = useRef(false);
-  const pointerActiveRef = useRef(false);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingRef = useRef(false);
-  /** Which exit duration to use for CSS when `isExiting` — set before setState in each path */
-  const exitMotionMsRef = useRef(EXIT_MS_DRAG);
-  const playExitAnimationRef = useRef<() => void>(() => {});
-  const isExitingRef = useRef(false);
+  const playAnimatedDismissRef = useRef<() => void>(() => {});
   const composerFocusedRef = useRef(false);
   const blurBackdropClickRef = useRef(false);
   /** One scroll-to-comments per modal open when arriving from feed comment control. */
   const focusCommentsScrollDoneRef = useRef(false);
 
-  const { keyboardInsetPx: modalKeyboardInsetPx } = useCreateKeyboardInset();
+  const {
+    keyboardInsetPx: modalKeyboardInsetPx,
+    keyboardOpen,
+  } = useCreateKeyboardInset();
 
   const handleClose = useCallback(() => {
     if (backgroundLocation) {
@@ -111,24 +75,7 @@ export default function PostDetailModal() {
   }, [navigate, backgroundLocation]);
 
   useEffect(() => {
-    isExitingRef.current = isExiting;
-  }, [isExiting]);
-
-  useEffect(() => {
     composerFocusedRef.current = composerFocused;
-  }, [composerFocused]);
-
-  useEffect(() => {
-    dragOffsetRef.current = dragOffset;
-  }, [dragOffset]);
-
-  useEffect(() => {
-    if (!composerFocused) return;
-    setDragOffset(0);
-    setIsPointerDragging(false);
-    setHandlePressed(false);
-    pointerActiveRef.current = false;
-    armedHapticRef.current = false;
   }, [composerFocused]);
 
   useEffect(() => {
@@ -152,13 +99,7 @@ export default function PostDetailModal() {
   }, []);
 
   useEffect(() => {
-    setIsExiting(false);
-    setDragOffset(0);
-    setIsPointerDragging(false);
-    setHandlePressed(false);
-    pointerActiveRef.current = false;
     closingRef.current = false;
-    exitMotionMsRef.current = EXIT_MS_DRAG;
     if (exitTimerRef.current) {
       clearTimeout(exitTimerRef.current);
       exitTimerRef.current = null;
@@ -247,7 +188,7 @@ export default function PostDetailModal() {
   }, []);
 
   const finishDismiss = useCallback(
-    (navDelayMs: number = EXIT_NAV_MS_DRAG) => {
+    (navDelayMs: number = 0) => {
       if (closingRef.current) return;
       closingRef.current = true;
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
@@ -270,33 +211,33 @@ export default function PostDetailModal() {
   );
 
   /**
-   * Same exit motion as committing the bottom dismiss drag: translate off-screen, fade/blur, then navigate.
-   * Use for back button, backdrop, Escape, and loading/error close — not raw handleClose.
+   * Route-mounted post overlay: no CreateChooser-style `visible` deferral — keep `active` true
+   * for the modal’s whole lifetime so the hook does not zero `translateX` while the sheet is
+   * still on screen (avoids post-close transform reset glitch).
    */
-  const playExitAnimation = useCallback(() => {
-    if (closingRef.current || isExiting) return;
-    setComposerFocused(false);
-    pointerActiveRef.current = false;
-    setHandlePressed(false);
-    setIsPointerDragging(false);
-    armedHapticRef.current = false;
-    const motionMs = EXIT_MS_PROGRAMMATIC;
-    exitMotionMsRef.current = motionMs;
-    setIsExiting(true);
-    setDragOffset(exitTranslatePx(-1));
-    const navBuffer = isNativeApp()
-      ? PROGRAMMATIC_NAV_BUFFER_NATIVE_MS
-      : PROGRAMMATIC_NAV_BUFFER_WEB_MS;
-    finishDismiss(motionMs + navBuffer);
-  }, [finishDismiss, isExiting]);
+  const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
+    useOverlayEdgeSwipeDismiss({
+      active: true,
+      engageSwipe: true,
+      gestureDisabled: composerFocused || keyboardOpen,
+      edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
+      edgeMaxWidthVw: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
+      edgeMaxWidthPx: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
+      edgeStripZClass: "z-[32]",
+      /**
+       * Horizontal edge swipe / programmatic dismiss: hook waits COMMIT_NAV_DELAY_MS, then
+       * navigate via the same pipeline as before (no upward sheet motion).
+       */
+      onDismiss: () => finishDismiss(0),
+    });
 
   useEffect(() => {
-    playExitAnimationRef.current = playExitAnimation;
-  }, [playExitAnimation]);
+    playAnimatedDismissRef.current = playAnimatedDismiss;
+  }, [playAnimatedDismiss]);
 
   useEffect(() => {
     return subscribeAndroidPostDetailModalBack(() => {
-      if (closingRef.current || isExitingRef.current) return;
+      if (closingRef.current) return;
       if (composerFocusedRef.current) {
         const ae = document.activeElement as HTMLElement | null;
         if (
@@ -309,129 +250,42 @@ export default function PostDetailModal() {
           return;
         }
       }
-      playExitAnimationRef.current();
+      playAnimatedDismissRef.current();
     });
   }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (isPointerDragging) {
-          setDragOffset(0);
-          setIsPointerDragging(false);
-          setHandlePressed(false);
-          pointerActiveRef.current = false;
-          return;
-        }
-        playExitAnimation();
+        playAnimatedDismiss();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [playExitAnimation, isPointerDragging]);
+  }, [playAnimatedDismiss]);
 
-  const onHandlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (composerFocused || isExiting) return;
-      e.preventDefault();
-      (e.currentTarget as HTMLButtonElement).setPointerCapture(e.pointerId);
-      pointerActiveRef.current = true;
-      startYRef.current = e.clientY;
-      armedHapticRef.current = false;
-      setHandlePressed(true);
-      setIsPointerDragging(true);
-    },
-    [composerFocused, isExiting]
-  );
-
-  const onHandlePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (!pointerActiveRef.current || isExiting) return;
-      const dy = e.clientY - startYRef.current;
-      if (!armedHapticRef.current && Math.abs(dy) >= DISMISS_ARM_PX) {
-        armedHapticRef.current = true;
-        void hapticImpactLight();
-      }
-      const cap = maxDismissDragPx();
-      const clamped = Math.max(-cap, Math.min(cap, dy));
-      setDragOffset(clamped);
-    },
-    [isExiting]
-  );
-
-  const endPointerGesture = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (!pointerActiveRef.current) return;
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {
-        /* already released */
-      }
-      pointerActiveRef.current = false;
-      setHandlePressed(false);
-      armedHapticRef.current = false;
-      setIsPointerDragging(false);
-
-      if (isExiting) return;
-
-      const last = dragOffsetRef.current;
-      if (Math.abs(last) >= DISMISS_COMMIT_PX * 0.92) {
-        exitMotionMsRef.current = EXIT_MS_DRAG;
-        setIsExiting(true);
-        setDragOffset(exitTranslatePx(last));
-        finishDismiss(EXIT_NAV_MS_DRAG);
-      } else {
-        setDragOffset(0);
-      }
-    },
-    [isExiting, finishDismiss]
+  const noopDismissPointer = useCallback(
+    (_e: PointerEvent<HTMLButtonElement>) => {},
+    [],
   );
 
   const dismissContextValue = useMemo(
     () => ({
       setComposerFocused,
       modalKeyboardInsetPx,
+      /** Swipe-up handle removed — keep shape so FloatingCommentInput types stay valid. */
       dismissHandle: {
-        visible: !composerFocused,
-        pressed: handlePressed,
-        onPointerDown: onHandlePointerDown,
-        onPointerMove: onHandlePointerMove,
-        onPointerUp: endPointerGesture,
-        onPointerCancel: endPointerGesture,
-        onLostPointerCapture: endPointerGesture,
+        visible: false,
+        pressed: false,
+        onPointerDown: noopDismissPointer,
+        onPointerMove: noopDismissPointer,
+        onPointerUp: noopDismissPointer,
+        onPointerCancel: noopDismissPointer,
+        onLostPointerCapture: noopDismissPointer,
       },
     }),
-    [
-      composerFocused,
-      modalKeyboardInsetPx,
-      handlePressed,
-      onHandlePointerDown,
-      onHandlePointerMove,
-      endPointerGesture,
-    ]
+    [modalKeyboardInsetPx, noopDismissPointer]
   );
-
-  /** Softer ramp for visuals — starts as soon as you move */
-  const visualT = Math.min(1, Math.abs(dragOffset) / DISMISS_VISUAL_RANGE_PX);
-
-  const overlayBase = 0.55;
-  const overlayOpacity = isExiting
-    ? 0
-    : Math.max(0.04, overlayBase * (1 - 0.52 * visualT));
-  const sheetOpacity = isExiting ? 0 : Math.max(0.78, 1 - 0.14 * visualT);
-  const sheetScale = 1 - 0.05 * visualT;
-  const sheetBlurPx = visualT * 2.8;
-
-  const motionEase = "cubic-bezier(0.22, 1, 0.32, 1)";
-  const motionMs = isExiting ? exitMotionMsRef.current : 380;
-  const sheetTransition =
-    isPointerDragging && !isExiting
-      ? "none"
-      : `transform ${motionMs}ms ${motionEase}, opacity ${motionMs}ms ${motionEase}, filter ${motionMs}ms ${motionEase}`;
-  const backdropTransition =
-    isPointerDragging && !isExiting
-      ? "none"
-      : `opacity ${motionMs}ms ${motionEase}, backdrop-filter ${motionMs}ms ${motionEase}, -webkit-backdrop-filter ${motionMs}ms ${motionEase}`;
 
   return (
     <PostDetailDismissContext.Provider value={dismissContextValue}>
@@ -439,6 +293,7 @@ export default function PostDetailModal() {
         className="fixed inset-0 z-[120] flex flex-col pointer-events-none"
         style={{
           bottom: "calc(-1 * var(--safe-area-bottom-layout))",
+          ...overlayMotionStyle,
         }}
         role="dialog"
         aria-modal="true"
@@ -447,45 +302,31 @@ export default function PostDetailModal() {
           className="pointer-events-auto absolute inset-0 z-0 cursor-default"
           style={{
             backgroundColor: "rgba(0,0,0,0.55)",
-            opacity: isExiting ? 0 : overlayOpacity,
-            transition: backdropTransition,
-            backdropFilter: `blur(${Math.round(visualT * 10)}px)`,
-            WebkitBackdropFilter: `blur(${Math.round(visualT * 10)}px)`,
+            opacity: 1,
+            backdropFilter: "blur(10px)",
+            WebkitBackdropFilter: "blur(10px)",
           }}
           onPointerDown={(e) => {
             if (e.target !== e.currentTarget) return;
-            if (isPointerDragging || isExiting) return;
+            if (closingRef.current) return;
             if (!blurActiveEditableFirst()) return;
             blurBackdropClickRef.current = true;
             e.preventDefault();
           }}
           onClick={(e) => {
             if (e.target !== e.currentTarget) return;
-            if (isPointerDragging || isExiting) return;
+            if (closingRef.current) return;
             if (blurBackdropClickRef.current) {
               blurBackdropClickRef.current = false;
               return;
             }
-            playExitAnimation();
+            playAnimatedDismiss();
           }}
           aria-hidden
         />
 
         <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 justify-center">
-          <div
-            className="pointer-events-auto flex h-full min-h-0 w-full max-w-[640px] flex-col"
-            style={{
-              transform: `translateY(${dragOffset}px) scale(${sheetScale})`,
-              opacity: sheetOpacity,
-              filter: `blur(${sheetBlurPx}px)`,
-              transition: sheetTransition,
-              transformOrigin: "50% 45%",
-              willChange:
-                isPointerDragging || isExiting
-                  ? "transform, opacity"
-                  : undefined,
-            }}
-          >
+          <div className="pointer-events-auto flex h-full min-h-0 w-full max-w-[640px] flex-col">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl bg-[var(--bg)] shadow-xl safe-area-inset-bottom">
               <div
                 className="min-h-0 flex-1 overflow-y-auto"
@@ -495,7 +336,7 @@ export default function PostDetailModal() {
                   {(loading || (error && !post)) && (
                     <button
                       type="button"
-                      onClick={playExitAnimation}
+                      onClick={playAnimatedDismiss}
                       className="absolute top-3 right-3 z-50 h-9 w-9 rounded-full bg-black/60 backdrop-blur flex items-center justify-center text-white hover:bg-black/75"
                       aria-label="Close"
                     >
@@ -517,7 +358,7 @@ export default function PostDetailModal() {
                   {post && (
                     <PostDetailBody
                       post={post}
-                      onClose={playExitAnimation}
+                      onClose={playAnimatedDismiss}
                       autoFocusCommentComposer={focusCommentComposer}
                     />
                   )}
@@ -526,6 +367,7 @@ export default function PostDetailModal() {
             </div>
           </div>
         </div>
+        <div {...edgeStripProps} />
       </div>
     </PostDetailDismissContext.Provider>
   );

@@ -19,8 +19,14 @@ import {
 import { scrollCommentsSectionIntoView } from "../../lib/postDetailCommentsScroll";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 const COMMENT_IMAGE_UPLOAD_LOG = "[CommentImageUpload]";
+const COMMENT_REPLY_LOG = "[CommentReply]";
+
+function devReplyLog(...args: unknown[]) {
+  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
+}
 
 /** Align with useCreateKeyboardInset — keyboard "open" for follow-up scroll. */
 const KEYBOARD_LIFT_SCROLL_THRESHOLD_PX = 48;
@@ -66,6 +72,8 @@ export default function FloatingCommentInput({
   const didAutoFocusRef = useRef(false);
   /** Tracks IME-open for one follow-up scroll after inset crosses threshold (modal). */
   const prevKeyboardLiftRef = useRef(0);
+  /** Skip smooth scroll on the next focus when entering reply mode programmatically. */
+  const skipNextFocusScrollRef = useRef(false);
 
   const [composerSurfaceFocused, setComposerSurfaceFocused] = useState(false);
   const [safeBottom, setSafeBottom] = useState(0);
@@ -186,13 +194,77 @@ export default function FloatingCommentInput({
     []
   );
 
-  const focusComposer = useCallback(() => {
-    composerInputRef.current?.focus({ preventScroll: true });
+  const focusComposerInput = useCallback((el: HTMLInputElement) => {
+    const preferNativeScroll =
+      isNativeApp() ||
+      (typeof window !== "undefined" &&
+        window.matchMedia("(pointer: coarse)").matches);
+    if (preferNativeScroll) {
+      el.focus();
+    } else {
+      el.focus({ preventScroll: true });
+    }
   }, []);
+
+  const logFocusActiveElement = useCallback(() => {
+    if (!import.meta.env.DEV) return;
+    const active = document.activeElement;
+    devReplyLog("activeElement after focus", {
+      tag: active?.tagName,
+      isComposer: active === composerInputRef.current,
+    });
+  }, []);
+
+  const focusComposer = useCallback(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    devReplyLog("focus called");
+    focusComposerInput(el);
+    logFocusActiveElement();
+  }, [focusComposerInput, logFocusActiveElement]);
+
+  const focusForReplyMode = useCallback(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    skipNextFocusScrollRef.current = true;
+    devReplyLog("focus for reply parentId", parentId);
+    focusComposerInput(el);
+    const preferNativeScroll =
+      isNativeApp() ||
+      (typeof window !== "undefined" &&
+        window.matchMedia("(pointer: coarse)").matches);
+    if (preferNativeScroll) {
+      el.click();
+    }
+    logFocusActiveElement();
+  }, [focusComposerInput, logFocusActiveElement, parentId]);
+
+  useEffect(() => {
+    if (!parentId) return;
+    focusForReplyMode();
+  }, [parentId, focusForReplyMode]);
+
+  const handleComposerFocus = useCallback(
+    (modal: boolean) => {
+      if (modal) {
+        postDetailDismiss?.setComposerFocused(true);
+        prevKeyboardLiftRef.current =
+          postDetailDismiss?.modalKeyboardInsetPx ?? 0;
+      }
+      setComposerSurfaceFocused(true);
+      if (skipNextFocusScrollRef.current) {
+        skipNextFocusScrollRef.current = false;
+        return;
+      }
+      scheduleScrollCommentsIntoView(modal, "smooth");
+    },
+    [postDetailDismiss, scheduleScrollCommentsIntoView]
+  );
 
   useEffect(() => {
     if (!onFocusComposerReady) return;
     onFocusComposerReady(focusComposer);
+    devReplyLog("focus composer registered");
     return () => {
       onFocusComposerReady(() => {});
     };
@@ -204,11 +276,11 @@ export default function FloatingCommentInput({
       const el = composerInputRef.current;
       if (!el) return;
       didAutoFocusRef.current = true;
-      el.focus({ preventScroll: true });
+      focusComposerInput(el);
       // scrollIntoView on fixed input does not scroll the sheet; onFocus scrolls comments.
     }, 180);
     return () => clearTimeout(tid);
-  }, [autoFocusComposer, isModal]);
+  }, [autoFocusComposer, isModal, focusComposerInput]);
 
   /** Modal: when IME inset crosses "open", snap comments into view (viewport shrank). */
   useEffect(() => {
@@ -299,12 +371,16 @@ export default function FloatingCommentInput({
       // Prepare images array
       const images = uploadedImage ? [uploadedImage] : [];
 
+      devReplyLog("submit parentId", parentId);
+
       const createdComment = await createComment({
         post_id: postId,
         parent_id: parentId || null,
         content: content.trim(),
         images: images,
       });
+
+      devReplyLog("createComment parent_id", createdComment.parent_id);
 
       // Notify parent component with comment data
       onComment(content.trim(), parentId || undefined, createdComment);
@@ -377,14 +453,23 @@ export default function FloatingCommentInput({
     const dh = postDetailDismiss?.dismissHandle;
     /** Single source from PostDetailModal: same hook as create flow (vv + Android Capacitor keyboard). */
     const modalKeyboardLiftPx = postDetailDismiss?.modalKeyboardInsetPx ?? 0;
+    const modalKeyboardOpen =
+      modalKeyboardLiftPx >= KEYBOARD_LIFT_SCROLL_THRESHOLD_PX;
+    const modalSafeAreaBottom = modalKeyboardOpen
+      ? "0px"
+      : "var(--safe-area-bottom-layout)";
 
     return (
       <>
         <div
           className="pointer-events-none fixed bottom-0 left-0 right-0 z-30"
           style={{
-            bottom: "calc(-1px + -1 * var(--safe-area-bottom-layout))",
-            height: `calc(88px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
+            bottom: modalKeyboardOpen
+              ? "-1px"
+              : "calc(-1px + -1 * var(--safe-area-bottom-layout))",
+            height: modalKeyboardOpen
+              ? `calc(88px + ${modalKeyboardLiftPx}px)`
+              : `calc(88px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
             width: "100%",
             background: "var(--gradient-from-bottom)",
           }}
@@ -393,7 +478,7 @@ export default function FloatingCommentInput({
         <div
           className="pointer-events-none fixed left-0 right-0 z-30 flex flex-col items-center px-2 transition-all duration-300"
           style={{
-            bottom: `calc(8px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
+            bottom: `calc(8px + ${modalSafeAreaBottom} + ${modalKeyboardLiftPx}px)`,
           }}
         >
           {dh?.visible ? (
@@ -461,13 +546,7 @@ export default function FloatingCommentInput({
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      onFocus={() => {
-                        postDetailDismiss?.setComposerFocused(true);
-                        setComposerSurfaceFocused(true);
-                        prevKeyboardLiftRef.current =
-                          postDetailDismiss?.modalKeyboardInsetPx ?? 0;
-                        scheduleScrollCommentsIntoView(true, "smooth");
-                      }}
+                      onFocus={() => handleComposerFocus(true)}
                       onBlur={() => {
                         postDetailDismiss?.setComposerFocused(false);
                         setComposerSurfaceFocused(false);
@@ -549,10 +628,7 @@ export default function FloatingCommentInput({
               value={content}
               onChange={(e) => setContent(e.target.value)}
               onKeyDown={handleKeyDown}
-              onFocus={() => {
-                setComposerSurfaceFocused(true);
-                scheduleScrollCommentsIntoView(false, "smooth");
-              }}
+              onFocus={() => handleComposerFocus(false)}
               onBlur={() => setComposerSurfaceFocused(false)}
               placeholder={placeholder}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
