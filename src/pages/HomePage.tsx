@@ -44,8 +44,8 @@ import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import {
-  fetchDateSpotlightItems,
   logTodaySpotlight,
+  resolveDateSpotlightWithFallback,
 } from "../lib/homeTodaySpotlight";
 import {
   buildDateSpotlightBaseOptions,
@@ -60,7 +60,6 @@ import {
   hasActiveHomeFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
-  getDateSpotlightOccurrenceParams,
   isDateSpotlightFilter,
   shouldPersonalizeHomeVerticalFeed,
   toggleHomeDateFilter,
@@ -175,6 +174,11 @@ export default function HomePage() {
   const dateSpotlightActive = isDateSpotlightFilter(dateFilter);
 
   const [dateSpotlightItems, setDateSpotlightItems] = useState<FeedItem[]>([]);
+  const [dateSpotlightFallbackFilter, setDateSpotlightFallbackFilter] =
+    useState<HomeDateFilterChip | null>(null);
+  const [dateSpotlightFallbackItems, setDateSpotlightFallbackItems] = useState<
+    FeedItem[]
+  >([]);
   const [dateSpotlightLoading, setDateSpotlightLoading] = useState(false);
   const [dateSpotlightResolved, setDateSpotlightResolved] = useState(false);
 
@@ -412,6 +416,8 @@ export default function HomePage() {
   useEffect(() => {
     if (!dateSpotlightActive) {
       setDateSpotlightItems([]);
+      setDateSpotlightFallbackFilter(null);
+      setDateSpotlightFallbackItems([]);
       setDateSpotlightLoading(false);
       setDateSpotlightResolved(false);
       logTodaySpotlight({
@@ -424,43 +430,31 @@ export default function HomePage() {
       return;
     }
 
-    const occurrence = getDateSpotlightOccurrenceParams(dateFilter);
-    if (!occurrence) {
-      setDateSpotlightItems([]);
-      setDateSpotlightLoading(false);
-      setDateSpotlightResolved(true);
-      logTodaySpotlight({
-        dateSpotlightActive: true,
-        dateFilter,
-        verticalSegment: viewMode,
-        spotlightCount: 0,
-        spotlightLoading: false,
-        spotlightResolved: true,
-        note: "no-occurrence-window",
-      });
-      return;
-    }
-
     let cancelled = false;
     setDateSpotlightLoading(true);
     setDateSpotlightResolved(false);
+    setDateSpotlightFallbackFilter(null);
+    setDateSpotlightFallbackItems([]);
 
     void (async () => {
       try {
-        const items = await fetchDateSpotlightItems(
+        const result = await resolveDateSpotlightWithFallback(
+          dateFilter,
           buildDateSpotlightBaseOptions(verticalFilterCtx),
-          occurrence,
           USE_OPTIMIZED_FEED
         );
         if (cancelled) return;
-        setDateSpotlightItems(items);
+        setDateSpotlightItems(result.primaryItems);
+        setDateSpotlightFallbackFilter(result.fallback?.filter ?? null);
+        setDateSpotlightFallbackItems(result.fallback?.items ?? []);
         logTodaySpotlight({
           dateSpotlightActive: true,
           dateFilter,
           verticalSegment: viewMode,
           verticalType: verticalSegmentType ?? "all",
-          occurrenceMode: occurrence.mode,
-          spotlightCount: items.length,
+          primaryCount: result.primaryItems.length,
+          fallbackFilter: result.fallback?.filter ?? null,
+          fallbackCount: result.fallback?.items.length ?? 0,
           spotlightLoading: false,
           spotlightResolved: true,
         });
@@ -468,12 +462,14 @@ export default function HomePage() {
         if (cancelled) return;
         console.error("[HomePage] Date spotlight fetch failed:", err);
         setDateSpotlightItems([]);
+        setDateSpotlightFallbackFilter(null);
+        setDateSpotlightFallbackItems([]);
         logTodaySpotlight({
           dateSpotlightActive: true,
           dateFilter,
           verticalSegment: viewMode,
-          occurrenceMode: occurrence.mode,
-          spotlightCount: 0,
+          primaryCount: 0,
+          fallbackCount: 0,
           error: true,
           spotlightResolved: true,
         });
@@ -1031,6 +1027,8 @@ export default function HomePage() {
               dateSpotlightActive={dateSpotlightActive}
               dateFilter={dateFilter}
               dateSpotlightItems={dateSpotlightItems}
+              dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
+              dateSpotlightFallbackItems={dateSpotlightFallbackItems}
               dateSpotlightLoading={dateSpotlightLoading}
               dateSpotlightResolved={dateSpotlightResolved}
               railLoadItems={railLoadItems}

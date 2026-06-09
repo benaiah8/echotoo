@@ -9,10 +9,29 @@ import {
   type FeedItem,
   type FeedOptions,
 } from "../api/queries/getPublicFeed";
-import type { DateSpotlightOccurrenceParams } from "./homeVerticalFilters";
+import {
+  getDateSpotlightFallbackChain,
+  getDateSpotlightOccurrenceParams,
+  type DateSpotlightOccurrenceParams,
+  type HomeDateFilterChip,
+} from "./homeVerticalFilters";
 
 /** Max spotlight rows for the block above the normal feed. */
 export const DATE_SPOTLIGHT_FETCH_CAP = 30;
+
+/** Max RPC calls per spotlight resolution (primary + fallback chain). */
+export const MAX_DATE_SPOTLIGHT_FETCH_ATTEMPTS = 3;
+
+export type DateSpotlightFallback = {
+  filter: HomeDateFilterChip;
+  items: FeedItem[];
+};
+
+export type DateSpotlightResolution = {
+  primaryFilter: HomeDateFilterChip;
+  primaryItems: FeedItem[];
+  fallback: DateSpotlightFallback | null;
+};
 
 /** @deprecated Use DATE_SPOTLIGHT_FETCH_CAP */
 export const TODAY_SPOTLIGHT_FETCH_CAP = DATE_SPOTLIGHT_FETCH_CAP;
@@ -80,6 +99,64 @@ export async function fetchDateSpotlightItems(
     : await getPublicFeed(opts);
 
   return dedupeFeedItemsById(items);
+}
+
+/**
+ * Fetch primary spotlight bucket; if empty, walk fallback chain sequentially
+ * and stop at the first non-empty bucket (at most one fallback section).
+ */
+export async function resolveDateSpotlightWithFallback(
+  primaryFilter: HomeDateFilterChip,
+  baseFeedOptions: DateSpotlightBaseOptions,
+  useOptimizedFeed: boolean
+): Promise<DateSpotlightResolution> {
+  const emptyResult = (): DateSpotlightResolution => ({
+    primaryFilter,
+    primaryItems: [],
+    fallback: null,
+  });
+
+  const primaryOccurrence = getDateSpotlightOccurrenceParams(primaryFilter);
+  if (!primaryOccurrence) return emptyResult();
+
+  let fetchAttempts = 0;
+
+  const primaryItems = await fetchDateSpotlightItems(
+    baseFeedOptions,
+    primaryOccurrence,
+    useOptimizedFeed
+  );
+  fetchAttempts += 1;
+
+  if (primaryItems.length > 0) {
+    return { primaryFilter, primaryItems, fallback: null };
+  }
+
+  const fallbackChain = getDateSpotlightFallbackChain(primaryFilter);
+
+  for (const fallbackFilter of fallbackChain) {
+    if (fetchAttempts >= MAX_DATE_SPOTLIGHT_FETCH_ATTEMPTS) break;
+
+    const occurrence = getDateSpotlightOccurrenceParams(fallbackFilter);
+    if (!occurrence) continue;
+
+    const items = await fetchDateSpotlightItems(
+      baseFeedOptions,
+      occurrence,
+      useOptimizedFeed
+    );
+    fetchAttempts += 1;
+
+    if (items.length > 0) {
+      return {
+        primaryFilter,
+        primaryItems: [],
+        fallback: { filter: fallbackFilter, items },
+      };
+    }
+  }
+
+  return emptyResult();
 }
 
 /** @deprecated Use fetchDateSpotlightItems */

@@ -19,7 +19,9 @@ import { supabase } from "../../lib/supabaseClient";
 import { HOME_FEED_FIRST_PAGE } from "../../lib/homeFeedConstants";
 import {
   getDateSpotlightEmptyNotice,
+  getDateSpotlightFallbackSectionTitle,
   type HomeDateFilter,
+  type HomeDateFilterChip,
 } from "../../lib/homeVerticalFilters";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 
@@ -78,6 +80,8 @@ interface Props {
   dateSpotlightActive?: boolean;
   dateFilter?: HomeDateFilter;
   dateSpotlightItems?: FeedItem[];
+  dateSpotlightFallbackFilter?: HomeDateFilterChip | null;
+  dateSpotlightFallbackItems?: FeedItem[];
   dateSpotlightLoading?: boolean;
   dateSpotlightResolved?: boolean;
 }
@@ -111,6 +115,8 @@ export default function HomePostsSection({
   dateSpotlightActive = false,
   dateFilter = "none",
   dateSpotlightItems = [],
+  dateSpotlightFallbackFilter = null,
+  dateSpotlightFallbackItems = [],
   dateSpotlightLoading = false,
   dateSpotlightResolved = false,
 }: Props) {
@@ -332,9 +338,9 @@ export default function HomePostsSection({
     (!showTagFallback || fallbackItems.length === 0);
 
   const renderSpotlightPost = useCallback(
-    (item: FeedItem) => (
+    (item: FeedItem, keyPrefix = "spotlight") => (
       <Post
-        key={`today-spotlight-${item.id}`}
+        key={`${keyPrefix}-${item.id}`}
         postId={item.id}
         caption={item.caption || "(no caption)"}
         createdAt={item.created_at}
@@ -359,6 +365,13 @@ export default function HomePostsSection({
     !dateSpotlightLoading &&
     dateSpotlightItems.length === 0;
 
+  const showDateSpotlightFallback =
+    dateSpotlightActive &&
+    dateSpotlightResolved &&
+    !dateSpotlightLoading &&
+    dateSpotlightFallbackFilter !== null &&
+    dateSpotlightFallbackItems.length > 0;
+
   // [OPTIMIZATION: Phase 2 - Progressive] Use ProgressiveFeed if enabled
   if (useProgressiveFeed && loadItems) {
     return (
@@ -373,7 +386,21 @@ export default function HomePostsSection({
                 {getDateSpotlightEmptyNotice(dateFilter)}
               </p>
             ) : null}
-            {dateSpotlightItems.map((item) => renderSpotlightPost(item))}
+            {dateSpotlightItems.map((item) =>
+              renderSpotlightPost(item, "date-spotlight-primary")
+            )}
+            {showDateSpotlightFallback ? (
+              <div className="flex flex-col gap-4">
+                <p className="text-[var(--text)]/90 text-sm font-medium">
+                  {getDateSpotlightFallbackSectionTitle(
+                    dateSpotlightFallbackFilter!
+                  )}
+                </p>
+                {dateSpotlightFallbackItems.map((item) =>
+                  renderSpotlightPost(item, "date-spotlight-fallback")
+                )}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
