@@ -136,6 +136,7 @@ export default function HomePage() {
   const [friendsFilter, setFriendsFilter] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const homeTopBarRef = useRef<HTMLDivElement>(null);
+  const scheduleScrollHomeFeedToTopRef = useRef<() => void>(() => {});
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
   /** While search is focused (keyboard), keep top chrome pinned — scroll/IME must not slide it away. */
   const [homeSearchFocused, setHomeSearchFocused] = useState(false);
@@ -236,6 +237,7 @@ export default function HomePage() {
     setSearch("");
     setSearchMode("posts");
     setHomeSearchFocused(false);
+    scheduleScrollHomeFeedToTopRef.current();
   }, []);
   const handleHomeUserSearchBackdropPointerDown = useCallback(() => {
     if (blurActiveEditableFirst()) return;
@@ -350,6 +352,7 @@ export default function HomePage() {
       const hasMatches = await runFriendsPreflight();
       if (hasMatches) {
         setFriendsFilter(true);
+        scheduleScrollHomeFeedToTopRef.current();
       } else {
         setNoFriendsInlineBannerVisible(true);
         if (noFriendsBannerTimerRef.current !== null) {
@@ -405,6 +408,45 @@ export default function HomePage() {
     () => dataCache.generateFeedKey(homeVerticalFirstPageFeedKeyOptions),
     [homeVerticalFirstPageFeedKeyOptions]
   );
+
+  const saveScrollPosition = useCallback((key: string, value: number) => {
+    try {
+      localStorage.setItem(
+        `home_scroll:${key}`,
+        JSON.stringify({ v: 1, y: Math.max(0, value) })
+      );
+    } catch (e) {
+      // ignore storage errors
+    }
+  }, []);
+
+  const getSavedScrollPosition = useCallback((key: string): number => {
+    try {
+      const raw = localStorage.getItem(`home_scroll:${key}`);
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.y === "number") {
+        return parsed.y;
+      }
+    } catch (e) {
+      // ignore parse/storage errors
+    }
+    return 0;
+  }, []);
+
+  const scrollHomeFeedToTop = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    latestScrollRef.current = 0;
+    saveScrollPosition(feedCacheKey, 0);
+  }, [feedCacheKey, saveScrollPosition]);
+
+  const scheduleScrollHomeFeedToTop = useCallback(() => {
+    requestAnimationFrame(scrollHomeFeedToTop);
+  }, [scrollHomeFeedToTop]);
+
+  useEffect(() => {
+    scheduleScrollHomeFeedToTopRef.current = scheduleScrollHomeFeedToTop;
+  }, [scheduleScrollHomeFeedToTop]);
 
   /** Warm memory hits only — same key as ProgressiveFeed hydrate; avoids empty-array initialItems misleading offset. */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
@@ -503,15 +545,47 @@ export default function HomePage() {
     setSelectedTags([]);
     setSearch("");
     setSearchMode("posts");
-  }, []);
+    scheduleScrollHomeFeedToTop();
+  }, [scheduleScrollHomeFeedToTop]);
 
-  const handleToggleDateFilter = useCallback((target: HomeDateFilterChip) => {
-    setDateFilter((current) => toggleHomeDateFilter(current, target));
-  }, []);
+  const handleToggleDateFilter = useCallback(
+    (target: HomeDateFilterChip) => {
+      setDateFilter((current) => toggleHomeDateFilter(current, target));
+      scheduleScrollHomeFeedToTop();
+    },
+    [scheduleScrollHomeFeedToTop]
+  );
 
   const handleFriendsFilterDeactivate = useCallback(() => {
     setFriendsFilter(false);
-  }, []);
+    scheduleScrollHomeFeedToTop();
+  }, [scheduleScrollHomeFeedToTop]);
+
+  const handleViewModeChange = useCallback(
+    (mode: "all" | "hangouts" | "experiences") => {
+      setViewMode(mode);
+      scheduleScrollHomeFeedToTop();
+    },
+    [scheduleScrollHomeFeedToTop]
+  );
+
+  const handleTagsChange = useCallback(
+    (tags: string[]) => {
+      setSelectedTags(tags);
+      scheduleScrollHomeFeedToTop();
+    },
+    [scheduleScrollHomeFeedToTop]
+  );
+
+  const handleSearchChange = useCallback(
+    (q: string) => {
+      setSearch(q);
+      if (q === "") {
+        scheduleScrollHomeFeedToTop();
+      }
+    },
+    [scheduleScrollHomeFeedToTop]
+  );
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
@@ -559,31 +633,6 @@ export default function HomePage() {
     },
     refreshEpoch: homeRefreshEpoch,
   });
-
-  const saveScrollPosition = useCallback((key: string, value: number) => {
-    try {
-      localStorage.setItem(
-        `home_scroll:${key}`,
-        JSON.stringify({ v: 1, y: Math.max(0, value) })
-      );
-    } catch (e) {
-      // ignore storage errors
-    }
-  }, []);
-
-  const getSavedScrollPosition = useCallback((key: string): number => {
-    try {
-      const raw = localStorage.getItem(`home_scroll:${key}`);
-      if (!raw) return 0;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.y === "number") {
-        return parsed.y;
-      }
-    } catch (e) {
-      // ignore parse/storage errors
-    }
-    return 0;
-  }, []);
 
   // Restore scroll on mount if we have a saved position for this feed key
   useEffect(() => {
@@ -666,7 +715,8 @@ export default function HomePage() {
   const handleClearFilters = useCallback(() => {
     setSelectedTags([]);
     setSearch("");
-  }, []);
+    scheduleScrollHomeFeedToTop();
+  }, [scheduleScrollHomeFeedToTop]);
 
   // Handle logo click - show login modal if not authenticated, info popup if authenticated
   const handleLogoClick = useCallback(() => {
@@ -823,7 +873,7 @@ export default function HomePage() {
           atTop={effectiveHomeAtTop}
           onToggleFilters={handleFilterClick}
           onLogoClick={handleLogoClick}
-          onSearch={setSearch}
+          onSearch={handleSearchChange}
           search={search}
           searchMode={searchMode}
           onSearchModeChange={setSearchMode}
@@ -833,10 +883,10 @@ export default function HomePage() {
           hasActiveFilters={hasActiveFilters}
           filtersOpen={filtersOpen}
           selectedTags={selectedTags}
-          onTagsChange={setSelectedTags}
+          onTagsChange={handleTagsChange}
           onClearFilters={handleClearFilters}
           viewMode={viewMode}
-          setViewMode={setViewMode}
+          setViewMode={handleViewModeChange}
           dateFilter={dateFilter}
           onToggleDateFilter={handleToggleDateFilter}
           friendsFilter={friendsFilter}
