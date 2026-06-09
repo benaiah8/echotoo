@@ -19,9 +19,6 @@ import {
 /** Max spotlight rows for the block above the normal feed. */
 export const DATE_SPOTLIGHT_FETCH_CAP = 30;
 
-/** Max RPC calls per spotlight resolution (primary + fallback chain). */
-export const MAX_DATE_SPOTLIGHT_FETCH_ATTEMPTS = 3;
-
 export type DateSpotlightFallback = {
   filter: HomeDateFilterChip;
   items: FeedItem[];
@@ -102,8 +99,10 @@ export async function fetchDateSpotlightItems(
 }
 
 /**
- * Fetch primary spotlight bucket; if empty, walk fallback chain sequentially
- * and stop at the first non-empty bucket (at most one fallback section).
+ * Fetch primary spotlight bucket; if empty, walk the full fallback chain from
+ * getDateSpotlightFallbackChain sequentially and stop at the first non-empty
+ * bucket (at most one fallback section). RPC bound: 1 primary + chain.length
+ * (short, controlled chain — no fixed cap that truncates before next_week).
  */
 export async function resolveDateSpotlightWithFallback(
   primaryFilter: HomeDateFilterChip,
@@ -119,14 +118,11 @@ export async function resolveDateSpotlightWithFallback(
   const primaryOccurrence = getDateSpotlightOccurrenceParams(primaryFilter);
   if (!primaryOccurrence) return emptyResult();
 
-  let fetchAttempts = 0;
-
   const primaryItems = await fetchDateSpotlightItems(
     baseFeedOptions,
     primaryOccurrence,
     useOptimizedFeed
   );
-  fetchAttempts += 1;
 
   if (primaryItems.length > 0) {
     return { primaryFilter, primaryItems, fallback: null };
@@ -135,8 +131,6 @@ export async function resolveDateSpotlightWithFallback(
   const fallbackChain = getDateSpotlightFallbackChain(primaryFilter);
 
   for (const fallbackFilter of fallbackChain) {
-    if (fetchAttempts >= MAX_DATE_SPOTLIGHT_FETCH_ATTEMPTS) break;
-
     const occurrence = getDateSpotlightOccurrenceParams(fallbackFilter);
     if (!occurrence) continue;
 
@@ -145,7 +139,6 @@ export async function resolveDateSpotlightWithFallback(
       occurrence,
       useOptimizedFeed
     );
-    fetchAttempts += 1;
 
     if (items.length > 0) {
       return {
