@@ -131,6 +131,66 @@ export function getDateSpotlightEmptyNotice(dateFilter: HomeDateFilter): string 
   }
 }
 
+/**
+ * Ordered fallback date buckets when the selected spotlight filter returns no posts.
+ * Fetch orchestration (later): walk this chain sequentially and stop at the first
+ * non-empty bucket; show at most one fallback section above the normal vertical feed.
+ * Max RPC count and caching will be handled in a follow-up step — no UI/fetch changes here.
+ *
+ * @param dateFilter - Active Home date chip (primary bucket is not included in the result).
+ * @param options.isodow - Viewer-local Postgres ISODOW (Mon=1 … Sun=7); defaults to
+ *   `viewerLocalIsodow(0)` when omitted. When unavailable, uses the weekday chain (isodow < 6).
+ */
+export function getDateSpotlightFallbackChain(
+  dateFilter: HomeDateFilter,
+  options?: { isodow?: number }
+): HomeDateFilterChip[] {
+  if (!isDateSpotlightFilter(dateFilter)) return [];
+
+  const isodow =
+    options?.isodow ?? viewerLocalIsodow(0) ?? 3;
+  const weekendPassedOrCurrent = isodow >= 6;
+
+  switch (dateFilter) {
+    case "today":
+      return weekendPassedOrCurrent
+        ? ["tomorrow", "next_week"]
+        : ["tomorrow", "this_weekend", "next_week"];
+    case "tomorrow":
+      return weekendPassedOrCurrent
+        ? ["next_week"]
+        : ["this_weekend", "next_week"];
+    case "this_week":
+      return ["next_week"];
+    case "this_weekend":
+      return ["next_week"];
+    case "next_week":
+      return [];
+    default:
+      return [];
+  }
+}
+
+/** Section heading for a fallback spotlight bucket (first non-empty chain step). */
+export function getDateSpotlightFallbackSectionTitle(
+  filter: HomeDateFilterChip
+): string {
+  switch (filter) {
+    case "tomorrow":
+      return "Coming up tomorrow";
+    case "this_week":
+      return "Coming up this week";
+    case "this_weekend":
+      return "Coming up this weekend";
+    case "next_week":
+      return "Coming up next week";
+    case "today":
+      return "Happening today";
+    default:
+      return "";
+  }
+}
+
 /** Spotlight RPC occurrence params for any active date filter. */
 export function getDateSpotlightOccurrenceParams(
   dateFilter: HomeDateFilter
