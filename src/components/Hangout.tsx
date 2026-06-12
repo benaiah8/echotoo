@@ -213,7 +213,7 @@ export default function Hangout({
       navigate(createEditActivitiesHref(post.type));
     } catch (error) {
       console.error("Error loading hangout for edit:", error);
-      toast.error("Failed to load hangout for editing");
+      toast.error("Failed to load event for editing");
     }
   };
 
@@ -230,13 +230,13 @@ export default function Hangout({
     setIsDeleting(true);
     try {
       await deletePost(id);
-      toast.success("Hangout deleted successfully");
+      toast.success("Event deleted successfully");
       emitPostDeleted(id);
       onDelete?.();
       setShowDeleteModal(false);
     } catch (error) {
       console.error("Error deleting hangout:", error);
-      toast.error("Failed to delete hangout");
+      toast.error("Failed to delete event");
     } finally {
       setIsDeleting(false);
     }
@@ -528,8 +528,8 @@ export default function Hangout({
         open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
         onConfirm={handleDelete}
-        title="Delete hangout?"
-        message="Are you sure you want to delete this hangout? This action cannot be undone."
+        title="Delete event?"
+        message="Are you sure you want to delete this event? This action cannot be undone."
         confirmLabel="Delete"
         confirmVariant="danger"
         isLoading={isDeleting}

@@ -36,6 +36,10 @@ import { setCachedInviteData } from "../../lib/inviteDataCache";
 import { setCachedInviteStatus } from "../../lib/inviteStatusCache";
 import { logFetchStart } from "../../lib/tabVisibilityDebug";
 import { NOTIFICATIONS_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
+import {
+  writePersistedNotificationList,
+  readPersistedNotificationList,
+} from "../../lib/notificationListCache";
 import { Paths } from "../../router/Paths";
 
 /** Max extra invite pages to auto-fetch while resolving a push deep link (avoids infinite loops). */
@@ -139,6 +143,13 @@ function persistNotificationDisplayCache(
       nextHasMore,
       nextFollow
     );
+    const ts = Date.now();
+    writePersistedNotificationList(uid, listViewKey, {
+      notifications: nextNotifications,
+      hasMore: nextHasMore,
+      batchedFollowStatuses: nextFollow,
+      ts,
+    });
   });
 }
 
@@ -802,6 +813,42 @@ export default function NotificationList({
         }
         return;
       }
+
+      const persisted = readPersistedNotificationList(
+        userId,
+        capturedListView
+      );
+      if (
+        persisted &&
+        (persisted.notifications.length > 0 || persisted.hasMore)
+      ) {
+        if (gen !== listViewEffectGenRef.current) {
+          initialLoadInFlightRef.current = false;
+          return;
+        }
+        setNotifications(persisted.notifications);
+        setHasMore(persisted.hasMore);
+        setBatchedFollowStatuses(persisted.batchedFollowStatuses);
+        notificationsRef.current = persisted.notifications;
+        hasMoreRef.current = persisted.hasMore;
+        batchedFollowStatusesRef.current = persisted.batchedFollowStatuses;
+        writeNotificationDisplayCache(
+          userId,
+          capturedListView,
+          persisted.notifications,
+          persisted.hasMore,
+          persisted.batchedFollowStatuses
+        );
+        setLoading(false);
+        setError(null);
+        await loadNotifications(0, false, {
+          quiet: true,
+          forceRefresh: true,
+          listViewForRequest: capturedListView,
+        });
+        return;
+      }
+
       if (gen !== listViewEffectGenRef.current) {
         initialLoadInFlightRef.current = false;
         return;
@@ -1016,6 +1063,7 @@ export default function NotificationList({
     const markable = notifications
       .filter((n) => {
         if (n.is_read) return false;
+        if (listView === "activity" && n.type === "saved") return false;
         /** Invites stay unread until the user opens the thread from the row (InviteNotificationItem). */
         if (listView === "invites" && n.type === "invite") return false;
         if (
@@ -1065,6 +1113,9 @@ export default function NotificationList({
   // Exclude declined follow requests from in-page unread row
   const unreadInView = notifications.filter((n) => {
     if (!n.is_read) {
+      if (listView === "activity" && n.type === "saved") {
+        return false;
+      }
       if (
         n.type === "follow" &&
         n.additional_data?.follow_request_status === "declined"
@@ -1081,11 +1132,19 @@ export default function NotificationList({
       ? notifications.filter((n) =>
           inviteRowMatchesSubFilter(n, inviteSubFilter)
         )
-      : notifications;
+      : listView === "activity"
+        ? notifications.filter((n) => n.type !== "saved")
+        : notifications;
 
   const showInviteFilteredEmpty =
     listView === "invites" &&
     inviteSubFilter != null &&
+    notifications.length > 0 &&
+    visibleNotifications.length === 0;
+
+  /** Activity tab: all rows are hidden client-side (e.g. only "saved" notifications). */
+  const showActivityFilteredEmpty =
+    listView === "activity" &&
     notifications.length > 0 &&
     visibleNotifications.length === 0;
 
@@ -1406,6 +1465,10 @@ export default function NotificationList({
           ) : showInviteFilteredEmpty ? (
             <p className="py-6 text-center text-sm text-[var(--text)]/55">
               No matching invites.
+            </p>
+          ) : showActivityFilteredEmpty ? (
+            <p className="py-6 text-center text-sm text-[var(--text)]/55">
+              No activity to show here yet.
             </p>
           ) : listView === "activity" ? (
             visibleNotifications.map((notification) => (

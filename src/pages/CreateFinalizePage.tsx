@@ -195,7 +195,7 @@ function getFinalizePublishWarnings(
       key: "dates",
       heading: "No date added",
       explanation:
-        "Dates help Hangouts appear at the right time and make them more useful to others.",
+        "Dates help events appear at the right time and make them more useful to others.",
     });
   }
   return out;

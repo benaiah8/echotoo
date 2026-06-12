@@ -379,7 +379,7 @@ export default function HomeTopBar({
                 }
                 className={chipButtonClass(viewMode === "hangouts")}
               >
-                Hangouts
+                Events
               </button>
               <button
                 type="button"
@@ -486,7 +486,7 @@ export default function HomeTopBar({
                     isHomeTypeFilterActive(viewMode, "hangouts")
                   )}
                 >
-                  Hangouts
+                  Events
                 </button>
                 <button
                   type="button"

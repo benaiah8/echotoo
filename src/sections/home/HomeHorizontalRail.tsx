@@ -224,7 +224,7 @@ export default function HomeHorizontalRail({
                 <div key={p.id} className={railItemShellClass(p.id)}>
                   <Hangout
                     id={p.id}
-                    caption={p.caption || "Untitled hangout"}
+                    caption={p.caption || "Untitled event"}
                     createdAt={p.created_at}
                     authorHandle={authorHandle}
                     avatarUrl={avatarUrl}

@@ -8,9 +8,6 @@ import {
 } from "react";
 import html2canvas from "html2canvas";
 import toast from "react-hot-toast";
-import { PiCalendarBlank } from "react-icons/pi";
-import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
-import { getInstagramStoryBackgroundPath } from "../../lib/assets";
 import { formatInstagramStoryEventLine } from "../../lib/instagramStoryEventLine";
 import { shareOrDownloadStoryImage } from "../../lib/instagramStoryExport";
 import {
@@ -22,14 +19,7 @@ import FrostedCenterModal, {
   frostedModalPanelClassName,
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
-import StoryExportCard, {
-  CAPTION_MAX_LINES,
-  SEE_MORE_LABEL,
-  STORY_EXPORT_COLORS as S,
-} from "./StoryExportCard";
-
-/** Shorter portrait card (not full 9:16 story); background art should match ~this frame. */
-const STORY_CARD_ASPECT_RATIO = "3 / 4";
+import StoryExportCard from "./StoryExportCard";
 
 /**
  * Export pipeline: primary = manual Canvas 2D (`renderInstagramStoryToCanvas`); fallback = DOM capture
@@ -186,7 +176,7 @@ export default function InstagramStoryGenerator({
   onClose,
   creatorName,
   creatorHandle,
-  creatorAvatarUrl,
+  creatorAvatarUrl: _creatorAvatarUrl,
   activities: _activities,
   selectedDates,
   isRecurring,
@@ -197,30 +187,20 @@ export default function InstagramStoryGenerator({
   const captionRef = useRef<HTMLParagraphElement>(null);
   const [captionTruncated, setCaptionTruncated] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [bgReady, setBgReady] = useState(false);
-  const [useBgImage, setUseBgImage] = useState(true);
+  /** Story card no longer loads a template PNG — export is always ready. */
+  const bgReady = true;
+  const useBgImage = false;
+  const storyBgSrc = "";
   const isDark = useIsDarkTheme();
 
   const rawCaption =
     caption?.trim() ||
     (postType === "hangout"
-      ? "Check out this hangout!"
+      ? "Check out this event!"
       : "Check out this experience!");
 
   const safeCreatorName = creatorName || "";
   const safeCreatorHandle = creatorHandle || "";
-  const processedAvatarUrl = creatorAvatarUrl
-    ? avatarDisplayUrl(creatorAvatarUrl) ?? null
-    : null;
-  const hasAvatar = !!processedAvatarUrl;
-
-  const storyFallbackInitial = (() => {
-    const fromName = safeCreatorName.trim().charAt(0);
-    if (fromName) return fromName.toUpperCase();
-    const fromHandle = safeCreatorHandle.replace(/^@/, "").trim().charAt(0);
-    if (fromHandle) return fromHandle.toUpperCase();
-    return "E";
-  })();
 
   const eventLine = formatInstagramStoryEventLine({
     postType,
@@ -228,19 +208,6 @@ export default function InstagramStoryGenerator({
     isRecurring,
     recurrenceDays,
   });
-
-  const storyBgSrc = getInstagramStoryBackgroundPath();
-
-  useEffect(() => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => setBgReady(true);
-    img.onerror = () => {
-      setUseBgImage(false);
-      setBgReady(true);
-    };
-    img.src = storyBgSrc;
-  }, [storyBgSrc]);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -294,9 +261,6 @@ export default function InstagramStoryGenerator({
           canvas = await renderInstagramStoryToCanvas({
             storyBgSrc,
             useBgImage,
-            hasAvatar,
-            processedAvatarUrl,
-            storyFallbackInitial,
             safeCreatorHandle,
             safeCreatorName,
             rawCaption,
@@ -368,19 +332,6 @@ export default function InstagramStoryGenerator({
     }
   };
 
-  const captionClampStyle: CSSProperties = {
-    display: "-webkit-box",
-    WebkitLineClamp: CAPTION_MAX_LINES,
-    WebkitBoxOrient: "vertical",
-    overflow: "hidden",
-    wordBreak: "break-word",
-    overflowWrap: "anywhere",
-    whiteSpace: "pre-line",
-    lineHeight: 1.38,
-    paddingTop: 0,
-    paddingBottom: 4,
-  };
-
   return (
     <FrostedCenterModal
       open
@@ -404,316 +355,26 @@ export default function InstagramStoryGenerator({
           Create Instagram Story
         </h2>
 
-        <div
-          className="mb-4 overflow-hidden rounded-xl bg-black"
-          style={{
-            aspectRatio: STORY_CARD_ASPECT_RATIO,
-            width: "100%",
-            position: "relative",
-            ...previewFrameStyle,
-          }}
-        >
+        <div className="mb-4 flex w-full justify-center">
           <div
+            className="overflow-hidden rounded-xl bg-black"
             style={{
-              position: "relative",
-              boxSizing: "border-box",
-              height: "100%",
               width: "100%",
-              overflow: "hidden",
-              WebkitFontSmoothing: "antialiased",
-              fontFamily:
-                'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+              maxWidth: 400,
+              position: "relative",
+              ...previewFrameStyle,
             }}
           >
-            <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                inset: 0,
-                zIndex: 0,
-                background:
-                  "linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%)",
-                backgroundImage: `
-                  linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%),
-                  linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
-                  linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)
-                `,
-                backgroundSize: "100% 100%, 24px 24px, 24px 24px",
-              }}
+            <StoryExportCard
+              captionRef={captionRef}
+              storyBgSrc={storyBgSrc}
+              useBgImage={useBgImage}
+              safeCreatorHandle={safeCreatorHandle}
+              safeCreatorName={safeCreatorName}
+              rawCaption={rawCaption}
+              captionShowSeeMore={captionTruncated}
+              eventLine={eventLine}
             />
-
-            {useBgImage ? (
-              <img
-                src={storyBgSrc}
-                alt=""
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  zIndex: 1,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                }}
-                crossOrigin="anonymous"
-                draggable={false}
-              />
-            ) : null}
-
-            {/* Post block from top of safe area (not vertically centered — centering pushed content down and clipped captions). Brand pinned bottom-left. */}
-            <div
-              style={{
-                position: "relative",
-                zIndex: 10,
-                height: "100%",
-                boxSizing: "border-box",
-                color: S.text,
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  boxSizing: "border-box",
-                  paddingLeft: "8%",
-                  paddingRight: "8%",
-                  paddingTop: "5%",
-                  paddingBottom: "26%",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "flex-start",
-                  alignItems: "stretch",
-                }}
-              >
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 340,
-                    alignSelf: "center",
-                  }}
-                >
-                  {hasAvatar ? (
-                    <div
-                      style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 9999,
-                        overflow: "hidden",
-                        border: `2px solid ${S.borderLight}`,
-                        marginBottom: 8,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-                      }}
-                    >
-                      <img
-                        src={processedAvatarUrl as string}
-                        alt=""
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
-                        }}
-                        crossOrigin="anonymous"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 9999,
-                        border: `2px solid ${S.borderLight}`,
-                        marginBottom: 8,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: S.initialsBg,
-                        color: S.text,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-                        lineHeight: 1,
-                      }}
-                    >
-                      <span
-                        style={{
-                          display: "block",
-                          lineHeight: "20px",
-                          height: "20px",
-                          margin: 0,
-                          padding: 0,
-                          fontSize: 20,
-                          fontWeight: 700,
-                          textAlign: "center",
-                        }}
-                      >
-                        {storyFallbackInitial}
-                      </span>
-                    </div>
-                  )}
-
-                  {(safeCreatorHandle || safeCreatorName) && (
-                    <p
-                      style={{
-                        margin: 0,
-                        paddingBottom: 6,
-                        borderBottom: `1px solid ${S.borderRule}`,
-                        fontSize: 14,
-                        fontWeight: 600,
-                        letterSpacing: "-0.01em",
-                        color: S.text,
-                        textShadow: "0 1px 2px rgba(0,0,0,0.45)",
-                        textAlign: "left",
-                      }}
-                    >
-                      {safeCreatorHandle || safeCreatorName}
-                    </p>
-                  )}
-
-                  <div
-                    style={{
-                      marginTop: 12,
-                      width: "100%",
-                      borderRadius: 6,
-                      padding: "6px 4px 8px",
-                      backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent calc(1.38em - 1px), ${S.captionLine} 1.38em, ${S.captionLine} calc(1.38em + 1px))`,
-                    }}
-                  >
-                    <p
-                      ref={captionRef}
-                      style={{
-                        margin: 0,
-                        fontSize: 13,
-                        fontWeight: 500,
-                        color: S.textMuted,
-                        textShadow: "0 1px 2px rgba(0,0,0,0.4)",
-                        textAlign: "left",
-                        ...captionClampStyle,
-                      }}
-                    >
-                      {rawCaption}
-                    </p>
-                    {captionTruncated ? (
-                      <p
-                        style={{
-                          margin: "8px 0 0 0",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          lineHeight: 1.35,
-                          color: S.text,
-                          textShadow: "0 1px 2px rgba(0,0,0,0.45)",
-                        }}
-                      >
-                        {SEE_MORE_LABEL}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  {eventLine ? (
-                    <div
-                      style={{
-                        marginTop: 12,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "flex-start",
-                        gap: 8,
-                        fontSize: 12,
-                        fontWeight: 500,
-                        color: S.textSoft,
-                      }}
-                    >
-                      <PiCalendarBlank
-                        size={18}
-                        style={{ color: S.textSoft, flexShrink: 0 }}
-                        aria-hidden
-                      />
-                      <span>{eventLine}</span>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  position: "absolute",
-                  left: "8%",
-                  bottom: "max(10px, 2.5%)",
-                  maxWidth: "min(200px, 48%)",
-                  zIndex: 12,
-                  textAlign: "left",
-                  pointerEvents: "none",
-                }}
-              >
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 15,
-                    fontWeight: 700,
-                    letterSpacing: "-0.02em",
-                    color: S.text,
-                    textShadow: "0 1px 2px rgba(0,0,0,0.5)",
-                  }}
-                >
-                  Echotoo.com
-                </p>
-                <p
-                  style={{
-                    margin: "5px 0 0 0",
-                    padding: 0,
-                    fontSize: 10,
-                    fontWeight: 500,
-                    lineHeight: 1.25,
-                    color: S.textSoft,
-                    textShadow: "0 1px 2px rgba(0,0,0,0.45)",
-                  }}
-                >
-                  Download on
-                </p>
-                <div
-                  style={{
-                    marginTop: 6,
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      borderRadius: 9999,
-                      background: S.pillBg,
-                      color: S.pillFg,
-                      padding: "5px 11px",
-                      fontWeight: 600,
-                      fontSize: 10,
-                      lineHeight: "12px",
-                      verticalAlign: "middle",
-                      boxSizing: "border-box",
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-                    }}
-                  >
-                    App Store
-                  </span>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      borderRadius: 9999,
-                      background: S.pillBg,
-                      color: S.pillFg,
-                      padding: "5px 11px",
-                      fontWeight: 600,
-                      fontSize: 10,
-                      lineHeight: "12px",
-                      verticalAlign: "middle",
-                      boxSizing: "border-box",
-                      boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-                    }}
-                  >
-                    Play Store
-                  </span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -744,7 +405,7 @@ export default function InstagramStoryGenerator({
           left: "-10000px",
           top: 0,
           width: 400,
-          overflow: "hidden",
+          overflow: "visible",
           pointerEvents: "none",
         }}
       >
@@ -754,8 +415,7 @@ export default function InstagramStoryGenerator({
             position: "relative",
             boxSizing: "border-box",
             width: 400,
-            aspectRatio: STORY_CARD_ASPECT_RATIO,
-            overflow: "hidden",
+            overflow: "visible",
             WebkitFontSmoothing: "antialiased",
             fontFamily:
               'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
@@ -764,9 +424,6 @@ export default function InstagramStoryGenerator({
           <StoryExportCard
             storyBgSrc={storyBgSrc}
             useBgImage={useBgImage}
-            hasAvatar={hasAvatar}
-            processedAvatarUrl={processedAvatarUrl}
-            storyFallbackInitial={storyFallbackInitial}
             safeCreatorHandle={safeCreatorHandle}
             safeCreatorName={safeCreatorName}
             rawCaption={rawCaption}

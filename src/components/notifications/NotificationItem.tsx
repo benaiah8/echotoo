@@ -50,11 +50,11 @@ const getNotificationText = (notification: NotificationWithActor): string => {
 
       if (inviteStatus === "accepted") {
         return `${actorName} accepted your invite to ${
-          postType === "hangout" ? "a hangout" : "an experience"
+          postType === "hangout" ? "an event" : "an experience"
         }`;
       } else if (inviteStatus === "declined") {
         return `${actorName} declined your invite to ${
-          postType === "hangout" ? "a hangout" : "an experience"
+          postType === "hangout" ? "an event" : "an experience"
         }`;
       }
       // Fallback to generic RSVP text

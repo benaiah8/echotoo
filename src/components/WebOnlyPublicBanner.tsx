@@ -10,7 +10,7 @@ import { Paths } from "../router/Paths";
 import { isCapacitor } from "../lib/storage/utils/capacitorDetection";
 
 const PURPOSE =
-  "Discover local hangouts and experiences, connect with friends.";
+  "Discover local events and experiences, connect with friends.";
 
 export default function WebOnlyPublicBanner() {
   if (isCapacitor()) return null;

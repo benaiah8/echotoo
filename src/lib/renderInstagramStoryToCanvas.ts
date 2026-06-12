@@ -1,21 +1,33 @@
 /**
  * Manual Canvas 2D composition for Instagram story export (parity with StoryExportCard layout).
  * No DOM layout for the bitmap — avoids html2canvas text drift.
+ * Canvas height matches the dynamic black card (width fixed at `STORY_EXPORT_LOGICAL_WIDTH`).
  */
 
 import {
   CAPTION_LINE_HEIGHT_PX,
   CAPTION_MAX_LINES,
+  EVENT_ROW_H,
   SEE_MORE_LABEL,
+  STORY_EXPORT_BRAND_COLOR,
+  STORY_EXPORT_BRAND_FONT_PX,
+  STORY_EXPORT_BRAND_LABEL,
+  STORY_EXPORT_CALENDAR_ICON_PX,
+  STORY_EXPORT_CAPTION_FONT_PX,
   STORY_EXPORT_COLORS,
+  STORY_EXPORT_EVENT_FONT_PX,
   STORY_EXPORT_FONT_FAMILY,
+  STORY_EXPORT_GAP_PX,
+  STORY_EXPORT_INSET_PAD_Y_PX,
+  STORY_EXPORT_OWL_SIZE_PX,
+  STORY_EXPORT_SEE_MORE_FONT_PX,
+  STORY_EXPORT_USERNAME_FONT_PX,
+  USER_BLOCK_H,
 } from "../components/ui/StoryExportCard";
+import { getOwlLogoPath } from "./assets";
 
-/** Matches off-screen export wrapper in InstagramStoryGenerator (3:4 portrait). */
+/** Matches export / off-screen capture width. Card height is computed from content. */
 export const STORY_EXPORT_LOGICAL_WIDTH = 400;
-export const STORY_EXPORT_LOGICAL_HEIGHT = Math.round(
-  (STORY_EXPORT_LOGICAL_WIDTH * 4) / 3
-);
 
 /** Match html2canvas scale for sharper JPEG output. */
 export const STORY_EXPORT_CANVAS_SCALE = 2;
@@ -25,9 +37,6 @@ const S = STORY_EXPORT_COLORS;
 export type RenderInstagramStoryToCanvasInput = {
   storyBgSrc: string;
   useBgImage: boolean;
-  hasAvatar: boolean;
-  processedAvatarUrl: string | null;
-  storyFallbackInitial: string;
   safeCreatorHandle: string;
   safeCreatorName: string;
   rawCaption: string;
@@ -35,84 +44,29 @@ export type RenderInstagramStoryToCanvasInput = {
   eventLine: string | null;
 };
 
-function loadImage(
-  url: string,
-  crossOrigin: boolean
-): Promise<HTMLImageElement> {
+function drawSolidBlackBackground(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+) {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, w, h);
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    if (crossOrigin) img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
 }
 
-function drawCoverImage(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  dx: number,
-  dy: number,
-  dw: number,
-  dh: number
-) {
-  const iw = img.naturalWidth;
-  const ih = img.naturalHeight;
-  if (iw <= 0 || ih <= 0) return;
-  const wr = dw / dh;
-  const ir = iw / ih;
-  let sx: number;
-  let sy: number;
-  let sw: number;
-  let sh: number;
-  if (ir > wr) {
-    sh = ih;
-    sw = ih * wr;
-    sx = (iw - sw) / 2;
-    sy = 0;
-  } else {
-    sw = iw;
-    sh = iw / wr;
-    sx = 0;
-    sy = (ih - sh) / 2;
-  }
-  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-}
-
-function drawGradientBackground(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number
-) {
-  const g = ctx.createLinearGradient(0, 0, w, h);
-  g.addColorStop(0, "#f5c800");
-  g.addColorStop(0.55, "#1a0f0a");
-  g.addColorStop(1, "#050308");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-}
-
-function drawNotebookGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  const step = 24;
-  ctx.strokeStyle = "rgba(255,255,255,0.06)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = 0; x <= w; x += step) {
-    ctx.moveTo(x + 0.5, 0);
-    ctx.lineTo(x + 0.5, h);
-  }
-  for (let y = 0; y <= h; y += step) {
-    ctx.moveTo(0, y + 0.5);
-    ctx.lineTo(w, y + 0.5);
-  }
-  ctx.stroke();
-}
-
 function wrapCaptionLines(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
-  maxLines: number
+  maxLines: number,
 ): string[] {
   const lines: string[] = [];
   const paragraphs = text.split(/\n/);
@@ -168,7 +122,7 @@ function setTextShadow(
   ctx: CanvasRenderingContext2D,
   blur: number,
   dy: number,
-  alpha: number
+  alpha: number,
 ) {
   ctx.shadowColor = `rgba(0,0,0,${alpha})`;
   ctx.shadowBlur = blur;
@@ -187,7 +141,7 @@ function drawCalendarIcon(
   x: number,
   y: number,
   size: number,
-  color: string
+  color: string,
 ) {
   const s = size / 24;
   ctx.save();
@@ -214,39 +168,16 @@ function drawCalendarIcon(
   ctx.restore();
 }
 
-function drawPill(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  label: string,
-  font: string
-) {
-  ctx.font = font;
-  const padX = 11;
-  const padY = 5;
-  const tw = ctx.measureText(label).width;
-  const w = tw + padX * 2;
-  const h = 12 + padY * 2;
-  ctx.save();
-  setTextShadow(ctx, 4, 1, 0.35);
-  ctx.fillStyle = S.pillBg;
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 9999);
-  ctx.fill();
-  clearTextShadow(ctx);
-  ctx.fillStyle = S.pillFg;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-  ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
-  ctx.restore();
-  return w;
-}
+const CAPTION_PAD_TOP = 6;
+const CAPTION_PAD_BOTTOM = 8;
+/** “See more” block: margin-top 8px + 16px line (12px font). */
+const SEE_MORE_BLOCK_H = 8 + 16;
 
 /**
- * Creates and returns a canvas with the Instagram story bitmap (logical layout matches StoryExportCard).
+ * Creates a JPEG-ready canvas: full bitmap is the black story card (dynamic height).
  */
 export async function renderInstagramStoryToCanvas(
-  input: RenderInstagramStoryToCanvasInput
+  input: RenderInstagramStoryToCanvasInput,
 ): Promise<HTMLCanvasElement> {
   if (typeof document !== "undefined" && document.fonts?.ready) {
     try {
@@ -257,9 +188,54 @@ export async function renderInstagramStoryToCanvas(
   }
 
   const LW = STORY_EXPORT_LOGICAL_WIDTH;
-  const LH = STORY_EXPORT_LOGICAL_HEIGHT;
   const scale = STORY_EXPORT_CANVAS_SCALE;
+
+  const padInsetY = STORY_EXPORT_INSET_PAD_Y_PX;
+  const padL = 0.08 * LW;
+  const padR = 0.08 * LW;
+  const colW = LW - padL - padR;
+  const maxInnerW = Math.min(340, colW);
+  const columnLeft = padL + (colW - maxInnerW) / 2;
+
+  const handleOrName = input.safeCreatorHandle || input.safeCreatorName || "";
+  const rawEventLine = (input.eventLine ?? "").trim();
+  const hasEventLine = rawEventLine.length > 0;
+
+  const captionBoxX = columnLeft;
+  const captionBoxW = maxInnerW;
+  const captionPadX = 4;
+  const captionInnerW = captionBoxW - captionPadX * 2;
+
   const W = Math.round(LW * scale);
+  const measureCanvas = document.createElement("canvas");
+  measureCanvas.width = W;
+  measureCanvas.height = Math.round(120 * scale);
+  const mctx = measureCanvas.getContext("2d");
+  if (!mctx) throw new Error("Could not get 2d context");
+  mctx.setTransform(scale, 0, 0, scale, 0, 0);
+  mctx.font = `500 ${STORY_EXPORT_CAPTION_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
+  const captionLines = wrapCaptionLines(
+    mctx,
+    input.rawCaption,
+    captionInnerW,
+    CAPTION_MAX_LINES,
+  );
+
+  const captionBlockH =
+    CAPTION_PAD_TOP +
+    captionLines.length * CAPTION_LINE_HEIGHT_PX +
+    CAPTION_PAD_BOTTOM +
+    (input.captionShowSeeMore ? SEE_MORE_BLOCK_H : 0);
+
+  const userH = handleOrName ? USER_BLOCK_H : 0;
+  const gapBeforeCaption = handleOrName ? STORY_EXPORT_GAP_PX : 0;
+  const gapBeforeEvent = hasEventLine ? STORY_EXPORT_GAP_PX : 0;
+  const eventH = hasEventLine ? EVENT_ROW_H : 0;
+
+  const contentH =
+    userH + gapBeforeCaption + captionBlockH + gapBeforeEvent + eventH;
+
+  const LH = padInsetY + contentH + padInsetY;
   const H = Math.round(LH * scale);
 
   const canvas = document.createElement("canvas");
@@ -270,191 +246,46 @@ export async function renderInstagramStoryToCanvas(
 
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
-  drawGradientBackground(ctx, LW, LH);
-  drawNotebookGrid(ctx, LW, LH);
+  drawSolidBlackBackground(ctx, LW, LH);
 
-  if (input.useBgImage) {
-    try {
-      const bg = await loadImage(input.storyBgSrc, true);
-      drawCoverImage(ctx, bg, 0, 0, LW, LH);
-    } catch {
-      /* gradient-only fallback */
-    }
-  }
+  let cursorY = padInsetY;
 
-  const padL = 0.08 * LW;
-  const padR = 0.08 * LW;
-  const padT = 0.05 * LH;
-  const colW = LW - padL - padR;
-  const maxInnerW = Math.min(340, colW);
-  /** Centered column (matches StoryExportCard maxWidth + alignSelf center). */
-  const columnLeft = padL + (colW - maxInnerW) / 2;
-
-  let cursorY = padT;
-
-  const avatarSize = 56;
-  /** Avatar is left-aligned within the column (not centered in the card). */
-  const avatarDrawX = columnLeft;
-
-  cursorY = padT;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.35)";
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetY = 2;
-
-  if (input.hasAvatar && input.processedAvatarUrl) {
-    try {
-      const av = await loadImage(input.processedAvatarUrl, true);
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(
-        avatarDrawX + avatarSize / 2,
-        cursorY + avatarSize / 2,
-        avatarSize / 2 - 1,
-        0,
-        Math.PI * 2
-      );
-      ctx.clip();
-      drawCoverImage(
-        ctx,
-        av,
-        avatarDrawX + 2,
-        cursorY + 2,
-        avatarSize - 4,
-        avatarSize - 4
-      );
-      ctx.restore();
-      ctx.strokeStyle = S.borderLight;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(
-        avatarDrawX + avatarSize / 2,
-        cursorY + avatarSize / 2,
-        avatarSize / 2 - 1,
-        0,
-        Math.PI * 2
-      );
-      ctx.stroke();
-    } catch {
-      ctx.fillStyle = S.initialsBg;
-      ctx.beginPath();
-      ctx.arc(
-        avatarDrawX + avatarSize / 2,
-        cursorY + avatarSize / 2,
-        avatarSize / 2 - 1,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-      ctx.strokeStyle = S.borderLight;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.font = `700 20px ${STORY_EXPORT_FONT_FAMILY}`;
-      ctx.fillStyle = S.text;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      setTextShadow(ctx, 2, 1, 0.45);
-      ctx.fillText(
-        input.storyFallbackInitial.slice(0, 1).toUpperCase(),
-        avatarDrawX + avatarSize / 2,
-        cursorY + avatarSize / 2
-      );
-      clearTextShadow(ctx);
-    }
-  } else {
-    ctx.fillStyle = S.initialsBg;
-    ctx.beginPath();
-    ctx.arc(
-      avatarDrawX + avatarSize / 2,
-      cursorY + avatarSize / 2,
-      avatarSize / 2 - 1,
-      0,
-      Math.PI * 2
-    );
-    ctx.fill();
-    ctx.strokeStyle = S.borderLight;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.font = `700 20px ${STORY_EXPORT_FONT_FAMILY}`;
-    ctx.fillStyle = S.text;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    setTextShadow(ctx, 2, 1, 0.45);
-    ctx.fillText(
-      input.storyFallbackInitial.slice(0, 1).toUpperCase(),
-      avatarDrawX + avatarSize / 2,
-      cursorY + avatarSize / 2
-    );
-    clearTextShadow(ctx);
-  }
-
-  ctx.restore();
-
-  cursorY += avatarSize + 8;
-
-  const handleOrName = input.safeCreatorHandle || input.safeCreatorName || "";
   if (handleOrName) {
-    ctx.font = `600 14px ${STORY_EXPORT_FONT_FAMILY}`;
+    ctx.font = `600 ${STORY_EXPORT_USERNAME_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
     ctx.fillStyle = S.text;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     setTextShadow(ctx, 2, 1, 0.45);
-    ctx.fillText(handleOrName, columnLeft, cursorY);
+    ctx.font = `500 ${STORY_EXPORT_BRAND_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
+    const brandW = ctx.measureText(STORY_EXPORT_BRAND_LABEL).width;
+    ctx.font = `600 ${STORY_EXPORT_USERNAME_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
+    const maxUserW = Math.max(40, LW - padR - columnLeft - 8 - brandW);
+    let drawUser = handleOrName;
+    if (ctx.measureText(drawUser).width > maxUserW) {
+      const ell = "…";
+      while (
+        drawUser.length > 1 &&
+        ctx.measureText(drawUser + ell).width > maxUserW
+      ) {
+        drawUser = drawUser.slice(0, -1);
+      }
+      drawUser += ell;
+    }
+    ctx.fillText(drawUser, columnLeft, cursorY);
     clearTextShadow(ctx);
-    const lineH = 20;
-    cursorY += lineH + 6;
-    ctx.strokeStyle = S.borderRule;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(columnLeft, cursorY);
-    ctx.lineTo(columnLeft + maxInnerW, cursorY);
-    ctx.stroke();
-    cursorY += 1;
+    ctx.font = `500 ${STORY_EXPORT_BRAND_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
+    ctx.fillStyle = STORY_EXPORT_BRAND_COLOR;
+    ctx.textAlign = "right";
+    setTextShadow(ctx, 2, 1, 0.35);
+    ctx.fillText(STORY_EXPORT_BRAND_LABEL, LW - padR, cursorY);
+    clearTextShadow(ctx);
+    ctx.textAlign = "left";
+    cursorY += USER_BLOCK_H + STORY_EXPORT_GAP_PX;
   }
 
-  cursorY += 12;
+  const innerTop = cursorY + CAPTION_PAD_TOP;
 
-  const captionBoxX = columnLeft;
-  const captionBoxW = maxInnerW;
-  const captionPadX = 4;
-  const captionPadTop = 6;
-  const captionPadBottom = 8;
-  const captionInnerW = captionBoxW - captionPadX * 2;
-
-  ctx.font = `500 13px ${STORY_EXPORT_FONT_FAMILY}`;
-  const captionLines = wrapCaptionLines(
-    ctx,
-    input.rawCaption,
-    captionInnerW,
-    CAPTION_MAX_LINES
-  );
-
-  const captionBlockH =
-    captionPadTop +
-    captionLines.length * CAPTION_LINE_HEIGHT_PX +
-    captionPadBottom +
-    (input.captionShowSeeMore ? 8 + 15 : 0);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.roundRect(captionBoxX, cursorY, captionBoxW, captionBlockH, 6);
-  ctx.clip();
-
-  const innerTop = cursorY + captionPadTop;
-  for (let i = 0; i < captionLines.length; i++) {
-    const lineY = innerTop + i * CAPTION_LINE_HEIGHT_PX;
-    const lineBottom = lineY + CAPTION_LINE_HEIGHT_PX - 1;
-    ctx.strokeStyle = S.captionLine;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(captionBoxX, lineBottom + 0.5);
-    ctx.lineTo(captionBoxX + captionBoxW, lineBottom + 0.5);
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  ctx.font = `500 13px ${STORY_EXPORT_FONT_FAMILY}`;
+  ctx.font = `500 ${STORY_EXPORT_CAPTION_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
   ctx.fillStyle = S.textMuted;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
@@ -463,64 +294,50 @@ export async function renderInstagramStoryToCanvas(
     ctx.fillText(
       ln,
       captionBoxX + captionPadX,
-      innerTop + i * CAPTION_LINE_HEIGHT_PX
+      innerTop + i * CAPTION_LINE_HEIGHT_PX,
     );
   });
   clearTextShadow(ctx);
 
   if (input.captionShowSeeMore) {
-    ctx.font = `600 11px ${STORY_EXPORT_FONT_FAMILY}`;
+    ctx.font = `600 ${STORY_EXPORT_SEE_MORE_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
     ctx.fillStyle = S.text;
     setTextShadow(ctx, 2, 1, 0.45);
     ctx.fillText(
       SEE_MORE_LABEL,
       captionBoxX + captionPadX,
-      innerTop + captionLines.length * CAPTION_LINE_HEIGHT_PX + 8
+      innerTop + captionLines.length * CAPTION_LINE_HEIGHT_PX + 8,
     );
     clearTextShadow(ctx);
   }
 
   cursorY += captionBlockH;
 
-  if (input.eventLine) {
-    cursorY += 12;
+  if (hasEventLine) {
+    cursorY += STORY_EXPORT_GAP_PX;
     const calY = cursorY;
-    drawCalendarIcon(ctx, captionBoxX, calY, 18, S.textSoft);
-    ctx.font = `500 12px ${STORY_EXPORT_FONT_FAMILY}`;
+    const rowMidY = calY + EVENT_ROW_H / 2;
+    const iconPx = STORY_EXPORT_CALENDAR_ICON_PX;
+    drawCalendarIcon(ctx, captionBoxX, calY, iconPx, S.textSoft);
+    ctx.font = `500 ${STORY_EXPORT_EVENT_FONT_PX}px ${STORY_EXPORT_FONT_FAMILY}`;
     ctx.fillStyle = S.textSoft;
-    ctx.textBaseline = "top";
-    ctx.fillText(input.eventLine, captionBoxX + 18 + 8, calY + 1);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(rawEventLine, captionBoxX + iconPx + 8, rowMidY);
   }
 
-  const footerLeft = 0.08 * LW;
-  /** Bottom edge of footer block (`bottom: 2.5%` on StoryExportCard). */
-  const bottomEdge = LH - 0.025 * LH;
-  const pillFont = `600 10px ${STORY_EXPORT_FONT_FAMILY}`;
-  const pillH = 12 + 5 * 2;
-  const gapPills = 6;
-  const pillTop = bottomEdge - pillH;
-
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  let xPill = footerLeft;
-  const w1 = drawPill(ctx, xPill, pillTop, "App Store", pillFont);
-  xPill += w1 + gapPills;
-  drawPill(ctx, xPill, pillTop, "Play Store", pillFont);
-
-  const downloadOnTop = pillTop - 6 - 13;
-  ctx.font = `500 10px ${STORY_EXPORT_FONT_FAMILY}`;
-  ctx.fillStyle = S.textSoft;
-  setTextShadow(ctx, 2, 1, 0.45);
-  ctx.fillText("Download on", footerLeft, downloadOnTop);
-  clearTextShadow(ctx);
-
-  const echotooTop = downloadOnTop - 5 - 20;
-  ctx.font = `700 15px ${STORY_EXPORT_FONT_FAMILY}`;
-  ctx.fillStyle = S.text;
-  setTextShadow(ctx, 2, 1, 0.5);
-  ctx.fillText("Echotoo.com", footerLeft, echotooTop);
-  clearTextShadow(ctx);
+  const owlSz = STORY_EXPORT_OWL_SIZE_PX;
+  try {
+    const owlPath = getOwlLogoPath();
+    const owlUrl =
+      typeof window !== "undefined"
+        ? new URL(owlPath, window.location.href).href
+        : owlPath;
+    const owlImg = await loadImage(owlUrl);
+    ctx.drawImage(owlImg, LW - owlSz, LH - owlSz, owlSz, owlSz);
+  } catch {
+    /* Owl is decorative; omit if asset fails (offline, bad path, etc.). */
+  }
 
   return canvas;
 }

@@ -3,4 +3,4 @@
 export const ECHO_APP_DISPLAY_NAME = "EchoToo";
 
 export const ECHO_TAGLINE =
-  "Discover hangouts, events, and meetups near you—and go with friends.";
+  "Discover events, meetups, and plans near you—and go with friends.";

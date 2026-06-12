@@ -475,7 +475,7 @@ export default function CreateCategoryPage() {
                 />
                 {showRsvpInfo && (
                   <p className="text-[var(--text)]/65 text-xs mt-2">
-                    Mostly for Hangouts (e.g., set <strong>10</strong> for a
+                    Mostly for events (e.g., set <strong>10</strong> for a
                     small book club so it doesn't overcrowd).
                   </p>
                 )}

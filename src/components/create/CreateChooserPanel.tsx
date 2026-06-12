@@ -8,14 +8,14 @@ type PostType = "hangout" | "experience";
 
 const COPY = {
   hangout: {
-    title: "Hangout",
-    subtitle: "Something happening soon",
-    helper: "For something people can join, check out, or plan for soon.",
+    title: "Events / Hangouts",
+    subtitle: "Plan something people can join",
+    helper: "For meetups, activities, classes, or anything happening soon.",
   },
   experience: {
-    title: "Experience",
-    subtitle: "Share a plan, idea, or itinerary",
-    helper: "Places, routes, or ideas others can try, save, or revisit.",
+    title: "Places / Experiences",
+    subtitle: "Share a place, plan, or idea",
+    helper: "For places, routes, itineraries, or ideas others can save or try.",
   },
 } as const;
 
@@ -105,7 +105,7 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
   const ctaLabel = !selected
     ? "Choose what to create"
     : selected === "hangout"
-    ? "Create hangout"
+    ? "Create event"
     : "Create experience";
 
   const ctaButtonClass = (() => {

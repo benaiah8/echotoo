@@ -1254,6 +1254,21 @@ export default function ProgressiveFeed<T extends { id: string }>({
           .catch((err) => {
             const errorMessage =
               err instanceof Error ? err.message : String(err);
+
+            if (itemsRef.current.length === 0 && getCachedItems) {
+              const cached = getCachedItems();
+              if (cached && cached.length > 0) {
+                const deduplicated = Array.from(
+                  new Map(cached.map((item) => [item.id, item])).values()
+                );
+                setItems(deduplicated);
+                offsetRef.current = deduplicated.length;
+                itemsRef.current = deduplicated;
+                initialLoadCompleteRef.current = true;
+                setEmptySurfaceAwaitingInitialResponse(false);
+              }
+            }
+
             setError(errorMessage);
             console.error("[ProgressiveFeed] Initial load failed:", err);
             // On error, reset loading state immediately
@@ -1448,7 +1463,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
           firstPostId: firstPublished?.id ?? null,
         });
       } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
         console.error("[ProgressiveFeed] Soft refresh failed:", e);
+        if (itemsRef.current.length > 0) {
+          setError(errorMessage);
+        }
       } finally {
         softRefreshInFlightRef.current = false;
       }
@@ -1666,6 +1685,16 @@ export default function ProgressiveFeed<T extends { id: string }>({
       ref={containerRef as React.RefObject<HTMLDivElement>}
       className="w-full"
     >
+      {error && items.length > 0 && (
+        <FeedLoadErrorState
+          compact
+          onRetry={() => {
+            setError(null);
+            loadMore();
+          }}
+        />
+      )}
+
       {/* Items */}
       {enableVirtualScrolling && items.length > 50 ? (
         // Virtual scrolling mode

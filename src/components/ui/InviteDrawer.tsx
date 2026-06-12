@@ -1287,7 +1287,7 @@ export default function InviteDrawer({
                   : "mb-3 line-clamp-2 text-xs"
               }`}
             >
-              {postType === "hangout" ? "Hangout" : "Experience"}:{" "}
+              {postType === "hangout" ? "Event" : "Experience"}:{" "}
               {postCaption || "Untitled"}
             </p>
 

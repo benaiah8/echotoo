@@ -42,8 +42,9 @@ import {
   INVITE_HEADER_PILL_OUTER_HEIGHT_PX,
   inviteThreadHeaderBackArrowClass,
   inviteThreadHeaderBackButtonClass,
-  GROUP_QUOTA_UI_SEGMENT_TOTAL,
+  PERSONAL_QUOTA_SEGMENT_TOTAL,
   groupQuotaActiveSegmentsCount,
+  groupQuotaSegmentTotal,
 } from "./invite-thread/InviteThreadOverlayLayout";
 import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
 import {
@@ -933,12 +934,14 @@ export default function GroupInviteThreadOverlay({
           <InviteThreadTopHeader
             bundle={bundle}
             loading={loading && !bundle}
-            segmentTotal={GROUP_QUOTA_UI_SEGMENT_TOTAL}
+            segmentTotal={
+              bundle ? groupQuotaSegmentTotal(bundle) : PERSONAL_QUOTA_SEGMENT_TOTAL
+            }
             segmentActive={
               bundle
                 ? groupQuotaActiveSegmentsCount(
                     bundle,
-                    GROUP_QUOTA_UI_SEGMENT_TOTAL,
+                    groupQuotaSegmentTotal(bundle),
                   )
                 : 0
             }

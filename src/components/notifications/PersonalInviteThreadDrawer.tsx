@@ -394,7 +394,7 @@ export default function PersonalInviteThreadDrawer({
           >
             <div className="text-[10px] uppercase tracking-wide text-[var(--text)]/45">
               {bundle.post_peek.post_type === "hangout"
-                ? "Hangout"
+                ? "Event"
                 : bundle.post_peek.post_type === "experience"
                 ? "Experience"
                 : "Post"}

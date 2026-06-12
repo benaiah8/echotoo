@@ -320,7 +320,7 @@ export default function PostDetailBody({
   const tags =
     post.tags && post.tags.length > 0
       ? post.tags
-      : [post.type === "experience" ? "Experience" : "Hangout"];
+      : [post.type === "experience" ? "Experience" : "Event"];
 
   // Clearance below sticky actions (floating glass bar is shorter than legacy full-width bar).
   // Create finalize step uses CreateFlowTopBar + notice stack instead of StickyPostActions.

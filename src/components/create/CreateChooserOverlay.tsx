@@ -2,11 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { subscribeAndroidHardwareBack } from "../../lib/androidPostDetailModalBack";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
-import {
-  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
-  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
-  useOverlayEdgeSwipeDismiss,
-} from "../../hooks/useOverlayEdgeSwipeDismiss";
+import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
 import CreateChooserPanel from "./CreateChooserPanel";
 import CreateDraftEntryDialog from "./CreateDraftEntryDialog";
 import { useCreateDraftEntryGate } from "../../hooks/useCreateDraftEntryGate";
@@ -15,6 +11,10 @@ const EXIT_MS = 300;
 const NAV_DELAY_MS = 280;
 /** Backdrop: cancel tap-to-close if pointer moves farther than this (px) from down position. */
 const BACKDROP_TAP_MAX_MOVE_PX = 10;
+
+/** Wider than hook defaults (~48px) for easier swipe-close; capped below old invite 42vw/180px. */
+const CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_VW = 0.32;
+const CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_PX = 128;
 
 type Props = {
   open: boolean;
@@ -82,8 +82,14 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
       engageSwipe: open && animateIn,
       gestureDisabled: draftEntryDialogProps.open,
       edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
-      edgeMaxWidthVw: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
-      edgeMaxWidthPx: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
+      edgeMaxWidthVw: CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_VW,
+      edgeMaxWidthPx: CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_PX,
+      /**
+       * Wider swipe start band than hook defaults, but strip stays at `z-[5]` under the chooser
+       * panel (`z-10`) so full-width Hangout/Experience cards stay tappable (strip must not use
+       * default z-[28] above the panel).
+       */
+      edgeStripZClass: "z-[5]",
       onDismiss: onClose,
     });
 

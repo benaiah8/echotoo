@@ -22,11 +22,6 @@ import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 const COMMENT_IMAGE_UPLOAD_LOG = "[CommentImageUpload]";
-const COMMENT_REPLY_LOG = "[CommentReply]";
-
-function devReplyLog(...args: unknown[]) {
-  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
-}
 
 /** Align with useCreateKeyboardInset — keyboard "open" for follow-up scroll. */
 const KEYBOARD_LIFT_SCROLL_THRESHOLD_PX = 48;
@@ -206,28 +201,16 @@ export default function FloatingCommentInput({
     }
   }, []);
 
-  const logFocusActiveElement = useCallback(() => {
-    if (!import.meta.env.DEV) return;
-    const active = document.activeElement;
-    devReplyLog("activeElement after focus", {
-      tag: active?.tagName,
-      isComposer: active === composerInputRef.current,
-    });
-  }, []);
-
   const focusComposer = useCallback(() => {
     const el = composerInputRef.current;
     if (!el) return;
-    devReplyLog("focus called");
     focusComposerInput(el);
-    logFocusActiveElement();
-  }, [focusComposerInput, logFocusActiveElement]);
+  }, [focusComposerInput]);
 
   const focusForReplyMode = useCallback(() => {
     const el = composerInputRef.current;
     if (!el) return;
     skipNextFocusScrollRef.current = true;
-    devReplyLog("focus for reply parentId", parentId);
     focusComposerInput(el);
     const preferNativeScroll =
       isNativeApp() ||
@@ -236,8 +219,7 @@ export default function FloatingCommentInput({
     if (preferNativeScroll) {
       el.click();
     }
-    logFocusActiveElement();
-  }, [focusComposerInput, logFocusActiveElement, parentId]);
+  }, [focusComposerInput]);
 
   useEffect(() => {
     if (!parentId) return;
@@ -264,7 +246,6 @@ export default function FloatingCommentInput({
   useEffect(() => {
     if (!onFocusComposerReady) return;
     onFocusComposerReady(focusComposer);
-    devReplyLog("focus composer registered");
     return () => {
       onFocusComposerReady(() => {});
     };
@@ -371,16 +352,12 @@ export default function FloatingCommentInput({
       // Prepare images array
       const images = uploadedImage ? [uploadedImage] : [];
 
-      devReplyLog("submit parentId", parentId);
-
       const createdComment = await createComment({
         post_id: postId,
         parent_id: parentId || null,
         content: content.trim(),
         images: images,
       });
-
-      devReplyLog("createComment parent_id", createdComment.parent_id);
 
       // Notify parent component with comment data
       onComment(content.trim(), parentId || undefined, createdComment);

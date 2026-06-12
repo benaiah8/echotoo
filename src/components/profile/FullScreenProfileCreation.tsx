@@ -21,6 +21,7 @@ import AvatarCropModal from "./AvatarCropModal";
 import { isPlaceholderUsername } from "../../lib/profileUsername";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 import HangoutNotificationExplainerModal from "../ui/HangoutNotificationExplainerModal";
+import EchoPresetPickerOverlay from "./EchoPresetPickerOverlay";
 import { getNativePushReceiveState } from "../../lib/explicitNativePushRegistration";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
@@ -142,6 +143,9 @@ export default function FullScreenProfileCreation({
   const [isDeleting, setIsDeleting] = useState(false);
   const [avatarCropOpen, setAvatarCropOpen] = useState(false);
   const [avatarCropSrc, setAvatarCropSrc] = useState<string | null>(null);
+  /** Large nested Echo picker above this overlay (z-[140] in overlay component) */
+  const [echoLargePickerOpen, setEchoLargePickerOpen] = useState(false);
+  const echoLargePickerOpenRef = useRef(false);
   const avatarCropObjectUrlRef = useRef<string | null>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const deleteDangerZoneRef = useRef<HTMLDivElement>(null);
@@ -163,6 +167,14 @@ export default function FullScreenProfileCreation({
       revokeAvatarCropObjectUrl();
     }
   }, [open, revokeAvatarCropObjectUrl]);
+
+  useEffect(() => {
+    echoLargePickerOpenRef.current = echoLargePickerOpen;
+  }, [echoLargePickerOpen]);
+
+  useEffect(() => {
+    if (!open) setEchoLargePickerOpen(false);
+  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -511,6 +523,15 @@ export default function FullScreenProfileCreation({
         skipPopstateRef.current = false;
         return;
       }
+      if (echoLargePickerOpenRef.current) {
+        setEchoLargePickerOpen(false);
+        window.history.pushState(
+          { editProfileModal: true } as const,
+          "",
+          window.location.href,
+        );
+        return;
+      }
       if (!isDirtyFnRef.current()) {
         onCloseRef.current();
         return;
@@ -817,8 +838,9 @@ export default function FullScreenProfileCreation({
   if (!open) return null;
 
   const avatarPreviewUrl = avatarDisplayUrl(avatarUrl);
-  const echoPickerInteractive =
-    avatarMode === "echo" && ECHO_AVATAR_PRESETS.length > 0;
+  /** Strip + large picker entry: available whenever presets exist (not tied to echo mode). */
+  const echoStripOpenable =
+    ECHO_AVATAR_PRESETS.length > 0 && !uploading;
 
   return (
     <div className="fixed inset-0 z-50 bg-[var(--surface)]">
@@ -993,7 +1015,10 @@ export default function FullScreenProfileCreation({
                         : "text-[var(--text)]/70 hover:bg-[var(--surface)]/40 hover:text-[var(--text)]/90",
                     ].join(" ")}
                     disabled={ECHO_AVATAR_PRESETS.length === 0 || uploading}
-                    onClick={() => setAvatarMode("echo")}
+                    onClick={() => {
+                      setAvatarMode("echo");
+                      setEchoLargePickerOpen(true);
+                    }}
                   >
                     Choose Echo
                   </button>
@@ -1007,69 +1032,71 @@ export default function FullScreenProfileCreation({
                 />
 
                 {ECHO_AVATAR_PRESETS.length > 0 ? (
-                  <div
-                    aria-disabled={!echoPickerInteractive}
-                    className={[
-                      "w-full min-w-0 shrink-0",
-                      "rounded-[999px] border-2 border-[var(--border)]",
-                      "bg-[var(--surface-2)]/42 p-1.5",
-                      "backdrop-blur-[var(--glass-blur)] ring-1 ring-[var(--text)]/[0.06]",
-                      echoPickerInteractive
-                        ? "opacity-100"
-                        : "pointer-events-none opacity-[0.42] saturate-[0.82]",
-                    ].join(" ")}
-                  >
-                    {/*
-                     * Outer p-1.5: even inset from rail border.
-                     * Inner rounded + overflow-hidden masks scrollport so owls don’t shear on a vertical edge.
-                     */}
-                    <div className="min-w-0 overflow-hidden rounded-[999px]">
-                      <div
-                        className={[
-                          "flex w-full min-w-0 items-center gap-1.5",
-                          "min-h-[2.5rem] overflow-x-auto overflow-y-hidden rounded-[999px]",
-                          "px-1.5 py-1 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]",
-                        ].join(" ")}
-                      >
-                      {ECHO_AVATAR_PRESETS.map((preset) => {
-                        const value = `${AVATAR_PRESET_PREFIX}${preset.id}`;
-                        const selected =
-                          isAvatarPresetValue(avatarUrl) && avatarUrl === value;
-                        return (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            disabled={!echoPickerInteractive}
-                            aria-disabled={!echoPickerInteractive}
-                            aria-label={`Echo ${preset.id}`}
-                            aria-pressed={selected}
-                            className={[
-                              "relative h-[34px] w-[34px] shrink-0 rounded-full disabled:opacity-65",
-                              "overflow-hidden transition-opacity",
-                              "box-border outline-none",
-                              selected
-                                ? "border-2 border-[var(--brand)]"
-                                : "border border-[var(--border)] opacity-92 hover:opacity-100",
-                              echoPickerInteractive
-                                ? ""
-                                : "cursor-not-allowed hover:opacity-92",
-                            ].join(" ")}
-                            onClick={() => {
-                              if (!echoPickerInteractive) return;
-                              setAvatarUrl(value);
-                            }}
-                          >
-                            <img
-                              src={preset.url}
-                              alt=""
-                              className="h-full w-full object-cover"
-                              draggable={false}
-                            />
-                          </button>
-                        );
-                      })}
+                  <div className="w-full">
+                    <div
+                      role="group"
+                      aria-label="Echo avatars — tap to open picker"
+                      onClick={() => {
+                        if (!echoStripOpenable) return;
+                        setEchoLargePickerOpen(true);
+                      }}
+                      className={[
+                        "w-full min-w-0 shrink-0",
+                        "rounded-[999px] border-2 border-[var(--border)]",
+                        "bg-[var(--surface-2)]/42 p-1.5",
+                        "backdrop-blur-[var(--glass-blur)] ring-1 ring-[var(--text)]/[0.06]",
+                        echoStripOpenable
+                          ? "cursor-pointer opacity-100"
+                          : "pointer-events-none opacity-[0.42] saturate-[0.82]",
+                      ].join(" ")}
+                    >
+                      {/*
+                       * Outer p-1.5: even inset from rail border.
+                       * Inner rounded + overflow-hidden masks scrollport so owls don’t shear on a vertical edge.
+                       * Thumbnails are preview-only; selection happens in EchoPresetPickerOverlay (Done).
+                       */}
+                      <div className="min-w-0 overflow-hidden rounded-[999px]">
+                        <div
+                          className={[
+                            "flex w-full min-w-0 items-center gap-1.5",
+                            "min-h-[2.5rem] overflow-x-auto overflow-y-hidden rounded-[999px]",
+                            "px-1.5 py-1 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]",
+                          ].join(" ")}
+                        >
+                          {ECHO_AVATAR_PRESETS.map((preset) => {
+                            const value = `${AVATAR_PRESET_PREFIX}${preset.id}`;
+                            const selected =
+                              isAvatarPresetValue(avatarUrl) &&
+                              avatarUrl === value;
+                            return (
+                              <div
+                                key={preset.id}
+                                className={[
+                                  "relative h-[34px] w-[34px] shrink-0 rounded-full",
+                                  "overflow-hidden box-border",
+                                  selected
+                                    ? "border-2 border-[var(--brand)]"
+                                    : "border border-[var(--border)] opacity-92",
+                                ].join(" ")}
+                                aria-hidden
+                              >
+                                <img
+                                  src={preset.url}
+                                  alt=""
+                                  className="h-full w-full object-cover"
+                                  draggable={false}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
+                    {echoStripOpenable ? (
+                      <p className="mt-1.5 text-center text-[10px] leading-tight text-[var(--text)]/40">
+                        Tap to choose
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1395,6 +1422,23 @@ export default function FullScreenProfileCreation({
           </div>
         </div>
       </div>
+
+      {echoLargePickerOpen && ECHO_AVATAR_PRESETS.length > 0 ? (
+        <EchoPresetPickerOverlay
+          open
+          onClose={() => setEchoLargePickerOpen(false)}
+          presets={ECHO_AVATAR_PRESETS}
+          initialPresetValue={
+            isAvatarPresetValue(avatarUrl)
+              ? avatarUrl
+              : `${AVATAR_PRESET_PREFIX}${ECHO_AVATAR_PRESETS[0]!.id}`
+          }
+          onSelectPreset={(full) => {
+            setAvatarUrl(full);
+            setAvatarMode("echo");
+          }}
+        />
+      ) : null}
 
       <AvatarCropModal
         open={avatarCropOpen}

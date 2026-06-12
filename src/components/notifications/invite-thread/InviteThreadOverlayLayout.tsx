@@ -73,22 +73,32 @@ function quotaSegmentShapeClass(index: number, segmentTotal: number): string {
 
 const QUOTA_METER_GAP_CLASS = "gap-1";
 
-/** Personal invite threads always show five quota slots in the top bar. */
-export const PERSONAL_QUOTA_SEGMENT_TOTAL = 5;
+/**
+ * Hard cap on drawn segments so very large server quotas do not explode layout.
+ * Typical caps (e.g. 8) render 1:1; larger caps scale into this max.
+ */
+const QUOTA_METER_MAX_DISPLAY_SEGMENTS = 16;
 
-/** Group invite threads always show three quota slots in the top bar UI. */
-export const GROUP_QUOTA_UI_SEGMENT_TOTAL = 3;
+/**
+ * At or below this count, the meter uses compact fixed-width tiles; above it,
+ * stretches to half header width with flex segments (fits 8-segment quota).
+ */
+const QUOTA_METER_COMPACT_SEGMENT_THRESHOLD = 4;
 
-export const GROUP_QUOTA_SEGMENT_MAX = 5;
+/**
+ * Default segment count for loading / empty bundle (matches common 8-message cap).
+ * Call sites should prefer {@link personalQuotaSegmentTotal} when `bundle` exists.
+ */
+export const PERSONAL_QUOTA_SEGMENT_TOTAL = 8;
 
 function quotaMeterWrapperWidthClass(segmentTotal: number): string {
-  return segmentTotal <= GROUP_QUOTA_UI_SEGMENT_TOTAL
+  return segmentTotal <= QUOTA_METER_COMPACT_SEGMENT_THRESHOLD
     ? "w-auto max-w-[108px]"
     : "w-1/2";
 }
 
 function quotaSegmentWidthClass(segmentTotal: number): string {
-  return segmentTotal <= GROUP_QUOTA_UI_SEGMENT_TOTAL
+  return segmentTotal <= QUOTA_METER_COMPACT_SEGMENT_THRESHOLD
     ? "w-8 shrink-0"
     : "min-w-0 flex-1";
 }
@@ -101,32 +111,34 @@ export function inviteThreadMessageStatusLabel(
   return `${bundle.my_messages_remaining} messages left`;
 }
 
-/** Active segment count when personal quota is within 5-slot UI. */
+/** Total segments for personal viewer meter (from used + remaining, capped). */
+export function personalQuotaSegmentTotal(bundle: InviteThreadBundle): number {
+  const cap = bundle.my_messages_used + bundle.my_messages_remaining;
+  return Math.min(QUOTA_METER_MAX_DISPLAY_SEGMENTS, Math.max(1, cap));
+}
+
+/** Lit segment count for personal threads (remaining quota vs cap). */
 export function personalQuotaActiveSegmentsCount(
   bundle: InviteThreadBundle,
 ): number {
+  const totalSeg = personalQuotaSegmentTotal(bundle);
   const cap = bundle.my_messages_used + bundle.my_messages_remaining;
-  if (cap <= PERSONAL_QUOTA_SEGMENT_TOTAL) {
-    return Math.min(
-      PERSONAL_QUOTA_SEGMENT_TOTAL,
-      Math.max(0, bundle.my_messages_remaining),
-    );
+  if (cap <= totalSeg) {
+    return Math.min(totalSeg, Math.max(0, bundle.my_messages_remaining));
   }
   return Math.min(
-    PERSONAL_QUOTA_SEGMENT_TOTAL,
+    totalSeg,
     Math.max(
       0,
-      Math.round(
-        (bundle.my_messages_remaining / cap) * PERSONAL_QUOTA_SEGMENT_TOTAL,
-      ),
+      Math.round((bundle.my_messages_remaining / cap) * totalSeg),
     ),
   );
 }
 
-/** Total pill segments for group viewer quota (matches message cap when ≤ max). */
+/** Total pill segments for group viewer quota (same cap logic as personal). */
 export function groupQuotaSegmentTotal(bundle: InviteThreadBundle): number {
   const cap = bundle.my_messages_used + bundle.my_messages_remaining;
-  return Math.min(GROUP_QUOTA_SEGMENT_MAX, Math.max(1, cap));
+  return Math.min(QUOTA_METER_MAX_DISPLAY_SEGMENTS, Math.max(1, cap));
 }
 
 /** Lit segments (remaining quota) for group threads. */
@@ -156,7 +168,7 @@ function InviteThreadQuotaSegments({
   segmentTotal: number;
   segmentActive: number;
 }) {
-  const meterClass = `flex ${segmentTotal <= GROUP_QUOTA_UI_SEGMENT_TOTAL ? "w-auto" : "w-full"} ${QUOTA_METER_HEIGHT_CLASS} items-stretch ${QUOTA_METER_GAP_CLASS}`;
+  const meterClass = `flex ${segmentTotal <= QUOTA_METER_COMPACT_SEGMENT_THRESHOLD ? "w-auto" : "w-full"} ${QUOTA_METER_HEIGHT_CLASS} items-stretch ${QUOTA_METER_GAP_CLASS}`;
   const segmentWidth = quotaSegmentWidthClass(segmentTotal);
 
   if (!bundle) {

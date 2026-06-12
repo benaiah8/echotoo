@@ -8,12 +8,6 @@ import ImageLightbox from "../ImageLightbox";
 import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
 
-const COMMENT_REPLY_LOG = "[CommentReply]";
-
-function devReplyLog(...args: unknown[]) {
-  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
-}
-
 interface Props {
   comment: CommentWithDetails;
   onReply?: (parentId: string) => void;
@@ -97,7 +91,6 @@ export default function Comment({
         return;
       }
       lastReplyActivationRef.current = now;
-      devReplyLog("button press", comment.id, via);
       onReply?.(comment.id);
     },
     [comment.id, onReply]

@@ -12,7 +12,7 @@ export function PostTypeMetaChip({
   className?: string;
 }) {
   const Icon = type === "hangout" ? PiCalendarBlank : PiPath;
-  const label = type === "hangout" ? "Hangout post" : "Experience post";
+  const label = type === "hangout" ? "Event post" : "Experience post";
   const tint =
     type === "hangout"
       ? [

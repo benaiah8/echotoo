@@ -48,6 +48,7 @@ import {
   inviteThreadHeaderSidePillSizeClass,
   PERSONAL_QUOTA_SEGMENT_TOTAL,
   personalQuotaActiveSegmentsCount,
+  personalQuotaSegmentTotal,
 } from "./invite-thread/InviteThreadOverlayLayout";
 import { useInviteThreadKeyboardLayout } from "./invite-thread/useInviteThreadKeyboardLayout";
 import {
@@ -685,7 +686,9 @@ export default function PersonalInviteThreadOverlay({
           <InviteThreadTopHeader
             bundle={bundle}
             loading={loading && !bundle}
-            segmentTotal={PERSONAL_QUOTA_SEGMENT_TOTAL}
+            segmentTotal={
+              bundle ? personalQuotaSegmentTotal(bundle) : PERSONAL_QUOTA_SEGMENT_TOTAL
+            }
             segmentActive={
               bundle ? personalQuotaActiveSegmentsCount(bundle) : 0
             }

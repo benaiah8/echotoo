@@ -11,12 +11,7 @@ import FloatingCommentInput from "./FloatingCommentInput";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { useCommentThreadRealtime } from "../../hooks/useCommentThreadRealtime";
 
-const COMMENT_REPLY_LOG = "[CommentReply]";
 const RECENT_OPTIMISTIC_TTL_MS = 2000;
-
-function devReplyLog(...args: unknown[]) {
-  if (import.meta.env.DEV) console.log(COMMENT_REPLY_LOG, ...args);
-}
 
 type RecentOptimisticEntry = {
   id: string;
@@ -148,7 +143,6 @@ function mergeRecentOptimisticIntoTree(
     if (result.inserted) {
       tree = result.tree;
     } else {
-      devReplyLog("merge optimistic fallback root", entry.id, entry.parentId);
       tree = [...tree, entry.comment];
     }
   }
@@ -274,7 +268,6 @@ export default function CommentList({
         });
 
         if (opts?.silent) {
-          devReplyLog("silent reload");
           recentOptimisticRef.current = recentOptimisticRef.current.filter(
             (entry) => !commentExistsInTree(commentsData, entry.id)
           );
@@ -344,8 +337,6 @@ export default function CommentList({
     parentId?: string,
     commentData?: any
   ) => {
-    devReplyLog("handleNewComment parentId", parentId);
-
     if (commentData) {
       const newComment: CommentWithDetails = {
         ...commentData,
@@ -373,13 +364,7 @@ export default function CommentList({
         const result = insertCommentInTree(prevComments, newComment, parentId);
         let next = result.tree;
         if (parentId && !result.inserted) {
-          devReplyLog("insert parent not found", parentId);
-          if (import.meta.env.DEV) {
-            console.warn(COMMENT_REPLY_LOG, "parent not found, appending at root", parentId);
-          }
           next = [...prevComments, newComment];
-        } else {
-          devReplyLog("insert ok", { parentId, inserted: result.inserted });
         }
         onCommentCountChange?.(countCommentsInTree(next));
         return next;
@@ -415,7 +400,6 @@ export default function CommentList({
   };
 
   const handleReply = (parentId: string) => {
-    devReplyLog("reply clicked", parentId);
     setReplyingTo(parentId);
     focusComposerRef.current?.();
     window.setTimeout(() => {
@@ -427,7 +411,6 @@ export default function CommentList({
   };
 
   useEffect(() => {
-    devReplyLog("replyingTo changed", replyingTo);
     if (replyingTo) {
       focusComposerRef.current?.();
     }

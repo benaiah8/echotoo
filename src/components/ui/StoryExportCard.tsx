@@ -4,7 +4,8 @@
  * Primary export uses `renderInstagramStoryToCanvas`; keep visual parity with the modal preview when changing layout.
  */
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, RefObject } from "react";
+import { getOwlLogoPath } from "../../lib/assets";
 
 /** Same stack as the preview card + capture root — set on export content so FO doesn’t rely on inheritance. */
 export const STORY_EXPORT_FONT_FAMILY =
@@ -28,8 +29,44 @@ const S = STORY_EXPORT_COLORS;
 export const CAPTION_MAX_LINES = 8;
 export const SEE_MORE_LABEL = "See more on Echotoo.com";
 
-/** 13px × ~1.38 ≈ 18px — explicit px for export card + manual canvas line metrics. */
-export const CAPTION_LINE_HEIGHT_PX = 18;
+/** Typography — keep in sync with `renderInstagramStoryToCanvas`. */
+export const STORY_EXPORT_USERNAME_FONT_PX = 15;
+export const STORY_EXPORT_CAPTION_FONT_PX = 14;
+export const STORY_EXPORT_SEE_MORE_FONT_PX = 12;
+export const STORY_EXPORT_EVENT_FONT_PX = 13;
+
+/** Username: one line + padding under handle (matches canvas `USER_BLOCK_H`). */
+export const USERNAME_LINE_HEIGHT_PX = 22;
+export const USERNAME_PADDING_BOTTOM_PX = 6;
+export const USER_BLOCK_H =
+  USERNAME_LINE_HEIGHT_PX + USERNAME_PADDING_BOTTOM_PX;
+
+/** Caption line box (14px × ~1.43). */
+export const CAPTION_LINE_HEIGHT_PX = 20;
+
+/** Vertical padding inside the black card (above username / below last line). */
+export const STORY_EXPORT_INSET_PAD_Y_PX = 36;
+
+/** Brand wordmark on the username row (right). */
+export const STORY_EXPORT_BRAND_LABEL = "echotoo";
+export const STORY_EXPORT_BRAND_FONT_PX = 12;
+/** Matches `public/owlicon.svg` body fill (`#FFCC00`). */
+export const STORY_EXPORT_BRAND_COLOR = "#FFCC00";
+
+/** Corner owl graphic (fits within bottom inset to avoid overlapping body text). */
+export const STORY_EXPORT_OWL_SIZE_PX = 32;
+
+/** Gap between username / caption / date blocks. */
+export const STORY_EXPORT_GAP_PX = 12;
+
+/** Calendar glyph size; row height aligns with this. */
+export const STORY_EXPORT_CALENDAR_ICON_PX = 20;
+
+export const STORY_EXPORT_EVENT_LINE_HEIGHT_PX = 18;
+export const EVENT_ROW_H = Math.max(
+  STORY_EXPORT_CALENDAR_ICON_PX,
+  STORY_EXPORT_EVENT_LINE_HEIGHT_PX,
+);
 
 const captionClampStyle: CSSProperties = {
   display: "-webkit-box",
@@ -45,10 +82,11 @@ const captionClampStyle: CSSProperties = {
 };
 
 function ExportCalendarIcon({ color }: { color: string }) {
+  const s = STORY_EXPORT_CALENDAR_ICON_PX;
   return (
     <svg
-      width={18}
-      height={18}
+      width={s}
+      height={s}
       viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
@@ -83,168 +121,118 @@ function ExportCalendarIcon({ color }: { color: string }) {
 export type StoryExportCardProps = {
   storyBgSrc: string;
   useBgImage: boolean;
-  hasAvatar: boolean;
-  processedAvatarUrl: string | null;
-  storyFallbackInitial: string;
   safeCreatorHandle: string;
   safeCreatorName: string;
   rawCaption: string;
   captionShowSeeMore: boolean;
   eventLine: string | null;
+  /** Optional ref on the clamped caption paragraph (preview truncation measure). */
+  captionRef?: RefObject<HTMLParagraphElement | null>;
 };
 
 /**
- * Full-bleed story card content (no outer aspect wrapper — parent supplies size).
+ * Dynamic-height black story card: width fills parent; height follows content.
  */
 export default function StoryExportCard({
   storyBgSrc,
   useBgImage,
-  hasAvatar,
-  processedAvatarUrl,
-  storyFallbackInitial,
   safeCreatorHandle,
   safeCreatorName,
   rawCaption,
   captionShowSeeMore,
   eventLine,
+  captionRef,
 }: StoryExportCardProps) {
+  const trimmedEventLine =
+    typeof eventLine === "string" ? eventLine.trim() : "";
+  const showEventLine = trimmedEventLine.length > 0;
+
+  const bgFromPost =
+    useBgImage && storyBgSrc.trim().length > 0
+      ? {
+          backgroundImage: `url(${storyBgSrc})`,
+          backgroundSize: "cover" as const,
+          backgroundPosition: "center" as const,
+          backgroundRepeat: "no-repeat" as const,
+        }
+      : {};
+
   return (
-    <>
-      <div
+    <div
+      style={{
+        position: "relative",
+        boxSizing: "border-box",
+        width: "100%",
+        minHeight: 0,
+        backgroundColor: "#000000",
+        ...bgFromPost,
+        color: S.text,
+        fontFamily: STORY_EXPORT_FONT_FAMILY,
+        WebkitFontSmoothing: "antialiased",
+      }}
+    >
+      <img
+        src={getOwlLogoPath()}
+        alt=""
         aria-hidden
         style={{
           position: "absolute",
-          inset: 0,
-          zIndex: 0,
-          background:
-            "linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%)",
-          backgroundImage: `
-                  linear-gradient(135deg, #f5c800 0%, #1a0f0a 55%, #050308 100%),
-                  linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
-                  linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)
-                `,
-          backgroundSize: "100% 100%, 24px 24px, 24px 24px",
+          right: 0,
+          bottom: 0,
+          width: STORY_EXPORT_OWL_SIZE_PX,
+          height: STORY_EXPORT_OWL_SIZE_PX,
+          objectFit: "contain",
+          objectPosition: "bottom right",
+          display: "block",
+          pointerEvents: "none",
         }}
       />
-
-      {useBgImage ? (
-        <img
-          src={storyBgSrc}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 1,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-          }}
-          crossOrigin="anonymous"
-          draggable={false}
-        />
-      ) : null}
-
       <div
         style={{
-          position: "relative",
-          zIndex: 10,
-          height: "100%",
           boxSizing: "border-box",
-          color: S.text,
-          fontFamily: STORY_EXPORT_FONT_FAMILY,
-          WebkitFontSmoothing: "antialiased",
+          paddingLeft: "8%",
+          paddingRight: "8%",
+          paddingTop: STORY_EXPORT_INSET_PAD_Y_PX,
+          paddingBottom: STORY_EXPORT_INSET_PAD_Y_PX,
         }}
       >
         <div
           style={{
-            position: "absolute",
-            inset: 0,
-            boxSizing: "border-box",
-            paddingLeft: "8%",
-            paddingRight: "8%",
-            paddingTop: "5%",
-            paddingBottom: "26%",
+            width: "100%",
+            maxWidth: 340,
+            marginLeft: "auto",
+            marginRight: "auto",
             display: "flex",
             flexDirection: "column",
-            justifyContent: "flex-start",
+            gap: STORY_EXPORT_GAP_PX,
             alignItems: "stretch",
+            minHeight: 0,
           }}
         >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: 340,
-              alignSelf: "center",
-            }}
-          >
-            {hasAvatar ? (
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 9999,
-                  overflow: "hidden",
-                  border: `2px solid ${S.borderLight}`,
-                  marginBottom: 8,
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-                }}
-              >
-                <img
-                  src={processedAvatarUrl as string}
-                  alt=""
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                  }}
-                  crossOrigin="anonymous"
-                />
-              </div>
-            ) : (
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 9999,
-                  border: `2px solid ${S.borderLight}`,
-                  marginBottom: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: S.initialsBg,
-                  color: S.text,
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-                  lineHeight: 1,
-                }}
-              >
-                <span
-                  style={{
-                    display: "block",
-                    lineHeight: "20px",
-                    height: "20px",
-                    margin: 0,
-                    padding: 0,
-                    fontFamily: STORY_EXPORT_FONT_FAMILY,
-                    fontSize: 20,
-                    fontWeight: 700,
-                    textAlign: "center",
-                  }}
-                >
-                  {storyFallbackInitial}
-                </span>
-              </div>
-            )}
-
-            {(safeCreatorHandle || safeCreatorName) && (
+          {(safeCreatorHandle || safeCreatorName) && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                flexShrink: 0,
+                paddingBottom: USERNAME_PADDING_BOTTOM_PX,
+              }}
+            >
               <p
                 style={{
                   margin: 0,
-                  paddingBottom: 6,
-                  borderBottom: `1px solid ${S.borderRule}`,
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
                   fontFamily: STORY_EXPORT_FONT_FAMILY,
-                  fontSize: 14,
+                  fontSize: STORY_EXPORT_USERNAME_FONT_PX,
                   fontWeight: 600,
-                  lineHeight: "20px",
+                  lineHeight: `${USERNAME_LINE_HEIGHT_PX}px`,
                   letterSpacing: "-0.01em",
                   color: S.text,
                   textShadow: "0 1px 2px rgba(0,0,0,0.45)",
@@ -253,177 +241,103 @@ export default function StoryExportCard({
               >
                 {safeCreatorHandle || safeCreatorName}
               </p>
-            )}
-
-            <div
-              style={{
-                marginTop: 12,
-                width: "100%",
-                borderRadius: 6,
-                padding: "6px 4px 8px",
-                backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent calc(${CAPTION_LINE_HEIGHT_PX}px - 1px), ${S.captionLine} ${CAPTION_LINE_HEIGHT_PX}px, ${S.captionLine} calc(${CAPTION_LINE_HEIGHT_PX}px + 1px))`,
-              }}
-            >
-              <p
+              <span
                 style={{
-                  margin: 0,
+                  flexShrink: 0,
                   fontFamily: STORY_EXPORT_FONT_FAMILY,
-                  fontSize: 13,
+                  fontSize: STORY_EXPORT_BRAND_FONT_PX,
                   fontWeight: 500,
-                  color: S.textMuted,
-                  textShadow: "0 1px 2px rgba(0,0,0,0.4)",
-                  textAlign: "left",
-                  ...captionClampStyle,
+                  lineHeight: `${USERNAME_LINE_HEIGHT_PX}px`,
+                  letterSpacing: "0.04em",
+                  color: STORY_EXPORT_BRAND_COLOR,
+                  textShadow: "0 1px 2px rgba(0,0,0,0.35)",
                 }}
               >
-                {rawCaption}
-              </p>
-              {captionShowSeeMore ? (
-                <p
-                  style={{
-                    margin: "8px 0 0 0",
-                    fontFamily: STORY_EXPORT_FONT_FAMILY,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    lineHeight: "15px",
-                    color: S.text,
-                    textShadow: "0 1px 2px rgba(0,0,0,0.45)",
-                  }}
-                >
-                  {SEE_MORE_LABEL}
-                </p>
-              ) : null}
+                {STORY_EXPORT_BRAND_LABEL}
+              </span>
             </div>
+          )}
 
-            {eventLine ? (
-              <div
+          <div
+            style={{
+              width: "100%",
+              borderRadius: 6,
+              padding: "6px 4px 8px",
+              flexShrink: 0,
+              minHeight: 0,
+            }}
+          >
+            <p
+              ref={captionRef}
+              style={{
+                margin: 0,
+                fontFamily: STORY_EXPORT_FONT_FAMILY,
+                fontSize: STORY_EXPORT_CAPTION_FONT_PX,
+                fontWeight: 500,
+                color: S.textMuted,
+                textShadow: "0 1px 2px rgba(0,0,0,0.4)",
+                textAlign: "left",
+                ...captionClampStyle,
+              }}
+            >
+              {rawCaption}
+            </p>
+            {captionShowSeeMore ? (
+              <p
                 style={{
-                  marginTop: 12,
-                  display: "flex",
-                  flexDirection: "row",
-                  alignItems: "baseline",
-                  justifyContent: "flex-start",
+                  margin: "8px 0 0 0",
                   fontFamily: STORY_EXPORT_FONT_FAMILY,
-                  fontSize: 12,
+                  fontSize: STORY_EXPORT_SEE_MORE_FONT_PX,
+                  fontWeight: 600,
+                  lineHeight: "16px",
+                  color: S.text,
+                  textShadow: "0 1px 2px rgba(0,0,0,0.45)",
+                }}
+              >
+                {SEE_MORE_LABEL}
+              </p>
+            ) : null}
+          </div>
+
+          {showEventLine ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                flexShrink: 0,
+                fontFamily: STORY_EXPORT_FONT_FAMILY,
+                fontSize: STORY_EXPORT_EVENT_FONT_PX,
+                fontWeight: 500,
+                color: S.textSoft,
+              }}
+            >
+              <span
+                style={{
+                  marginRight: 8,
+                  display: "inline-flex",
+                  flexShrink: 0,
+                  alignItems: "center",
+                }}
+              >
+                <ExportCalendarIcon color={S.textSoft} />
+              </span>
+              <span
+                style={{
+                  fontFamily: STORY_EXPORT_FONT_FAMILY,
+                  fontSize: STORY_EXPORT_EVENT_FONT_PX,
                   fontWeight: 500,
+                  lineHeight: `${STORY_EXPORT_EVENT_LINE_HEIGHT_PX}px`,
                   color: S.textSoft,
                 }}
               >
-                <span
-                  style={{ marginRight: 8, display: "flex", flexShrink: 0 }}
-                >
-                  <ExportCalendarIcon color={S.textSoft} />
-                </span>
-                <span
-                  style={{
-                    fontFamily: STORY_EXPORT_FONT_FAMILY,
-                    fontSize: 12,
-                    fontWeight: 500,
-                    lineHeight: "16px",
-                    color: S.textSoft,
-                  }}
-                >
-                  {eventLine}
-                </span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div
-          style={{
-            position: "absolute",
-            left: "8%",
-            bottom: "2.5%",
-            maxWidth: "200px",
-            width: "48%",
-            zIndex: 12,
-            textAlign: "left",
-            pointerEvents: "none",
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              fontFamily: STORY_EXPORT_FONT_FAMILY,
-              fontSize: 15,
-              fontWeight: 700,
-              lineHeight: "20px",
-              letterSpacing: "-0.02em",
-              color: S.text,
-              textShadow: "0 1px 2px rgba(0,0,0,0.5)",
-            }}
-          >
-            Echotoo.com
-          </p>
-          <p
-            style={{
-              margin: "5px 0 0 0",
-              padding: 0,
-              fontFamily: STORY_EXPORT_FONT_FAMILY,
-              fontSize: 10,
-              fontWeight: 500,
-              lineHeight: "13px",
-              color: S.textSoft,
-              textShadow: "0 1px 2px rgba(0,0,0,0.45)",
-            }}
-          >
-            Download on
-          </p>
-          <div
-            style={{
-              marginTop: 6,
-              display: "flex",
-              flexDirection: "row",
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                borderRadius: 9999,
-                background: S.pillBg,
-                color: S.pillFg,
-                padding: "5px 11px",
-                marginRight: 6,
-                marginBottom: 4,
-                fontFamily: STORY_EXPORT_FONT_FAMILY,
-                fontWeight: 600,
-                fontSize: 10,
-                lineHeight: "12px",
-                verticalAlign: "middle",
-                boxSizing: "border-box",
-                boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-              }}
-            >
-              App Store
-            </span>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                borderRadius: 9999,
-                background: S.pillBg,
-                color: S.pillFg,
-                padding: "5px 11px",
-                fontFamily: STORY_EXPORT_FONT_FAMILY,
-                fontWeight: 600,
-                fontSize: 10,
-                lineHeight: "12px",
-                verticalAlign: "middle",
-                boxSizing: "border-box",
-                boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-              }}
-            >
-              Play Store
-            </span>
-          </div>
+                {trimmedEventLine}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
-    </>
+    </div>
   );
 }

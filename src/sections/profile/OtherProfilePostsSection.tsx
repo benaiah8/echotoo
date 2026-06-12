@@ -17,6 +17,10 @@ import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { dataCache } from "../../lib/dataCache";
 import { cancelContextRequests } from "../../lib/requestManager";
 import { getViewerId } from "../../api/services/follows";
+import {
+  readPersistedProfilePosts,
+  writePersistedProfilePosts,
+} from "../../lib/profilePostListCache";
 
 /**
  * OtherProfilePostsSection - Posts section for OTHER profiles
@@ -173,41 +177,65 @@ export default function OtherProfilePostsSection({
   );
 
   const getCachedCreated = useCallback(() => {
-    return dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) || null;
-  }, [profileCreatedDataCacheKey]);
+    if (!viewerHasAccess) return null;
+    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    if (cached?.length) return cached;
+    const persisted = readPersistedProfilePosts("created", userId);
+    return persisted?.items?.length ? persisted.items : null;
+  }, [profileCreatedDataCacheKey, userId, viewerHasAccess]);
 
   const setCachedCreated = useCallback(
     (items: FeedItem[]) => {
+      const persisted = items.slice(0, 20);
       dataCache.set(
         profileCreatedDataCacheKey,
-        items.slice(0, 20),
+        persisted,
         10 * 60 * 1000
       ); // 10min TTL, cache 20 items
+      writePersistedProfilePosts("created", userId, persisted);
     },
-    [profileCreatedDataCacheKey]
+    [profileCreatedDataCacheKey, userId]
   );
 
-  /** Warm memory hits — only when viewer can see Created; skips empty caches. */
+  /** Memory + persisted first page — only when viewer can see Created. */
   const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
     if (!viewerHasAccess) return undefined;
     if (!userId) return undefined;
     const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
-    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedProfilePosts("created", userId);
+    return persisted?.items?.length ? persisted.items : undefined;
   }, [viewerHasAccess, userId, profileCreatedDataCacheKey]);
 
   // [PHASE C.2] Cache callbacks for Interacted tab using dataCache (migrating from profilePostsCache)
   const getCachedInteracted = useCallback(() => {
+    if (!viewerHasAccess) return null;
     const cacheKey = `profile_interacted_${userId}`;
-    return dataCache.get<FeedItem[]>(cacheKey) || null;
-  }, [userId]);
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (cached?.length) return cached;
+    const persisted = readPersistedProfilePosts("interacted", userId);
+    return persisted?.items?.length ? persisted.items : null;
+  }, [userId, viewerHasAccess]);
 
   const setCachedInteracted = useCallback(
     (items: FeedItem[]) => {
       const cacheKey = `profile_interacted_${userId}`;
-      dataCache.set(cacheKey, items.slice(0, 20), 30 * 60 * 1000); // 30min TTL, cache 20 items
+      const persisted = items.slice(0, 20);
+      dataCache.set(cacheKey, persisted, 30 * 60 * 1000); // 30min TTL, cache 20 items
+      writePersistedProfilePosts("interacted", userId, persisted);
     },
     [userId]
   );
+
+  const profileInteractedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (!viewerHasAccess) return undefined;
+    if (!userId) return undefined;
+    const cacheKey = `profile_interacted_${userId}`;
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedProfilePosts("interacted", userId);
+    return persisted?.items?.length ? persisted.items : undefined;
+  }, [viewerHasAccess, userId]);
 
   // [PHASE C.1] LoadItems function for Created tab
   const loadCreatedItems = useCallback(
@@ -267,6 +295,14 @@ export default function OtherProfilePostsSection({
         validViewerUserId
       );
 
+      if (result.error) {
+        if (offset === 0) {
+          const cached = getCachedCreated();
+          if (cached?.length) return cached;
+        }
+        return [];
+      }
+
       if (DEBUG_OTHER_PROFILE) {
         console.log(
           "[OtherProfilePostsSection] loadCreatedItems: Received",
@@ -297,7 +333,7 @@ export default function OtherProfilePostsSection({
 
       return [];
     },
-    [userId, viewerHasAccess]
+    [userId, viewerHasAccess, getCachedCreated]
   ); // [FIX] Remove profile dependency - use userId instead
 
   // [PHASE C.2] Interacted tab loadItems
@@ -365,7 +401,11 @@ export default function OtherProfilePostsSection({
             "[OtherProfilePostsSection] loadInteractedItems: Error:",
             result.error
           );
-          return []; // Return empty array on error (ProgressiveFeed handles gracefully)
+          if (offset === 0) {
+            const cached = getCachedInteracted();
+            if (cached?.length) return cached;
+          }
+          return [];
         }
 
         // Edge Case 4: Handle null/empty data
@@ -409,10 +449,14 @@ export default function OtherProfilePostsSection({
           "[OtherProfilePostsSection] loadInteractedItems: Exception:",
           error
         );
-        return []; // Return empty array on exception (ProgressiveFeed handles gracefully)
+        if (offset === 0) {
+          const cached = getCachedInteracted();
+          if (cached?.length) return cached;
+        }
+        return [];
       }
     },
-    [userId, viewerHasAccess]
+    [userId, viewerHasAccess, getCachedInteracted]
   ); // [FIX] Remove profile and hasAccess dependencies - viewerHasAccess already includes hasAccess
 
   // Cleanup when profile changes to prevent data overlap
@@ -606,6 +650,7 @@ export default function OtherProfilePostsSection({
               renderItem={renderInteractedItem} // [FIX] Use memoized function
               getCachedItems={getCachedInteracted}
               setCachedItems={setCachedInteracted}
+              initialItems={profileInteractedWarmInitialItems}
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
               enableScrollStopDetection={true}
               enableLazyLoading={true}

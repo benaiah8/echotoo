@@ -28,6 +28,10 @@ import { Paths } from "../router/Paths";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import WelcomeModal from "../components/ui/WelcomeModal";
 import { dataCache } from "../lib/dataCache";
+import {
+  readPersistedHomeFeed,
+  writePersistedHomeFeed,
+} from "../lib/homeFeedListCache";
 import { mixHangoutsAndExperiences } from "../lib/horizontalRailFilters";
 import { filterRailsItems } from "../lib/feedExpiryFilters";
 import { preloadImages } from "../lib/imageOptimization";
@@ -448,10 +452,13 @@ export default function HomePage() {
     scheduleScrollHomeFeedToTopRef.current = scheduleScrollHomeFeedToTop;
   }, [scheduleScrollHomeFeedToTop]);
 
-  /** Warm memory hits only — same key as ProgressiveFeed hydrate; avoids empty-array initialItems misleading offset. */
+  /** Memory + persisted first-page snapshot — sync read for cold offline open before dataCache.ready. */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
     const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedHomeFeed(feedCacheKey);
+    if (persisted?.items?.length) return persisted.items;
+    return undefined;
   }, [feedCacheKey]);
 
   /** Date spotlight fetch — independent of ProgressiveFeed; all date filters use spotlight. */
@@ -1064,12 +1071,15 @@ export default function HomePage() {
               initialItems={homeVerticalWarmInitialItems}
               getCachedItems={useCallback(() => {
                 const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-                return Array.isArray(cached) ? cached : null;
+                if (Array.isArray(cached) && cached.length > 0) return cached;
+                const persisted = readPersistedHomeFeed(feedCacheKey);
+                return persisted?.items?.length ? persisted.items : null;
               }, [feedCacheKey])}
               setCachedItems={useCallback(
                 (items: FeedItem[]) => {
                   if (!Array.isArray(items) || items.length === 0) return;
                   dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
+                  writePersistedHomeFeed(feedCacheKey, items);
                 },
                 [feedCacheKey]
               )}

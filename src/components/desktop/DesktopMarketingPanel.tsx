@@ -98,10 +98,10 @@ export default function DesktopMarketingPanel() {
           </div>
 
           <h1 className="text-balance text-[1.65rem] font-bold leading-snug tracking-tight text-[var(--text)] sm:text-[1.95rem] sm:leading-tight">
-            Discover hangouts, experiences, and real-world plans with friends.
+            Discover events, experiences, and real-world plans with friends.
           </h1>
           <p className="mt-5 max-w-lg text-[15px] leading-relaxed text-[var(--text)]/87">
-            Find what&apos;s happening near you, join hangouts, and explore
+            Find what&apos;s happening near you, join events, and explore
             curated stops and itineraries — built for showing up, not endless
             scrolling.
           </p>
@@ -128,7 +128,7 @@ export default function DesktopMarketingPanel() {
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <FeatureCard
-            title="Hangouts"
+            title="Events"
             accentClass="bg-[rgba(247,208,71,0.07)] text-[var(--brand)]"
             icon={<PiConfetti className="text-xl" aria-hidden />}
           >

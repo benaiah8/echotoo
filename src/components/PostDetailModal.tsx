@@ -19,11 +19,7 @@ import { PostDetailDismissContext } from "../context/PostDetailDismissContext";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
 import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
-import {
-  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
-  INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
-  useOverlayEdgeSwipeDismiss,
-} from "../hooks/useOverlayEdgeSwipeDismiss";
+import { useOverlayEdgeSwipeDismiss } from "../hooks/useOverlayEdgeSwipeDismiss";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 
@@ -221,8 +217,7 @@ export default function PostDetailModal() {
       engageSwipe: true,
       gestureDisabled: composerFocused || keyboardOpen,
       edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
-      edgeMaxWidthVw: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_VW,
-      edgeMaxWidthPx: INVITE_OVERLAY_EDGE_SWIPE_MAX_WIDTH_PX,
+      /** Narrow true-edge strip only — do not reuse invite overlay 42vw / 180px (blocks Reply taps). */
       edgeStripZClass: "z-[32]",
       /**
        * Horizontal edge swipe / programmatic dismiss: hook waits COMMIT_NAV_DELAY_MS, then

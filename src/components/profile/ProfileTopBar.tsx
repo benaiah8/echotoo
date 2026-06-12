@@ -36,6 +36,11 @@ import {
 } from "../../lib/explicitNativePushRegistration";
 import { App } from "@capacitor/app";
 import type { Profile } from "../../contexts/ProfileContext";
+import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
+
+/** Own-profile action sheet: wider-than-default edge band, strip stacked under sheet (CreateChooser lesson). */
+const OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_VW = 0.32;
+const OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_PX = 128;
 
 /** Match PostMenu / header: frosted surface + blur (inline for WebKit). */
 const glassMenuSurface: React.CSSProperties = {
@@ -112,7 +117,9 @@ export default function ProfileTopBar({
   const [nativePushRegisterBusy, setNativePushRegisterBusy] = useState(false);
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const profileMenuDropdownRef = useRef<HTMLDivElement>(null);
-  const ownProfileSheetRef = useRef<HTMLDivElement>(null);
+  /** Own-profile sheet portal root (backdrop + sheet + edge strip) — used for outside-dismiss hit-testing. */
+  const ownProfileActionPortalRef = useRef<HTMLDivElement>(null);
+  const playAnimatedDismissRef = useRef<() => void>(() => {});
 
   const showReport = Boolean(reportUserId && onRequestReport);
   const showBlock = Boolean(showBlockControls);
@@ -145,6 +152,21 @@ export default function ProfileTopBar({
     setProfileMenuOpen(false);
     setMenuAnchorRect(null);
   }, []);
+
+  const ownProfileActionSheetOpen = profileMenuOpen && useOwnProfileActionSheet;
+
+  const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
+    useOverlayEdgeSwipeDismiss({
+      active: ownProfileActionSheetOpen,
+      engageSwipe: ownProfileActionSheetOpen,
+      edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
+      edgeMaxWidthVw: OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_VW,
+      edgeMaxWidthPx: OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_PX,
+      edgeStripZClass: "z-[5]",
+      onDismiss: closeProfileMenu,
+    });
+
+  playAnimatedDismissRef.current = playAnimatedDismiss;
 
   const refreshNativePushStatus = useCallback(async () => {
     if (!isNativeApp() || !showHangoutReminderSetupInMenu) {
@@ -184,12 +206,17 @@ export default function ProfileTopBar({
       const t = e.target as Node;
       if (profileMenuTriggerRef.current?.contains(t)) return;
       if (useOwnProfileActionSheet) {
-        if (ownProfileSheetRef.current?.contains(t)) return;
+        if (ownProfileActionPortalRef.current?.contains(t)) return;
       } else if (profileMenuDropdownRef.current?.contains(t)) return;
       closeProfileMenu();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeProfileMenu();
+      if (e.key !== "Escape") return;
+      if (ownProfileActionSheetOpen) {
+        playAnimatedDismissRef.current();
+        return;
+      }
+      closeProfileMenu();
     };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("touchstart", onDoc, { passive: true });
@@ -199,7 +226,12 @@ export default function ProfileTopBar({
       document.removeEventListener("touchstart", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [profileMenuOpen, closeProfileMenu, useOwnProfileActionSheet]);
+  }, [
+    profileMenuOpen,
+    closeProfileMenu,
+    useOwnProfileActionSheet,
+    ownProfileActionSheetOpen,
+  ]);
 
   /** Own-profile sheet: lock document scroll (same pattern as ReportModal). */
   useEffect(() => {
@@ -405,21 +437,24 @@ export default function ProfileTopBar({
         useOwnProfileActionSheet &&
         createPortal(
           <div
+            ref={ownProfileActionPortalRef}
             className="fixed inset-0 z-[100] flex items-center justify-center overscroll-none p-6 pointer-events-none"
+            style={overlayMotionStyle}
             role="presentation"
           >
             <button
               type="button"
               className="pointer-events-auto absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
               aria-label="Dismiss profile menu"
-              onClick={() => closeProfileMenu()}
+              onClick={() => playAnimatedDismiss()}
             />
             <div
-              ref={ownProfileSheetRef}
               role="dialog"
               aria-modal="true"
               aria-labelledby="own-profile-actions-title"
               className="relative z-10 flex max-h-[min(85dvh,calc(100vh-48px))] w-[min(280px,calc(100vw-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5 pointer-events-auto"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
             >
               <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <span
@@ -432,7 +467,7 @@ export default function ProfileTopBar({
                   type="button"
                   className={`${ownSheetGlassPill} flex h-9 w-9 shrink-0 items-center justify-center p-0 text-[var(--text)] hover:bg-[var(--glass-active-bg)]`}
                   aria-label="Close"
-                  onClick={() => closeProfileMenu()}
+                  onClick={() => playAnimatedDismiss()}
                 >
                   <PiCaretLeft size={18} aria-hidden />
                 </button>
@@ -623,6 +658,7 @@ export default function ProfileTopBar({
                 </button>
               </div>
             </div>
+            <div {...edgeStripProps} />
           </div>,
           document.body,
         )}

@@ -15,7 +15,7 @@ import {
 import { Paths } from "../../router/Paths";
 
 const LABELS = {
-  hangout: "Hang out",
+  hangout: "Event",
   experience: "Experience",
 } as const;
 

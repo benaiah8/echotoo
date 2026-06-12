@@ -29,6 +29,7 @@ import { initAppSafeAreaBottom } from "./lib/appSafeAreaBottom";
 import AppUpdateRuntimeController from "./components/AppUpdateRuntimeController";
 import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMount";
 import PushRegistrationMount from "./components/PushRegistrationMount";
+import NativePushPermissionPromptGate from "./components/notifications/NativePushPermissionPromptGate";
 import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
 import {
   consumeProfileDefaultsLoginPending,
@@ -129,6 +130,17 @@ function App() {
             );
           });
 
+        import("./lib/notificationListCache")
+          .then(({ clearAllNotificationListCaches }) => {
+            clearAllNotificationListCaches();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear notification list cache on logout:",
+              error
+            );
+          });
+
         // [OPTIMIZATION: Phase 2] Clear invite data cache on logout
         // Why: Prevents cross-user data leakage
         import("./lib/inviteDataCache")
@@ -180,6 +192,7 @@ function App() {
         <AppErrorBoundary>
           <CreateChooserProvider>
             <OwlMessageModalProvider>
+              <NativePushPermissionPromptGate appContentReady={!showSplash} />
               <div className="app-shell">
                 <DesktopShellWrapper>
                   <OnboardingWrapper>

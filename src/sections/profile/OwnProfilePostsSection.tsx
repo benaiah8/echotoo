@@ -32,6 +32,10 @@ import {
   consumeOwnCreatedPrependPending,
   peekOwnCreatedPrependPending,
 } from "../../lib/ownCreatedPendingPrepend";
+import {
+  readPersistedProfilePosts,
+  writePersistedProfilePosts,
+} from "../../lib/profilePostListCache";
 // [PHASE 4.1.3] Complete refactor: Single ProgressiveFeed pattern for all tabs
 
 /**
@@ -240,7 +244,11 @@ export default function OwnProfilePostsSection({
   // Created tab cache
   // [FIX] Only depend on primitives, not entire profile object - prevents infinite loops
   const getCachedCreated = useCallback(() => {
-    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    let cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    if (!cached?.length) {
+      const persisted = readPersistedProfilePosts("created", userId);
+      cached = persisted?.items?.length ? persisted.items : null;
+    }
 
     // Only add drafts for Created tab
     if (cached) {
@@ -308,30 +316,36 @@ export default function OwnProfilePostsSection({
       const itemsToCache = items.filter((item: any) => !item.isDraft);
       const persisted = itemsToCache.slice(0, 20);
       dataCache.set(profileCreatedDataCacheKey, persisted, 10 * 60 * 1000); // 10min TTL, cache 20 items
+      writePersistedProfilePosts("created", userId, persisted);
     },
-    [profileCreatedDataCacheKey]
+    [profileCreatedDataCacheKey, userId]
   );
 
-  /** Warm memory hits — same bare key as setCached hydrate; skips empty caches (avoid offset skew). */
+  /** Memory + persisted first page — sync read for cold offline open. */
   const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
     if (!userId) return undefined;
     const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
-    return Array.isArray(cached) && cached.length > 0 ? cached : undefined;
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedProfilePosts("created", userId);
+    return persisted?.items?.length ? persisted.items : undefined;
   }, [userId, profileCreatedDataCacheKey]);
 
   /**
    * First paint merge: prepend marker (peek-only) + `profile_created_${userId}` + drafts parity with load offset 0.
    * Consume runs in an effect afterward so ProgressiveFeed mounts with seeded rows synchronously on the publish return.
+   * Not gated on tab visibility — Done/discard can remount Created feed while profile tab is hidden on create routes.
    */
   const publishHydratedCreatedRows = useMemo(() => {
-    if (!visible || !profile?.user_id || !profile) return null;
+    if (!profile?.user_id || !profile) return null;
 
     const peek = peekOwnCreatedPrependPending(profile.user_id);
     if (peek.kind !== "pending") return null;
 
     const localItem = buildLocalPrependedFeedItem(profile, peek.payload);
     const cachedBare =
-      dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) ?? [];
+      dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) ??
+      readPersistedProfilePosts("created", userId)?.items ??
+      [];
 
     const drafts = getDraftsFromStorage();
 
@@ -348,7 +362,6 @@ export default function OwnProfilePostsSection({
 
     return deduped;
   }, [
-    visible,
     userId,
     profileCreatedDataCacheKey,
     profile?.user_id,
@@ -388,30 +401,58 @@ export default function OwnProfilePostsSection({
   // Interacted tab cache
   const getCachedInteracted = useCallback(() => {
     const cacheKey = `profile_interacted_${userId}`;
-    return dataCache.get<FeedItem[]>(cacheKey) || null;
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (cached?.length) return cached;
+    const persisted = readPersistedProfilePosts("interacted", userId);
+    return persisted?.items?.length ? persisted.items : null;
   }, [userId]);
 
   const setCachedInteracted = useCallback(
     (items: FeedItem[]) => {
       const cacheKey = `profile_interacted_${userId}`;
-      dataCache.set(cacheKey, items.slice(0, 20), 30 * 60 * 1000); // 30min TTL, cache 20 items
+      const persisted = items.slice(0, 20);
+      dataCache.set(cacheKey, persisted, 30 * 60 * 1000); // 30min TTL, cache 20 items
+      writePersistedProfilePosts("interacted", userId, persisted);
     },
     [userId]
   );
 
+  const profileInteractedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (!userId) return undefined;
+    const cacheKey = `profile_interacted_${userId}`;
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedProfilePosts("interacted", userId);
+    return persisted?.items?.length ? persisted.items : undefined;
+  }, [userId]);
+
   // Saved tab cache
   const getCachedSaved = useCallback(() => {
     const cacheKey = `profile_saved_${userId}`;
-    return dataCache.get<FeedItem[]>(cacheKey) || null;
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (cached?.length) return cached;
+    const persisted = readPersistedProfilePosts("saved", userId);
+    return persisted?.items?.length ? persisted.items : null;
   }, [userId]);
 
   const setCachedSaved = useCallback(
     (items: FeedItem[]) => {
       const cacheKey = `profile_saved_${userId}`;
-      dataCache.set(cacheKey, items.slice(0, 20), 30 * 60 * 1000); // 30min TTL, cache 20 items
+      const persisted = items.slice(0, 20);
+      dataCache.set(cacheKey, persisted, 30 * 60 * 1000); // 30min TTL, cache 20 items
+      writePersistedProfilePosts("saved", userId, persisted);
     },
     [userId]
   );
+
+  const profileSavedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    if (!userId) return undefined;
+    const cacheKey = `profile_saved_${userId}`;
+    const cached = dataCache.get<FeedItem[]>(cacheKey);
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedProfilePosts("saved", userId);
+    return persisted?.items?.length ? persisted.items : undefined;
+  }, [userId]);
 
   // [PHASE 4.1.3] All tabs now use ProgressiveFeed - no manual loading needed
   // ProgressiveFeed handles caching, loading, pagination automatically
@@ -420,6 +461,11 @@ export default function OwnProfilePostsSection({
   useEffect(() => {
     const onLocalDraftDiscarded = () => {
       if (userId) {
+        const prependPeek = peekOwnCreatedPrependPending(userId);
+        if (prependPeek.kind === "pending") {
+          // Publish Done clears drafts after marker write — do not wipe/remount Created seed path.
+          return;
+        }
         dataCache.delete(profileCreatedDataCacheKey);
       }
       setLocalDraftEpoch((n) => n + 1);
@@ -486,6 +532,22 @@ export default function OwnProfilePostsSection({
         validViewerUserId
       );
 
+      if (result.error) {
+        if (offset === 0) {
+          const drafts = getDraftsFromStorage();
+          let bare =
+            dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) ??
+            readPersistedProfilePosts("created", currentUserId)?.items ??
+            [];
+          bare = bare.filter((item) => !(item as { isDraft?: boolean }).isDraft);
+          const merged = [...drafts, ...bare];
+          if (merged.length > 0) {
+            return { items: merged, consumedOffset: bare.length };
+          }
+        }
+        return offset === 0 ? [] : [];
+      }
+
       const backendRows = (result.data || []).length;
 
       // Prepend localStorage drafts to first page only
@@ -517,7 +579,7 @@ export default function OwnProfilePostsSection({
       }
       return { items: merged, consumedOffset: backendRows };
     },
-    [userId, getDraftsFromStorage]
+    [userId, getDraftsFromStorage, profileCreatedDataCacheKey]
   ); // [FIX] Only depend on userId and getDraftsFromStorage
 
   // Interacted tab loadItems
@@ -548,6 +610,14 @@ export default function OwnProfilePostsSection({
         offset
       );
 
+      if (result.error) {
+        if (offset === 0) {
+          const cached = getCachedInteracted();
+          if (cached?.length) return cached;
+        }
+        return [];
+      }
+
       // Convert to FeedItem format (RPC now carries canonical engagement counts).
       if (result.data) {
         const mapped = result.data.map(convertLikedToFeedItem);
@@ -564,7 +634,7 @@ export default function OwnProfilePostsSection({
 
       return [];
     },
-    [userId]
+    [userId, getCachedInteracted]
   ); // [FIX] Only depend on userId
 
   // Saved tab loadItems
@@ -603,6 +673,14 @@ export default function OwnProfilePostsSection({
         limit,
         offset
       );
+
+      if (result.error) {
+        if (offset === 0) {
+          const cached = getCachedSaved();
+          if (cached?.length) return cached;
+        }
+        return [];
+      }
 
       // [DEBUG] Log response size to identify large fetches (4MB issue)
       if (DEBUG_OWN_PROFILE && result.data) {
@@ -643,10 +721,8 @@ export default function OwnProfilePostsSection({
 
       return [];
     },
-    [userId]
+    [userId, getCachedSaved]
   ); // [FIX] Only depend on userId
-
-  // [PHASE B.2] Unified loadItems removed - using separate functions for each ProgressiveFeed
 
   // [DEBUG] Track tab changes
   useEffect(() => {
@@ -845,6 +921,7 @@ export default function OwnProfilePostsSection({
               renderItem={renderInteractedItem} // [FIX] Use memoized function
               getCachedItems={getCachedInteracted}
               setCachedItems={setCachedInteracted}
+              initialItems={profileInteractedWarmInitialItems}
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
               enableScrollStopDetection={true}
               enableLazyLoading={true}
@@ -866,6 +943,7 @@ export default function OwnProfilePostsSection({
               renderItem={renderSavedItem} // [FIX] Use memoized function
               getCachedItems={getCachedSaved}
               setCachedItems={setCachedSaved}
+              initialItems={profileSavedWarmInitialItems}
               pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
               enableScrollStopDetection={true}
               enableLazyLoading={true}
