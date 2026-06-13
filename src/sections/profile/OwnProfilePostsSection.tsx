@@ -49,6 +49,8 @@ interface OwnProfilePostsSectionProps {
   visible?: boolean; // [OPTIMIZATION] Only load data when tab is visible
   /** Bumps when user taps profile tab again — remount feeds + drop tab caches */
   feedRefreshEpoch?: number;
+  /** Bumps after publish navigation — select Created tab */
+  focusCreatedTabEpoch?: number;
 }
 
 // [DEBUG] Toggle for console logs
@@ -57,6 +59,7 @@ const DEBUG_OWN_PROFILE = false;
 export default function OwnProfilePostsSection({
   visible = true, // Default to true for backward compatibility
   feedRefreshEpoch = 0,
+  focusCreatedTabEpoch = 0,
 }: OwnProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
@@ -68,6 +71,17 @@ export default function OwnProfilePostsSection({
 
   // React 19: useTransition for non-urgent tab switching
   const [isPending, startTransition] = useTransition();
+
+  const prevFocusCreatedTabEpochRef = useRef(focusCreatedTabEpoch);
+  useEffect(() => {
+    if (
+      focusCreatedTabEpoch > 0 &&
+      focusCreatedTabEpoch !== prevFocusCreatedTabEpochRef.current
+    ) {
+      prevFocusCreatedTabEpochRef.current = focusCreatedTabEpoch;
+      startTransition(() => setTab("created"));
+    }
+  }, [focusCreatedTabEpoch, startTransition]);
 
   // Use profile.user_id consistently (not profile.id)
   // Must be declared before useEffects that use it

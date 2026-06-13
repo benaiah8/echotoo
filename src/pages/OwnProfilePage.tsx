@@ -63,6 +63,10 @@ import { SKIP_WELCOME_ONBOARDING } from "../lib/featureFlags";
 import { Paths } from "../router/Paths";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { getCurrentUserIsReportReviewer } from "../api/services/reportReview";
+import {
+  isOwnProfilePublishNavigationState,
+  scrollOwnProfileToTopAfterPublish,
+} from "../lib/profilePublishNavigation";
 
 /** Verbose profile-tab load instrumentation (PROFILEDBG). Off by default. */
 const DEBUG_PROFILE_LOAD = false;
@@ -83,6 +87,9 @@ export default function OwnProfilePage() {
 
   /** Tap profile tab again / pull-to-refresh → remount feeds (feed dataCache retained until fresh load replaces) */
   const [profileFeedRefreshEpoch, setProfileFeedRefreshEpoch] = useState(0);
+  /** Bumps when returning from publish — forces Created tab focus in posts section */
+  const [publishReturnFocusEpoch, setPublishReturnFocusEpoch] = useState(0);
+  const publishReturnHandledKeyRef = useRef<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
   /** False until the visible-tab profile load effect finishes (avoids false error before first fetch). */
@@ -238,6 +245,29 @@ export default function OwnProfilePage() {
     return () =>
       window.removeEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
   }, [isProfileTabVisible, profile?.id]);
+
+  /** Publish success → profile: scroll top, remount Created feed, then clear one-shot nav state */
+  useEffect(() => {
+    if (!isOwnProfilePublishNavigationState(location.state)) return;
+
+    const handledKey = `${location.key}:${location.state.postId ?? ""}`;
+    if (publishReturnHandledKeyRef.current === handledKey) return;
+    publishReturnHandledKeyRef.current = handledKey;
+
+    scrollOwnProfileToTopAfterPublish();
+
+    if (profile?.id) invalidateProfile(profile.id);
+    setProfileFeedRefreshEpoch((n) => n + 1);
+    setPublishReturnFocusEpoch((n) => n + 1);
+
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [
+    location.key,
+    location.state,
+    location.pathname,
+    navigate,
+    profile?.id,
+  ]);
 
   const {
     pullPx,
@@ -1107,6 +1137,7 @@ export default function OwnProfilePage() {
             <OwnProfilePostsSection
               visible={isProfileTabVisible}
               feedRefreshEpoch={profileFeedRefreshEpoch}
+              focusCreatedTabEpoch={publishReturnFocusEpoch}
             />
 
             {/* Modals and drawers */}

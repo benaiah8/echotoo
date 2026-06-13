@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { CommentWithDetails } from "../../types/comment";
 import {
   getCommentsForPost,
@@ -10,6 +11,10 @@ import Comment from "./Comment";
 import FloatingCommentInput from "./FloatingCommentInput";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { useCommentThreadRealtime } from "../../hooks/useCommentThreadRealtime";
+import {
+  scheduleStagedModalReplyTargetScroll,
+  POST_DETAIL_MODAL_SCROLL_ROOT,
+} from "../../lib/postDetailCommentsScroll";
 
 const RECENT_OPTIMISTIC_TTL_MS = 2000;
 
@@ -27,6 +32,8 @@ interface Props {
   autoFocusCommentComposer?: boolean;
   /** Parent stores the latest focus() for the modal sticky bar. */
   setFocusComposer?: (focus: () => void) => void;
+  /** Modal only: portal mount for composer outside modal scroll root. */
+  modalComposerPortalHost?: HTMLElement | null;
 }
 
 function countCommentsInTree(comments: CommentWithDetails[]): number {
@@ -89,7 +96,7 @@ function insertCommentInTree(
   parentId?: string
 ): { tree: CommentWithDetails[]; inserted: boolean } {
   if (!parentId) {
-    return { tree: [...comments, newComment], inserted: true };
+    return { tree: [newComment, ...comments], inserted: true };
   }
 
   let inserted = false;
@@ -143,7 +150,7 @@ function mergeRecentOptimisticIntoTree(
     if (result.inserted) {
       tree = result.tree;
     } else {
-      tree = [...tree, entry.comment];
+      tree = [entry.comment, ...tree];
     }
   }
 
@@ -217,6 +224,7 @@ export default function CommentList({
   isModal = false,
   autoFocusCommentComposer = false,
   setFocusComposer,
+  modalComposerPortalHost = null,
 }: Props) {
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
@@ -226,7 +234,14 @@ export default function CommentList({
   const [userProfile, setUserProfile] = useState<any>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const focusComposerRef = useRef<(() => void) | null>(null);
+  const gestureFocusComposerRef = useRef<(() => void) | null>(null);
   const recentOptimisticRef = useRef<RecentOptimisticEntry[]>([]);
+  const replyingToRef = useRef<string | null>(null);
+  const stagedReplyScrollRef = useRef<{ cancel: () => void } | null>(null);
+
+  const dockModalComposer = isModal && modalComposerPortalHost != null;
+
+  const listBottomPaddingClass = dockModalComposer ? "pb-6" : "pb-24";
 
   const handleFocusComposerReady = useCallback(
     (fn: () => void) => {
@@ -297,6 +312,23 @@ export default function CommentList({
   useEffect(() => {
     void loadComments();
   }, [loadComments]);
+
+  useEffect(() => {
+    replyingToRef.current = replyingTo;
+  }, [replyingTo]);
+
+  useEffect(() => {
+    return () => {
+      stagedReplyScrollRef.current?.cancel();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!replyingTo) {
+      stagedReplyScrollRef.current?.cancel();
+      stagedReplyScrollRef.current = null;
+    }
+  }, [replyingTo]);
 
   const commentIds = useMemo(
     () => collectAllCommentIds(comments),
@@ -399,71 +431,130 @@ export default function CommentList({
     }
   };
 
+  const handleClearReplyMode = useCallback(() => {
+    setReplyingTo(null);
+  }, []);
+
   const handleReply = (parentId: string) => {
-    setReplyingTo(parentId);
-    focusComposerRef.current?.();
-    window.setTimeout(() => {
-      const active = document.activeElement;
-      if (active?.tagName !== "INPUT" && active?.tagName !== "TEXTAREA") {
-        focusComposerRef.current?.();
+    stagedReplyScrollRef.current?.cancel();
+    stagedReplyScrollRef.current = null;
+
+    if (replyingTo === parentId) {
+      replyingToRef.current = null;
+      setReplyingTo(null);
+      if (isModal) {
+        const input = document.querySelector(
+          '[data-post-detail-modal-composer-host] input[type="text"]'
+        ) as HTMLInputElement | null;
+        input?.blur();
       }
-    }, 0);
+      return;
+    }
+
+    replyingToRef.current = parentId;
+    setReplyingTo(parentId);
+    gestureFocusComposerRef.current?.();
+
+    if (isModal) {
+      const targetId = parentId;
+      stagedReplyScrollRef.current = scheduleStagedModalReplyTargetScroll(
+        targetId,
+        {
+          behavior: "auto",
+          isActive: () =>
+            replyingToRef.current === targetId &&
+            document.querySelector(POST_DETAIL_MODAL_SCROLL_ROOT) != null,
+        }
+      );
+    }
   };
 
-  useEffect(() => {
-    if (replyingTo) {
-      focusComposerRef.current?.();
-    }
-  }, [replyingTo]);
+  const displayComments = useMemo(
+    () => [...comments].reverse(),
+    [comments]
+  );
 
-  if (loading) {
-    return (
-      <div className="p-4">
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-[var(--text)]/10 animate-pulse" />
-              <div className="flex-1 space-y-2">
-                <div className="h-4 bg-[var(--text)]/10 rounded animate-pulse w-1/4" />
-                <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse w-3/4" />
-                <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse w-1/2" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const composerPlaceholder = replyingTo
+    ? "Write a reply..."
+    : "Write a comment...";
 
-  if (error) {
-    return (
-      <div className="mt-6 border-t border-[var(--border)]">
-        <div className="p-4 pb-24 text-center">
-          <p className="text-sm text-red-500">{error}</p>
-          <button
-            onClick={() => void loadComments()}
-            className="mt-2 px-3 py-1 text-xs bg-[var(--primary)] text-[var(--primaryText)] rounded-lg hover:bg-[var(--primary)]/90"
-          >
-            Try Again
-          </button>
-        </div>
-
+  const commentComposer = isModal ? (
+    modalComposerPortalHost ? (
+      createPortal(
         <FloatingCommentInput
           postId={postId}
+          parentId={replyingTo}
           onComment={handleNewComment}
-          placeholder="Write a comment..."
+          onReplyModeClear={handleClearReplyMode}
+          placeholder={composerPlaceholder}
           isModal={isModal}
           autoFocusComposer={autoFocusCommentComposer}
           onFocusComposerReady={handleFocusComposerReady}
-        />
-      </div>
-    );
-  }
+          onGestureFocusReady={(fn) => {
+            gestureFocusComposerRef.current = fn;
+          }}
+          modalComposerLayer="layer-absolute"
+        />,
+        modalComposerPortalHost
+      )
+    ) : (
+      <FloatingCommentInput
+        postId={postId}
+        parentId={replyingTo}
+        onComment={handleNewComment}
+        onReplyModeClear={handleClearReplyMode}
+        placeholder={composerPlaceholder}
+        isModal={isModal}
+        autoFocusComposer={autoFocusCommentComposer}
+        onFocusComposerReady={handleFocusComposerReady}
+        onGestureFocusReady={(fn) => {
+          gestureFocusComposerRef.current = fn;
+        }}
+      />
+    )
+  ) : (
+    <FloatingCommentInput
+      postId={postId}
+      parentId={replyingTo}
+      onComment={handleNewComment}
+      onReplyModeClear={handleClearReplyMode}
+      placeholder={composerPlaceholder}
+      isModal={isModal}
+      autoFocusComposer={autoFocusCommentComposer}
+      onFocusComposerReady={handleFocusComposerReady}
+      onGestureFocusReady={(fn) => {
+        gestureFocusComposerRef.current = fn;
+      }}
+    />
+  );
 
   return (
     <div className="mt-6 border-t border-[var(--border)]">
-      <div className="p-4 pb-24">
-        {comments.length === 0 ? (
+      <div className={`p-4 ${listBottomPaddingClass}`}>
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-[var(--text)]/10 animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 bg-[var(--text)]/10 rounded animate-pulse w-1/4" />
+                  <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse w-3/4" />
+                  <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <div className="text-center">
+            <p className="text-sm text-red-500">{error}</p>
+            <button
+              onClick={() => void loadComments()}
+              className="mt-2 px-3 py-1 text-xs bg-[var(--primary)] text-[var(--primaryText)] rounded-lg hover:bg-[var(--primary)]/90"
+            >
+              Try Again
+            </button>
+          </div>
+        ) : comments.length === 0 ? (
           <div className="text-center py-8">
             <p className="text-sm text-[var(--text)]/60">No comments yet</p>
             <p className="text-xs text-[var(--text)]/40 mt-1">
@@ -472,7 +563,7 @@ export default function CommentList({
           </div>
         ) : (
           <div className="space-y-1">
-            {comments.map((comment) => (
+            {displayComments.map((comment) => (
               <Comment
                 key={comment.id}
                 comment={comment}
@@ -481,22 +572,14 @@ export default function CommentList({
                 onDelete={handleDeleteComment}
                 onLikeChange={handleLikeChange}
                 currentUserId={currentUserId || undefined}
+                activeReplyId={replyingTo}
               />
             ))}
           </div>
         )}
       </div>
 
-      <FloatingCommentInput
-        postId={postId}
-        parentId={replyingTo}
-        onComment={handleNewComment}
-        onCancel={replyingTo ? () => setReplyingTo(null) : undefined}
-        placeholder={replyingTo ? "Write a reply..." : "Write a comment..."}
-        isModal={isModal}
-        autoFocusComposer={autoFocusCommentComposer}
-        onFocusComposerReady={handleFocusComposerReady}
-      />
+      {commentComposer}
     </div>
   );
 }

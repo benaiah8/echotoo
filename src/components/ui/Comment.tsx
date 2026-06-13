@@ -15,6 +15,7 @@ interface Props {
   onDelete?: (commentId: string) => void;
   onLikeChange?: (commentId: string, liked: boolean, count: number) => void;
   currentUserId?: string;
+  activeReplyId?: string | null;
   depth?: number;
 }
 
@@ -25,6 +26,7 @@ export default function Comment({
   onDelete,
   onLikeChange,
   currentUserId,
+  activeReplyId = null,
   depth = 0,
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
@@ -37,6 +39,7 @@ export default function Comment({
   const lastReplyActivationRef = useRef(0);
 
   const isOwner = currentUserId === comment.author_id;
+  const isActiveReply = activeReplyId === comment.id;
   const maxDepth = 3; // Limit nesting depth
   const canReply = depth < maxDepth;
 
@@ -98,6 +101,7 @@ export default function Comment({
 
   return (
     <div
+      data-comment-id={comment.id}
       className={`${
         depth > 0 ? "ml-6 border-l border-[var(--border)] pl-4" : ""
       }`}
@@ -230,7 +234,12 @@ export default function Comment({
                   handleReplyPress("pointerdown");
                 }}
                 onClick={() => handleReplyPress("click")}
-                className="relative z-10 pointer-events-auto touch-manipulation text-xs text-[var(--text)]/70 hover:text-[var(--text)] active:text-[var(--text)] transition-colors"
+                className={[
+                  "relative z-10 pointer-events-auto touch-manipulation text-xs transition-colors",
+                  isActiveReply
+                    ? "font-medium text-[var(--text)]"
+                    : "text-[var(--text)]/70 hover:text-[var(--text)] active:text-[var(--text)]",
+                ].join(" ")}
               >
                 Reply
               </button>
@@ -286,6 +295,7 @@ export default function Comment({
               onDelete={onDelete}
               onLikeChange={onLikeChange}
               currentUserId={currentUserId}
+              activeReplyId={activeReplyId}
               depth={depth + 1}
             />
           ))}

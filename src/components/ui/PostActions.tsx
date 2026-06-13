@@ -175,7 +175,7 @@ export default function PostActions({
         state: {
           backgroundLocation: location,
           initialPost: post ?? undefined,
-          focusCommentComposer: true,
+          scrollToComments: true,
         },
       }
     );

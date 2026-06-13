@@ -2,7 +2,7 @@ import Modal from "./Modal";
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
-import { PiAppleLogo, PiEye, PiEyeSlash } from "react-icons/pi";
+import { PiAppleLogo, PiEye, PiEyeSlash, PiInfo } from "react-icons/pi";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { supabase } from "../../lib/supabaseClient";
@@ -210,7 +210,10 @@ async function persistAppleFullNameAfterNativeSignIn(
   await finalizeAppleProfileClientSync(userId);
 }
 
-/** Our local form state (username/fullName optional for login) */
+/**
+ * Form state for reviewer email login. Optional signup fields retained so
+ * {@link handleEmailSignup} stays valid if re-enabled internally.
+ */
 type FormState = {
   fullName?: string;
   username?: string;
@@ -230,6 +233,7 @@ function PasswordInput({
   placeholder = "••••••••",
   showPassword,
   onToggleVisibility,
+  autoComplete,
   "data-testid": dataTestId,
 }: {
   value: string;
@@ -237,6 +241,7 @@ function PasswordInput({
   placeholder?: string;
   showPassword: boolean;
   onToggleVisibility: () => void;
+  autoComplete?: string;
   "data-testid"?: string;
 }) {
   return (
@@ -247,6 +252,7 @@ function PasswordInput({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        autoComplete={autoComplete}
         data-testid={dataTestId}
       />
       <button
@@ -266,15 +272,15 @@ const AuthModal = () => {
   const navigate = useNavigate();
   const { authModal } = useSelector((s: RootState) => s.modal);
 
-  const [tab, setTab] = useState<"login" | "signup">("login");
-  /** When true, show Login / Sign up tabs + email fields (OAuth + guest stay visible above). */
+  /** When true, show email + password login (OAuth + guest stay visible above). */
   const [showEmailForm, setShowEmailForm] = useState(false);
+  /** Inline helper for who email login is intended for (toggle via info control). */
+  const [showEmailLoginInfo, setShowEmailLoginInfo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [signupPhase, setSignupPhase] = useState<SignupPhase>("form");
   const [resendCooldown, setResendCooldown] = useState(0);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [showRepeatPassword, setShowRepeatPassword] = useState(false);
   const [data, setData] = useState<FormState>({
     email: "",
     password: "",
@@ -313,8 +319,9 @@ const AuthModal = () => {
     return () => sub.subscription.unsubscribe();
   }, [dispatch]);
 
-  // auto-reset inputs and login error when switching tabs
+  // Reset sensitive fields when expanding email login
   useEffect(() => {
+    if (!showEmailForm) return;
     setData((d) => ({
       ...d,
       password: "",
@@ -322,7 +329,7 @@ const AuthModal = () => {
     }));
     setLoginError(null);
     setAuthAgreementError(null);
-  }, [tab]);
+  }, [showEmailForm]);
 
   useEffect(() => {
     if (acceptedTerms) setAuthAgreementError(null);
@@ -334,6 +341,7 @@ const AuthModal = () => {
     if (!authModal) {
       setSignupPhase("form");
       setShowEmailForm(false);
+      setShowEmailLoginInfo(false);
       setAuthAgreementError(null);
     } else {
       setAcceptedTerms(false);
@@ -796,7 +804,7 @@ const AuthModal = () => {
       centerVariant="glass"
       centerModalOverrideClassname={AUTH_MODAL_SHELL_CLASS}
     >
-      <div className="w-full mx-auto text-[var(--text)]">
+      <div className="auth-modal-scroll w-full mx-auto max-h-[min(78dvh,540px)] overflow-y-auto overflow-x-hidden overscroll-contain pr-0.5 text-[var(--text)] [-webkit-overflow-scrolling:touch]">
         <div className="flex flex-col items-center text-center mb-5">
           <Logo size={52} rounded={14} className="mb-3" />
           <h2 className="text-lg font-semibold leading-tight">
@@ -896,7 +904,7 @@ const AuthModal = () => {
 
         <button
           type="button"
-          className={`auth-guest-link w-full mb-1 ${
+          className={`auth-guest-link w-full mb-0.5 ${
             !acceptedTerms && !loading ? "opacity-55" : ""
           }`}
           onClick={continueAsGuest}
@@ -905,52 +913,80 @@ const AuthModal = () => {
         </button>
 
         {!showEmailForm ? (
-          <button
-            type="button"
-            className={`w-full text-center text-xs font-normal text-[var(--brand)] py-2 mt-1 transition-opacity hover:opacity-100 hover:underline ${
-              !acceptedTerms && !loading ? "opacity-55" : "opacity-70"
-            }`}
-            onClick={() => {
-              if (!requireAuthAgreement()) return;
-              setShowEmailForm(true);
-            }}
-            aria-expanded={false}
-            aria-controls="auth-email-sign-in"
-          >
-            Log in or sign up with email
-          </button>
+          <div className="mt-0.5 w-full">
+            <div className="flex items-center justify-center gap-1 py-1">
+              <button
+                type="button"
+                className={`text-center text-[10px] font-normal text-[var(--muted)] tracking-wide transition-colors hover:text-[var(--text)]/90 ${
+                  !acceptedTerms && !loading ? "opacity-50" : "opacity-80"
+                }`}
+                onClick={() => {
+                  if (!requireAuthAgreement()) return;
+                  setShowEmailForm(true);
+                }}
+                aria-expanded={showEmailForm}
+                aria-controls="auth-email-sign-in"
+              >
+                Log in with email
+              </button>
+              <button
+                type="button"
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] hover:text-[var(--text)]/90 ${
+                  !acceptedTerms && !loading ? "opacity-50" : "opacity-80"
+                }`}
+                aria-label="About email login"
+                aria-expanded={showEmailLoginInfo}
+                aria-controls="email-login-info"
+                onClick={() => setShowEmailLoginInfo((v) => !v)}
+              >
+                <PiInfo size={15} aria-hidden />
+              </button>
+            </div>
+            {showEmailLoginInfo ? (
+              <p
+                id="email-login-info"
+                className="mx-auto mb-1 max-w-[280px] rounded-lg border border-[var(--border)]/60 bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] px-2.5 py-1.5 text-center text-[10px] leading-snug text-[var(--muted)]"
+                role="note"
+              >
+                Email login is for approved reviewer/test accounts.
+              </p>
+            ) : null}
+          </div>
         ) : (
           <div
             id="auth-email-sign-in"
-            className="mt-4 pt-4 border-t border-[var(--border)]"
+            className="mt-4 pt-4 border-t border-[var(--border)]/70"
             role="region"
             aria-label="Email sign-in"
           >
-            <button
-              type="button"
-              className="w-full text-center text-xs text-[var(--muted)] mb-3 hover:text-[var(--text)] transition-colors"
-              onClick={() => setShowEmailForm(false)}
-            >
-              Hide email sign-in
-            </button>
-
-            <div className="flex gap-2 mb-4">
-              {(["login", "signup"] as const).map((t) => {
-                const active = tab === t;
-                return (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setTab(t)}
-                    className={`flex-1 ui-chip ${
-                      active ? "ui-chip--active" : ""
-                    }`}
-                  >
-                    {t === "login" ? "Login" : "Sign up"}
-                  </button>
-                );
-              })}
+            <div className="mb-2 flex items-center justify-center gap-3 px-0.5">
+              <button
+                type="button"
+                className="min-h-8 text-[10px] text-[var(--muted)] hover:text-[var(--text)]/90 transition-colors"
+                onClick={() => setShowEmailForm(false)}
+              >
+                Hide
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] hover:text-[var(--text)]/90"
+                aria-label="About email login"
+                aria-expanded={showEmailLoginInfo}
+                aria-controls="email-login-info"
+                onClick={() => setShowEmailLoginInfo((v) => !v)}
+              >
+                <PiInfo size={15} aria-hidden />
+              </button>
             </div>
+            {showEmailLoginInfo ? (
+              <p
+                id="email-login-info"
+                className="mb-2 rounded-lg border border-[var(--border)]/60 bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] px-2.5 py-1.5 text-center text-[10px] leading-snug text-[var(--muted)]"
+                role="note"
+              >
+                Email login is for approved reviewer/test accounts.
+              </p>
+            ) : null}
 
             <div
               className="rounded-xl p-4 mb-1"
@@ -962,44 +998,14 @@ const AuthModal = () => {
               }}
             >
               <div className="space-y-3">
-                {tab === "signup" && (
-                  <>
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-[var(--muted)]">
-                        Full name
-                      </label>
-                      <input
-                        className="ui-input"
-                        placeholder="Full name"
-                        value={data.fullName ?? ""}
-                        onChange={(e) =>
-                          setData({ ...data, fullName: e.target.value })
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="block text-xs font-medium text-[var(--muted)]">
-                        Username
-                      </label>
-                      <input
-                        className="ui-input"
-                        placeholder="Choose a username"
-                        value={data.username ?? ""}
-                        onChange={(e) =>
-                          setData({ ...data, username: e.target.value })
-                        }
-                      />
-                    </div>
-                  </>
-                )}
-
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-[var(--muted)]">
-                    Email/Username
+                    Email
                   </label>
                   <input
                     className="ui-input"
                     type="email"
+                    autoComplete="email"
                     placeholder="you@email.com"
                     value={data.email}
                     onChange={(e) =>
@@ -1017,49 +1023,37 @@ const AuthModal = () => {
                     onChange={(v) => setData({ ...data, password: v })}
                     showPassword={showPassword}
                     onToggleVisibility={() => setShowPassword((p) => !p)}
+                    autoComplete="current-password"
                   />
                 </div>
 
-                {tab === "signup" && (
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-medium text-[var(--muted)]">
-                      Repeat password
-                    </label>
-                    <PasswordInput
-                      value={data.repeatPassword ?? ""}
-                      onChange={(v) => setData({ ...data, repeatPassword: v })}
-                      showPassword={showRepeatPassword}
-                      onToggleVisibility={() =>
-                        setShowRepeatPassword((p) => !p)
-                      }
-                    />
-                  </div>
-                )}
+                {loginError ? (
+                  <p
+                    className="rounded-md border border-red-500/30 bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-2 py-1.5 text-center text-[11px] leading-snug text-red-800 app-dark:text-red-200"
+                    role="alert"
+                  >
+                    {loginError}
+                  </p>
+                ) : null}
 
                 <button
                   type="button"
                   className="ui-btn ui-btn--primary mt-1 w-full"
                   disabled={loading}
-                  onClick={
-                    tab === "login" ? handleEmailLogin : handleEmailSignup
-                  }
+                  onClick={handleEmailLogin}
                 >
-                  {loading
-                    ? "Please wait..."
-                    : tab === "login"
-                    ? "Login"
-                    : "Sign up"}
+                  {loading ? "Please wait..." : "Login"}
                 </button>
 
-                {tab === "login" && loginError && (
+                <div className="flex flex-col items-center gap-1 pt-0.5">
                   <button
                     type="button"
                     onClick={handleForgotPassword}
-                    className="text-sm text-[var(--brand)] hover:underline mt-2"
+                    className="text-[11px] text-[var(--muted)] hover:text-[var(--brand)] hover:underline"
                   >
                     Forgot password?
                   </button>
-                )}
+                </div>
               </div>
             </div>
           </div>

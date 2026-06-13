@@ -31,6 +31,20 @@ const HEADER_BTN =
 
 const L = CREATE_FLOW_LIMITS.activities;
 
+/** Softer addon panel on Activities page (matches finalize metadata / caption shell). */
+const ACTIVITIES_ADDON_PANEL_CLASS =
+  "rounded-[var(--create-radius-panel)] border border-[var(--create-border-composer-shell)] px-3 py-3 flex flex-col gap-3 " +
+  "bg-[color-mix(in_oklab,var(--surface)_14%,white)] " +
+  "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.05)] " +
+  "app-dark:border-[var(--create-border-composer-shell)] " +
+  "app-dark:bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] " +
+  "app-dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]";
+
+const HERO_OVERLAY_PANEL_CLASS =
+  "rounded-[var(--create-radius-panel)] border border-[var(--create-border-hero-outline)] px-3 py-3 flex flex-col gap-3 backdrop-blur-xl " +
+  "bg-white/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.62),0_8px_22px_rgba(0,0,0,0.1)] backdrop-saturate-150 " +
+  "app-dark:bg-black/28 app-dark:backdrop-blur-2xl app-dark:backdrop-saturate-150 app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_10px_28px_rgba(0,0,0,0.28)]";
+
 export default function CreateActivityImagesSection({
   activities,
   activityIndex,
@@ -125,11 +139,15 @@ export default function CreateActivityImagesSection({
     <div
       className={[
         embedded
-          ? "rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-frame)] px-3 py-3 flex flex-col gap-3 backdrop-blur-xl"
-          : "mt-2 rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-frame)] px-3 py-3 flex flex-col gap-3 backdrop-blur-xl",
-        heroOverlaySurface
-          ? "bg-white/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.62),0_8px_22px_rgba(0,0,0,0.1)] backdrop-saturate-150 app-dark:bg-black/28 app-dark:backdrop-blur-2xl app-dark:backdrop-saturate-150 app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_10px_28px_rgba(0,0,0,0.28)]"
-          : "bg-white/74 shadow-[inset_0_1px_0_rgba(255,255,255,0.54),0_6px_18px_rgba(0,0,0,0.08)] app-dark:bg-[color-mix(in_oklab,#000_36%,var(--surface)_64%)] app-dark:backdrop-blur-2xl app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_10px_28px_rgba(0,0,0,0.4)]",
+          ? heroOverlaySurface
+            ? HERO_OVERLAY_PANEL_CLASS
+            : ACTIVITIES_ADDON_PANEL_CLASS
+          : "mt-2 rounded-[var(--create-radius-panel)] border border-[var(--create-border-composer-shell)] px-3 py-3 flex flex-col gap-3 " +
+            "bg-[color-mix(in_oklab,var(--surface)_14%,white)] " +
+            "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.05)] " +
+            "app-dark:border-[var(--create-border-composer-shell)] " +
+            "app-dark:bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] " +
+            "app-dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]",
       ].join(" ")}
       role="region"
       aria-labelledby={embedded ? undefined : "activity-images-disclosure"}

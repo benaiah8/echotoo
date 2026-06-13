@@ -19,6 +19,8 @@ interface Props {
   handleChange: (field: string, value: any) => void;
   /** When true, no outer section margin — used in shared add-on panel */
   embedded?: boolean;
+  /** When true, strip inner card chrome — used inside finalize metadata panel */
+  finalizeEmbedded?: boolean;
 }
 
 /**
@@ -74,10 +76,20 @@ const MAPS_LINK_TAB_IDLE = "opacity-[0.88] scale-[0.97]";
 
 const L = CREATE_FLOW_LIMITS.activities;
 
+/** Softer addon panel on Activities page (matches finalize metadata / caption shell). */
+const ACTIVITIES_ADDON_PANEL_CLASS =
+  "rounded-[var(--create-radius-panel)] border border-[var(--create-border-composer-shell)] px-3 py-3 " +
+  "bg-[color-mix(in_oklab,var(--surface)_14%,white)] " +
+  "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.05)] " +
+  "app-dark:border-[var(--create-border-composer-shell)] " +
+  "app-dark:bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] " +
+  "app-dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]";
+
 export default function CreateActivityLocationSection({
   activity,
   handleChange,
   embedded = false,
+  finalizeEmbedded = false,
 }: Props) {
   const [showMapsHelp, setShowMapsHelp] = useState(false);
 
@@ -107,15 +119,17 @@ export default function CreateActivityLocationSection({
       : "https://maps.google.com";
   }, [activity.location]);
 
+  const innerCardClass = finalizeEmbedded
+    ? "w-full"
+    : ACTIVITIES_ADDON_PANEL_CLASS;
+
+  const fieldSurfaceBoost = finalizeEmbedded
+    ? " !bg-[color-mix(in_oklab,white_90%,var(--surface))] app-dark:!bg-[color-mix(in_oklab,var(--surface)_34%,transparent)]"
+    : "";
+
   return (
     <section className={embedded ? "w-full" : "w-full mt-3"}>
-      <div
-        className={[
-          "rounded-[var(--create-radius-panel)] border-2 border-[var(--create-border-frame)] bg-white/95 px-3 py-3",
-          "shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] app-dark:bg-[var(--surface)]/20",
-          "app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-        ].join(" ")}
-      >
+      <div className={innerCardClass}>
         <div className="flex flex-col gap-0">
           <div className="w-full">
             <PrimaryInput
@@ -125,7 +139,7 @@ export default function CreateActivityLocationSection({
               maxLength={L.placeNameMaxChars}
               counterMax={L.placeNameMaxChars}
               onChange={(e) => handleChange("location", e.target.value)}
-              className={`${LOCATION_PLACE_FIELD_CLASS} ${charFieldRingClassForTone(
+              className={`${LOCATION_PLACE_FIELD_CLASS}${fieldSurfaceBoost} ${charFieldRingClassForTone(
                 charLimitTone(
                   (activity.location || "").length,
                   L.placeNameMaxChars
@@ -239,7 +253,7 @@ export default function CreateActivityLocationSection({
                     onChange={(e) =>
                       handleChange("locationUrl", e.target.value)
                     }
-                    className={`${LOCATION_FIELD_CLASS} ${charFieldRingClassForTone(
+                    className={`${LOCATION_FIELD_CLASS}${fieldSurfaceBoost} ${charFieldRingClassForTone(
                       charLimitTone(
                         locationUrl.length,
                         L.googleMapsLinkMaxChars
@@ -282,7 +296,7 @@ export default function CreateActivityLocationSection({
                     onChange={(e) =>
                       handleChange("locationNotes", e.target.value)
                     }
-                    className={`${LOCATION_FIELD_CLASS} ${charFieldRingClassForTone(
+                    className={`${LOCATION_FIELD_CLASS}${fieldSurfaceBoost} ${charFieldRingClassForTone(
                       charLimitTone(
                         locationNotes.length,
                         L.locationExtraDetailsMaxChars

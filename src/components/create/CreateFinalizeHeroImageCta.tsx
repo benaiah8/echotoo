@@ -10,6 +10,8 @@ type Props = {
   totalImagesPost: number;
   /** Called after uploads are queued so parents can bump draft epoch / re-read LS. */
   onAfterStartUploads?: () => void;
+  /** Called before opening the file picker (e.g. close metadata panels). */
+  onBeforeOpen?: () => void;
   /** Empty hero vs below-hero secondary CTA copy. */
   variant?: "empty" | "more";
 };
@@ -23,6 +25,7 @@ const MAX = CREATE_FLOW_LIMITS.activities.maxTotalImagesPerPost;
 export default function CreateFinalizeHeroImageCta({
   totalImagesPost,
   onAfterStartUploads,
+  onBeforeOpen,
   variant = "empty",
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -41,6 +44,7 @@ export default function CreateFinalizeHeroImageCta({
       toast.error(`You can add up to ${MAX} images per post.`);
       return;
     }
+    onBeforeOpen?.();
     inputRef.current?.click();
   };
 

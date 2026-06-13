@@ -56,6 +56,19 @@ export function readPersistedProfilePosts(
   }
 }
 
+/** Remove persisted first-page snapshot for one tab (targeted invalidation). */
+export function clearPersistedProfilePosts(
+  tab: ProfilePostListTab,
+  userId: string
+): void {
+  if (!userId || !tab) return;
+  try {
+    localStorage.removeItem(storageKey(tab, userId));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function writePersistedProfilePosts(
   tab: ProfilePostListTab,
   userId: string,

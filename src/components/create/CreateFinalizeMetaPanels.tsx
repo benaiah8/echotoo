@@ -6,12 +6,14 @@ import { PiCalendarBlank } from "react-icons/pi";
 import PrimaryToggle from "../input/PrimaryToggle";
 import VisibilityPillToggle from "../input/VisibilityPillToggle";
 import HorizontalNumberWheel from "../input/HorizontalNumberWheel";
+import CreateActivityLocationSection from "../../sections/create/CreateActivityLocationSection";
 import { CREATE_FLOW_WEEKDAYS } from "../../lib/createFlowScheduleConstants";
 import {
   type CreateFlowDateSummaryGroup,
   formatFinalizeRecurrenceSummaryLine,
   formatFinalizeSelectedDatesSummaryLine,
 } from "../../lib/createFlowDateSummary";
+import { ActivityType } from "../../types/post";
 
 type Visibility = "public" | "friends";
 
@@ -240,6 +242,65 @@ export function FinalizeRsvpPanel({
           max={99}
         />
       )}
+    </div>
+  );
+}
+
+export function FinalizeLocationPanel({
+  activity,
+  onFieldChange,
+}: {
+  activity: ActivityType;
+  onFieldChange: (field: string, value: unknown) => void;
+}) {
+  return (
+    <CreateActivityLocationSection
+      activity={activity}
+      activityIndex={0}
+      handleChange={onFieldChange}
+      embedded
+      finalizeEmbedded
+    />
+  );
+}
+
+export function FinalizeMorePanel({
+  postType,
+  rsvpEnabled,
+  setRsvpEnabled,
+  rsvpCapacity,
+  setRsvpCapacity,
+  ratingEnabled,
+  setRatingEnabled,
+}: {
+  postType: "hangout" | "experience";
+  rsvpEnabled: boolean;
+  setRsvpEnabled: (v: boolean) => void;
+  rsvpCapacity: number;
+  setRsvpCapacity: (v: number) => void;
+  ratingEnabled: boolean;
+  setRatingEnabled: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      {postType === "hangout" ? (
+        <>
+          <FinalizeRsvpPanel
+            rsvpEnabled={rsvpEnabled}
+            setRsvpEnabled={setRsvpEnabled}
+            rsvpCapacity={rsvpCapacity}
+            setRsvpCapacity={setRsvpCapacity}
+          />
+          <div
+            className="border-t border-[var(--create-border-subtle)] app-dark:border-[var(--create-border-panel-line)]"
+            aria-hidden
+          />
+        </>
+      ) : null}
+      <FinalizeRatePanel
+        ratingEnabled={ratingEnabled}
+        setRatingEnabled={setRatingEnabled}
+      />
     </div>
   );
 }

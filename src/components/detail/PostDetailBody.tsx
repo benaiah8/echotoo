@@ -9,6 +9,7 @@ import PostActions from "../ui/PostActions";
 import StickyPostActions from "../ui/StickyPostActions";
 import InviteDrawer from "../ui/InviteDrawer";
 import CommentList from "../ui/CommentList";
+import { scrollModalCommentsContentAboveComposer } from "../../lib/postDetailCommentsScroll";
 import { buildCarouselImages } from "../../lib/carouselImages";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
@@ -48,7 +49,12 @@ import {
 } from "../../lib/createFlowDateSummary";
 import { visibleActivityTagLines } from "../../lib/createFlowLimitUtils";
 import { formatHashtagForDisplay } from "../../lib/createFlowLimits";
-import { getTimelineStopHeadingText } from "../../lib/createFlowMeaningfulActivity";
+import {
+  buildTimelineDisplayItems,
+  getTimelineSectionLabel,
+  getTimelineStopHeadingText,
+  shouldShowTimelineStopHeading,
+} from "../../lib/createFlowMeaningfulActivity";
 import { ReadOnlyActivityTagLine } from "./ReadOnlyActivityTagLine";
 import { AdditionalInfoSemanticRows } from "./AdditionalInfoSemanticRows";
 import { PiCalendarBlank, PiListBullets, PiMapPin } from "react-icons/pi";
@@ -118,6 +124,8 @@ export default function PostDetailBody({
   /** Create finalize: metadata row + shared panel (rendered below caption, above inline preview chips). */
   composeFinalizeBelowCaption,
   composeFinalizeStripPreviewMeta = false,
+  /** Create finalize: hide author/profile preview row (avatar, name, type chip, schedule subline). */
+  composeFinalizeHideAuthorPreview = false,
   /** Create finalize: full-width image CTA when there is no hero yet (safe-area handled here). */
   composeFinalizeEmptyHeroCta,
   /** Create finalize: secondary image CTA below hero when images exist (not overlaid on carousel). */
@@ -133,6 +141,8 @@ export default function PostDetailBody({
   composeFinalizeShowActivityTimeline,
   /** Opened from feed comment control (router state): focus composer when comments are ready. */
   autoFocusCommentComposer = false,
+  /** Modal: portal host for comment composer (sibling to modal scroll root). */
+  modalComposerPortalHost = null,
 }: {
   post: Post;
   isPreview?: boolean;
@@ -158,12 +168,14 @@ export default function PostDetailBody({
   composeFinalizeBelowCaption?: ReactNode;
   /** Hide inline tags / schedule / RSVP preview rows (finalize uses caption + metadata row instead). */
   composeFinalizeStripPreviewMeta?: boolean;
+  composeFinalizeHideAuthorPreview?: boolean;
   composeFinalizeEmptyHeroCta?: ReactNode;
   composeFinalizeBelowHeroImageCta?: ReactNode;
   composeFinalizeHeroBottomOverlayCta?: ReactNode;
   composeFinalizeActivitiesCta?: ReactNode;
   composeFinalizeShowActivityTimeline?: boolean;
   autoFocusCommentComposer?: boolean;
+  modalComposerPortalHost?: HTMLElement | null;
   // [OPTIMIZATION: Phase 3.4] Removed batchedData - PostgreSQL function provides all data in post object
 }) {
   const navigate = useNavigate();
@@ -266,7 +278,7 @@ export default function PostDetailBody({
   };
 
   const commentComposerFocusRef = useRef<(() => void) | null>(null);
-  /** Full-page detail only: one scroll when opening with `focusCommentComposer` (modal scrolls in PostDetailModal). */
+  /** Full-page detail only: one scroll when opening with `autoFocusCommentComposer` (modal scroll is handled in PostDetailModal via `scrollToComments` / legacy `focusCommentComposer`). */
   const fullPageCommentScrollDoneRef = useRef(false);
 
   const setFocusComposer = useCallback((fn: () => void) => {
@@ -274,9 +286,7 @@ export default function PostDetailBody({
   }, []);
 
   const handleStickyCommentClick = useCallback(() => {
-    document
-      .querySelector("[data-comments-section]")
-      ?.scrollIntoView({ behavior: "smooth" });
+    scrollModalCommentsContentAboveComposer({ behavior: "smooth" });
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         commentComposerFocusRef.current?.();
@@ -341,7 +351,16 @@ export default function PostDetailBody({
 
   const hideFinalizeActivityTimeline =
     composeFinalizeShell && composeFinalizeShowActivityTimeline === false;
-  const hasActivities = (post.activities ?? []).length > 0;
+
+  const timelineDisplayItems = useMemo(
+    () => buildTimelineDisplayItems(post.activities ?? []),
+    [post.activities]
+  );
+
+  const timelineSectionLabel = useMemo(
+    () => getTimelineSectionLabel(timelineDisplayItems),
+    [timelineDisplayItems]
+  );
 
   const detailPostType = post.type === "hangout" ? "hangout" : "experience";
 
@@ -430,29 +449,31 @@ export default function PostDetailBody({
     <>
       {/* STICKY INTERACTION BAR (hidden on create merged final step — use CreateFlowTopBar) */}
       {!composeFinalizeShell ? (
-        <StickyPostActions
-          postId={post.id}
-          authorId={!anon ? post.author_id : undefined}
-          post={post}
-          barVariant={onClose ? "floatingGlass" : "default"}
-          onClose={onClose}
-          postType={post.type}
-          caption={post.caption ?? null}
-          postImageUrl={gallery.length > 0 ? gallery[0] : null}
-          postAuthor={
-            !anon && post.author
-              ? {
-                  id: post.author_id,
-                  username: post.author.username ?? null,
-                  display_name: post.author.display_name ?? null,
-                  avatar_url: post.author.avatar_url ?? null,
-                  is_anonymous: false,
-                }
-              : undefined
-          }
-          onInvite={handleInvite}
-          onCommentClick={onClose ? handleStickyCommentClick : undefined}
-        />
+        <div className="contents" data-sticky-post-actions>
+          <StickyPostActions
+            postId={post.id}
+            authorId={!anon ? post.author_id : undefined}
+            post={post}
+            barVariant={onClose ? "floatingGlass" : "default"}
+            onClose={onClose}
+            postType={post.type}
+            caption={post.caption ?? null}
+            postImageUrl={gallery.length > 0 ? gallery[0] : null}
+            postAuthor={
+              !anon && post.author
+                ? {
+                    id: post.author_id,
+                    username: post.author.username ?? null,
+                    display_name: post.author.display_name ?? null,
+                    avatar_url: post.author.avatar_url ?? null,
+                    is_anonymous: false,
+                  }
+                : undefined
+            }
+            onInvite={handleInvite}
+            onCommentClick={onClose ? handleStickyCommentClick : undefined}
+          />
+        </div>
       ) : null}
 
       {/* Create finalize: full-width image CTA when no hero; optional upload pill overlays it. */}
@@ -513,6 +534,7 @@ export default function PostDetailBody({
               ? "opacity-[0.80] transition-opacity duration-300"
               : "",
           ].join(" ")}
+          data-media-control
           style={{
             aspectRatio: "4/5",
             maxHeight: "50vh",
@@ -521,6 +543,8 @@ export default function PostDetailBody({
         >
           <div
             className="absolute left-0 right-0 bottom-0 z-0"
+            data-carousel-control
+            data-image-control
             style={{
               top: `calc(${topOffset} + env(safe-area-inset-top, 0px) + ${heroBelowBarGap} + ${finalizeHeroBreathing})`,
             }}
@@ -578,69 +602,72 @@ export default function PostDetailBody({
         }}
       >
         {/* Author row */}
-        <div
-          className={[
-            composeFinalizeShell
-              ? "mt-[0.675rem] flex items-center gap-3"
-              : "mt-3 flex items-center gap-3",
-            finalizeSurroundingsDim
-              ? "opacity-[0.82] transition-opacity duration-300"
-              : "",
-          ].join(" ")}
-        >
-          <Avatar
-            className="shrink-0"
-            url={anon ? undefined : post.author?.avatar_url || undefined}
-            name={anon ? post.anonymous_name || "Anonymous" : displayName}
-            size={40}
-            onClick={anon ? undefined : goToProfile}
-            variant={anon ? "anon" : vis === "friends" ? "friends" : "default"}
-            anonymousAvatar={anon ? post.anonymous_avatar : undefined}
-            userId={anon ? null : post.author_id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
-          />
+        {!composeFinalizeHideAuthorPreview ? (
+          <div
+            className={[
+              composeFinalizeShell
+                ? "mt-[0.675rem] flex items-center gap-3"
+                : "mt-3 flex items-center gap-3",
+              finalizeSurroundingsDim
+                ? "opacity-[0.82] transition-opacity duration-300"
+                : "",
+            ].join(" ")}
+          >
+            <Avatar
+              className="shrink-0"
+              url={anon ? undefined : post.author?.avatar_url || undefined}
+              name={anon ? post.anonymous_name || "Anonymous" : displayName}
+              size={40}
+              onClick={anon ? undefined : goToProfile}
+              variant={anon ? "anon" : vis === "friends" ? "friends" : "default"}
+              anonymousAvatar={anon ? post.anonymous_avatar : undefined}
+              userId={anon ? null : post.author_id || null} // [OPTIMIZATION: Phase 3.2] Pass userId for cache lookup
+            />
 
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <button
-                className="text-sm font-medium hover:underline"
-                onClick={anon ? undefined : goToProfile}
-              >
-                {anon ? post.anonymous_name || "Anonymous" : displayName}
-              </button>
-              <PostTypeMetaChip type={post.type} />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <button
+                  className="text-sm font-medium hover:underline"
+                  onClick={anon ? undefined : goToProfile}
+                >
+                  {anon ? post.anonymous_name || "Anonymous" : displayName}
+                </button>
+                <PostTypeMetaChip type={post.type} />
+              </div>
+              <div className="text-xs text-[var(--text)]/60">
+                {anon ? "" : `@${post.author?.username || "user"} · `}
+                <span
+                  className={detailHeaderScheduleLabelClass(
+                    headerScheduleLabel.kind
+                  )}
+                >
+                  {headerScheduleLabel.label}
+                </span>
+              </div>
             </div>
-            <div className="text-xs text-[var(--text)]/60">
-              {anon ? "" : `@${post.author?.username || "user"} · `}
-              <span
-                className={detailHeaderScheduleLabelClass(
-                  headerScheduleLabel.kind
-                )}
-              >
-                {headerScheduleLabel.label}
-              </span>
-            </div>
+
+            {!composeFinalizeShell ? (
+              <div className="ml-auto flex items-center gap-2" data-post-menu>
+                <PostMenu
+                  postId={post.id}
+                  isOwner={isOwner}
+                  onEdit={handleEdit}
+                  onDelete={handleAfterDelete}
+                  isDraft={isDraft}
+                  onRequestReport={handleRequestPostReport}
+                />
+              </div>
+            ) : null}
           </div>
-
-          {!composeFinalizeShell ? (
-            <div className="ml-auto flex items-center gap-2">
-              <PostMenu
-                postId={post.id}
-                isOwner={isOwner}
-                onEdit={handleEdit}
-                onDelete={handleAfterDelete}
-                isDraft={isDraft}
-                onRequestReport={handleRequestPostReport}
-              />
-            </div>
-          ) : null}
-        </div>
+        ) : null}
 
         {/* Caption (read-only, or inline editor on create finalize) */}
         {composeFinalizeCaption ? (
           <section
             id="create-finalize-caption-anchor"
             className={[
-              "relative z-[1] mt-[1.125rem] rounded-xl px-3.5 py-4 transition-[box-shadow,ring] duration-700 ease-out",
+              "relative z-[1] rounded-xl px-3.5 py-4 transition-[box-shadow,ring] duration-700 ease-out",
+              composeFinalizeHideAuthorPreview ? "mt-0" : "mt-[1.125rem]",
               composeFinalizeCaption.highlight
                 ? "border border-[var(--brand)]/55 shadow-[0_0_0_1px_color-mix(in_oklab,var(--brand)_35%,transparent),0_0_28px_rgba(247,208,71,0.2),0_12px_36px_rgba(0,0,0,0.35)]"
                 : composeFinalizeCaption.entryPulse
@@ -736,6 +763,7 @@ export default function PostDetailBody({
               {/* Post-detail hashtags: single horizontal scroll row, width capped (not create-flow) */}
               <div
                 className="mt-4 w-full max-w-[80%] min-w-0 overflow-x-auto pb-2 pt-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                data-hashtag-row
                 role="region"
                 aria-label="Hashtags"
               >
@@ -812,7 +840,7 @@ export default function PostDetailBody({
               {/* RSVP section */}
               {typeof post.rsvp_capacity === "number" &&
                 post.type === "hangout" && (
-                  <div className="mt-3">
+                  <div className="mt-3" data-rsvp>
                     <RSVPComponent
                       postId={post.id}
                       capacity={post.rsvp_capacity}
@@ -846,15 +874,15 @@ export default function PostDetailBody({
             </>
           ) : null}
 
-          {!hideFinalizeActivityTimeline && hasActivities ? (
+          {!hideFinalizeActivityTimeline && timelineDisplayItems.length > 0 ? (
             <>
               {/* Divider */}
               <div className="mt-4 border-t border-[var(--border)] app-dark:border-white/12" />
 
-              {/* Activities — finalize uses composeFinalizeActivitiesCta as the section entry */}
-              {!composeFinalizeShell ? (
+              {/* Timeline — finalize uses composeFinalizeActivitiesCta as the section entry */}
+              {!composeFinalizeShell && timelineSectionLabel ? (
                 <div className="mt-3 text-sm font-semibold text-[var(--text)]/95 app-dark:text-white/92">
-                  Activities
+                  {timelineSectionLabel}
                 </div>
               ) : null}
               <section className={composeFinalizeShell ? "mt-3" : "mt-2"}>
@@ -870,20 +898,31 @@ export default function PostDetailBody({
                     aria-hidden
                   />
                   <ol className="space-y-6">
-                    {(post.activities ?? []).map((a, i) => {
+                    {timelineDisplayItems.map(
+                      ({
+                        activity: a,
+                        index: i,
+                        input,
+                        visibleTagLineCount,
+                      }) => {
                       const extras = (a.additional_info || []) as {
                         title: string;
                         value: string;
                       }[];
 
                       const address = a.location_name || "";
-                      const details = a.location_desc || "";
                       const locationNotes = a.location_notes || "";
                       const googleMapsUrl = a.location_url || "";
 
                       // Per-stop lines (exclude "custom" sentinel; matches ActivitiesTagsInput)
                       const activityTagLines = visibleActivityTagLines(
                         Array.isArray(a.tags) ? a.tags : []
+                      );
+
+                      const showStopHeading = shouldShowTimelineStopHeading(
+                        input,
+                        i,
+                        visibleTagLineCount
                       );
 
                       const extrasFiltered = Array.isArray(extras)
@@ -895,6 +934,8 @@ export default function PostDetailBody({
                         locationNotes ||
                         googleMapsUrl
                       );
+                      const hasStopLabelBlock =
+                        activityTagLines.length > 0 || showStopHeading;
 
                       return (
                         <li key={i} className="relative min-w-0 pl-6">
@@ -909,31 +950,38 @@ export default function PostDetailBody({
                           />
 
                           {/* Stacked lines: pills when short; full-width blocks when long (matches composer) */}
-                          <div className="flex w-full min-w-0 flex-col items-start gap-2">
-                            {activityTagLines.length > 0 ? (
-                              activityTagLines.map(
-                                (tag: string, tagIndex: number) => (
-                                  <ReadOnlyActivityTagLine
-                                    key={tagIndex}
-                                    text={tag}
-                                    isFirst={tagIndex === 0}
-                                  />
+                          {hasStopLabelBlock ? (
+                            <div className="flex w-full min-w-0 flex-col items-start gap-2">
+                              {activityTagLines.length > 0 ? (
+                                activityTagLines.map(
+                                  (tag: string, tagIndex: number) => (
+                                    <ReadOnlyActivityTagLine
+                                      key={tagIndex}
+                                      text={tag}
+                                      isFirst={tagIndex === 0}
+                                    />
+                                  )
                                 )
-                              )
-                            ) : (
-                              <ReadOnlyActivityTagLine
-                                text={getTimelineStopHeadingText(
-                                  a.title || `Stop ${i + 1}`,
-                                  i
-                                )}
-                                isFirst
-                              />
-                            )}
-                          </div>
+                              ) : (
+                                <ReadOnlyActivityTagLine
+                                  text={getTimelineStopHeadingText(
+                                    a.title || `Stop ${i + 1}`,
+                                    i
+                                  )}
+                                  isFirst
+                                />
+                              )}
+                            </div>
+                          ) : null}
 
                           {/* Location — larger gap from activities */}
                           {hasLocation && (
-                            <div className="mt-8 rounded-md border border-[var(--border)] px-3 py-2">
+                            <div
+                              className={[
+                                "rounded-md border border-[var(--border)] px-3 py-2",
+                                hasStopLabelBlock ? "mt-8" : "mt-0",
+                              ].join(" ")}
+                            >
                               <div className="space-y-3">
                                 <div>
                                   <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-[var(--text)]/60">
@@ -997,6 +1045,7 @@ export default function PostDetailBody({
             isModal={!!onClose}
             autoFocusCommentComposer={autoFocusCommentComposer}
             setFocusComposer={setFocusComposer}
+            modalComposerPortalHost={modalComposerPortalHost}
           />
         </div>
       )}

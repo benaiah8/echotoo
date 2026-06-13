@@ -693,8 +693,19 @@ function BottomTab() {
   ];
 
   const avatarTabDisplayUrl = avatarDisplayUrl(avatarUrl);
+
+  /**
+   * Pill `bottom` offset (visual gap above the viewport edge).
+   * `--safe-area-bottom-layout` includes artificial Android/iOS extras from
+   * `syncAppSafeAreaBottom()` so **content** can clear gesture/3-button areas.
+   * The pill should stay **tighter** to the system nav / WebView chrome edge:
+   * on Android use raw `env` via `--safe-area-inset-bottom` only (capped), not
+   * the full layout variable — avoids the tab floating too high when extras
+   * already inflate layout for scroll regions. Gradients below still use
+   * `--safe-area-bottom-layout`.
+   */
   const bottomTabBottomOffset = isAndroid()
-    ? "max(14px, min(32px, var(--safe-area-bottom-layout, 0px)))"
+    ? "max(6px, min(12px, var(--safe-area-inset-bottom, 0px)))"
     : isIOS()
     ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
     : "8px";

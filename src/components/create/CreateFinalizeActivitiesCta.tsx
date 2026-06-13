@@ -4,24 +4,38 @@ import { CREATE_FLOW_LIMITS } from "../../lib/createFlowLimits";
 const MAX_STOPS = CREATE_FLOW_LIMITS.activities.maxStopsPerPost;
 
 type Props = {
+  postType: "experience" | "hangout";
   hasMeaningfulActivities: boolean;
   /** Current number of stops in the draft (same length as `activities` array). */
   stopCount: number;
   onClick: () => void;
 };
 
+function activitiesCtaLabel(
+  postType: "experience" | "hangout",
+  hasMeaningfulActivities: boolean
+): string {
+  if (postType === "hangout") {
+    return hasMeaningfulActivities
+      ? "Edit activity or stops"
+      : "Add activity or extra stop";
+  }
+  return hasMeaningfulActivities
+    ? "Edit places or stops"
+    : "Add places or stops";
+}
+
 /**
  * Create-post finalize: activities entry matches {@link CreateFinalizeHeroImageCta}
  * (hero outline, accent icon disc, left label, stops counter on the right).
  */
 export default function CreateFinalizeActivitiesCta({
+  postType,
   hasMeaningfulActivities,
   stopCount,
   onClick,
 }: Props) {
-  const label = hasMeaningfulActivities
-    ? "Edit activity, location, or stop"
-    : "Add activity, location, or stop";
+  const label = activitiesCtaLabel(postType, hasMeaningfulActivities);
 
   const count = Math.min(Math.max(0, stopCount), MAX_STOPS);
 

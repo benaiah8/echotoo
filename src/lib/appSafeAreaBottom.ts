@@ -8,8 +8,10 @@ import {
 export const APP_SAFE_BOTTOM_SYNC_EVENT = "echotoo:safe-bottom-sync";
 
 /**
- * Leading constant in BottomTab `#bottom-tab` style: `bottom: calc(5px + var(--safe-area-bottom-layout))`.
- * Fixed action strips above the tab must include this plus safe area so they sit above the pill on Capacitor.
+ * Native bottom sync writes `--android-extra-bottom` / `--ios-extra-bottom` on
+ * `documentElement` so `--safe-area-bottom-layout` matches content clearance
+ * (see `src/index.css`). The floating tab pill’s `bottom` offset is computed in
+ * `BottomTab.tsx` separately — do not assume it equals this constant.
  */
 export const BOTTOM_TAB_PILL_OFFSET_PX = 5;
 

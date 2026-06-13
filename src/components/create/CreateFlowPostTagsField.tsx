@@ -16,6 +16,7 @@ import {
   formatHashtagForDisplay,
   normalizeHashtagToken,
 } from "../../lib/createFlowLimits";
+import { CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS } from "../../lib/createFlowAdvisoryHighlight";
 
 const allSuggestions = [
   "food",
@@ -38,6 +39,10 @@ type Props = {
   onTagsChange: Dispatch<SetStateAction<string[]>>;
   /** `embedded` = inside finalize caption card; `standalone` = bordered section on categories */
   variant?: "embedded" | "standalone";
+  /** Fired when the hashtag text input receives focus (finalize: close metadata panels). */
+  onInputFocus?: () => void;
+  /** Temporary nudge after publish-warning modal Back */
+  advisoryHighlight?: boolean;
 };
 
 function splitPasteTags(text: string): string[] {
@@ -65,6 +70,8 @@ export default function CreateFlowPostTagsField({
   tags,
   onTagsChange,
   variant = "standalone",
+  onInputFocus,
+  advisoryHighlight = false,
 }: Props) {
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
@@ -289,6 +296,7 @@ export default function CreateFlowPostTagsField({
                 }
               }}
               onBlur={scheduleTagBlurCommit}
+              onFocus={() => onInputFocus?.()}
               enterKeyHint="done"
               placeholder={
                 atTagLimit
@@ -310,6 +318,7 @@ export default function CreateFlowPostTagsField({
                   )
                 }
                 onBlur={scheduleTagBlurCommit}
+                onFocus={() => onInputFocus?.()}
                 enterKeyHint="done"
                 placeholder="Add hashtags people might search for"
                 className="flex-1 bg-transparent text-sm text-[var(--text)] outline-none pr-16"
@@ -363,7 +372,18 @@ export default function CreateFlowPostTagsField({
   );
 
   if (isEmbedded) {
-    return <div className="mt-2 w-full">{inner}</div>;
+    return (
+      <div
+        className={[
+          "mt-2 w-full rounded-[var(--create-radius-field)]",
+          advisoryHighlight ? CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {inner}
+      </div>
+    );
   }
 
   return (

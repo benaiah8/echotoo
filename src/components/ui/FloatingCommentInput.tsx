@@ -16,10 +16,21 @@ import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
   resolveSafeAreaBottomLayoutPx,
 } from "../../lib/appSafeAreaBottom";
-import { scrollCommentsSectionIntoView } from "../../lib/postDetailCommentsScroll";
+import {
+  scrollCommentsSectionIntoView,
+  scrollModalCommentsContentAboveComposer,
+  scrollModalReplyTargetIntoView,
+  modalReplyRowNeedsKeyboardScroll,
+  scheduleStagedModalReplyTargetScroll,
+  POST_DETAIL_MODAL_SCROLL_ROOT,
+} from "../../lib/postDetailCommentsScroll";
+import { MODAL_COMPOSER_PILL_BOTTOM_GAP_PX } from "../../hooks/usePostDetailCommentLayout";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
-import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import {
+  isAndroid,
+  isNativeApp,
+} from "../../lib/storage/utils/capacitorDetection";
 
 const COMMENT_IMAGE_UPLOAD_LOG = "[CommentImageUpload]";
 
@@ -30,25 +41,38 @@ interface Props {
   postId: string;
   parentId?: string | null;
   onComment: (content: string, parentId?: string, commentData?: any) => void;
-  onCancel?: () => void;
+  /** Modal reply mode: clear when composer blurs safely (no draft). */
+  onReplyModeClear?: () => void;
   placeholder?: string;
   /** When true (e.g. post detail modal), ignores BottomTab height and scroll-hide logic */
   isModal?: boolean;
-  /** One-shot: focus composer after open (e.g. feed comment icon). iOS may still require a tap for IME. */
+  /** One-shot: programmatically focus composer after mount (explicit opt-in; modal feed comment icon does not use this). */
   autoFocusComposer?: boolean;
   /** Registers imperative focus for sticky bar / parent (cleared on unmount). */
   onFocusComposerReady?: (focus: () => void) => void;
+  /**
+   * Same-tick focus for Reply tap (user gesture). Skips aggressive modal scroll on the
+   * resulting focus event. Registered on mount; cleared on unmount.
+   */
+  onGestureFocusReady?: (focusFromGesture: () => void) => void;
+  /**
+   * Modal only: when `layer-absolute`, composer is positioned inside a portal host
+   * (sibling to modal scroll) instead of `position: fixed` to the viewport.
+   */
+  modalComposerLayer?: "viewport-fixed" | "layer-absolute";
 }
 
 export default function FloatingCommentInput({
   postId,
   parentId,
   onComment,
-  onCancel,
+  onReplyModeClear,
   placeholder = "This is where we add the comment",
   isModal = false,
   autoFocusComposer = false,
   onFocusComposerReady,
+  onGestureFocusReady,
+  modalComposerLayer,
 }: Props) {
   const { ensureAuthed } = useAuthActionGate();
   const postDetailDismiss = usePostDetailDismiss();
@@ -69,6 +93,10 @@ export default function FloatingCommentInput({
   const prevKeyboardLiftRef = useRef(0);
   /** Skip smooth scroll on the next focus when entering reply mode programmatically. */
   const skipNextFocusScrollRef = useRef(false);
+  const blurClearReplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const stagedReplyRecheckRef = useRef<{ cancel: () => void } | null>(null);
 
   const [composerSurfaceFocused, setComposerSurfaceFocused] = useState(false);
   const [safeBottom, setSafeBottom] = useState(0);
@@ -174,32 +202,59 @@ export default function FloatingCommentInput({
     getUserProfile();
   }, []);
 
-  const scheduleScrollCommentsIntoView = useCallback(
-    (modal: boolean, behavior: ScrollBehavior = "smooth") => {
+  const scheduleComposerViewportScroll = useCallback(
+    (
+      modal: boolean,
+      behavior: ScrollBehavior = "smooth",
+      replyParentId?: string | null
+    ) => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+        if (modal && replyParentId) {
+          scrollModalReplyTargetIntoView(replyParentId, { behavior });
+        } else if (modal) {
+          scrollModalCommentsContentAboveComposer({ behavior });
+        } else {
           scrollCommentsSectionIntoView({
             isModal: modal,
             behavior,
-            block: "start",
+            block: "nearest",
           });
-        });
+        }
       });
     },
     []
   );
 
-  const focusComposerInput = useCallback((el: HTMLInputElement) => {
-    const preferNativeScroll =
-      isNativeApp() ||
-      (typeof window !== "undefined" &&
-        window.matchMedia("(pointer: coarse)").matches);
-    if (preferNativeScroll) {
-      el.focus();
-    } else {
-      el.focus({ preventScroll: true });
-    }
-  }, []);
+  const focusComposerInput = useCallback(
+    (el: HTMLInputElement) => {
+      if (isModal) {
+        const coarseOrNative =
+          isNativeApp() ||
+          (typeof window !== "undefined" &&
+            window.matchMedia("(pointer: coarse)").matches);
+        if (coarseOrNative) {
+          el.focus();
+          return;
+        }
+        try {
+          el.focus({ preventScroll: true });
+        } catch {
+          el.focus();
+        }
+        return;
+      }
+      const preferNativeScroll =
+        isNativeApp() ||
+        (typeof window !== "undefined" &&
+          window.matchMedia("(pointer: coarse)").matches);
+      if (preferNativeScroll) {
+        el.focus();
+      } else {
+        el.focus({ preventScroll: true });
+      }
+    },
+    [isModal]
+  );
 
   const focusComposer = useCallback(() => {
     const el = composerInputRef.current;
@@ -207,24 +262,33 @@ export default function FloatingCommentInput({
     focusComposerInput(el);
   }, [focusComposerInput]);
 
-  const focusForReplyMode = useCallback(() => {
-    const el = composerInputRef.current;
-    if (!el) return;
-    skipNextFocusScrollRef.current = true;
-    focusComposerInput(el);
-    const preferNativeScroll =
-      isNativeApp() ||
-      (typeof window !== "undefined" &&
-        window.matchMedia("(pointer: coarse)").matches);
-    if (preferNativeScroll) {
-      el.click();
-    }
-  }, [focusComposerInput]);
-
+  /** Backup only: if Reply did not focus from CommentList gesture path (rare). */
   useEffect(() => {
     if (!parentId) return;
-    focusForReplyMode();
-  }, [parentId, focusForReplyMode]);
+    const tid = window.setTimeout(() => {
+      const el = composerInputRef.current;
+      if (!el || document.activeElement === el) return;
+      skipNextFocusScrollRef.current = true;
+      focusComposerInput(el);
+    }, 80);
+    return () => clearTimeout(tid);
+  }, [parentId, focusComposerInput]);
+
+  useEffect(() => {
+    if (!onGestureFocusReady) return;
+    const focusFromGesture = () => {
+      const el = composerInputRef.current;
+      if (!el) {
+        return;
+      }
+      skipNextFocusScrollRef.current = true;
+      focusComposerInput(el);
+    };
+    onGestureFocusReady(focusFromGesture);
+    return () => {
+      onGestureFocusReady(() => {});
+    };
+  }, [onGestureFocusReady, focusComposerInput]);
 
   const handleComposerFocus = useCallback(
     (modal: boolean) => {
@@ -238,10 +302,53 @@ export default function FloatingCommentInput({
         skipNextFocusScrollRef.current = false;
         return;
       }
-      scheduleScrollCommentsIntoView(modal, "smooth");
+      if (modal) {
+        const replyId = parentId ?? null;
+        requestAnimationFrame(() => {
+          if (replyId) {
+            scrollModalReplyTargetIntoView(replyId, { behavior: "auto" });
+          } else {
+            scrollModalCommentsContentAboveComposer({ behavior: "auto" });
+          }
+        });
+        return;
+      }
+      scheduleComposerViewportScroll(modal, "smooth", parentId ?? null);
     },
-    [postDetailDismiss, scheduleScrollCommentsIntoView]
+    [postDetailDismiss, scheduleComposerViewportScroll, parentId]
   );
+
+  const handleModalComposerInputFocus = useCallback(() => {
+    handleComposerFocus(true);
+  }, [handleComposerFocus]);
+
+  const handleModalComposerInputBlur = useCallback(() => {
+    postDetailDismiss?.setComposerFocused(false);
+    setComposerSurfaceFocused(false);
+    prevKeyboardLiftRef.current = 0;
+
+    if (!onReplyModeClear || !parentId) return;
+
+    if (blurClearReplyTimerRef.current) {
+      clearTimeout(blurClearReplyTimerRef.current);
+    }
+    blurClearReplyTimerRef.current = setTimeout(() => {
+      blurClearReplyTimerRef.current = null;
+      const el = composerInputRef.current;
+      if (el && document.activeElement === el) return;
+      const draft = el?.value ?? "";
+      if (draft.trim().length > 0) return;
+      onReplyModeClear();
+    }, 120);
+  }, [postDetailDismiss, onReplyModeClear, parentId]);
+
+  useEffect(() => {
+    return () => {
+      if (blurClearReplyTimerRef.current) {
+        clearTimeout(blurClearReplyTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!onFocusComposerReady) return;
@@ -257,29 +364,74 @@ export default function FloatingCommentInput({
       const el = composerInputRef.current;
       if (!el) return;
       didAutoFocusRef.current = true;
+      skipNextFocusScrollRef.current = true;
       focusComposerInput(el);
-      // scrollIntoView on fixed input does not scroll the sheet; onFocus scrolls comments.
     }, 180);
     return () => clearTimeout(tid);
   }, [autoFocusComposer, isModal, focusComposerInput]);
 
-  /** Modal: when IME inset crosses "open", snap comments into view (viewport shrank). */
+  /** Modal reply: re-position target when keyboard inset / layout settles. */
   useEffect(() => {
-    if (!isModal || !composerSurfaceFocused) return;
-    const lift = postDetailDismiss?.modalKeyboardInsetPx ?? 0;
-    const prev = prevKeyboardLiftRef.current;
-    prevKeyboardLiftRef.current = lift;
-    if (prev >= KEYBOARD_LIFT_SCROLL_THRESHOLD_PX) return;
-    if (lift < KEYBOARD_LIFT_SCROLL_THRESHOLD_PX) return;
-    const t = window.setTimeout(() => {
-      scrollCommentsSectionIntoView({
-        isModal: true,
+    if (!isModal || !parentId || !composerSurfaceFocused) return;
+
+    stagedReplyRecheckRef.current?.cancel();
+
+    const replyId = parentId;
+    stagedReplyRecheckRef.current = scheduleStagedModalReplyTargetScroll(
+      replyId,
+      {
         behavior: "auto",
-        block: "start",
+        isActive: () => {
+          if (!document.querySelector(POST_DETAIL_MODAL_SCROLL_ROOT)) return false;
+          const el = composerInputRef.current;
+          return (
+            !!el &&
+            (document.activeElement === el || composerSurfaceFocused)
+          );
+        },
+      }
+    );
+
+    return () => {
+      stagedReplyRecheckRef.current?.cancel();
+    };
+  }, [
+    isModal,
+    parentId,
+    composerSurfaceFocused,
+    postDetailDismiss?.modalKeyboardInsetPx,
+  ]);
+
+  /** Modal reply: gentle recheck on visualViewport resize while keyboard animates. */
+  useEffect(() => {
+    if (!isModal || !parentId || !composerSurfaceFocused) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    let rafId = 0;
+    const onVvChange = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const replyId = parentId;
+        if (!replyId || !modalReplyRowNeedsKeyboardScroll(replyId)) return;
+        scrollModalReplyTargetIntoView(replyId, { behavior: "auto" });
       });
-    }, 0);
-    return () => clearTimeout(t);
-  }, [isModal, composerSurfaceFocused, postDetailDismiss?.modalKeyboardInsetPx]);
+    };
+
+    vv.addEventListener("resize", onVvChange);
+    vv.addEventListener("scroll", onVvChange);
+    return () => {
+      vv.removeEventListener("resize", onVvChange);
+      vv.removeEventListener("scroll", onVvChange);
+      cancelAnimationFrame(rafId);
+    };
+  }, [isModal, parentId, composerSurfaceFocused]);
+
+  useEffect(() => {
+    return () => {
+      stagedReplyRecheckRef.current?.cancel();
+    };
+  }, []);
 
   const handleImageUpload = async (file: File) => {
     if (!ensureAuthed()) return;
@@ -430,32 +582,44 @@ export default function FloatingCommentInput({
     const dh = postDetailDismiss?.dismissHandle;
     /** Single source from PostDetailModal: same hook as create flow (vv + Android Capacitor keyboard). */
     const modalKeyboardLiftPx = postDetailDismiss?.modalKeyboardInsetPx ?? 0;
+    /**
+     * Android WebView already shrinks the modal sheet above the IME — do not lift by raw inset
+     * (see BottomDrawer drawerBottomOffsetPx). iOS/non-Android unchanged.
+     */
+    const liftForBottomChrome = isAndroid()
+      ? 0
+      : Math.max(0, Math.round(modalKeyboardLiftPx));
     const modalKeyboardOpen =
       modalKeyboardLiftPx >= KEYBOARD_LIFT_SCROLL_THRESHOLD_PX;
     const modalSafeAreaBottom = modalKeyboardOpen
       ? "0px"
       : "var(--safe-area-bottom-layout)";
+    const layerMode = modalComposerLayer ?? "viewport-fixed";
+    const edgePositionClass =
+      layerMode === "layer-absolute"
+        ? "absolute left-0 right-0"
+        : "fixed left-0 right-0";
 
     return (
       <>
         <div
-          className="pointer-events-none fixed bottom-0 left-0 right-0 z-30"
+          className={`pointer-events-none ${edgePositionClass} bottom-0 z-30`}
           style={{
             bottom: modalKeyboardOpen
               ? "-1px"
               : "calc(-1px + -1 * var(--safe-area-bottom-layout))",
             height: modalKeyboardOpen
-              ? `calc(88px + ${modalKeyboardLiftPx}px)`
-              : `calc(88px + var(--safe-area-bottom-layout) + ${modalKeyboardLiftPx}px)`,
+              ? `calc(88px + ${liftForBottomChrome}px)`
+              : `calc(88px + var(--safe-area-bottom-layout) + ${liftForBottomChrome}px)`,
             width: "100%",
             background: "var(--gradient-from-bottom)",
           }}
           aria-hidden
         />
         <div
-          className="pointer-events-none fixed left-0 right-0 z-30 flex flex-col items-center px-2 transition-all duration-300"
+          className={`pointer-events-none ${edgePositionClass} z-30 flex flex-col items-center px-2`}
           style={{
-            bottom: `calc(8px + ${modalSafeAreaBottom} + ${modalKeyboardLiftPx}px)`,
+            bottom: `calc(${MODAL_COMPOSER_PILL_BOTTOM_GAP_PX}px + ${modalSafeAreaBottom} + ${liftForBottomChrome}px)`,
           }}
         >
           {dh?.visible ? (
@@ -504,16 +668,16 @@ export default function FloatingCommentInput({
             <div className="px-1.5 py-1.5 sm:px-2 sm:py-1.5">
               <form onSubmit={handleSubmit} className="min-w-0">
                 <div className="grid min-w-0 grid-cols-[auto_1fr_auto_auto] items-center gap-1.5">
-                  <div className="flex h-8 items-center justify-center">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center">
                     {userProfile ? (
                       <Avatar
                         className="inline-flex shrink-0 items-center justify-center leading-none"
                         url={userProfile.avatar_url}
                         name={userProfile.display_name || userProfile.username}
-                        size={28}
+                        size={32}
                       />
                     ) : (
-                      <div className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-[var(--text)]/10" />
+                      <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-[var(--text)]/10" />
                     )}
                   </div>
                   <div className="min-w-0">
@@ -523,15 +687,11 @@ export default function FloatingCommentInput({
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      onFocus={() => handleComposerFocus(true)}
-                      onBlur={() => {
-                        postDetailDismiss?.setComposerFocused(false);
-                        setComposerSurfaceFocused(false);
-                        prevKeyboardLiftRef.current = 0;
-                      }}
+                      onFocus={handleModalComposerInputFocus}
+                      onBlur={handleModalComposerInputBlur}
                       placeholder={placeholder}
                       className={[
-                        "w-full min-w-0 border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] text-sm leading-tight text-[var(--text)] placeholder:text-[var(--text)]/45 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/40",
+                        "w-full min-w-0 border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] text-base leading-tight text-[var(--text)] placeholder:text-[var(--text)]/45 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/40",
                         uploadedImage
                           ? "rounded-xl px-2.5 py-1.5"
                           : "rounded-full px-3 py-1.5",

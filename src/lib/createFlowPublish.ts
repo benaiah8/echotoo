@@ -11,6 +11,7 @@ import { incrementMyXp } from "../api/services/xp";
 import { sanitizeTagsForPublish } from "./createFlowLimits";
 import { isDefaultStopTitle } from "./createFlowMeaningfulActivity";
 import { persistOwnCreatedPrependPending } from "./ownCreatedPendingPrepend";
+import { clearPersistedProfilePosts } from "./profilePostListCache";
 import { assertCreateFlowDraftTextAllowed } from "./ugcTextPolicy";
 
 /** Legacy sessionStorage key — no longer written; cleared on new publish for hygiene. */
@@ -123,7 +124,7 @@ export type ExecuteCreateFlowPublishResult = {
 
 /**
  * Inserts or updates post + activities; side effects: XP, personalization, caches, publishedPostLast.
- * New publishes also write `echotoo:own-created-prepend-pending` for local Created prepend (no profile_created cache wipe).
+ * New publishes also write `echotoo:own-created-prepend-pending` and clear the current user's Created list caches.
  */
 export async function executeCreateFlowPublish(
   input: ExecuteCreateFlowPublishInput
@@ -281,6 +282,9 @@ export async function executeCreateFlowPublish(
   const createdCacheKey = `profile_created_${session.user.id}`;
   if (input.isEditMode && input.editPostId) {
     dataCache.delete(createdCacheKey);
+  } else {
+    dataCache.delete(createdCacheKey);
+    clearPersistedProfilePosts("created", session.user.id);
   }
   dataCache.clearFeedCache().catch(() => {});
   invalidatePostDetailCache(post.id);

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { subscribeAndroidHardwareBack } from "../../lib/androidPostDetailModalBack";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
+import { useOverlayContentSwipeDismiss } from "../../hooks/useOverlayContentSwipeDismiss";
 import CreateChooserPanel from "./CreateChooserPanel";
 import CreateDraftEntryDialog from "./CreateDraftEntryDialog";
 import { useCreateDraftEntryGate } from "../../hooks/useCreateDraftEntryGate";
@@ -15,6 +16,10 @@ const BACKDROP_TAP_MAX_MOVE_PX = 10;
 /** Wider than hook defaults (~48px) for easier swipe-close; capped below old invite 42vw/180px. */
 const CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_VW = 0.32;
 const CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_PX = 128;
+
+/** Cards + CTA are `<button>` — allow panel swipe from card/label text, not form controls. */
+const CREATE_CHOOSER_PANEL_SWIPE_EXCLUDE_SELECTOR =
+  'input, textarea, select, [contenteditable="true"], [data-no-overlay-swipe], a[href]';
 
 type Props = {
   open: boolean;
@@ -73,25 +78,39 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     };
   }, [visible]);
 
-  // useOverlayEdgeSwipeDismiss: `active` follows `visible` (portal mount), not only `open`, so
-  // translateX is not reset while the overlay is still on screen after `open` goes false
-  // (EXIT_MS exit). `engageSwipe: open && animateIn` blocks new swipes during that exit/entry.
+  const swipeActive = visible;
+  const swipeEngaged = open && animateIn;
+  const swipeDisabled = draftEntryDialogProps.open;
+
+  // Edge strip: single owner of overlay transform + exit animation.
   const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
     useOverlayEdgeSwipeDismiss({
-      active: visible,
-      engageSwipe: open && animateIn,
-      gestureDisabled: draftEntryDialogProps.open,
+      active: swipeActive,
+      engageSwipe: swipeEngaged,
+      gestureDisabled: swipeDisabled,
       edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
       edgeMaxWidthVw: CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_VW,
       edgeMaxWidthPx: CREATE_CHOOSER_EDGE_SWIPE_MAX_WIDTH_PX,
-      /**
-       * Wider swipe start band than hook defaults, but strip stays at `z-[5]` under the chooser
-       * panel (`z-10`) so full-width Hangout/Experience cards stay tappable (strip must not use
-       * default z-[28] above the panel).
-       */
       edgeStripZClass: "z-[5]",
       onDismiss: onClose,
     });
+
+  const {
+    panelSwipeProps,
+    contentSwipeMotionStyle,
+  } = useOverlayContentSwipeDismiss({
+    active: swipeActive,
+    engageSwipe: swipeEngaged,
+    gestureDisabled: swipeDisabled,
+    startZoneMaxXVw: 0.45,
+    startZoneMaxPx: 180,
+    leftInsetPx: isNativeApp() ? 8 : 12,
+    excludeSelector: CREATE_CHOOSER_PANEL_SWIPE_EXCLUDE_SELECTOR,
+    allowButtonTargets: true,
+    commitThresholdPx: 48,
+    horizontalLockPx: 12,
+    onSwipeCommit: playAnimatedDismiss,
+  });
 
   useEffect(() => {
     if (!visible || !animateIn) return;
@@ -226,13 +245,17 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     "transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.33,1,0.68,1)]";
   const show = animateIn;
 
+  const effectiveOverlayMotionStyle = contentSwipeMotionStyle
+    ? { ...overlayMotionStyle, ...contentSwipeMotionStyle }
+    : overlayMotionStyle;
+
   return createPortal(
     <div
       className="fixed inset-0 z-[38] flex flex-col justify-end pointer-events-none"
       role="dialog"
       aria-modal="true"
       aria-label="Choose what to create"
-      style={overlayMotionStyle}
+      style={effectiveOverlayMotionStyle}
     >
       <div
         className={[
@@ -252,6 +275,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
         aria-hidden
       />
       <div
+        {...panelSwipeProps}
         className={[
           "relative z-10 w-full max-w-[min(440px,calc(100vw-24px))] mx-auto px-3 pointer-events-auto",
           transition,
@@ -259,6 +283,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
         ].join(" ")}
         style={{
           paddingBottom: "calc(70px + var(--safe-area-bottom-layout, 0px))",
+          touchAction: "pan-y",
         }}
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}

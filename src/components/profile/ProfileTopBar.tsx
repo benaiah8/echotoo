@@ -37,6 +37,7 @@ import {
 import { App } from "@capacitor/app";
 import type { Profile } from "../../contexts/ProfileContext";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
+import { useOverlayContentSwipeDismiss } from "../../hooks/useOverlayContentSwipeDismiss";
 
 /** Own-profile action sheet: wider-than-default edge band, strip stacked under sheet (CreateChooser lesson). */
 const OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_VW = 0.32;
@@ -167,6 +168,22 @@ export default function ProfileTopBar({
     });
 
   playAnimatedDismissRef.current = playAnimatedDismiss;
+
+  const { panelSwipeProps, contentSwipeMotionStyle } =
+    useOverlayContentSwipeDismiss({
+      active: ownProfileActionSheetOpen,
+      engageSwipe: ownProfileActionSheetOpen,
+      gestureDisabled: false,
+      startZoneMaxXVw: 0.45,
+      startZoneMaxPx: 180,
+      leftInsetPx: isNativeApp() ? 8 : 12,
+      excludeSelector:
+        'input, textarea, select, [contenteditable="true"], [data-no-overlay-swipe], a[href]',
+      allowButtonTargets: true,
+      commitThresholdPx: 48,
+      horizontalLockPx: 12,
+      onSwipeCommit: playAnimatedDismiss,
+    });
 
   const refreshNativePushStatus = useCallback(async () => {
     if (!isNativeApp() || !showHangoutReminderSetupInMenu) {
@@ -337,6 +354,10 @@ export default function ProfileTopBar({
   const ownSheetIconWrapClass =
     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]";
 
+  const effectiveOverlayMotionStyle = contentSwipeMotionStyle
+    ? { ...overlayMotionStyle, ...contentSwipeMotionStyle }
+    : overlayMotionStyle;
+
   return (
     <>
       <div
@@ -439,7 +460,7 @@ export default function ProfileTopBar({
           <div
             ref={ownProfileActionPortalRef}
             className="fixed inset-0 z-[100] flex items-center justify-center overscroll-none p-6 pointer-events-none"
-            style={overlayMotionStyle}
+            style={effectiveOverlayMotionStyle}
             role="presentation"
           >
             <button
@@ -449,10 +470,12 @@ export default function ProfileTopBar({
               onClick={() => playAnimatedDismiss()}
             />
             <div
+              {...panelSwipeProps}
               role="dialog"
               aria-modal="true"
               aria-labelledby="own-profile-actions-title"
               className="relative z-10 flex max-h-[min(85dvh,calc(100vh-48px))] w-[min(280px,calc(100vw-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5 pointer-events-auto"
+              style={{ touchAction: "pan-y" }}
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
@@ -518,6 +541,7 @@ export default function ProfileTopBar({
                 <div
                   role="group"
                   aria-label="Theme"
+                  data-no-overlay-swipe
                   className={`${ownSheetRowBase} min-h-[40px] h-auto py-1.5`}
                   onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) => e.stopPropagation()}

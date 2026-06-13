@@ -2,10 +2,10 @@
  * Merged create final step: caption-first editing + preview body shell.
  * Publishes directly via {@link executeCreateFlowPublish}; same success flow as Preview.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { PiWarning } from "react-icons/pi";
+import { PiCheck, PiWarning } from "react-icons/pi";
 import { useDispatch } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 
@@ -18,11 +18,13 @@ import CreateFlowKeyboardShell, {
 import CalendarModal from "../components/CalendarModal";
 import {
   FinalizeDateSchedulePanel,
-  FinalizeRatePanel,
-  FinalizeRsvpPanel,
+  FinalizeLocationPanel,
+  FinalizeMorePanel,
   FinalizeVisibilityPanel,
 } from "../components/create/CreateFinalizeMetaPanels";
-import CreateFinalizeMetadataRow from "../components/create/CreateFinalizeMetadataRow";
+import CreateFinalizeMetadataRow, {
+  type FinalizeMetaPanelKey,
+} from "../components/create/CreateFinalizeMetadataRow";
 import CreateFlowPostTagsField from "../components/create/CreateFlowPostTagsField";
 import PostDetailBody, {
   Post as DetailPost,
@@ -31,7 +33,10 @@ import { useCreatePostMedia } from "../components/create/CreatePostMediaProvider
 import CreateFinalizeHeroImageCta from "../components/create/CreateFinalizeHeroImageCta";
 import CreateFinalizeActivitiesCta from "../components/create/CreateFinalizeActivitiesCta";
 import CreateFinalizeHeroImageDock from "../components/create/CreateFinalizeHeroImageDock";
-import { hasMeaningfulActivityContent } from "../lib/createFlowMeaningfulActivity";
+import {
+  hasAnyDraftActivityLocation,
+  hasMeaningfulActivityContent,
+} from "../lib/createFlowMeaningfulActivity";
 import ActionSheet from "../components/ui/ActionSheet";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PreviewUploadOverlayPill from "../components/ui/PreviewUploadOverlayPill";
@@ -51,7 +56,13 @@ import {
 import { dispatchCreateFlowLeaveRequest } from "../lib/createFlowLeaveRequest";
 import { getViewerAuthUserId } from "../api/services/follows";
 import { executeCreateFlowPublish } from "../lib/createFlowPublish";
-import { clampCaption, CREATE_FLOW_CAPTION_MAX } from "../lib/createFlowLimits";
+import {
+  clampCaption,
+  CREATE_FLOW_CAPTION_MAX,
+  CREATE_FLOW_LIMITS,
+} from "../lib/createFlowLimits";
+import { clampString } from "../lib/createFlowLimitUtils";
+import { ActivityType } from "../types/post";
 import { isUgcTextPolicyError } from "../lib/ugcTextPolicy";
 import {
   APP_SAFE_BOTTOM_SYNC_EVENT,
@@ -62,12 +73,27 @@ import { CREATE_FLOW_CAPTION_REQUIRED_NOTICE_ID } from "../lib/createFlowNoticeI
 import { formatDateSummary } from "../lib/createFlowDateSummary";
 import { useCreateDraftActivitiesState } from "../hooks/useCreateDraftActivitiesState";
 import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
+import { navigateToOwnProfileAfterPublish } from "../lib/profilePublishNavigation";
+import { CREATE_FLOW_ADVISORY_HIGHLIGHT_MS } from "../lib/createFlowAdvisoryHighlight";
 
 const GAP_ABOVE_TAB = 16;
 const PREVIEW_ACTION_STRIP_HEIGHT_PX = 36;
 
 const FINALIZE_PUBLISH_UGC_INLINE_ALERT_COPY =
   "This post may violate EchoToo\u2019s Community Guidelines. Please revise the wording before publishing.";
+
+const DRAFT_ACTIVITY_SEED: ActivityType = {
+  title: "Stop 1",
+  activityType: "",
+  customActivity: "",
+  locationDesc: "",
+  tags: [],
+  location: "",
+  locationNotes: "",
+  locationUrl: "",
+  images: [],
+  additionalInfo: [],
+};
 
 /** After mount scroll (~120ms), allow smooth scroll to settle before caption entry pulse. */
 const FINALIZE_CAPTION_PULSE_START_MS = 550;
@@ -156,7 +182,7 @@ function coerceVisibility(v: unknown): VisibilityCtl {
   return s === "friends" ? "friends" : "public";
 }
 
-type FinalizePublishWarningKey = "hashtags" | "dates";
+type FinalizePublishWarningKey = "hashtags" | "dates" | "location";
 
 type FinalizePublishWarningItem = {
   key: FinalizePublishWarningKey;
@@ -168,7 +194,8 @@ type FinalizePublishWarningItem = {
 function getFinalizePublishWarnings(
   postType: "experience" | "hangout",
   missingHashtags: boolean,
-  missingHangoutSchedule: boolean
+  missingHangoutSchedule: boolean,
+  missingHangoutLocation: boolean
 ): FinalizePublishWarningItem[] {
   const out: FinalizePublishWarningItem[] = [];
   if (postType === "experience") {
@@ -196,6 +223,14 @@ function getFinalizePublishWarnings(
       heading: "No date added",
       explanation:
         "Dates help events appear at the right time and make them more useful to others.",
+    });
+  }
+  if (missingHangoutLocation) {
+    out.push({
+      key: "location",
+      heading: "No location added",
+      explanation:
+        "A place or address helps people find and join your event.",
     });
   }
   return out;
@@ -291,6 +326,12 @@ export default function CreateFinalizePage() {
   const { upsertNotice, removeNotice, notices } = useCreateFlowNotices();
   /** Single final publish modal (optional warning boxes + publish / back). */
   const [publishModalOpen, setPublishModalOpen] = useState(false);
+  /** Temporary field nudges after publish-warning modal Back (keys match {@link getFinalizePublishWarnings}). */
+  const [highlightedPublishWarningKeys, setHighlightedPublishWarningKeys] =
+    useState<Set<FinalizePublishWarningKey>>(() => new Set());
+  const publishWarningHighlightTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   /** UGC policy violation: show inline alert in publish confirm (no top toast). */
   const [publishModalUgcInline, setPublishModalUgcInline] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -364,6 +405,12 @@ export default function CreateFinalizePage() {
     () => initialDraft.ratingEnabled
   );
   const [showCal, setShowCal] = useState(false);
+  const [openMetaPanel, setOpenMetaPanel] =
+    useState<FinalizeMetaPanelKey | null>(null);
+
+  const closeMetaPanel = useCallback(() => {
+    setOpenMetaPanel(null);
+  }, []);
 
   const sanitizedActivities = useMemo((): SanitizedDraftActivity[] => {
     return (draftActivitiesState || []).map((a: DraftActivity, i: number) => ({
@@ -430,16 +477,90 @@ export default function CreateFinalizePage() {
 
   const missingHashtags = tags.length === 0;
   const missingHangoutSchedule = postType === "hangout" && !hasSchedule;
+  const missingHangoutLocation = useMemo(
+    () =>
+      postType === "hangout" &&
+      !hasAnyDraftActivityLocation(
+        sanitizedActivities.map((a) => ({
+          location: a.location,
+          locationUrl: a.locationUrl,
+          locationNotes: a.locationNotes,
+          locationDesc: a.locationDesc,
+        }))
+      ),
+    [postType, sanitizedActivities]
+  );
 
   const finalizePublishWarnings = useMemo(
     () =>
       getFinalizePublishWarnings(
         postType,
         missingHashtags,
-        missingHangoutSchedule
+        missingHangoutSchedule,
+        missingHangoutLocation
       ),
-    [postType, missingHashtags, missingHangoutSchedule]
+    [postType, missingHashtags, missingHangoutSchedule, missingHangoutLocation]
   );
+
+  const applyPublishWarningHighlightsFromModalBack = useCallback(() => {
+    if (finalizePublishWarnings.length === 0) return;
+    const keys = new Set(
+      finalizePublishWarnings.map((w) => w.key)
+    ) as Set<FinalizePublishWarningKey>;
+    setHighlightedPublishWarningKeys(keys);
+    if (publishWarningHighlightTimerRef.current) {
+      clearTimeout(publishWarningHighlightTimerRef.current);
+    }
+    publishWarningHighlightTimerRef.current = setTimeout(() => {
+      setHighlightedPublishWarningKeys(new Set());
+      publishWarningHighlightTimerRef.current = null;
+    }, CREATE_FLOW_ADVISORY_HIGHLIGHT_MS);
+  }, [finalizePublishWarnings]);
+
+  const handlePublishModalClose = useCallback(() => {
+    if (publishing) return;
+    setPublishModalUgcInline(false);
+    setPublishModalOpen(false);
+    applyPublishWarningHighlightsFromModalBack();
+  }, [publishing, applyPublishWarningHighlightsFromModalBack]);
+
+  useEffect(() => {
+    return () => {
+      if (publishWarningHighlightTimerRef.current) {
+        clearTimeout(publishWarningHighlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setHighlightedPublishWarningKeys((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(prev);
+      if (!missingHashtags) next.delete("hashtags");
+      if (!missingHangoutSchedule) next.delete("dates");
+      if (!missingHangoutLocation) next.delete("location");
+      if (next.size === prev.size) return prev;
+      return next;
+    });
+  }, [missingHashtags, missingHangoutSchedule, missingHangoutLocation]);
+
+  const publishModalConfirmLabel = useMemo((): ReactNode => {
+    if (finalizePublishWarnings.length === 0 && !publishModalUgcInline) {
+      return publishActionLabel;
+    }
+    const lead = isEditMode ? "Republish" : "Publish";
+    return (
+      <>
+        {lead}{" "}
+        <strong className="font-bold">anyway</strong>
+      </>
+    );
+  }, [
+    finalizePublishWarnings.length,
+    publishModalUgcInline,
+    isEditMode,
+    publishActionLabel,
+  ]);
 
   const finalizePublishModalMessage = useMemo(
     () => (
@@ -479,26 +600,103 @@ export default function CreateFinalizePage() {
     </span>
   );
 
-  const ratePillEnd = (
-    <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1.1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[8px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
-      {ratingEnabled ? "On" : "Off"}
-    </span>
+  const patchFirstActivityLocation = useCallback(
+    (field: string, value: unknown) => {
+      const lim = CREATE_FLOW_LIMITS.activities;
+      setDraftActivitiesState((prev) => {
+        const base = prev.length > 0 ? [...prev] : [{ ...DRAFT_ACTIVITY_SEED }];
+        const first = { ...base[0] };
+        if (field === "location") {
+          first.location = clampString(String(value), lim.placeNameMaxChars);
+        } else if (field === "locationUrl") {
+          first.locationUrl = clampString(
+            String(value),
+            lim.googleMapsLinkMaxChars
+          );
+        } else if (field === "locationNotes") {
+          first.locationNotes = clampString(
+            String(value),
+            lim.locationExtraDetailsMaxChars
+          );
+        } else {
+          (first as Record<string, unknown>)[field] = value;
+        }
+        base[0] = first;
+        return base;
+      });
+    },
+    [setDraftActivitiesState]
   );
 
-  const rsvpPillEnd =
-    postType === "hangout" ? (
-      rsvpEnabled && typeof rsvpCapacity === "number" ? (
-        <span className="create-meta-pill-endcap inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none text-[var(--create-meta-pill-endcap-fg)]">
-          {rsvpCapacity}
-        </span>
-      ) : (
-        <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
-      )
-    ) : (
-      <span className="text-[9px] font-medium text-[var(--create-meta-pill-fg)] opacity-45">
-        —
+  const firstActivityForLocationPanel = useMemo((): ActivityType => {
+    const a = draftActivitiesState[0];
+    if (!a) return { ...DRAFT_ACTIVITY_SEED };
+    return {
+      title: a.title ?? DRAFT_ACTIVITY_SEED.title,
+      activityType: a.activityType ?? "",
+      customActivity: a.customActivity ?? "",
+      locationDesc: a.locationDesc ?? "",
+      tags: Array.isArray(a.tags) ? a.tags.map(String) : [],
+      location: a.location ?? "",
+      locationNotes: a.locationNotes ?? "",
+      locationUrl: a.locationUrl ?? "",
+      images: Array.isArray(a.images) ? (a.images as string[]) : [],
+      additionalInfo: Array.isArray(a.additionalInfo) ? a.additionalInfo : [],
+    };
+  }, [draftActivitiesState]);
+
+  const firstStopLocationStatus = useMemo(() => {
+    const a = draftActivitiesState[0];
+    if (!a) return "empty" as const;
+    const hasPlace = !!(a.location || "").trim();
+    const hasMapsUrl = !!(a.locationUrl || "").trim();
+    const hasNotes = !!(a.locationNotes || "").trim();
+    if (hasPlace && hasMapsUrl) return "strong" as const;
+    if (hasPlace || hasMapsUrl || hasNotes) return "partial" as const;
+    return "empty" as const;
+  }, [draftActivitiesState]);
+
+  const locationPillLabel = postType === "hangout" ? "Location" : "Places";
+
+  const locationPillEnd =
+    firstStopLocationStatus === "strong" ? (
+      <span
+        className="create-meta-pill-endcap inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+        role="img"
+        aria-label="Location set"
+      >
+        <PiCheck
+          className="h-2.5 w-2.5 text-[var(--create-meta-pill-endcap-fg)]"
+          strokeWidth={2.75}
+          aria-hidden
+        />
       </span>
+    ) : firstStopLocationStatus === "partial" ? (
+      <span
+        className="create-meta-pill-endcap inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
+        role="img"
+        aria-label="Partial location"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      </span>
+    ) : (
+      <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
     );
+
+  const moreOptionsActive =
+    (postType === "hangout" && rsvpEnabled) || ratingEnabled;
+
+  const morePillEnd = moreOptionsActive ? (
+    <span
+      className="inline-flex h-3 w-3 shrink-0 items-center justify-center sm:h-3.5 sm:w-3.5"
+      role="img"
+      aria-label="More options enabled"
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--create-meta-pill-schedule-dot-bg)] ring-1 ring-[var(--create-meta-pill-schedule-dot-ring)]" />
+    </span>
+  ) : (
+    <span className="inline-flex h-4 w-4 shrink-0" aria-hidden />
+  );
 
   const { hasPendingUploads, jobs } = useCreatePostMedia();
 
@@ -859,8 +1057,11 @@ export default function CreateFinalizePage() {
       /* ignore */
     }
     const userId = await getViewerAuthUserId();
-    if (!userId) return nav(Paths.profile);
-    return nav(Paths.profileMe);
+    if (!userId) {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      return nav(Paths.profile);
+    }
+    navigateToOwnProfileAfterPublish(nav, { postId: newPostId });
   };
 
   const handleLeaveCreateFlow = useCallback(() => {
@@ -868,8 +1069,9 @@ export default function CreateFinalizePage() {
   }, [nav]);
 
   const goToActivities = useCallback(() => {
+    closeMetaPanel();
     nav(`${Paths.createActivities}?type=${postType}`);
-  }, [nav, postType]);
+  }, [nav, postType, closeMetaPanel]);
 
   return (
     <PrimaryPageContainer back capacitorNotchScrim>
@@ -907,6 +1109,7 @@ export default function CreateFinalizePage() {
               post={previewPost}
               isPreview={true}
               composeFinalizeShell
+              composeFinalizeHideAuthorPreview
               composeFinalizeCaption={{
                 value: caption,
                 onChange: (next) => setCaption(clampCaption(next)),
@@ -914,23 +1117,37 @@ export default function CreateFinalizePage() {
                 highlight: showCaptionHighlight,
                 entryPulse: captionEntryPulse,
                 surroundingDeemphasize: !fullProminence,
-                onCaptionFocusChange: (focused) => setFullProminence(!focused),
+                onCaptionFocusChange: (focused) => {
+                  setFullProminence(!focused);
+                  if (focused) closeMetaPanel();
+                },
                 belowCaption: (
                   <CreateFlowPostTagsField
                     tags={tags}
                     onTagsChange={setTags}
                     variant="embedded"
+                    onInputFocus={closeMetaPanel}
+                    advisoryHighlight={highlightedPublishWarningKeys.has(
+                      "hashtags"
+                    )}
                   />
                 ),
               }}
               composeFinalizeBelowCaption={
                 <CreateFinalizeMetadataRow
+                  locationPillLabel={locationPillLabel}
                   hasSchedule={hasSchedule}
                   visibilityPillEnd={visibilityPillEnd}
-                  rsvpPillEnd={rsvpPillEnd}
-                  ratePillEnd={ratePillEnd}
-                  rsvpEnabled={postType === "hangout" && rsvpEnabled}
+                  locationPillEnd={locationPillEnd}
+                  morePillEnd={morePillEnd}
+                  moreOptionsActive={moreOptionsActive}
                   rateEnabled={ratingEnabled}
+                  openPanel={openMetaPanel}
+                  onOpenPanelChange={setOpenMetaPanel}
+                  highlightDatePill={highlightedPublishWarningKeys.has("dates")}
+                  highlightLocationPill={highlightedPublishWarningKeys.has(
+                    "location"
+                  )}
                   datePanel={
                     <FinalizeDateSchedulePanel
                       dateSummary={dateSummary}
@@ -942,22 +1159,25 @@ export default function CreateFinalizePage() {
                       onOpenCalendar={() => setShowCal(true)}
                     />
                   }
+                  locationPanel={
+                    <FinalizeLocationPanel
+                      activity={firstActivityForLocationPanel}
+                      onFieldChange={patchFirstActivityLocation}
+                    />
+                  }
                   visibilityPanel={
                     <FinalizeVisibilityPanel
                       visibility={visibility}
                       onVisibilityChange={setVisibility}
                     />
                   }
-                  rsvpPanel={
-                    <FinalizeRsvpPanel
+                  morePanel={
+                    <FinalizeMorePanel
+                      postType={postType}
                       rsvpEnabled={rsvpEnabled}
                       setRsvpEnabled={setRsvpEnabled}
                       rsvpCapacity={rsvpCapacity}
                       setRsvpCapacity={setRsvpCapacity}
-                    />
-                  }
-                  ratePanel={
-                    <FinalizeRatePanel
                       ratingEnabled={ratingEnabled}
                       setRatingEnabled={setRatingEnabled}
                     />
@@ -970,6 +1190,7 @@ export default function CreateFinalizePage() {
                 <CreateFinalizeHeroImageCta
                   totalImagesPost={totalPostImages}
                   variant="empty"
+                  onBeforeOpen={closeMetaPanel}
                 />
               }
               composeFinalizeHeroBottomOverlayCta={
@@ -981,6 +1202,7 @@ export default function CreateFinalizePage() {
               }
               composeFinalizeActivitiesCta={
                 <CreateFinalizeActivitiesCta
+                  postType={postType}
                   hasMeaningfulActivities={hasMeaningfulActivities}
                   stopCount={draftActivitiesState.length}
                   onClick={goToActivities}
@@ -1010,19 +1232,14 @@ export default function CreateFinalizePage() {
 
         <ConfirmDialog
           open={publishModalOpen}
-          onClose={() => {
-            if (!publishing) {
-              setPublishModalUgcInline(false);
-              setPublishModalOpen(false);
-            }
-          }}
+          onClose={handlePublishModalClose}
           onConfirm={() => void handleFinalizePublish()}
           title={isEditMode ? "Republish this post?" : "Publish this post?"}
           message={finalizePublishModalMessage}
           inlineAlert={
             publishModalUgcInline ? FINALIZE_PUBLISH_UGC_INLINE_ALERT_COPY : null
           }
-          confirmLabel={publishActionLabel}
+          confirmLabel={publishModalConfirmLabel}
           cancelLabel="Back"
           confirmVariant="primary"
           isLoading={publishing}

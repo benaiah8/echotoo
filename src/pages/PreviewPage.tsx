@@ -29,6 +29,7 @@ import {
   UGC_TEXT_POLICY_ERROR_MESSAGE,
 } from "../lib/ugcTextPolicy";
 import { navigateAfterEditPublish } from "../lib/editPostBootstrap";
+import { navigateToOwnProfileAfterPublish } from "../lib/profilePublishNavigation";
 
 const BOTTOM_NAV_H = 56;
 const GAP_BELOW_ACTIONS = 4;
@@ -395,8 +396,11 @@ export default function PreviewPage() {
       /* ignore */
     }
     const userId = await getViewerAuthUserId();
-    if (!userId) return nav(Paths.profile);
-    return nav(Paths.profileMe);
+    if (!userId) {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      return nav(Paths.profile);
+    }
+    navigateToOwnProfileAfterPublish(nav, { postId: newPostId });
   };
 
   // measure sheet width with the column

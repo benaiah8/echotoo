@@ -20,7 +20,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>;
   title: string;
   message: string | React.ReactNode;
-  confirmLabel?: string;
+  confirmLabel?: string | React.ReactNode;
   cancelLabel?: string;
   confirmVariant?:
     | "danger"

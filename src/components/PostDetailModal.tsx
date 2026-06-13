@@ -20,8 +20,41 @@ import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
 import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
 import { useOverlayEdgeSwipeDismiss } from "../hooks/useOverlayEdgeSwipeDismiss";
+import { useOverlayContentSwipeDismiss } from "../hooks/useOverlayContentSwipeDismiss";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
+import { scrollCommentsSectionIntoView } from "../lib/postDetailCommentsScroll";
+import { getPostDetailModalCommentScrollPaddingBottom } from "../hooks/usePostDetailCommentLayout";
+
+/** Conservative: exclude comments, composer host, inputs, controls, and tagged interactive regions. */
+const POST_DETAIL_CONTENT_SWIPE_EXCLUDE_SELECTOR = [
+  "[data-no-overlay-swipe]",
+  "[data-comments-section]",
+  "[data-comments-section] *",
+  "[data-post-detail-modal-composer-host]",
+  "[data-post-detail-modal-composer-host] *",
+  "input",
+  "textarea",
+  "select",
+  '[contenteditable="true"]',
+  "button",
+  '[role="button"]',
+  "a[href]",
+  "[data-rsvp]",
+  "[data-rsvp] *",
+  "[data-post-menu]",
+  "[data-post-menu] *",
+  "[data-sticky-post-actions]",
+  "[data-sticky-post-actions] *",
+  "[data-hashtag-row]",
+  "[data-hashtag-row] *",
+  "[data-media-control]",
+  "[data-media-control] *",
+  "[data-carousel-control]",
+  "[data-carousel-control] *",
+  "[data-image-control]",
+  "[data-image-control] *",
+].join(", ");
 
 export default function PostDetailModal() {
   const { id } = useParams<{ id: string }>();
@@ -30,7 +63,12 @@ export default function PostDetailModal() {
   const state = location.state as PostDetailNavigateState | null;
   const backgroundLocation = state?.backgroundLocation;
   const initialPost = state?.initialPost;
-  const focusCommentComposer = Boolean(state?.focusCommentComposer);
+  /** Feed comment icon: scroll comments into view; does not imply composer focus. */
+  const shouldScrollToCommentsOnOpen = Boolean(
+    state?.scrollToComments ?? state?.focusCommentComposer
+  );
+  /** Rare explicit opt-in only; outside comment icon never sets this. */
+  const shouldAutoFocusComposer = Boolean(state?.autoFocusCommentComposer);
 
   const hasMatchingInitialPost = !!id && !!initialPost && initialPost.id === id;
   const [post, setPost] = useState<Post | null>(() => {
@@ -42,6 +80,13 @@ export default function PostDetailModal() {
   const [loadAttempt, setLoadAttempt] = useState(0);
 
   const [composerFocused, setComposerFocused] = useState(false);
+
+  /** DOM mount for `FloatingCommentInput` portaled outside `[data-post-detail-modal-scroll]`. */
+  const [modalComposerHostEl, setModalComposerHostEl] =
+    useState<HTMLDivElement | null>(null);
+  const attachModalComposerHost = useCallback((node: HTMLDivElement | null) => {
+    setModalComposerHostEl((prev) => (prev === node ? prev : node));
+  }, []);
 
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingRef = useRef(false);
@@ -104,16 +149,18 @@ export default function PostDetailModal() {
   }, [id]);
 
   useEffect(() => {
-    if (!focusCommentComposer || !post || focusCommentsScrollDoneRef.current) return;
+    if (!shouldScrollToCommentsOnOpen || !post || focusCommentsScrollDoneRef.current)
+      return;
     focusCommentsScrollDoneRef.current = true;
     const t = window.setTimeout(() => {
-      document.querySelector("[data-comments-section]")?.scrollIntoView({
+      scrollCommentsSectionIntoView({
+        isModal: true,
         behavior: "smooth",
-        block: "end",
+        block: "nearest",
       });
     }, 120);
     return () => clearTimeout(t);
-  }, [focusCommentComposer, post?.id]);
+  }, [shouldScrollToCommentsOnOpen, post?.id]);
 
   const hasMatching = !!id && !!initialPost && initialPost.id === id;
   useEffect(() => {
@@ -226,6 +273,24 @@ export default function PostDetailModal() {
       onDismiss: () => finishDismiss(0),
     });
 
+  const { panelSwipeProps, contentSwipeMotionStyle } =
+    useOverlayContentSwipeDismiss({
+      active: true,
+      engageSwipe: true,
+      gestureDisabled: composerFocused || keyboardOpen,
+      startZoneMaxXVw: 0.45,
+      startZoneMaxPx: 180,
+      leftInsetPx: isNativeApp() ? 8 : 12,
+      excludeSelector: POST_DETAIL_CONTENT_SWIPE_EXCLUDE_SELECTOR,
+      commitThresholdPx: 48,
+      horizontalLockPx: 12,
+      onSwipeCommit: playAnimatedDismiss,
+    });
+
+  const effectiveOverlayMotionStyle = contentSwipeMotionStyle
+    ? { ...overlayMotionStyle, ...contentSwipeMotionStyle }
+    : overlayMotionStyle;
+
   useEffect(() => {
     playAnimatedDismissRef.current = playAnimatedDismiss;
   }, [playAnimatedDismiss]);
@@ -264,6 +329,11 @@ export default function PostDetailModal() {
     [],
   );
 
+  const modalScrollPaddingBottom = useMemo(
+    () => getPostDetailModalCommentScrollPaddingBottom(modalKeyboardInsetPx),
+    [modalKeyboardInsetPx]
+  );
+
   const dismissContextValue = useMemo(
     () => ({
       setComposerFocused,
@@ -288,7 +358,7 @@ export default function PostDetailModal() {
         className="fixed inset-0 z-[120] flex flex-col pointer-events-none"
         style={{
           bottom: "calc(-1 * var(--safe-area-bottom-layout))",
-          ...overlayMotionStyle,
+          ...effectiveOverlayMotionStyle,
         }}
         role="dialog"
         aria-modal="true"
@@ -322,10 +392,20 @@ export default function PostDetailModal() {
 
         <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 justify-center">
           <div className="pointer-events-auto flex h-full min-h-0 w-full max-w-[640px] flex-col">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl bg-[var(--bg)] shadow-xl safe-area-inset-bottom">
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-2xl bg-[var(--bg)] shadow-xl safe-area-inset-bottom">
               <div
+                ref={attachModalComposerHost}
+                className="pointer-events-none absolute inset-0 z-[25]"
+                data-post-detail-modal-composer-host
+              />
+              <div
+                {...panelSwipeProps}
                 className="min-h-0 flex-1 overflow-y-auto"
                 data-post-detail-modal-scroll
+                style={{
+                  touchAction: "pan-y",
+                  ...(post ? { paddingBottom: modalScrollPaddingBottom } : {}),
+                }}
               >
                 <div className="relative px-4 pb-6">
                   {(loading || (error && !post)) && (
@@ -354,7 +434,8 @@ export default function PostDetailModal() {
                     <PostDetailBody
                       post={post}
                       onClose={playAnimatedDismiss}
-                      autoFocusCommentComposer={focusCommentComposer}
+                      autoFocusCommentComposer={shouldAutoFocusComposer}
+                      modalComposerPortalHost={modalComposerHostEl}
                     />
                   )}
                 </div>
