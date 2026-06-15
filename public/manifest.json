@@ -1,6 +1,6 @@
 {
-  "name": "EchoToo",
-  "short_name": "EchoToo",
+  "name": "Echo Too",
+  "short_name": "Echo Too",
   "description": "Share and discover amazing experiences and hangouts",
   "start_url": "/",
   "display": "standalone",

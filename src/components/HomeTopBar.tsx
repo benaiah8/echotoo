@@ -102,8 +102,12 @@ export interface HomeTopBarProps {
   search: string;
   searchMode: "posts" | "users";
   onSearchModeChange: (mode: "posts" | "users") => void;
-  /** When true, show Posts / Users toggle under the search field. */
+  /** When true, show Posts / Users segmented toggle under the search field (legacy; keep false on Home). */
   showSearchKindToggle: boolean;
+  /** Home Phase 1: post search mode — hide browse quick chips; show dismiss control in search field. */
+  homePostSearchActive: boolean;
+  /** Home Phase 1: dismiss post search (clear query, blur, close filters). */
+  onExitPostSearch: () => void;
   searchFieldPlaceholder: string;
   hasActiveFilters: boolean;
   filtersOpen: boolean;
@@ -139,6 +143,8 @@ export default function HomeTopBar({
   searchMode,
   onSearchModeChange,
   showSearchKindToggle,
+  homePostSearchActive,
+  onExitPostSearch,
   searchFieldPlaceholder,
   hasActiveFilters,
   filtersOpen,
@@ -162,6 +168,13 @@ export default function HomeTopBar({
   /** Visual only: match banner during empty Friends preflight without activating friendsFilter. */
   const friendsIsVisuallyActive =
     friendsFilter || noFriendsInlineBannerVisible;
+
+  const showPostFiltersChrome =
+    !homePostSearchActive || searchMode === "posts";
+  const filtersDrawerExpanded =
+    filtersOpen && showPostFiltersChrome;
+  const filterButtonDisabled =
+    homePostSearchActive && searchMode === "users";
 
   const handleFriendsFilterClick = () => {
     if (friendsFilter) {
@@ -241,7 +254,8 @@ export default function HomeTopBar({
                 : "border border-transparent shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
             ].join(" ")}
             style={{
-              borderRadius: atTop ? 0 : 24,
+              /* Full stadium pill when floated (radius ≥ half height); 24px was slightly shy on ~50px chrome. */
+              borderRadius: atTop ? 0 : 9999,
               transition:
                 "border-radius 300ms cubic-bezier(0.33, 1, 0.68, 1), box-shadow 300ms cubic-bezier(0.33, 1, 0.68, 1)",
               backfaceVisibility: "hidden",
@@ -258,17 +272,23 @@ export default function HomeTopBar({
                   autoComplete="off"
                   placeholder={searchFieldPlaceholder}
                   className={`w-full pl-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0 ${
-                    search.trim() ? "pr-[2.125rem]" : "pr-2"
+                    search.trim() || homePostSearchActive
+                      ? "pr-[2.125rem]"
+                      : "pr-2"
                   }`}
                   value={search}
                   onChange={(e) => onSearch(e.target.value)}
                   onFocus={() => onSearchFocusChange?.(true)}
                   onBlur={() => onSearchFocusChange?.(false)}
                 />
-                {search.trim() ? (
+                {search.trim() || homePostSearchActive ? (
                   <button
                     type="button"
-                    aria-label="Clear search"
+                    aria-label={
+                      homePostSearchActive
+                        ? "Close search"
+                        : "Clear search"
+                    }
                     className={[
                       /* h-9 field (36px): h-6 chip + right-1.5 (6px) = equal ~6px inset top/right/bottom */
                       "absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full p-0.5",
@@ -287,7 +307,7 @@ export default function HomeTopBar({
                       ev.preventDefault();
                     }}
                     onClick={() => {
-                      onSearch("");
+                      onExitPostSearch();
                     }}
                   >
                     <PiX className="h-3 w-3 shrink-0" strokeWidth={2.25} aria-hidden />
@@ -296,12 +316,23 @@ export default function HomeTopBar({
               </div>
               <button
                 type="button"
+                disabled={filterButtonDisabled}
+                aria-disabled={filterButtonDisabled || undefined}
+                aria-label={
+                  filterButtonDisabled
+                    ? "Filters unavailable while searching users"
+                    : "Open filters"
+                }
                 onClick={onToggleFilters}
-                aria-label="Open filters"
-                className="relative shrink-0 w-9 h-9 rounded-full border border-[var(--border)] text-[var(--text)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
+                className={[
+                  "relative shrink-0 w-9 h-9 rounded-full border flex items-center justify-center transition-opacity",
+                  filterButtonDisabled
+                    ? "border-[var(--border)]/45 text-[var(--text)]/35 cursor-not-allowed opacity-45"
+                    : "border-[var(--border)] text-[var(--text)] hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]",
+                ].join(" ")}
               >
                 <PiFunnelSimple size={16} />
-                {hasActiveFilters && (
+                {!filterButtonDisabled && hasActiveFilters && (
                   <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[var(--brand)]" />
                 )}
               </button>
@@ -347,7 +378,37 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {/* Quick chips + optional Today-empty banner: one centered shrink-to-content column */}
+        {homePostSearchActive ? (
+          <div
+            className={[
+              "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
+              "self-center",
+            ].join(" ")}
+          >
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() =>
+                onSearchModeChange(
+                  searchMode === "posts" ? "users" : "posts"
+                )
+              }
+              className={[
+                "rounded-full px-3 py-1 text-[10px] font-medium leading-none transition-colors",
+                "border border-[var(--border)]",
+                "bg-[color-mix(in_oklab,var(--surface)_38%,transparent)]",
+                "text-[var(--text)]/78 hover:text-[var(--text)]",
+                "hover:bg-[color-mix(in_oklab,var(--text)_10%,transparent)]",
+                "active:scale-[0.97]",
+              ].join(" ")}
+            >
+              {searchMode === "posts" ? "Search users" : "Search posts"}
+            </button>
+          </div>
+        ) : null}
+
+        {/* Quick chips + optional Today-empty banner (hidden during Home post search mode) */}
+        {!homePostSearchActive ? (
         <div
           className={[
             "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
@@ -408,6 +469,7 @@ export default function HomeTopBar({
             </div>
           ) : null}
         </div>
+        ) : null}
 
         {/* Filter popout: appears below quick chips */}
         {/* When closed: no extra gap. When open: 8px gap from chips. */}
@@ -421,13 +483,13 @@ export default function HomeTopBar({
             "app-dark:border-white/16",
             "shadow-[0_8px_28px_rgba(0,0,0,0.22)] app-dark:shadow-[0_12px_32px_rgba(0,0,0,0.55)]",
             "rounded-2xl",
-            filtersOpen
+            filtersDrawerExpanded
               ? "max-h-[min(420px,72vh)] opacity-100 flex flex-col"
               : "max-h-0 opacity-0",
           ].join(" ")}
           style={{
             maxWidth: TOP_BAR_MAX_WIDTH,
-            marginTop: filtersOpen ? 8 : 0,
+            marginTop: filtersDrawerExpanded ? 8 : 0,
           }}
         >
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">

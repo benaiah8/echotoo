@@ -34,6 +34,13 @@ export function getSupportMailto(): string {
   )}`;
 }
 
+/** Logo / marketing “Send feedback” — same inbox as general support. */
+export function getFeedbackMailto(): string {
+  return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+    "EchoToo feedback"
+  )}`;
+}
+
 export function getAccountDeletionMailto(): string {
   return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
     "Account Deletion Request"

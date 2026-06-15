@@ -553,6 +553,30 @@ export default function GroupInviteThreadOverlay({
   const participantCount = bundle?.participant_count ?? participants.length;
   const extraCount = Math.max(0, participantCount - visibleParticipants.length);
 
+  const groupMemberCaptionLine =
+    bundle != null ? (
+      <p className="text-[10px] leading-none text-[var(--text)]/48">
+        {participantCount === 1 ? "1 member" : `${participantCount} members`}
+      </p>
+    ) : null;
+
+  /** Best-effort avatar for left-aligned group invite note (inviter not always explicit). */
+  const inviteNoteGroupSenderPreview = useMemo(() => {
+    if (!bundle) return null;
+    const first = bundle.messages[0];
+    if (first?.sender_profile) return first.sender_profile;
+    const uid = first?.sender_user_id;
+    if (uid) {
+      const hit = bundle.participants?.find((p) => p.user_id === uid);
+      if (hit) return hit;
+    }
+    const parts = bundle.participants ?? [];
+    const other = parts.find(
+      (p) => p.user_id != null && p.user_id !== viewerUserId,
+    );
+    return other ?? null;
+  }, [bundle, viewerUserId]);
+
   const activeMentionToken = useMemo(
     () => parseActiveMentionQuery(draft, composerCaret),
     [draft, composerCaret],
@@ -879,13 +903,6 @@ export default function GroupInviteThreadOverlay({
               bundle={bundle}
               linkToPost={linkToPost}
               backgroundLocation={location}
-              inviteNoteFooter={
-                <p className="mt-1.5 text-[10px] leading-none text-[var(--text)]/48">
-                  {participantCount === 1
-                    ? "1 member"
-                    : `${participantCount} members`}
-                </p>
-              }
             />
 
             <div>
@@ -903,6 +920,11 @@ export default function GroupInviteThreadOverlay({
                 reactionsInteractive={reactionsInteractive}
                 reactingMessageId={reactingMessageId}
                 counterparty={null}
+                inviteNote={bundle.invite.invite_note}
+                inviteNoteMine={false}
+                inviteNoteSenderPreview={inviteNoteGroupSenderPreview}
+                inviteNoteFooter={groupMemberCaptionLine}
+                listMetaWhenNoInviteNote={groupMemberCaptionLine}
                 onToggleReaction={(messageId) => {
                   void handleReactionToggle(messageId);
                 }}

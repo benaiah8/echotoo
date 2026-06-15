@@ -6,17 +6,20 @@ import { RootState } from "../../app/store";
 import { Paths } from "../../router/Paths";
 import { isAvatarPresetValue } from "../../lib/avatarPresets";
 import { useIsDesktopLayout } from "../../lib/desktopLayoutDetection";
+import {
+  profileFinishNudgeDismissedStorageKey,
+  setProfileFinishNudgeDismissed,
+} from "../../lib/profileFinishNudgeDismiss";
 
 /** Matches default bio set in FullScreenProfileCreation save(). */
 const DEFAULT_BIO_SNIPPET = "I'm too lazy to write a bio";
 
-function profileFinishNudgeStorageKey(userId: string): string {
-  return `echotoo_profile_finish_nudge_dismissed_${userId}`;
-}
-
 function isDismissed(userId: string): boolean {
   try {
-    return localStorage.getItem(profileFinishNudgeStorageKey(userId)) === "1";
+    return (
+      localStorage.getItem(profileFinishNudgeDismissedStorageKey(userId)) ===
+      "1"
+    );
   } catch {
     return false;
   }
@@ -88,15 +91,13 @@ export default function ProfileFinishSoftNudge() {
   if (!userId || !visible || loading) return null;
 
   const dismiss = () => {
-    try {
-      localStorage.setItem(profileFinishNudgeStorageKey(userId), "1");
-    } catch {
-      /* ignore */
-    }
+    setProfileFinishNudgeDismissed(userId);
     setVisible(false);
   };
 
   const goEdit = () => {
+    setProfileFinishNudgeDismissed(userId);
+    setVisible(false);
     navigate({ pathname: Paths.profileMe, search: "?edit=1" });
   };
 

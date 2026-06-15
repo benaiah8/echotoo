@@ -663,6 +663,9 @@ export default function PersonalInviteThreadOverlay({
                 reactionsInteractive={reactionsInteractive}
                 reactingMessageId={reactingMessageId}
                 counterparty={counterparty}
+                inviteNote={bundle.invite.invite_note}
+                inviteNoteMine={bundle.viewer_role === "inviter"}
+                inviteNoteSenderPreview={counterparty}
                 onToggleReaction={(messageId) => {
                   void handleReactionToggle(messageId);
                 }}

@@ -2,6 +2,7 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 import { invalidateProfileByUserIdCache } from "../api/services/follows";
 import { pickRandomPresetAvatarValue } from "./avatarPresets";
+import { isUsernameMissingOrPlaceholder } from "./profileUsername";
 
 const USERNAME_MAX = 24;
 /** Dedupe concurrent persist for the same auth user (OAuth + SIGNED_IN racing). */
@@ -92,9 +93,13 @@ function baseUsernameFromDisplayOrEmail(
   displayName: string,
   email: string | undefined,
 ): string {
-  const firstWord = displayName.trim().split(/\s+/)[0] ?? "";
+  const d = displayName.trim();
+  // Prefer compact slug: "Ben 10" → ben10, "John Doe" → johndoe (matches first-time editor intent).
+  const compact = sanitizeUsernameRaw(d.replace(/\s+/g, ""));
+  if (compact.length >= 3) return compact.slice(0, USERNAME_MAX);
+  const firstWord = d.split(/\s+/)[0] ?? "";
   let base = sanitizeUsernameRaw(firstWord);
-  if (!base) base = sanitizeUsernameRaw(displayName.replace(/\s+/g, ""));
+  if (!base) base = sanitizeUsernameRaw(d.replace(/\s+/g, ""));
   if (!base && email) {
     base = sanitizeUsernameRaw(email.split("@")[0] ?? "");
   }
@@ -235,15 +240,27 @@ async function runPersist(user: User): Promise<boolean> {
   }
 
   const hasDisplay = Boolean(String(existing?.display_name ?? "").trim());
-  const hasUsername = Boolean(String(existing?.username ?? "").trim());
+  const needsUsernameFill =
+    !existing || isUsernameMissingOrPlaceholder(existing.username);
   const hasAvatar = Boolean(String(existing?.avatar_url ?? "").trim());
 
   let nextDisplay = hasDisplay
     ? null
     : displayName.trim() || emailDisplayFallback(email);
   let nextUsername: string | null = null;
-  if (!hasUsername) {
-    if (metaUsernameCandidate.length >= 3) {
+  if (needsUsernameFill) {
+    const explicitDisplay =
+      String(existing?.display_name ?? "").trim() || displayFromMeta;
+    const weakMeta =
+      metaUsernameCandidate.length < 3 ||
+      /^[0-9]+$/.test(metaUsernameCandidate);
+
+    if (explicitDisplay) {
+      nextUsername = await findAvailableUsername(
+        baseUsernameFromDisplayOrEmail(explicitDisplay, email),
+        existing?.id ?? null,
+      );
+    } else if (metaUsernameCandidate.length >= 3 && !weakMeta) {
       const taken = await isUsernameTaken(
         metaUsernameCandidate,
         existing?.id ?? null,
@@ -255,11 +272,10 @@ async function runPersist(user: User): Promise<boolean> {
           )
         : metaUsernameCandidate;
     } else {
-      const base = baseUsernameFromDisplayOrEmail(
-        displayFromMeta || displayName,
-        email,
+      nextUsername = await findAvailableUsername(
+        baseUsernameFromDisplayOrEmail(displayName.trim(), email),
+        existing?.id ?? null,
       );
-      nextUsername = await findAvailableUsername(base, existing?.id ?? null);
     }
   }
 
@@ -270,7 +286,7 @@ async function runPersist(user: User): Promise<boolean> {
 
   const patch: Record<string, string> = {};
   if (!hasDisplay && nextDisplay) patch.display_name = nextDisplay;
-  if (!hasUsername && nextUsername) patch.username = nextUsername;
+  if (needsUsernameFill && nextUsername) patch.username = nextUsername;
   if (!hasAvatar && nextAvatar) patch.avatar_url = nextAvatar;
 
   const willWrite = !existing || Object.keys(patch).length > 0;
@@ -322,7 +338,7 @@ async function runPersist(user: User): Promise<boolean> {
         const retryPatch: Record<string, string> = {};
         if (!String(row.display_name ?? "").trim() && insertDisplay)
           retryPatch.display_name = insertDisplay;
-        if (!String(row.username ?? "").trim() && insertUsername)
+        if (isUsernameMissingOrPlaceholder(row.username) && insertUsername)
           retryPatch.username = insertUsername;
         if (!String(row.avatar_url ?? "").trim() && insertAvatar)
           retryPatch.avatar_url = insertAvatar;
@@ -382,6 +398,8 @@ async function runPersist(user: User): Promise<boolean> {
 /**
  * Idempotent: fills missing profiles.display_name, username, avatar_url from
  * auth user_metadata (and safe fallbacks). Does not overwrite non-empty fields.
+ * Username: also replaces DB placeholders matching `user_<digits>` when a
+ * display-derived username can be assigned.
  */
 export async function persistProviderProfileDefaultsAfterSignIn(
   user: User | null | undefined,

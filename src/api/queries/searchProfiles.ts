@@ -10,11 +10,22 @@ export type ProfileSearchRow = {
   you_follow: boolean; // viewer follows them
 };
 
+export type SearchProfilesOptions = {
+  /** Page size (default 25 for profile overlay). Capped at 50. */
+  limit?: number;
+  /** Row offset for pagination (default 0). */
+  offset?: number;
+};
+
 export async function searchProfiles(
   q: string,
-  viewerId?: string
+  viewerId?: string,
+  options?: SearchProfilesOptions
 ): Promise<ProfileSearchRow[]> {
   if (!q) return [];
+
+  const limit = Math.min(Math.max(options?.limit ?? 25, 1), 50);
+  const offset = Math.max(options?.offset ?? 0, 0);
 
   // basic name/username match (exclude soft-deleted profiles)
   let q1 = supabase
@@ -27,7 +38,7 @@ export async function searchProfiles(
     .is("deleted_at", null)
     .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
     .order("display_name", { ascending: true })
-    .limit(25);
+    .range(offset, offset + limit - 1);
 
   const { data, error } = await q1;
   if (error || !data) return [];

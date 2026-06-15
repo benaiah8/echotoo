@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { PiAppleLogo, PiGooglePlayLogo } from "react-icons/pi";
 import { openExternalUrl } from "../../lib/openExternalUrl";
-import { isIOS, isNativeApp } from "../../lib/storage/utils/capacitorDetection";
-
-const CONTACT_EMAIL = "blueprtdigital@gmail.com";
-
-const FEEDBACK_MAILTO = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(
-  "EchoToo feedback"
-)}`;
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import { APP_STORE_URL, PLAY_STORE_URL } from "../../lib/storeLinks";
+import {
+  getFeedbackMailto,
+  SUPPORT_EMAIL,
+} from "../../lib/supportConfig";
 
 interface WelcomeModalProps {
   isOpen: boolean;
@@ -15,7 +14,7 @@ interface WelcomeModalProps {
 }
 
 export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
-  const hideGooglePlayRow = isNativeApp() && isIOS();
+  const hideStoreSection = isNativeApp();
 
   // Disable body scroll when modal is open
   useEffect(() => {
@@ -86,7 +85,7 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
               </p>
               <button
                 type="button"
-                onClick={() => void openExternalUrl(FEEDBACK_MAILTO)}
+                onClick={() => void openExternalUrl(getFeedbackMailto())}
                 className="mt-3 w-full rounded-lg border border-[var(--brand)]/35 bg-[rgba(247,208,71,0.08)] py-2.5 text-sm font-semibold text-[var(--text)] transition hover:border-[var(--brand)]/50 hover:bg-[rgba(247,208,71,0.12)]"
               >
                 Send feedback
@@ -102,52 +101,66 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
 
               <button
                 type="button"
-                onClick={() =>
-                  void openExternalUrl(`mailto:${CONTACT_EMAIL}`)
-                }
+                onClick={() => void openExternalUrl(`mailto:${SUPPORT_EMAIL}`)}
                 className="flex w-full flex-col items-center justify-center gap-1 p-4 bg-[var(--surface)] rounded-lg border border-[var(--border)] hover:bg-[var(--surface)]/80 transition text-center"
               >
                 <span className="text-xs font-medium uppercase tracking-wide text-[var(--text)]/60">
                   Email us at
                 </span>
                 <span className="text-[var(--text)] font-semibold break-all underline underline-offset-2 decoration-[var(--brand-dark)]">
-                  {CONTACT_EMAIL}
+                  {SUPPORT_EMAIL}
                 </span>
               </button>
             </div>
 
-            {/* App Store (always); Play Store hidden on native iOS to avoid irrelevant store copy in review builds */}
-            <div className="mb-8">
-              <p className="text-sm text-[var(--text)]/70 mb-4">
-                {hideGooglePlayRow
-                  ? "EchoToo on the App Store:"
-                  : "Download our mobile app:"}
-              </p>
+            {/* Store links — web only; hidden inside installed Capacitor app */}
+            {!hideStoreSection ? (
+              <div className="mb-8">
+                <p className="text-sm text-[var(--text)]/70 mb-4">
+                  Download our mobile app:
+                </p>
 
-              <div className="flex flex-col gap-3">
-                {/* App Store */}
-                <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                  <PiAppleLogo className="text-[var(--text)] text-xl shrink-0" aria-hidden />
-                  <span className="text-[var(--text)]">App Store</span>
-                  <span className="text-xs text-[var(--text)]/50 ml-auto">
-                    Coming Soon
-                  </span>
-                </div>
-
-                {!hideGooglePlayRow ? (
-                  <div className="flex items-center justify-center gap-3 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                    <PiGooglePlayLogo
-                      className="text-[var(--text)] text-xl shrink-0"
-                      aria-hidden
-                    />
-                    <span className="text-[var(--text)]">Google Play</span>
-                    <span className="text-xs text-[var(--text)]/50 ml-auto">
-                      Coming Soon
+                <div className="flex flex-col gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void openExternalUrl(APP_STORE_URL)}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left transition hover:bg-[var(--surface)]/80"
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <PiAppleLogo
+                        className="shrink-0 text-xl text-[var(--text)]"
+                        aria-hidden
+                      />
+                      <span className="font-medium text-[var(--text)]">
+                        App Store
+                      </span>
                     </span>
-                  </div>
-                ) : null}
+                    <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                      Open
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void openExternalUrl(PLAY_STORE_URL)}
+                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-left transition hover:bg-[var(--surface)]/80"
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <PiGooglePlayLogo
+                        className="shrink-0 text-xl text-[var(--text)]"
+                        aria-hidden
+                      />
+                      <span className="font-medium text-[var(--text)]">
+                        Google Play
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                      Open
+                    </span>
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <button
               type="button"

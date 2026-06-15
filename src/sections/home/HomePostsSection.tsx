@@ -76,6 +76,8 @@ interface Props {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
+  /** Home Phase 1.5: hide horizontal Discover More rails while post search mode is active. */
+  suppressBrowseRails?: boolean;
   /** Date spotlight (Today / Tomorrow) above normal feed — does not remount ProgressiveFeed */
   dateSpotlightActive?: boolean;
   dateFilter?: HomeDateFilter;
@@ -110,6 +112,7 @@ export default function HomePostsSection({
   railLoadItems: railLoadItemsProp,
   railGetCachedItems: railGetCachedItemsProp,
   railSetCachedItems: railSetCachedItemsProp,
+  suppressBrowseRails = false,
   isVisible = true,
   tabId = "home",
   dateSpotlightActive = false,
@@ -180,6 +183,7 @@ export default function HomePostsSection({
     (item: FeedItem, index: number) => {
       renderedItemsCountRef.current = index + 1;
       const shouldInjectRail =
+        !suppressBrowseRails &&
         renderedItemsCountRef.current % INJECT_EVERY === 0;
 
       if (DEBUG_RSVP_POST_ID && item.id === DEBUG_RSVP_POST_ID) {
@@ -254,6 +258,7 @@ export default function HomePostsSection({
       setCachedItems,
       isVisible,
       authUserId,
+      suppressBrowseRails,
     ]
   );
 
@@ -381,7 +386,15 @@ export default function HomePostsSection({
       >
         {dateSpotlightActive ? (
           <div className="flex flex-col gap-4">
-            {showDateSpotlightEmptyNotice ? (
+            {showDateSpotlightEmptyNotice && showDateSpotlightFallback ? (
+              <p className="py-2 text-center text-sm text-[var(--text)]/70">
+                {getDateSpotlightEmptyNotice(dateFilter)}{" "}
+                {getDateSpotlightFallbackSectionTitle(
+                  dateSpotlightFallbackFilter!
+                )}
+                .
+              </p>
+            ) : showDateSpotlightEmptyNotice ? (
               <p className="py-2 text-center text-sm text-[var(--text)]/70">
                 {getDateSpotlightEmptyNotice(dateFilter)}
               </p>
@@ -391,11 +404,13 @@ export default function HomePostsSection({
             )}
             {showDateSpotlightFallback ? (
               <div className="flex flex-col gap-4">
-                <p className="text-[var(--text)]/90 text-sm font-medium">
-                  {getDateSpotlightFallbackSectionTitle(
-                    dateSpotlightFallbackFilter!
-                  )}
-                </p>
+                {showDateSpotlightEmptyNotice ? null : (
+                  <p className="text-[var(--text)]/90 text-sm font-medium">
+                    {getDateSpotlightFallbackSectionTitle(
+                      dateSpotlightFallbackFilter!
+                    )}
+                  </p>
+                )}
                 {dateSpotlightFallbackItems.map((item) =>
                   renderSpotlightPost(item, "date-spotlight-fallback")
                 )}
@@ -515,7 +530,7 @@ export default function HomePostsSection({
           />
 
           {/* Inject horizontal rail every 8 posts - Legacy mode (not used when useProgressiveFeed=true) */}
-          {(idx + 1) % INJECT_EVERY === 0 && (
+          {(idx + 1) % INJECT_EVERY === 0 && !suppressBrowseRails && (
             <>
               {/* Add spacing and separator line */}
               <div className="mt-6 mb-4">

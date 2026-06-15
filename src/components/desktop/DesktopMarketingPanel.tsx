@@ -9,13 +9,10 @@ import {
 import { getOwlLogoPath } from "../../lib/assets";
 import { DESKTOP_POLICY_NAV } from "../../lib/desktopPolicyRoutes";
 import { useDesktopPolicyNavigate } from "../../hooks/useDesktopPolicyNavigate";
-
-/** Desktop marketing panel only — beside the phone shell on web ≥ breakpoint. */
-const CONTACT_EMAIL = "blueprtdigital@gmail.com";
-
-const FEEDBACK_MAILTO = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(
-  "EchoToo feedback"
-)}`;
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
+import { APP_STORE_URL, PLAY_STORE_URL } from "../../lib/storeLinks";
+import { getFeedbackMailto, SUPPORT_EMAIL } from "../../lib/supportConfig";
 
 function FeatureCard({
   icon,
@@ -214,63 +211,72 @@ export default function DesktopMarketingPanel() {
       {/* Closure: download + contact */}
       <section
         className="rounded-[2rem] border border-white/[0.09] bg-[rgba(255,255,255,0.035)] p-6 backdrop-blur-md supports-[backdrop-filter]:bg-[rgba(21,21,22,0.45)] sm:p-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-        aria-labelledby="desktop-closure-heading"
+        aria-label="Get EchoToo, feedback, and contact"
       >
-        <h2
-          id="desktop-closure-heading"
-          className="text-xl font-bold tracking-tight text-[var(--text)]"
+        {!isNativeApp() ? (
+          <>
+            <h2
+              id="desktop-closure-heading"
+              className="text-xl font-bold tracking-tight text-[var(--text)]"
+            >
+              Get EchoToo
+            </h2>
+            <p className="mt-2 max-w-lg text-sm leading-relaxed text-[var(--text)]/75">
+              Download the app for iPhone, iPad, or Android.
+            </p>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void openExternalUrl(APP_STORE_URL)}
+                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
+              >
+                <PiAppleLogo
+                  className="shrink-0 text-xl text-[var(--text)]"
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-[var(--text)]">
+                    App Store
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">
+                    iPhone &amp; iPad
+                  </div>
+                </div>
+                <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                  Open
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void openExternalUrl(PLAY_STORE_URL)}
+                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
+              >
+                <PiGooglePlayLogo
+                  className="shrink-0 text-xl text-[var(--text)]"
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-semibold text-[var(--text)]">
+                    Google Play
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">Android</div>
+                </div>
+                <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                  Open
+                </span>
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        <div
+          className={
+            !isNativeApp()
+              ? "mt-8 rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5"
+              : "rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5"
+          }
         >
-          Get EchoToo
-        </h2>
-        <p className="mt-2 max-w-lg text-sm leading-relaxed text-[var(--text)]/75">
-          Mobile apps are on the way. Use the preview on the left today;
-          we&apos;ll link the stores here when builds go live.
-        </p>
-
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <div
-            className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 transition-all duration-200 hover:border-[var(--brand)]/30"
-            role="group"
-            aria-label="App Store"
-          >
-            <PiAppleLogo
-              className="shrink-0 text-xl text-[var(--text)]"
-              aria-hidden
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-[var(--text)]">
-                App Store
-              </div>
-              <div className="text-[11px] text-[var(--muted)]">
-                iPhone &amp; iPad
-              </div>
-            </div>
-            <span className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
-              Soon
-            </span>
-          </div>
-          <div
-            className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 transition-all duration-200 hover:border-[var(--brand)]/30"
-            role="group"
-            aria-label="Google Play"
-          >
-            <PiGooglePlayLogo
-              className="shrink-0 text-xl text-[var(--text)]"
-              aria-hidden
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-[var(--text)]">
-                Google Play
-              </div>
-              <div className="text-[11px] text-[var(--muted)]">Android</div>
-            </div>
-            <span className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
-              Soon
-            </span>
-          </div>
-        </div>
-
-        <div className="mt-8 rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5">
           <h3 className="text-sm font-semibold tracking-tight text-[var(--text)]">
             Give us feedback
           </h3>
@@ -278,27 +284,33 @@ export default function DesktopMarketingPanel() {
             Share what&apos;s working, what isn&apos;t, or what you&apos;d love
             next — your notes help us improve EchoToo.
           </p>
-          <a
-            href={FEEDBACK_MAILTO}
-            className="mt-3 inline-flex items-center justify-center rounded-lg border border-[var(--brand)]/35 bg-[rgba(247,208,71,0.08)] px-4 py-2 text-sm font-semibold text-[var(--text)] transition-all duration-200 hover:border-[var(--brand)]/55 hover:bg-[rgba(247,208,71,0.12)]"
+          <button
+            type="button"
+            onClick={() => void openExternalUrl(getFeedbackMailto())}
+            className="mt-3 inline-flex w-full items-center justify-center rounded-lg border border-[var(--brand)]/35 bg-[rgba(247,208,71,0.08)] px-4 py-2 text-sm font-semibold text-[var(--text)] transition-all duration-200 hover:border-[var(--brand)]/55 hover:bg-[rgba(247,208,71,0.12)]"
           >
             Send feedback
-          </a>
+          </button>
         </div>
 
-        <div className="mt-8 border-t border-white/[0.08] pt-8">
+        <div
+          className={
+            !isNativeApp() ? "mt-8 border-t border-white/[0.08] pt-8" : "mt-8"
+          }
+        >
           <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text)]/55">
             Contact
           </h3>
           <p className="mt-2 text-sm text-[var(--text)]/78">
             Business, partnerships, and general inquiries:
           </p>
-          <a
-            href={`mailto:${CONTACT_EMAIL}`}
-            className="mt-3 inline-flex items-center justify-center rounded-xl border border-[var(--brand)]/40 bg-[rgba(247,208,71,0.06)] px-4 py-2.5 text-sm font-semibold text-[var(--text)] transition-all duration-200 hover:border-[var(--brand)]/60 hover:bg-[rgba(247,208,71,0.1)]"
+          <button
+            type="button"
+            onClick={() => void openExternalUrl(`mailto:${SUPPORT_EMAIL}`)}
+            className="mt-3 inline-flex w-full items-center justify-center rounded-xl border border-[var(--brand)]/40 bg-[rgba(247,208,71,0.06)] px-4 py-2.5 text-sm font-semibold text-[var(--text)] transition-all duration-200 hover:border-[var(--brand)]/60 hover:bg-[rgba(247,208,71,0.1)]"
           >
-            {CONTACT_EMAIL}
-          </a>
+            {SUPPORT_EMAIL}
+          </button>
           <p className="mt-4 text-xs leading-relaxed text-[var(--muted)]">
             Phone and social channels will be listed here as official EchoToo
             handles are finalized.

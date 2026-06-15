@@ -25,6 +25,74 @@ function spacingSeparatorPrevMessage(
   return gap >= HOUR_MS;
 }
 
+export function trimInviteNote(
+  raw: string | null | undefined,
+): string | null {
+  if (raw == null) return null;
+  const t = String(raw).trim();
+  return t.length > 0 ? t : null;
+}
+
+/** Visual-only invite note — not a real thread message; no reactions. */
+function InviteNoteBubbleRow({
+  text,
+  mine,
+  senderPreview,
+  footer,
+}: {
+  text: string;
+  mine: boolean;
+  senderPreview: InviteThreadProfilePeek | null;
+  footer?: React.ReactNode;
+}) {
+  const senderAvatarUrl = senderPreview?.avatar_url || undefined;
+  const senderName =
+    senderPreview?.display_name || senderPreview?.username || undefined;
+
+  return (
+    <li
+      className={`mb-3 flex last:mb-1 ${mine ? "justify-end" : "justify-start"}`}
+    >
+      <div
+        className={`flex max-w-[min(79%,20.35rem)] flex-col gap-1.5 ${
+          mine ? "items-end" : "items-start"
+        }`}
+      >
+        <div className="flex items-start gap-1.5">
+          {!mine ? (
+            <span className="flex h-[44px] min-w-[44px] shrink-0 items-start justify-center pt-[1px]">
+              <Avatar
+                variant="default"
+                url={senderAvatarUrl}
+                name={senderName}
+                size={30}
+                tightLineBox
+                className="rounded-full"
+              />
+            </span>
+          ) : null}
+          <div
+            className={`min-w-0 rounded-[1.15rem] px-3.5 py-2.5 text-[15px] leading-snug shadow-sm ${
+              mine
+                ? "bg-gradient-to-br from-amber-100/95 via-yellow-50/98 to-amber-50/88 text-neutral-900/[0.91] ring-1 ring-amber-200/55 app-dark:from-amber-300/34 app-dark:via-amber-400/22 app-dark:to-amber-500/26 app-dark:text-[var(--text)]/[0.94] app-dark:ring-amber-400/22"
+                : "bg-[color-mix(in_oklab,var(--surface-2)_84%,var(--bg))] text-[var(--text)]/88 ring-1 ring-black/[0.04] app-dark:bg-[color-mix(in_oklab,var(--surface-2)_56%,var(--bg))] app-dark:text-[var(--text)]/92 app-dark:ring-white/[0.08]"
+            }`}
+          >
+            <p className="whitespace-pre-wrap break-words">{text}</p>
+          </div>
+        </div>
+        {footer ? (
+          <div
+            className={`w-full min-w-0 px-0.5 ${mine ? "text-right" : "text-left"}`}
+          >
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
 type Props = {
   messages: InviteThreadMessage[];
   viewerUserId: string | null;
@@ -32,6 +100,19 @@ type Props = {
   reactingMessageId: string | null;
   onToggleReaction: (messageId: string) => void;
   counterparty: InviteThreadProfilePeek | null;
+  /** Optional invite note text (trimmed); not stored as a message. */
+  inviteNote?: string | null;
+  /** When true, note uses the same alignment/styling as viewer-sent bubbles (inviter). */
+  inviteNoteMine?: boolean;
+  /** Avatar for left-aligned invite note (e.g. inviter when viewer is invitee). */
+  inviteNoteSenderPreview?: InviteThreadProfilePeek | null;
+  /** Shown under the invite note bubble (e.g. group member count). */
+  inviteNoteFooter?: React.ReactNode;
+  /**
+   * Optional line above the list when there is no invite note (e.g. group member count
+   * previously shown on the empty invite-note card).
+   */
+  listMetaWhenNoInviteNote?: React.ReactNode;
 };
 
 export default function InviteThreadMessageList({
@@ -41,155 +122,190 @@ export default function InviteThreadMessageList({
   reactingMessageId,
   onToggleReaction,
   counterparty,
+  inviteNote,
+  inviteNoteMine = false,
+  inviteNoteSenderPreview = null,
+  inviteNoteFooter,
+  listMetaWhenNoInviteNote,
 }: Props) {
-  if (messages.length === 0) {
+  const trimmedInviteNote = trimInviteNote(inviteNote);
+  const showInviteNoteBubble = trimmedInviteNote != null;
+
+  if (messages.length === 0 && !showInviteNoteBubble) {
     return (
-      <p className="py-4 text-center text-[13px] text-[var(--text)]/42">
-        No messages yet.
-      </p>
+      <>
+        {listMetaWhenNoInviteNote ? (
+          <div className="mb-3 flex justify-center">
+            {listMetaWhenNoInviteNote}
+          </div>
+        ) : null}
+        <p className="py-4 text-center text-[13px] text-[var(--text)]/42">
+          No messages yet.
+        </p>
+      </>
     );
   }
 
+  const noteSenderForBubble = inviteNoteMine
+    ? null
+    : inviteNoteSenderPreview ?? counterparty;
+
   return (
-    <ul className="flex flex-col gap-1">
-      {messages.map((m, idx) => {
-        const mine = viewerUserId != null && m.sender_user_id === viewerUserId;
-        const showSep = spacingSeparatorPrevMessage(messages, idx);
-        const thumbUpCount = Number(m.thumb_up_count) || 0;
-        const viewerHasThumbUp = m.viewer_has_thumb_up === true;
-        const showReactionCtl =
-          reactionsInteractive || thumbUpCount > 0;
-        const senderPreview = m.sender_profile ?? counterparty;
-        const senderAvatarUrl = senderPreview?.avatar_url || undefined;
-        const senderName =
-          senderPreview?.display_name || senderPreview?.username || undefined;
+    <>
+      {listMetaWhenNoInviteNote && !showInviteNoteBubble ? (
+        <div className="mb-3 flex justify-center">
+          {listMetaWhenNoInviteNote}
+        </div>
+      ) : null}
+      <ul className="flex flex-col gap-1">
+        {showInviteNoteBubble ? (
+          <InviteNoteBubbleRow
+            key="__invite_note__"
+            text={trimmedInviteNote}
+            mine={inviteNoteMine}
+            senderPreview={noteSenderForBubble}
+            footer={inviteNoteFooter}
+          />
+        ) : null}
+        {messages.map((m, idx) => {
+          const mine = viewerUserId != null && m.sender_user_id === viewerUserId;
+          const showSep = spacingSeparatorPrevMessage(messages, idx);
+          const thumbUpCount = Number(m.thumb_up_count) || 0;
+          const viewerHasThumbUp = m.viewer_has_thumb_up === true;
+          const showReactionCtl =
+            reactionsInteractive || thumbUpCount > 0;
+          const senderPreview = m.sender_profile ?? counterparty;
+          const senderAvatarUrl = senderPreview?.avatar_url || undefined;
+          const senderName =
+            senderPreview?.display_name || senderPreview?.username || undefined;
 
-        const showReactionNumber = thumbUpCount > 1;
-        const reactionInnerClass = [
-          "flex shrink-0 items-center justify-center gap-0.5 rounded-full border transition-all duration-150 tabular-nums",
-          showReactionNumber ? "min-h-[28px] px-1.5" : "h-7 w-7",
-          viewerHasThumbUp
-            ? "scale-[1.02] border-amber-400/80 bg-amber-400/28 text-amber-800 shadow-[0_0_12px_rgba(245,158,11,0.4)] app-dark:border-amber-300/78 app-dark:bg-amber-300/30 app-dark:text-amber-100 app-dark:shadow-[0_0_12px_rgba(251,191,36,0.3)]"
-            : thumbUpCount > 0
-              ? "border-neutral-900/22 bg-black/[0.08] text-neutral-800/92 app-dark:border-white/22 app-dark:bg-white/[0.1] app-dark:text-white/88"
-              : "border-neutral-900/14 bg-black/[0.04] text-neutral-700/76 hover:border-neutral-900/24 hover:bg-black/[0.08] hover:text-neutral-900/90 app-dark:border-white/16 app-dark:bg-white/[0.06] app-dark:text-white/74 app-dark:hover:bg-white/[0.11] app-dark:hover:text-white/90",
-        ].join(" ");
-        const reactionHitClass =
-          "mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 disabled:pointer-events-none disabled:opacity-35";
+          const showReactionNumber = thumbUpCount > 1;
+          const reactionInnerClass = [
+            "flex shrink-0 items-center justify-center gap-0.5 rounded-full border transition-all duration-150 tabular-nums",
+            showReactionNumber ? "min-h-[28px] px-1.5" : "h-7 w-7",
+            viewerHasThumbUp
+              ? "scale-[1.02] border-amber-400/80 bg-amber-400/28 text-amber-800 shadow-[0_0_12px_rgba(245,158,11,0.4)] app-dark:border-amber-300/78 app-dark:bg-amber-300/30 app-dark:text-amber-100 app-dark:shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+              : thumbUpCount > 0
+                ? "border-neutral-900/22 bg-black/[0.08] text-neutral-800/92 app-dark:border-white/22 app-dark:bg-white/[0.1] app-dark:text-white/88"
+                : "border-neutral-900/14 bg-black/[0.04] text-neutral-700/76 hover:border-neutral-900/24 hover:bg-black/[0.08] hover:text-neutral-900/90 app-dark:border-white/16 app-dark:bg-white/[0.06] app-dark:text-white/74 app-dark:hover:bg-white/[0.11] app-dark:hover:text-white/90",
+          ].join(" ");
+          const reactionHitClass =
+            "mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 disabled:pointer-events-none disabled:opacity-35";
 
-        const reactionAriaLabel =
-          thumbUpCount > 0
-            ? `Thumbs up, ${thumbUpCount}`
-            : "Thumbs up";
+          const reactionAriaLabel =
+            thumbUpCount > 0
+              ? `Thumbs up, ${thumbUpCount}`
+              : "Thumbs up";
 
-        const reactionPillInner = (
-          <>
-            <span className="text-[15px] leading-none select-none">👍</span>
-            {showReactionNumber ? (
-              <span className="text-[10px] font-semibold leading-none tracking-tight">
-                {thumbUpCount}
-              </span>
-            ) : null}
-          </>
-        );
-
-        return (
-          <Fragment key={m.id}>
-            {showSep ? (
-              <li className="mb-4 mt-3 flex justify-center">
-                <span className="rounded-full bg-[color-mix(in_oklab,var(--surface-2)_60%,transparent)] px-3 py-0.5 text-[10px] font-medium text-[var(--text)]/40 shadow-sm backdrop-blur-sm tabular-nums">
-                  {dmSeparatorLabel(m.created_at)}
+          const reactionPillInner = (
+            <>
+              <span className="text-[15px] leading-none select-none">👍</span>
+              {showReactionNumber ? (
+                <span className="text-[10px] font-semibold leading-none tracking-tight">
+                  {thumbUpCount}
                 </span>
-              </li>
-            ) : null}
-            <li
-              className={`mb-3 flex last:mb-1 ${
-                mine ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div className="flex max-w-[min(79%,20.35rem)] items-start gap-1.5">
-                {!mine ? (
-                  <span className="flex h-[44px] min-w-[44px] shrink-0 items-start justify-center pt-[1px]">
-                    <Avatar
-                      variant="default"
-                      url={senderAvatarUrl}
-                      name={senderName}
-                      size={30}
-                      tightLineBox
-                      className="rounded-full"
-                    />
+              ) : null}
+            </>
+          );
+
+          return (
+            <Fragment key={m.id}>
+              {showSep ? (
+                <li className="mb-4 mt-3 flex justify-center">
+                  <span className="rounded-full bg-[color-mix(in_oklab,var(--surface-2)_60%,transparent)] px-3 py-0.5 text-[10px] font-medium text-[var(--text)]/40 shadow-sm backdrop-blur-sm tabular-nums">
+                    {dmSeparatorLabel(m.created_at)}
                   </span>
-                ) : null}
-                {mine && showReactionCtl ? (
-                  reactionsInteractive ? (
-                    <button
-                      type="button"
-                      disabled={reactingMessageId === m.id}
-                      aria-pressed={viewerHasThumbUp}
-                      aria-label={reactionAriaLabel}
-                      onClick={() => onToggleReaction(m.id)}
-                      className={reactionHitClass}
-                    >
-                      <span className={reactionInnerClass} aria-hidden>
-                        {reactionPillInner}
-                      </span>
-                    </button>
-                  ) : thumbUpCount > 0 ? (
-                    <span
-                      className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
-                      aria-hidden
-                    >
-                      <span
-                        className={`${reactionInnerClass} pointer-events-none`}
-                      >
-                        {reactionPillInner}
-                      </span>
+                </li>
+              ) : null}
+              <li
+                className={`mb-3 flex last:mb-1 ${
+                  mine ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div className="flex max-w-[min(79%,20.35rem)] items-start gap-1.5">
+                  {!mine ? (
+                    <span className="flex h-[44px] min-w-[44px] shrink-0 items-start justify-center pt-[1px]">
+                      <Avatar
+                        variant="default"
+                        url={senderAvatarUrl}
+                        name={senderName}
+                        size={30}
+                        tightLineBox
+                        className="rounded-full"
+                      />
                     </span>
-                  ) : null
-                ) : null}
+                  ) : null}
+                  {mine && showReactionCtl ? (
+                    reactionsInteractive ? (
+                      <button
+                        type="button"
+                        disabled={reactingMessageId === m.id}
+                        aria-pressed={viewerHasThumbUp}
+                        aria-label={reactionAriaLabel}
+                        onClick={() => onToggleReaction(m.id)}
+                        className={reactionHitClass}
+                      >
+                        <span className={reactionInnerClass} aria-hidden>
+                          {reactionPillInner}
+                        </span>
+                      </button>
+                    ) : thumbUpCount > 0 ? (
+                      <span
+                        className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
+                        aria-hidden
+                      >
+                        <span
+                          className={`${reactionInnerClass} pointer-events-none`}
+                        >
+                          {reactionPillInner}
+                        </span>
+                      </span>
+                    ) : null
+                  ) : null}
 
-                <div
-                  className={`min-w-0 rounded-[1.15rem] px-3.5 py-2.5 text-[15px] leading-snug shadow-sm ${
-                    mine
-                      ? "bg-gradient-to-br from-amber-100/95 via-yellow-50/98 to-amber-50/88 text-neutral-900/[0.91] ring-1 ring-amber-200/55 app-dark:from-amber-300/34 app-dark:via-amber-400/22 app-dark:to-amber-500/26 app-dark:text-[var(--text)]/[0.94] app-dark:ring-amber-400/22"
-                      : "bg-[color-mix(in_oklab,var(--surface-2)_84%,var(--bg))] text-[var(--text)]/88 ring-1 ring-black/[0.04] app-dark:bg-[color-mix(in_oklab,var(--surface-2)_56%,var(--bg))] app-dark:text-[var(--text)]/92 app-dark:ring-white/[0.08]"
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap break-words">{m.body}</p>
+                  <div
+                    className={`min-w-0 rounded-[1.15rem] px-3.5 py-2.5 text-[15px] leading-snug shadow-sm ${
+                      mine
+                        ? "bg-gradient-to-br from-amber-100/95 via-yellow-50/98 to-amber-50/88 text-neutral-900/[0.91] ring-1 ring-amber-200/55 app-dark:from-amber-300/34 app-dark:via-amber-400/22 app-dark:to-amber-500/26 app-dark:text-[var(--text)]/[0.94] app-dark:ring-amber-400/22"
+                        : "bg-[color-mix(in_oklab,var(--surface-2)_84%,var(--bg))] text-[var(--text)]/88 ring-1 ring-black/[0.04] app-dark:bg-[color-mix(in_oklab,var(--surface-2)_56%,var(--bg))] app-dark:text-[var(--text)]/92 app-dark:ring-white/[0.08]"
+                    }`}
+                  >
+                    <p className="whitespace-pre-wrap break-words">{m.body}</p>
+                  </div>
+
+                  {!mine && showReactionCtl ? (
+                    reactionsInteractive ? (
+                      <button
+                        type="button"
+                        disabled={reactingMessageId === m.id}
+                        aria-pressed={viewerHasThumbUp}
+                        aria-label={reactionAriaLabel}
+                        onClick={() => onToggleReaction(m.id)}
+                        className={reactionHitClass}
+                      >
+                        <span className={reactionInnerClass} aria-hidden>
+                          {reactionPillInner}
+                        </span>
+                      </button>
+                    ) : thumbUpCount > 0 ? (
+                      <span
+                        className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
+                        aria-hidden
+                      >
+                        <span
+                          className={`${reactionInnerClass} pointer-events-none`}
+                        >
+                          {reactionPillInner}
+                        </span>
+                      </span>
+                    ) : null
+                  ) : null}
                 </div>
-
-                {!mine && showReactionCtl ? (
-                  reactionsInteractive ? (
-                    <button
-                      type="button"
-                      disabled={reactingMessageId === m.id}
-                      aria-pressed={viewerHasThumbUp}
-                      aria-label={reactionAriaLabel}
-                      onClick={() => onToggleReaction(m.id)}
-                      className={reactionHitClass}
-                    >
-                      <span className={reactionInnerClass} aria-hidden>
-                        {reactionPillInner}
-                      </span>
-                    </button>
-                  ) : thumbUpCount > 0 ? (
-                    <span
-                      className="mt-0.5 flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center"
-                      aria-hidden
-                    >
-                      <span
-                        className={`${reactionInnerClass} pointer-events-none`}
-                      >
-                        {reactionPillInner}
-                      </span>
-                    </span>
-                  ) : null
-                ) : null}
-              </div>
-            </li>
-          </Fragment>
-        );
-      })}
-    </ul>
+              </li>
+            </Fragment>
+          );
+        })}
+      </ul>
+    </>
   );
 }

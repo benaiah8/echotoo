@@ -5,3 +5,12 @@ export function isPlaceholderUsername(username: string | null | undefined): bool
   if (username == null || username === "") return false;
   return PLACEHOLDER_USERNAME_RE.test(username.trim());
 }
+
+/** True when provider sync should assign a username (empty, null, or `user_*` placeholder). */
+export function isUsernameMissingOrPlaceholder(
+  username: string | null | undefined,
+): boolean {
+  if (username == null) return true;
+  if (String(username).trim() === "") return true;
+  return isPlaceholderUsername(username);
+}

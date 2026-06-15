@@ -25,6 +25,9 @@ import EchoPresetPickerOverlay from "./EchoPresetPickerOverlay";
 import { getNativePushReceiveState } from "../../lib/explicitNativePushRegistration";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
+import { setProfileFinishNudgeDismissed } from "../../lib/profileFinishNudgeDismiss";
+import { normalizeSocialUrl } from "../../lib/socialLinks";
+import { PiCaretDown } from "react-icons/pi";
 
 const DISPLAY_NAME_MAX = 40;
 const USERNAME_MAX = 24;
@@ -137,6 +140,8 @@ export default function FullScreenProfileCreation({
   );
   const [isPrivate, setIsPrivate] = useState(false);
   const [socialMediaPublic, setSocialMediaPublic] = useState(false);
+  /** Privacy block: collapsed whenever the full-screen editor opens (not persisted). */
+  const [privacyAccordionOpen, setPrivacyAccordionOpen] = useState(false);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -179,8 +184,16 @@ export default function FullScreenProfileCreation({
   useEffect(() => {
     if (open) {
       usernameTouchedByUserRef.current = false;
+      setPrivacyAccordionOpen(false);
     }
   }, [open]);
+
+  /** Dismiss "Finish setting up your profile" nudge when editor opens (any entry path). */
+  useEffect(() => {
+    if (open && user?.id) {
+      setProfileFinishNudgeDismissed(user.id);
+    }
+  }, [open, user?.id]);
 
   useEffect(() => {
     if (!open) {
@@ -584,14 +597,20 @@ export default function FullScreenProfileCreation({
   const generateUsernameFromDisplayName = async (name: string) => {
     if (!name) return;
 
-    // Prefer first word of display name (e.g. "John Smith" → "john"), then slugify
-    const firstWord = name.trim().split(/\s+/)[0] ?? "";
-    let baseUsername = firstWord.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!baseUsername) {
-      // Fallback: full display name if first token has no usable latin chars
-      baseUsername = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Align with persistProviderProfileDefaults: compact tokens first ("Ben 10" → ben10).
+    const normalized = name.trim().toLowerCase();
+    let baseUsername = normalized
+      .replace(/\s+/g, "")
+      .replace(/[^a-z0-9_]/g, "");
+    if (baseUsername.length < 3) {
+      const firstWord = normalized.split(/\s+/).filter(Boolean)[0] ?? "";
+      baseUsername = firstWord.replace(/[^a-z0-9_]/g, "");
+    }
+    if (baseUsername.length < 3) {
+      baseUsername = normalized.replace(/[^a-z0-9_]/g, "");
     }
     if (!baseUsername) return;
+    baseUsername = baseUsername.slice(0, USERNAME_MAX);
 
     let finalUsername = baseUsername;
     let counter = 1;
@@ -681,9 +700,18 @@ export default function FullScreenProfileCreation({
       assertPlainTextAllowedForUgc(displayName.trim(), "default");
       assertPlainTextAllowedForUgc(username.trim(), "username");
       assertPlainTextAllowedForUgc(bio.trim(), "default");
-      assertPlainTextAllowedForUgc(instagramUrl.trim(), "default");
-      assertPlainTextAllowedForUgc(tiktokUrl.trim(), "default");
-      assertPlainTextAllowedForUgc(telegramUrl.trim(), "default");
+      const rawIg = instagramUrl.trim();
+      const rawTt = tiktokUrl.trim();
+      const rawTg = telegramUrl.trim();
+      const normIg = normalizeSocialUrl("instagram", instagramUrl);
+      const normTt = normalizeSocialUrl("tiktok", tiktokUrl);
+      const normTg = normalizeSocialUrl("telegram", telegramUrl);
+      if (normIg) assertPlainTextAllowedForUgc(normIg, "default");
+      else if (rawIg) assertPlainTextAllowedForUgc(rawIg, "default");
+      if (normTt) assertPlainTextAllowedForUgc(normTt, "default");
+      else if (rawTt) assertPlainTextAllowedForUgc(rawTt, "default");
+      if (normTg) assertPlainTextAllowedForUgc(normTg, "default");
+      else if (rawTg) assertPlainTextAllowedForUgc(rawTg, "default");
 
       // Update profile (excluding privacy settings - handled separately)
       const patch: any = {
@@ -691,9 +719,9 @@ export default function FullScreenProfileCreation({
         username: username.trim(),
         bio: bio.trim() || "I'm too lazy to write a bio 😅",
         avatar_url: avatarUrl,
-        instagram_url: instagramUrl.trim() || null,
-        tiktok_url: tiktokUrl.trim() || null,
-        telegram_url: telegramUrl.trim() || null,
+        instagram_url: normIg,
+        tiktok_url: normTt,
+        telegram_url: normTg,
       };
       if (origUsername !== username.trim()) {
         patch.last_username_change_at = new Date().toISOString();
@@ -1227,14 +1255,20 @@ export default function FullScreenProfileCreation({
               <div className="space-y-3">
                 <div>
                   <label className="mb-1 block text-xs text-[var(--text)]/70">
-                    Instagram URL
+                    Instagram
                   </label>
                   <div className="relative">
+                    <img
+                      src="/instagram-icon.svg"
+                      alt=""
+                      className="pointer-events-none absolute left-2.5 top-1/2 h-5 w-5 -translate-y-1/2 opacity-85"
+                      aria-hidden
+                    />
                     <input
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] py-1.5 pl-10 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                       value={instagramUrl}
                       onChange={(e) => setInstagramUrl(e.target.value)}
-                      placeholder="https://instagram.com/yourusername"
+                      placeholder="username or https://instagram.com/username"
                       maxLength={SOCIAL_URL_MAX}
                     />
                     <FieldCharCount
@@ -1246,14 +1280,20 @@ export default function FullScreenProfileCreation({
 
                 <div>
                   <label className="mb-1 block text-xs text-[var(--text)]/70">
-                    TikTok URL
+                    TikTok
                   </label>
                   <div className="relative">
+                    <img
+                      src="/Tiktok-icon.svg"
+                      alt=""
+                      className="pointer-events-none absolute left-2.5 top-1/2 h-5 w-5 -translate-y-1/2 opacity-85"
+                      aria-hidden
+                    />
                     <input
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] py-1.5 pl-10 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                       value={tiktokUrl}
                       onChange={(e) => setTiktokUrl(e.target.value)}
-                      placeholder="https://tiktok.com/@yourusername"
+                      placeholder="@username or https://tiktok.com/@username"
                       maxLength={SOCIAL_URL_MAX}
                     />
                     <FieldCharCount
@@ -1268,11 +1308,17 @@ export default function FullScreenProfileCreation({
                     Telegram
                   </label>
                   <div className="relative">
+                    <img
+                      src="/Telegram-icon.svg"
+                      alt=""
+                      className="pointer-events-none absolute left-2.5 top-1/2 h-5 w-5 -translate-y-1/2 opacity-85"
+                      aria-hidden
+                    />
                     <input
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] py-1.5 pl-10 pr-16 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
                       value={telegramUrl}
                       onChange={(e) => setTelegramUrl(e.target.value)}
-                      placeholder="@yourusername or https://t.me/yourusername"
+                      placeholder="@username or https://t.me/username"
                       maxLength={SOCIAL_URL_MAX}
                     />
                     <FieldCharCount
@@ -1284,79 +1330,103 @@ export default function FullScreenProfileCreation({
               </div>
             </div>
 
-            {/* Privacy Settings */}
+            {/* Privacy Settings — collapsed by default; not persisted */}
             <div className="pt-4 border-t border-[var(--border)]">
-              <label className="block text-sm font-medium text-[var(--text)] mb-3">
-                Privacy
-              </label>
+              <button
+                type="button"
+                id="privacy-settings-heading"
+                className="flex w-full items-center justify-between gap-2 rounded-lg py-1.5 text-left text-sm font-medium text-[var(--text)] transition-colors hover:bg-[var(--text)]/[0.04] hover:text-[var(--text)]"
+                aria-expanded={privacyAccordionOpen}
+                aria-controls="privacy-settings-panel"
+                onClick={() => setPrivacyAccordionOpen((v) => !v)}
+              >
+                <span>Privacy settings</span>
+                <PiCaretDown
+                  size={18}
+                  className={`shrink-0 text-[var(--text)]/50 transition-transform duration-200 ${
+                    privacyAccordionOpen ? "rotate-180" : ""
+                  }`}
+                  aria-hidden
+                />
+              </button>
+              <p className="mb-1 mt-0 text-[11px] leading-snug text-[var(--text)]/55">
+                Control who can see your profile and social links.
+              </p>
 
-              <div className="space-y-4">
-                {/* Private Account Toggle */}
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-[var(--text)] mb-1">
-                      Private Account
+              {privacyAccordionOpen ? (
+                <div
+                  id="privacy-settings-panel"
+                  role="region"
+                  aria-labelledby="privacy-settings-heading"
+                  className="mt-3 space-y-4"
+                >
+                  {/* Private Account Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-[var(--text)] mb-1">
+                        Private Account
+                      </div>
+                      <div className="text-xs text-[var(--text)]/70">
+                        When private, only approved followers can see your posts
+                      </div>
                     </div>
-                    <div className="text-xs text-[var(--text)]/70">
-                      When private, only approved followers can see your posts
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const newIsPrivate = !isPrivate;
-                      setIsPrivate(newIsPrivate);
-                      // When enabling private account, default social media toggle to ON
-                      if (newIsPrivate && !socialMediaPublic) {
-                        setSocialMediaPublic(true);
-                      }
-                    }}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      isPrivate ? "bg-[var(--brand)]" : "bg-[var(--text)]/20"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        isPrivate ? "translate-x-6" : "translate-x-1"
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newIsPrivate = !isPrivate;
+                        setIsPrivate(newIsPrivate);
+                        // When enabling private account, default social media toggle to ON
+                        if (newIsPrivate && !socialMediaPublic) {
+                          setSocialMediaPublic(true);
+                        }
+                      }}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        isPrivate ? "bg-[var(--brand)]" : "bg-[var(--text)]/20"
                       }`}
-                    />
-                  </button>
-                </div>
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          isPrivate ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
 
-                {/* Show Social Media Links Toggle */}
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-[var(--text)] mb-1">
-                      {isPrivate
-                        ? "Show Social Media Links"
-                        : "Show Social Media Links"}
+                  {/* Show Social Media Links Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-[var(--text)] mb-1">
+                        {isPrivate
+                          ? "Show Social Media Links"
+                          : "Show Social Media Links"}
+                      </div>
+                      <div className="text-xs text-[var(--text)]/70">
+                        {isPrivate
+                          ? "Allow everyone to see your social links, even if account is private"
+                          : "Social media links are always visible on public accounts"}
+                      </div>
                     </div>
-                    <div className="text-xs text-[var(--text)]/70">
-                      {isPrivate
-                        ? "Allow everyone to see your social links, even if account is private"
-                        : "Social media links are always visible on public accounts"}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSocialMediaPublic(!socialMediaPublic)}
-                    disabled={!isPrivate}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      !isPrivate
-                        ? "bg-[var(--text)]/10 opacity-50 cursor-not-allowed"
-                        : socialMediaPublic
-                        ? "bg-[var(--brand)]"
-                        : "bg-[var(--text)]/20"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        socialMediaPublic ? "translate-x-6" : "translate-x-1"
+                    <button
+                      type="button"
+                      onClick={() => setSocialMediaPublic(!socialMediaPublic)}
+                      disabled={!isPrivate}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        !isPrivate
+                          ? "bg-[var(--text)]/10 opacity-50 cursor-not-allowed"
+                          : socialMediaPublic
+                          ? "bg-[var(--brand)]"
+                          : "bg-[var(--text)]/20"
                       }`}
-                    />
-                  </button>
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          socialMediaPublic ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </div>
 
             {/* Help & Support - Play Store compliance */}

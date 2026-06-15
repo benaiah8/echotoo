@@ -11,9 +11,10 @@ import {
   getBatchFollowStatuses,
 } from "../../api/services/follows";
 import {
-  getCachedFollowStatus,
   setCachedFollowStatus,
 } from "../../lib/followStatusCache";
+
+type ResultRowVariant = "card" | "plain";
 
 // [OPTIMIZATION: Phase 6.2 - React] Memoized search result item component
 // Why: Prevents unnecessary re-renders when other items in the list change
@@ -21,8 +22,8 @@ type ProfileSearchResultItemProps = {
   profile: ProfileSearchRow;
   onNavigate: (slug: string) => void;
   onFollowChange: (profileId: string, nowFollowing: boolean) => void;
-  // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded follow status
   followStatus?: "none" | "pending" | "following" | "friends";
+  rowVariant?: ResultRowVariant;
 };
 
 const ProfileSearchResultItem = React.memo(
@@ -31,25 +32,34 @@ const ProfileSearchResultItem = React.memo(
     onNavigate,
     onFollowChange,
     followStatus,
+    rowVariant = "card",
   }: ProfileSearchResultItemProps) {
     const startY = useRef<number | null>(null);
     const moved = useRef(false);
 
     const handleClick = () => {
-      if (moved.current) return; // treat as scroll, not a click
+      if (moved.current) return;
       const slug = profile.username || profile.id;
       onNavigate(slug);
     };
 
+    const rowClass =
+      rowVariant === "plain"
+        ? [
+            "flex items-center gap-3 py-2.5 px-1 cursor-pointer select-none",
+            "border-b border-[var(--border)]/55 last:border-b-0",
+          ].join(" ")
+        : [
+            "flex items-center gap-3 p-2 rounded-xl cursor-pointer select-none",
+            "border border-[var(--bottom-tab-border)]",
+            "bg-[color-mix(in_oklab,var(--glass-bg)_80%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
+            "shadow-[0_1px_6px_rgba(0,0,0,0.10),0_0_0_1px_color-mix(in_oklab,var(--text)_6%,transparent)]",
+            "app-dark:shadow-[0_2px_10px_rgba(0,0,0,0.34),0_0_0_1px_color-mix(in_oklab,var(--text)_10%,transparent)]",
+          ].join(" ");
+
     return (
       <div
-        className={[
-          "flex items-center gap-3 p-2 rounded-xl cursor-pointer select-none",
-          "border border-[var(--bottom-tab-border)]",
-          "bg-[color-mix(in_oklab,var(--glass-bg)_80%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
-          "shadow-[0_1px_6px_rgba(0,0,0,0.10),0_0_0_1px_color-mix(in_oklab,var(--text)_6%,transparent)]",
-          "app-dark:shadow-[0_2px_10px_rgba(0,0,0,0.34),0_0_0_1px_color-mix(in_oklab,var(--text)_10%,transparent)]",
-        ].join(" ")}
+        className={rowClass}
         onMouseDown={(e) => {
           startY.current = e.clientY;
           moved.current = false;
@@ -118,98 +128,131 @@ const ProfileSearchResultItem = React.memo(
     );
   },
   (prevProps, nextProps) => {
-    // Custom comparison: only re-render if profile data changes
     return (
       prevProps.profile.id === nextProps.profile.id &&
       prevProps.profile.username === nextProps.profile.username &&
       prevProps.profile.display_name === nextProps.profile.display_name &&
       prevProps.profile.avatar_url === nextProps.profile.avatar_url &&
       prevProps.profile.member_no === nextProps.profile.member_no &&
-      prevProps.profile.you_follow === nextProps.profile.you_follow
+      prevProps.profile.you_follow === nextProps.profile.you_follow &&
+      prevProps.rowVariant === nextProps.rowVariant
     );
   }
 );
+
+export type ProfileSearchResultsLayout = "panel" | "inline";
 
 export default function ProfileSearchResults({
   query,
   viewerId,
   onClose,
   panelVariant = "default",
+  layout = "panel",
+  pageSize: pageSizeProp,
+  enableLoadMore = false,
 }: {
   query: string;
   viewerId?: string | null;
   onClose?: () => void;
-  /** `"glass"`: frosted shell for embedded contexts (e.g. Home). Default matches profile overlay. */
+  /** `"glass"`: frosted shell for embedded contexts. Default matches profile overlay. */
   panelVariant?: "default" | "glass";
+  /** `inline`: borderless list for Home search users mode. `panel`: default profile overlay. */
+  layout?: ProfileSearchResultsLayout;
+  /** Page size when using inline pagination (default 10 if `enableLoadMore`). */
+  pageSize?: number;
+  /** When true with `layout="inline"`, show Load more for additional pages. */
+  enableLoadMore?: boolean;
 }) {
   const [rows, setRows] = useState<ProfileSearchRow[]>([]);
   const [loading, setLoading] = useState(false);
-  // [OPTIMIZATION: Phase 1 - Batch] Store batched follow statuses
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [batchedFollowStatuses, setBatchedFollowStatuses] = useState<
     Record<string, "none" | "pending" | "following" | "friends">
   >({});
   const navigate = useNavigate();
 
+  const isInline = layout === "inline";
+  const pageSize = isInline
+    ? Math.min(Math.max(pageSizeProp ?? 10, 1), 50)
+    : 25;
+
+  const batchFollowForRows = useCallback(
+    async (r: ProfileSearchRow[], mounted: () => boolean) => {
+      if (r.length === 0 || !viewerId) return;
+      try {
+        const currentViewerId = await getViewerId();
+        if (!currentViewerId || !mounted()) return;
+        const profileIds = r.map((profile) => profile.id);
+        const followStatuses = await getBatchFollowStatuses(
+          currentViewerId,
+          profileIds
+        );
+        if (mounted()) {
+          setBatchedFollowStatuses((prev) => ({ ...prev, ...followStatuses }));
+        }
+        Object.entries(followStatuses).forEach(([profileId, status]) => {
+          setCachedFollowStatus(currentViewerId, profileId, status);
+        });
+      } catch (error) {
+        console.warn("Failed to batch load follow statuses:", error);
+      }
+    },
+    [viewerId]
+  );
+
   useEffect(() => {
     let mounted = true;
+    const isMounted = () => mounted;
+
     (async () => {
-      setLoading(true);
-      const r = await searchProfiles(query, viewerId || undefined);
-      if (mounted) setRows(r);
-      setLoading(false);
-
-      // [OPTIMIZATION: Phase 1 - Batch] Batch load follow statuses for all search results
-      // Why: Single API call instead of individual queries per FollowButton
-      if (r.length > 0 && viewerId) {
-        (async () => {
-          try {
-            const currentViewerId = await getViewerId();
-            if (!currentViewerId) return;
-
-            // Get all profile IDs from search results
-            const profileIds = r.map((profile) => profile.id);
-
-            // Batch fetch all follow statuses at once
-            const followStatuses = await getBatchFollowStatuses(
-              currentViewerId,
-              profileIds
-            );
-
-            // Store in state for components to use
-            if (mounted) {
-              setBatchedFollowStatuses(followStatuses);
-            }
-
-            // Also cache all statuses for future use
-            Object.entries(followStatuses).forEach(([profileId, status]) => {
-              setCachedFollowStatus(currentViewerId, profileId, status);
-            });
-          } catch (error) {
-            console.warn("Failed to batch load follow statuses:", error);
-            // Silent fail - components will fall back to individual queries
-          }
-        })();
+      const q = query.trim();
+      if (!q) {
+        setRows([]);
+        setHasMore(false);
+        setLoading(false);
+        setBatchedFollowStatuses({});
+        return;
       }
+
+      setLoading(true);
+      setHasMore(false);
+      setBatchedFollowStatuses({});
+
+      const limit = isInline ? pageSize : 25;
+      const offset = 0;
+      const r = await searchProfiles(q, viewerId || undefined, {
+        limit,
+        offset,
+      });
+      if (!isMounted()) return;
+      setRows(r);
+      setLoading(false);
+      setHasMore(isInline && enableLoadMore && r.length === limit);
+
+      void batchFollowForRows(r, isMounted);
     })();
+
     return () => {
       mounted = false;
     };
-  }, [query, viewerId]);
+  }, [
+    query,
+    viewerId,
+    isInline,
+    pageSize,
+    enableLoadMore,
+    batchFollowForRows,
+  ]);
 
-  // re-run search when follow state changes elsewhere
   useEffect(() => {
     const rerun = () => {
-      // simply refetch by setting the same query again
-      onClose?.(); // if you’d rather close the panel, keep this
-      // or trigger a re-fetch without closing:
-      // setRows((r) => [...r]);  // (no-op to force render)
+      onClose?.();
     };
     window.addEventListener("follow:changed", rerun);
     return () => window.removeEventListener("follow:changed", rerun);
-  }, []);
+  }, [onClose]);
 
-  // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
-  // Why: These callbacks are passed to memoized child components
   const handleNavigate = useCallback(
     (slug: string) => {
       navigate(`/u/${slug}`);
@@ -220,7 +263,6 @@ export default function ProfileSearchResults({
 
   const handleFollowChange = useCallback(
     (profileId: string, nowFollowing: boolean) => {
-      // Update the local state when follow status changes
       setRows((rows) =>
         rows.map((x) =>
           x.id === profileId ? { ...x, you_follow: nowFollowing } : x
@@ -229,8 +271,6 @@ export default function ProfileSearchResults({
     },
     []
   );
-
-  if (!query) return null;
 
   useEffect(() => {
     const handler = (e: any) => {
@@ -244,6 +284,47 @@ export default function ProfileSearchResults({
     window.addEventListener("follow:changed", handler);
     return () => window.removeEventListener("follow:changed", handler);
   }, []);
+
+  const handleLoadMore = useCallback(async () => {
+    const q = query.trim();
+    if (!q || !hasMore || loadingMore || loading) return;
+    setLoadingMore(true);
+    try {
+      const offset = rows.length;
+      const next = await searchProfiles(q, viewerId || undefined, {
+        limit: pageSize,
+        offset,
+      });
+      setRows((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        const merged = [...prev];
+        for (const p of next) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            merged.push(p);
+          }
+        }
+        return merged;
+      });
+      setHasMore(isInline && enableLoadMore && next.length === pageSize);
+      void batchFollowForRows(next, () => true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [
+    query,
+    viewerId,
+    pageSize,
+    rows.length,
+    hasMore,
+    loadingMore,
+    loading,
+    isInline,
+    enableLoadMore,
+    batchFollowForRows,
+  ]);
+
+  if (!query.trim()) return null;
 
   const panelShellClass =
     panelVariant === "glass"
@@ -259,10 +340,57 @@ export default function ProfileSearchResults({
       ? "border-b border-[var(--bottom-tab-border)]"
       : "border-b border-[var(--border)]";
 
+  if (isInline) {
+    return (
+      <div className="w-full">
+        {loading && (
+          <div className="text-xs text-[var(--text)]/60 py-2 px-1">
+            Searching…
+          </div>
+        )}
+        {!loading && rows.length === 0 && (
+          <div className="text-xs text-[var(--text)]/60 py-2 px-1">
+            No users found.
+          </div>
+        )}
+
+        <div className="flex flex-col">
+          {rows.map((r) => (
+            <ProfileSearchResultItem
+              key={r.id}
+              profile={r}
+              onNavigate={handleNavigate}
+              onFollowChange={handleFollowChange}
+              followStatus={batchedFollowStatuses[r.id]}
+              rowVariant="plain"
+            />
+          ))}
+        </div>
+
+        {enableLoadMore && hasMore && !loading ? (
+          <div className="flex justify-center pt-3 pb-1">
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => void handleLoadMore()}
+              className={[
+                "rounded-full px-4 py-1.5 text-[11px] font-medium",
+                "border border-[var(--border)] text-[var(--text)]/85",
+                "hover:bg-[color-mix(in_oklab,var(--text)_8%,transparent)]",
+                "disabled:opacity-50 disabled:pointer-events-none",
+              ].join(" ")}
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="mx-3">
       <div className={panelShellClass}>
-        {/* header */}
         <div
           className={[
             "flex items-center justify-between px-3 py-2",
@@ -273,6 +401,7 @@ export default function ProfileSearchResults({
             Results for “{query}”
           </div>
           <button
+            type="button"
             className="text-xs text-[var(--text)]/60 hover:text-[var(--text)]"
             onClick={onClose}
           >
@@ -280,7 +409,6 @@ export default function ProfileSearchResults({
           </button>
         </div>
 
-        {/* body */}
         <div className="max-h-[60vh] overflow-y-auto p-2">
           {loading && (
             <div className="text-xs text-[var(--text)]/60 py-2 px-1">
@@ -301,6 +429,7 @@ export default function ProfileSearchResults({
                 onNavigate={handleNavigate}
                 onFollowChange={handleFollowChange}
                 followStatus={batchedFollowStatuses[r.id]}
+                rowVariant="card"
               />
             ))}
           </div>

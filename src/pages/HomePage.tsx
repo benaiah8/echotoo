@@ -46,7 +46,6 @@ import {
 } from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
-import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import {
   logTodaySpotlight,
   resolveDateSpotlightWithFallback,
@@ -170,11 +169,45 @@ export default function HomePage() {
   const [friendsPreflightPending, setFriendsPreflightPending] = useState(false);
   const hadFriendsInFiltersRef = useRef(false);
 
-  /** Post/hangout/experience feed `q` only in posts mode; never send home search text as post `q` in users mode. */
+  /** Post feed `q` only in posts mode; users mode does not send text as post `q`. */
   const feedSearchQ = useMemo(
     () => getFeedSearchQ(searchMode, search),
     [searchMode, search]
   );
+
+  /** Dedicated Home search shell: focused search field or non-empty query. */
+  const homePostSearchActive =
+    homeSearchFocused || search.trim().length > 0;
+
+  const prevHomePostSearchActiveRef = useRef(false);
+  useLayoutEffect(() => {
+    if (homePostSearchActive && !prevHomePostSearchActiveRef.current) {
+      setSearchMode("posts");
+    }
+    prevHomePostSearchActiveRef.current = homePostSearchActive;
+  }, [homePostSearchActive]);
+
+  const handleHomeSearchModeChange = useCallback((mode: "posts" | "users") => {
+    if (mode === "users") setFiltersOpen(false);
+    setSearchMode(mode);
+    scheduleScrollHomeFeedToTopRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (!homePostSearchActive || searchMode !== "users") {
+      setDebouncedUserSearchQuery("");
+      return;
+    }
+    const id = window.setTimeout(() => {
+      setDebouncedUserSearchQuery(search);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [search, searchMode, homePostSearchActive]);
+
+  const showHomePostsFeed =
+    !homePostSearchActive || searchMode === "posts";
+  const suppressBrowseRails =
+    homePostSearchActive && searchMode === "posts";
 
   const dateSpotlightActive = isDateSpotlightFilter(dateFilter);
 
@@ -192,70 +225,30 @@ export default function HomePage() {
     [viewMode]
   );
 
-  const userSearchOverlayOpen =
-    searchMode === "users" &&
-    (homeSearchFocused || search.trim().length > 0);
-
-  const [userSearchOverlayTopPx, setUserSearchOverlayTopPx] = useState(140);
-
-  useEffect(() => {
-    if (searchMode !== "users") {
-      setDebouncedUserSearchQuery("");
-      return;
-    }
-    const id = window.setTimeout(() => {
-      setDebouncedUserSearchQuery(search);
-    }, 300);
-    return () => window.clearTimeout(id);
-  }, [search, searchMode]);
-
-  useLayoutEffect(() => {
-    if (!userSearchOverlayOpen) return;
-    const root = homeTopBarRef.current;
-    if (!root) return;
-    const update = () => {
-      const bottom = root.getBoundingClientRect().bottom;
-      setUserSearchOverlayTopPx(Math.round(bottom + 4));
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(root);
-    window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, [
-    userSearchOverlayOpen,
-    filtersOpen,
-    noFriendsInlineBannerVisible,
-    search,
-    searchMode,
-  ]);
-
-  const dismissHomeUserSearch = useCallback(() => {
+  const blurHomeSearchInput = useCallback(() => {
     const input = homeTopBarRef.current?.querySelector<HTMLInputElement>(
       "[data-home-search-input]"
     );
     input?.blur();
+  }, []);
+
+  /** Exit Home search shell — clears query, posts mode, closes filters, blurs field. */
+  const exitHomePostSearchMode = useCallback(() => {
+    blurHomeSearchInput();
     setSearch("");
     setSearchMode("posts");
+    setFiltersOpen(false);
     setHomeSearchFocused(false);
     scheduleScrollHomeFeedToTopRef.current();
-  }, []);
-  const handleHomeUserSearchBackdropPointerDown = useCallback(() => {
-    if (blurActiveEditableFirst()) return;
-    dismissHomeUserSearch();
-  }, [dismissHomeUserSearch]);
+  }, [blurHomeSearchInput]);
 
   const scrollDir = useScrollDirection(HOME_SCROLL_CHROME_OPTS);
   const isHidden = scrollDir === "down";
 
   const pinHomeTopBar =
-    homeSearchFocused ||
+    homePostSearchActive ||
     filtersOpen ||
-    noFriendsInlineBannerVisible ||
-    userSearchOverlayOpen;
+    noFriendsInlineBannerVisible;
   const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
   /** Bar width/pill shape follows scroll only. Do not OR `homeSearchFocused` — that forced full-width on focus and broke pill + safe-area on native keyboards. Visibility while typing uses `pinHomeTopBar` above. */
   const effectiveHomeAtTop = isAtTop;
@@ -552,8 +545,11 @@ export default function HomePage() {
     setSelectedTags([]);
     setSearch("");
     setSearchMode("posts");
+    setFiltersOpen(false);
+    blurHomeSearchInput();
+    setHomeSearchFocused(false);
     scheduleScrollHomeFeedToTop();
-  }, [scheduleScrollHomeFeedToTop]);
+  }, [scheduleScrollHomeFeedToTop, blurHomeSearchInput]);
 
   const handleToggleDateFilter = useCallback(
     (target: HomeDateFilterChip) => {
@@ -705,6 +701,7 @@ export default function HomePage() {
   // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
   // Why: These callbacks are passed as props, memoization prevents child re-renders
   const handleFilterClick = useCallback(() => {
+    if (homePostSearchActive && searchMode === "users") return;
     if (effectiveHomeTopHidden) {
       setForceRevealHeader(true);
       setFiltersOpen(true);
@@ -716,14 +713,16 @@ export default function HomePage() {
     } else {
       setFiltersOpen((v) => !v);
     }
-  }, [effectiveHomeTopHidden]);
+  }, [effectiveHomeTopHidden, homePostSearchActive, searchMode]);
 
   /** Popular-tags Clear All: tags + search only (legacy drawer behavior). */
   const handleClearFilters = useCallback(() => {
     setSelectedTags([]);
     setSearch("");
+    blurHomeSearchInput();
+    setHomeSearchFocused(false);
     scheduleScrollHomeFeedToTop();
-  }, [scheduleScrollHomeFeedToTop]);
+  }, [scheduleScrollHomeFeedToTop, blurHomeSearchInput]);
 
   // Handle logo click - show login modal if not authenticated, info popup if authenticated
   const handleLogoClick = useCallback(() => {
@@ -841,10 +840,99 @@ export default function HomePage() {
     [viewerProfileId]
   );
 
-  const showSearchKindToggle =
-    homeSearchFocused || search.trim().length > 0;
   const searchFieldPlaceholder =
-    searchMode === "users" ? "Search users" : "Where To?";
+    homePostSearchActive && searchMode === "users"
+      ? "Search users"
+      : "Where To?";
+
+  const homePostsLoadItems = useCallback(
+    async (offset: number, limit: number) => {
+      const feedOptions = buildVerticalLoadFeedOptions(verticalFilterCtx, {
+        offset,
+        limit,
+      });
+      if (USE_OPTIMIZED_FEED) {
+        const { items, consumedOffset, count } =
+          await getPublicFeedOptimizedWithCount(feedOptions);
+
+        const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
+          feedSearchQ,
+          selectedTags,
+          viewMode,
+          friendsFilter,
+        });
+
+        const personalizedItemsRaw = shouldPersonalize
+          ? personalizeFeedBatch(items)
+          : items;
+
+        const personalizedItems =
+          shouldPersonalize &&
+          personalizedItemsRaw.length !== items.length
+            ? items
+            : personalizedItemsRaw;
+
+        if (import.meta.env.DEV) {
+          console.log("[FeedPipeline] HomePage loadItems", {
+            offset,
+            limit,
+            itemsFromRpc: items.length,
+            afterPersonalization: personalizedItems.length,
+            consumedOffset: consumedOffset ?? items.length,
+            count,
+            friendsFilter,
+          });
+        }
+
+        return {
+          items: personalizedItems,
+          consumedOffset: consumedOffset ?? personalizedItems.length,
+          count,
+        };
+      }
+
+      const items = await getPublicFeed(feedOptions);
+      const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
+        feedSearchQ,
+        selectedTags,
+        viewMode,
+        friendsFilter,
+      });
+
+      const personalizedItemsRaw = shouldPersonalize
+        ? personalizeFeedBatch(items)
+        : items;
+
+      const personalizedItems =
+        shouldPersonalize &&
+        personalizedItemsRaw.length !== items.length
+          ? items
+          : personalizedItemsRaw;
+
+      return {
+        items: personalizedItems,
+        consumedOffset: personalizedItems.length,
+        count: personalizedItems.length,
+      };
+    },
+    [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
+  );
+
+  const homePostsGetCachedItems = useCallback(() => {
+    const cached = dataCache.get<FeedItem[]>(feedCacheKey);
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const persisted = readPersistedHomeFeed(feedCacheKey);
+    return persisted?.items?.length ? persisted.items : null;
+  }, [feedCacheKey]);
+
+  const homePostsSetCachedItems = useCallback(
+    (items: FeedItem[]) => {
+      if (!Array.isArray(items) || items.length === 0) return;
+      dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
+      writePersistedHomeFeed(feedCacheKey, items);
+    },
+    [feedCacheKey]
+  );
 
   return (
     <>
@@ -883,8 +971,10 @@ export default function HomePage() {
           onSearch={handleSearchChange}
           search={search}
           searchMode={searchMode}
-          onSearchModeChange={setSearchMode}
-          showSearchKindToggle={showSearchKindToggle}
+          onSearchModeChange={handleHomeSearchModeChange}
+          showSearchKindToggle={false}
+          homePostSearchActive={homePostSearchActive}
+          onExitPostSearch={exitHomePostSearchMode}
           searchFieldPlaceholder={searchFieldPlaceholder}
           onSearchFocusChange={setHomeSearchFocused}
           hasActiveFilters={hasActiveFilters}
@@ -904,59 +994,6 @@ export default function HomePage() {
           onClearAllFilters={clearAllHomeFilters}
         />
 
-        {userSearchOverlayOpen ? (
-          <>
-            <div
-              className={[
-                "fixed inset-x-0 bottom-0 z-[29] pointer-events-auto touch-manipulation",
-                "bg-[color-mix(in_oklab,var(--bg)_34%,transparent)]",
-                "backdrop-blur-sm supports-[backdrop-filter]:bg-[color-mix(in_oklab,var(--bg)_26%,transparent)]",
-              ].join(" ")}
-              style={{ top: userSearchOverlayTopPx }}
-              aria-hidden
-              onPointerDown={handleHomeUserSearchBackdropPointerDown}
-            />
-            <div
-              className="fixed inset-x-0 bottom-0 z-[30] flex justify-center pointer-events-none"
-              style={{ top: userSearchOverlayTopPx }}
-            >
-              <div className="w-full max-w-[640px] mx-auto pt-1 pointer-events-none">
-                {debouncedUserSearchQuery.trim().length < 2 ? (
-                  <div
-                    className="pointer-events-auto mx-3"
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <div
-                      className={[
-                        "rounded-2xl border border-[var(--bottom-tab-border)] overflow-hidden",
-                        "bg-[color-mix(in_oklab,var(--glass-bg)_84%,var(--bg))] backdrop-blur-[var(--glass-blur)]",
-                        "shadow-[0_6px_18px_rgba(0,0,0,0.16)] app-dark:shadow-[0_10px_22px_rgba(0,0,0,0.36)]",
-                        "px-3 py-3",
-                      ].join(" ")}
-                    >
-                      <p className="text-[11px] text-[var(--text)]/75 leading-snug">
-                        Type at least 2 characters to search users.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className="pointer-events-auto"
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <ProfileSearchResults
-                      query={debouncedUserSearchQuery}
-                      viewerId={viewerProfileId}
-                      onClose={dismissHomeUserSearch}
-                      panelVariant="glass"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        ) : null}
-
         {/* MAIN CONTENT */}
         <div
           style={{
@@ -964,27 +1001,49 @@ export default function HomePage() {
             paddingBottom: FOOTER_HEIGHT,
           }}
         >
-          {/* HORIZONTAL RAIL AT TOP — independent of Today / Hangouts / Experiences vertical chips */}
-          <div className="w-full max-w-[640px] mx-auto px-0">
-            <HomeHangoutSection
-              key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
-              items={[]}
-              loading={false}
-              batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
-              useProgressiveLoading={true}
-              isVisible={isHomeVisible}
-              tabId="home"
-              hasActiveFilters={false}
-              loadItems={topRailLoadItems}
-              getCachedItems={topRailGetCachedItems}
-              setCachedItems={topRailSetCachedItems}
-            />
-          </div>
+          {/* HORIZONTAL RAIL AT TOP — browse-only; hidden during post search mode (Phase 1.5) */}
+          {!homePostSearchActive ? (
+            <div className="w-full max-w-[640px] mx-auto px-0">
+              <HomeHangoutSection
+                key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
+                items={[]}
+                loading={false}
+                batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
+                useProgressiveLoading={true}
+                isVisible={isHomeVisible}
+                tabId="home"
+                hasActiveFilters={false}
+                loadItems={topRailLoadItems}
+                getCachedItems={topRailGetCachedItems}
+                setCachedItems={topRailSetCachedItems}
+              />
+            </div>
+          ) : null}
+
+          {homePostSearchActive && searchMode === "users" ? (
+            <div className="w-full max-w-[640px] mx-auto px-1.5 pt-1 pb-1">
+              {debouncedUserSearchQuery.trim().length < 2 ? (
+                <p className="text-[11px] text-[var(--text)]/75 px-2 py-2 leading-snug">
+                  Type at least 2 characters to search users.
+                </p>
+              ) : (
+                <ProfileSearchResults
+                  query={debouncedUserSearchQuery}
+                  viewerId={viewerProfileId}
+                  layout="inline"
+                  pageSize={10}
+                  enableLoadMore
+                />
+              )}
+            </div>
+          ) : null}
 
           {/* POSTS & INJECTIONS */}
+          {showHomePostsFeed ? (
           <div className="w-full max-w-[640px] mx-auto px-0">
             <HomePostsSection
               key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
+              suppressBrowseRails={suppressBrowseRails}
               viewMode={viewMode}
               hasActiveFilters={hasActiveFilters}
               tagFallbackItems={tagFallbackItems}
@@ -995,94 +1054,10 @@ export default function HomePage() {
               tabId="home"
               // [REFACTOR] ProgressiveFeed now owns all loading - HomePage is thin
               useProgressiveFeed={true}
-              loadItems={useCallback(
-                async (offset: number, limit: number) => {
-                  const feedOptions = buildVerticalLoadFeedOptions(
-                    verticalFilterCtx,
-                    { offset, limit }
-                  );
-                  if (USE_OPTIMIZED_FEED) {
-                    const { items, consumedOffset, count } =
-                      await getPublicFeedOptimizedWithCount(feedOptions);
-
-                    const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
-                      feedSearchQ,
-                      selectedTags,
-                      viewMode,
-                      friendsFilter,
-                    });
-
-                    const personalizedItemsRaw = shouldPersonalize
-                      ? personalizeFeedBatch(items)
-                      : items;
-
-                    const personalizedItems =
-                      shouldPersonalize &&
-                      personalizedItemsRaw.length !== items.length
-                        ? items
-                        : personalizedItemsRaw;
-
-                    if (import.meta.env.DEV) {
-                      console.log("[FeedPipeline] HomePage loadItems", {
-                        offset,
-                        limit,
-                        itemsFromRpc: items.length,
-                        afterPersonalization: personalizedItems.length,
-                        consumedOffset: consumedOffset ?? items.length,
-                        count,
-                        friendsFilter,
-                      });
-                    }
-
-                    return {
-                      items: personalizedItems,
-                      consumedOffset:
-                        consumedOffset ?? personalizedItems.length,
-                      count,
-                    };
-                  }
-
-                  const items = await getPublicFeed(feedOptions);
-                  const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
-                    feedSearchQ,
-                    selectedTags,
-                    viewMode,
-                    friendsFilter,
-                  });
-
-                  const personalizedItemsRaw = shouldPersonalize
-                    ? personalizeFeedBatch(items)
-                    : items;
-
-                  const personalizedItems =
-                    shouldPersonalize &&
-                    personalizedItemsRaw.length !== items.length
-                      ? items
-                      : personalizedItemsRaw;
-
-                  return {
-                    items: personalizedItems,
-                    consumedOffset: personalizedItems.length,
-                    count: personalizedItems.length,
-                  };
-                },
-                [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
-              )}
+              loadItems={homePostsLoadItems}
               initialItems={homeVerticalWarmInitialItems}
-              getCachedItems={useCallback(() => {
-                const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-                if (Array.isArray(cached) && cached.length > 0) return cached;
-                const persisted = readPersistedHomeFeed(feedCacheKey);
-                return persisted?.items?.length ? persisted.items : null;
-              }, [feedCacheKey])}
-              setCachedItems={useCallback(
-                (items: FeedItem[]) => {
-                  if (!Array.isArray(items) || items.length === 0) return;
-                  dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
-                  writePersistedHomeFeed(feedCacheKey, items);
-                },
-                [feedCacheKey]
-              )}
+              getCachedItems={homePostsGetCachedItems}
+              setCachedItems={homePostsSetCachedItems}
               feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
               dateSpotlightActive={dateSpotlightActive}
               dateFilter={dateFilter}
@@ -1096,6 +1071,7 @@ export default function HomePage() {
               railSetCachedItems={railSetCachedItems}
             />
           </div>
+          ) : null}
         </div>
       </PrimaryPageContainer>
 

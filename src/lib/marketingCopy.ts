@@ -1,6 +1,6 @@
 /** Single source for in-app / web marketing one-liners (auth modal, hero, etc.) */
 
-export const ECHO_APP_DISPLAY_NAME = "EchoToo";
+export const ECHO_APP_DISPLAY_NAME = "Echo Too";
 
 export const ECHO_TAGLINE =
   "Discover events, meetups, and plans near you—and go with friends.";

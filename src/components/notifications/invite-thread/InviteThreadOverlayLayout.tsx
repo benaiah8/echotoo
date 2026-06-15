@@ -265,19 +265,12 @@ export function InviteThreadScrollContext({
   bundle,
   linkToPost,
   backgroundLocation,
-  inviteNoteFooter,
 }: {
   bundle: InviteThreadBundle;
   linkToPost: string | null;
   backgroundLocation: Location;
-  inviteNoteFooter?: React.ReactNode;
 }) {
   const caption = bundle.post_peek.post_caption?.trim() || "Untitled";
-  const noteRaw =
-    bundle.invite.invite_note != null
-      ? String(bundle.invite.invite_note).trim()
-      : "";
-  const hasNote = noteRaw.length > 0;
 
   const postBody = (
     <>
@@ -313,18 +306,6 @@ export function InviteThreadScrollContext({
       ) : (
         <div className={`${contextCardClass} opacity-60`}>{postBody}</div>
       )}
-
-      <div className={contextCardClass}>
-        <p className={contextCardLabelClass}>Invite note</p>
-        <p
-          className={`mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug ${
-            hasNote ? "text-[var(--text)]/75" : "text-[var(--text)]/45 italic"
-          }`}
-        >
-          {hasNote ? noteRaw : "No invite note added."}
-        </p>
-        {inviteNoteFooter}
-      </div>
     </div>
   );
 }

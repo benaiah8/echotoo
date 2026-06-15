@@ -40,6 +40,7 @@ import BottomTabPeekOwl from "./BottomTabPeekOwl";
 import {
   isAndroid,
   isIOS,
+  isNativeApp,
 } from "../lib/storage/utils/capacitorDetection";
 
 /**
@@ -696,19 +697,18 @@ function BottomTab() {
 
   /**
    * Pill `bottom` offset (visual gap above the viewport edge).
-   * `--safe-area-bottom-layout` includes artificial Android/iOS extras from
-   * `syncAppSafeAreaBottom()` so **content** can clear gesture/3-button areas.
-   * The pill should stay **tighter** to the system nav / WebView chrome edge:
-   * on Android use raw `env` via `--safe-area-inset-bottom` only (capped), not
-   * the full layout variable — avoids the tab floating too high when extras
-   * already inflate layout for scroll regions. Gradients below still use
-   * `--safe-area-bottom-layout`.
+   * Native Android: position the pill **above** the full `--safe-area-bottom-layout`
+   * (env + extras from `appSafeAreaBottom` for 3-button nav) plus a small gap —
+   * additive, not subtractive from the inset, so the tab clears system buttons.
+   * iOS: unchanged (layout minus fixed gap). Web / non-shell Android: `8px`.
+   * Gradients/scrim below still use `--safe-area-bottom-layout` only.
    */
-  const bottomTabBottomOffset = isAndroid()
-    ? "max(6px, min(12px, var(--safe-area-inset-bottom, 0px)))"
-    : isIOS()
-    ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
-    : "8px";
+  const bottomTabBottomOffset =
+    isNativeApp() && isAndroid()
+      ? "max(14px, calc(var(--safe-area-bottom-layout, 0px) + 6px))"
+      : isIOS()
+        ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
+        : "8px";
 
   return (
     <>

@@ -1,6 +1,7 @@
 import React from "react";
 import { Profile } from "../../contexts/ProfileContext";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { resolveSocialProfileUrl, type SocialPlatform } from "../../lib/socialLinks";
 
 interface SocialMediaLinksProps {
   profile: Profile | null;
@@ -26,19 +27,22 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
   }
   const socialLinks = [
     {
-      platform: "Instagram",
+      platform: "Instagram" as const,
+      key: "instagram" as SocialPlatform,
       url: profile?.instagram_url,
       icon: "/instagram-icon.svg",
       color: "border border-[var(--text)]",
     },
     {
-      platform: "TikTok",
+      platform: "TikTok" as const,
+      key: "tiktok" as SocialPlatform,
       url: profile?.tiktok_url,
       icon: "/Tiktok-icon.svg",
       color: "border border-[var(--text)]",
     },
     {
-      platform: "Telegram",
+      platform: "Telegram" as const,
+      key: "telegram" as SocialPlatform,
       url: profile?.telegram_url,
       icon: "/Telegram-icon.svg",
       color: "border border-[var(--text)]",
@@ -69,15 +73,9 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
     return null;
   }
 
-  const handleLinkClick = (url: string, platform: string) => {
-    // Handle different URL formats
-    let finalUrl = url;
-
-    if (platform === "Telegram" && !url.startsWith("http")) {
-      // If it's just a username, make it a telegram link
-      finalUrl = `https://t.me/${url.replace("@", "")}`;
-    }
-
+  const handleLinkClick = (url: string, platformKey: SocialPlatform) => {
+    const finalUrl = resolveSocialProfileUrl(platformKey, url);
+    if (!finalUrl) return;
     void openExternalUrl(finalUrl);
   };
 
@@ -91,7 +89,7 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
         {socialLinks.map((link) => (
           <button
             key={link.platform}
-            onClick={() => handleLinkClick(link.url!, link.platform)}
+            onClick={() => handleLinkClick(link.url!, link.key)}
             className={`
               w-6 h-6 rounded-lg flex items-center justify-center
               transition-all duration-200 hover:scale-110 hover:shadow-lg
