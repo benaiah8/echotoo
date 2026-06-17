@@ -249,9 +249,16 @@ export default function HomePage() {
     homePostSearchActive ||
     filtersOpen ||
     noFriendsInlineBannerVisible;
-  const effectiveHomeTopHidden = isHidden && !pinHomeTopBar;
-  /** Bar width/pill shape follows scroll only. Do not OR `homeSearchFocused` — that forced full-width on focus and broke pill + safe-area on native keyboards. Visibility while typing uses `pinHomeTopBar` above. */
-  const effectiveHomeAtTop = isAtTop;
+  /** Never slide chrome off-screen while the Home search shell is open (focused or typed query), even if scroll/pin state ever diverges. */
+  const effectiveHomeTopHidden =
+    !homePostSearchActive && isHidden && !pinHomeTopBar;
+  /**
+   * Bar width/pill shape follows scroll in browse mode only.
+   * Users search scrolls the window over inline results — keep full-width flush bar so the pill transform does not track scroll.
+   * Do not OR `homeSearchFocused` for browse atTop — that forced full-width on focus and broke pill + safe-area on native keyboards.
+   */
+  const effectiveHomeAtTop =
+    homePostSearchActive && searchMode === "users" ? true : isAtTop;
 
   useEffect(() => {
     if (effectiveHomeTopHidden && !forceRevealHeader) setFiltersOpen(false);
