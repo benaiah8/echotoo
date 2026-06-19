@@ -1,7 +1,8 @@
 import { PiCalendarBlank, PiMapPin, PiPath } from "react-icons/pi";
+import { postTypeCompactLabel } from "../../lib/postTypeLabels";
 
 /**
- * Inline post-type metadata (Hangout vs Experience). Compact; not a button.
+ * Inline post-type metadata (Event vs Place). Compact; not a button.
  * Hangout: calendar + soft green tint. Experience: path/route + soft orange tint.
  */
 export function PostTypeMetaChip({
@@ -12,7 +13,7 @@ export function PostTypeMetaChip({
   className?: string;
 }) {
   const Icon = type === "hangout" ? PiCalendarBlank : PiPath;
-  const label = type === "hangout" ? "Event post" : "Experience post";
+  const label = postTypeCompactLabel(type);
   const tint =
     type === "hangout"
       ? [

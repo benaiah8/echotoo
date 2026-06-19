@@ -11,9 +11,10 @@ import OwnProfilePostsSection from "../sections/profile/OwnProfilePostsSection";
 import { supabase } from "../lib/supabaseClient";
 import { ProfileProvider, type Profile } from "../contexts/ProfileContext";
 import { useDispatch, useSelector } from "react-redux";
-import { setAuthModal } from "../reducers/modalReducer";
 import { RootState } from "../app/store";
+import { setAuthModal } from "../reducers/modalReducer";
 import WelcomeModal from "../components/ui/WelcomeModal";
+import type { WelcomeModalCloseSource } from "../components/ui/WelcomeModal";
 import ProfileTopBar from "../components/profile/ProfileTopBar";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import {
@@ -79,8 +80,8 @@ const DEBUG_PROFILE_LOAD = false;
  */
 export default function OwnProfilePage() {
   const navigate = useNavigate();
-  const dispatch = useDispatch();
   const location = useLocation();
+  const dispatch = useDispatch();
 
   // [FIX] Use parent tab active status from PersistentTabContainer - stops background fetches when Profile tab is display:none
   const isProfileTabVisible = useTabActive("profile");
@@ -205,6 +206,7 @@ export default function OwnProfilePage() {
     authLoading ||
     (hasSignedInIdentity && !profile && !profileHeroLoadSettled);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const pendingAuthAfterWelcomeCloseRef = useRef(false);
   const [isReportReviewer, setIsReportReviewer] = useState(false);
 
   // Get viewer ID
@@ -602,12 +604,26 @@ export default function OwnProfilePage() {
 
   // Handle logo click
   const handleLogoClick = () => {
-    if (isAuthenticated) {
-      setShowInfoModal(true);
-    } else {
-      dispatch(setAuthModal(true));
-    }
+    pendingAuthAfterWelcomeCloseRef.current = !isAuthenticated;
+    setShowInfoModal(true);
   };
+
+  const handleWelcomeClose = useCallback(
+    (source: WelcomeModalCloseSource) => {
+      const pendingAuth = pendingAuthAfterWelcomeCloseRef.current;
+      pendingAuthAfterWelcomeCloseRef.current = false;
+      setShowInfoModal(false);
+
+      if (source !== "x" || !pendingAuth || authState?.user) {
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        dispatch(setAuthModal(true));
+      });
+    },
+    [authState?.user, dispatch]
+  );
 
   // [OPTIMIZATION: Phase 3.2] Hero section: Follow counts - STALE-WHILE-REVALIDATE with silent background refresh
   // Why: Instant display of cached counts, silent update when counts change (no skeleton, just update number)
@@ -1241,7 +1257,7 @@ export default function OwnProfilePage() {
 
       <WelcomeModal
         isOpen={showInfoModal}
-        onClose={() => setShowInfoModal(false)}
+        onClose={handleWelcomeClose}
       />
     </>
   );

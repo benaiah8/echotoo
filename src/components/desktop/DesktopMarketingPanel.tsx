@@ -105,6 +105,67 @@ export default function DesktopMarketingPanel() {
         </div>
       </header>
 
+      {/* Get EchoToo — web only; below hero, above product overview */}
+      {!isNativeApp() ? (
+        <section
+          className="rounded-[2rem] border border-white/[0.09] bg-[rgba(255,255,255,0.035)] p-6 backdrop-blur-md supports-[backdrop-filter]:bg-[rgba(21,21,22,0.45)] sm:p-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+          aria-labelledby="desktop-get-echotoo-heading"
+        >
+          <h2
+            id="desktop-get-echotoo-heading"
+            className="text-xl font-bold tracking-tight text-[var(--text)]"
+          >
+            Get EchoToo
+          </h2>
+          <p className="mt-2 max-w-lg text-sm leading-relaxed text-[var(--text)]/75">
+            Download the app for iPhone, iPad, or Android.
+          </p>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => void openExternalUrl(APP_STORE_URL)}
+              className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
+            >
+              <PiAppleLogo
+                className="shrink-0 text-xl text-[var(--text)]"
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-[var(--text)]">
+                  App Store
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  iPhone &amp; iPad
+                </div>
+              </div>
+              <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                Open
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void openExternalUrl(PLAY_STORE_URL)}
+              className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
+            >
+              <PiGooglePlayLogo
+                className="shrink-0 text-xl text-[var(--text)]"
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-[var(--text)]">
+                  Google Play
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">Android</div>
+              </div>
+              <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
+                Open
+              </span>
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {/* Hangouts + Experiences */}
       <section
         className="flex flex-col gap-5"
@@ -137,13 +198,14 @@ export default function DesktopMarketingPanel() {
           </FeatureCard>
 
           <FeatureCard
-            title="Experiences"
+            title="Places / Plans"
             accentClass="bg-[rgba(120,160,255,0.06)] text-[var(--text)]"
             icon={<PiMapTrifold className="text-xl" aria-hidden />}
           >
             <p>
-              Follow itineraries and stops you care about — from cafés to events
-              — so every outing feels like a small adventure, not a vague maybe.
+              Follow food spots, routes, and plans you care about — from cafés
+              to day trips — so every outing feels like a small adventure, not a
+              vague maybe.
             </p>
           </FeatureCard>
         </div>
@@ -208,75 +270,12 @@ export default function DesktopMarketingPanel() {
         </nav>
       </section>
 
-      {/* Closure: download + contact */}
+      {/* Closure: feedback + contact */}
       <section
         className="rounded-[2rem] border border-white/[0.09] bg-[rgba(255,255,255,0.035)] p-6 backdrop-blur-md supports-[backdrop-filter]:bg-[rgba(21,21,22,0.45)] sm:p-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-        aria-label="Get EchoToo, feedback, and contact"
+        aria-label="Feedback and contact"
       >
-        {!isNativeApp() ? (
-          <>
-            <h2
-              id="desktop-closure-heading"
-              className="text-xl font-bold tracking-tight text-[var(--text)]"
-            >
-              Get EchoToo
-            </h2>
-            <p className="mt-2 max-w-lg text-sm leading-relaxed text-[var(--text)]/75">
-              Download the app for iPhone, iPad, or Android.
-            </p>
-
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => void openExternalUrl(APP_STORE_URL)}
-                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
-              >
-                <PiAppleLogo
-                  className="shrink-0 text-xl text-[var(--text)]"
-                  aria-hidden
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-[var(--text)]">
-                    App Store
-                  </div>
-                  <div className="text-[11px] text-[var(--muted)]">
-                    iPhone &amp; iPad
-                  </div>
-                </div>
-                <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
-                  Open
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void openExternalUrl(PLAY_STORE_URL)}
-                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3.5 text-left transition-all duration-200 hover:border-[var(--brand)]/30 hover:bg-[var(--surface)]/40"
-              >
-                <PiGooglePlayLogo
-                  className="shrink-0 text-xl text-[var(--text)]"
-                  aria-hidden
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold text-[var(--text)]">
-                    Google Play
-                  </div>
-                  <div className="text-[11px] text-[var(--muted)]">Android</div>
-                </div>
-                <span className="shrink-0 text-xs font-semibold text-[var(--brand)]">
-                  Open
-                </span>
-              </button>
-            </div>
-          </>
-        ) : null}
-
-        <div
-          className={
-            !isNativeApp()
-              ? "mt-8 rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5"
-              : "rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5"
-          }
-        >
+        <div className="rounded-xl border border-[var(--brand)]/22 bg-[rgba(247,208,71,0.05)] px-4 py-4 sm:px-5">
           <h3 className="text-sm font-semibold tracking-tight text-[var(--text)]">
             Give us feedback
           </h3>
@@ -293,11 +292,7 @@ export default function DesktopMarketingPanel() {
           </button>
         </div>
 
-        <div
-          className={
-            !isNativeApp() ? "mt-8 border-t border-white/[0.08] pt-8" : "mt-8"
-          }
-        >
+        <div className="mt-8 border-t border-white/[0.08] pt-8">
           <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--text)]/55">
             Contact
           </h3>

@@ -3,21 +3,14 @@ import { PiCalendarBlank, PiPath } from "react-icons/pi";
 import { useAppSelector } from "../../app/hooks";
 import { getCachedAvatar } from "../../lib/avatarCache";
 import ChooserPillAvatar from "./ChooserPillAvatar";
+import {
+  postTypeCreateCta,
+  postTypeCreateHelper,
+  postTypeCreateSubtitle,
+  postTypeCreateTitle,
+} from "../../lib/postTypeLabels";
 
 type PostType = "hangout" | "experience";
-
-const COPY = {
-  hangout: {
-    title: "Events / Hangouts",
-    subtitle: "Plan something people can join",
-    helper: "For meetups, activities, classes, or anything happening soon.",
-  },
-  experience: {
-    title: "Places / Experiences",
-    subtitle: "Share a place, plan, or idea",
-    helper: "For places, routes, itineraries, or ideas others can save or try.",
-  },
-} as const;
 
 type ProfileLite = {
   display_name?: string | null;
@@ -104,9 +97,7 @@ export default function CreateChooserPanel({ variant, onContinue }: Props) {
 
   const ctaLabel = !selected
     ? "Choose what to create"
-    : selected === "hangout"
-    ? "Create event"
-    : "Create experience";
+    : postTypeCreateCta(selected);
 
   const ctaButtonClass = (() => {
     const base = [
@@ -210,7 +201,11 @@ function ChooserCard({
   onSelect: () => void;
 }) {
   const isSel = selected === kind;
-  const c = COPY[kind];
+  const c = {
+    title: postTypeCreateTitle(kind),
+    subtitle: postTypeCreateSubtitle(kind),
+    helper: postTypeCreateHelper(kind),
+  };
   const accent =
     kind === "hangout"
       ? {

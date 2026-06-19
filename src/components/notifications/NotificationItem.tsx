@@ -7,6 +7,7 @@ import Avatar from "../ui/Avatar";
 import { Paths, profileByUsername } from "../../router/Paths";
 import InviteNotificationItem from "./InviteNotificationItem";
 import FollowRequestNotificationItem from "./FollowRequestNotificationItem";
+import { postTypeNotificationPhrase } from "../../lib/postTypeLabels";
 
 interface Props {
   notification: NotificationWithActor;
@@ -49,13 +50,9 @@ const getNotificationText = (notification: NotificationWithActor): string => {
       const postType = notification.additional_data?.post_type || "hangout";
 
       if (inviteStatus === "accepted") {
-        return `${actorName} accepted your invite to ${
-          postType === "hangout" ? "an event" : "an experience"
-        }`;
+        return `${actorName} accepted your invite to ${postTypeNotificationPhrase(postType)}`;
       } else if (inviteStatus === "declined") {
-        return `${actorName} declined your invite to ${
-          postType === "hangout" ? "an event" : "an experience"
-        }`;
+        return `${actorName} declined your invite to ${postTypeNotificationPhrase(postType)}`;
       }
       // Fallback to generic RSVP text
       return `${actorName} RSVP'd to your event`;

@@ -1,13 +1,12 @@
 // public/sw.js
 // Echotoo PWA: Service worker for caching static assets and reducing bandwidth
-const APP_VERSION = "v16"; // Update this version number when deploying new features
+const APP_VERSION = "v17"; // Update this version number when deploying new features
 const STATIC_CACHE = `static-${APP_VERSION}`;
 const IMAGE_CACHE = `images-${APP_VERSION}`;
 const API_CACHE = `api-${APP_VERSION}`;
 
-// Static assets to cache immediately (adjust to your files)
+// Static assets to precache on install (exclude "/" — navigations use network-first)
 const STATIC_ASSETS = [
-  "/",
   "/manifest.json",
   "/favicon.ico",
   "/apple-touch-icon.png",
@@ -203,6 +202,12 @@ self.addEventListener("fetch", (event) => {
     isSupabaseAPI  // Explicit check for API paths
   ) {
     return; // Let browser handle these requests normally
+  }
+
+  // Document navigations → network first so deploys serve fresh index.html (offline: cache fallback)
+  if (request.mode === "navigate") {
+    event.respondWith(networkFirst(request, STATIC_CACHE));
+    return;
   }
 
   // Static assets → cache first

@@ -37,6 +37,7 @@ import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
 import ReportModal from "../ui/ReportModal";
 import { PostTypeMetaChip } from "../ui/PostFeedSurfaceMeta";
+import { postTypeCompactLabel } from "../../lib/postTypeLabels";
 import PostRatingSummary from "../ui/PostRatingSummary";
 import {
   buildPostReportDraftFromFeedItem,
@@ -330,7 +331,7 @@ export default function PostDetailBody({
   const tags =
     post.tags && post.tags.length > 0
       ? post.tags
-      : [post.type === "experience" ? "Experience" : "Event"];
+      : [postTypeCompactLabel(post.type)];
 
   // Clearance below sticky actions (floating glass bar is shorter than legacy full-width bar).
   // Create finalize step uses CreateFlowTopBar + notice stack instead of StickyPostActions.

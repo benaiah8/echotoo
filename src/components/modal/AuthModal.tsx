@@ -105,8 +105,8 @@ async function finalizeAppleProfileClientSync(userId: string): Promise<void> {
   );
 }
 
-/** Narrower glass shell (~80% viewport) so auth feels compact on phones */
-const AUTH_MODAL_SHELL_CLASS = "!max-w-[80vw] w-full";
+/** Phone-sized cap: 80vw on narrow viewports, max 400px on desktop (modal portals to body) */
+const AUTH_MODAL_SHELL_CLASS = "!max-w-[min(80vw,400px)] w-full";
 
 /**
  * Native Sign in with Apple only: persist Apple-provided person name to

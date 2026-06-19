@@ -30,6 +30,7 @@ import {
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
 import toast from "react-hot-toast";
+import { postTypeInvitePrefix } from "../../lib/postTypeLabels";
 import {
   PiCaretDown,
   PiCaretRight,
@@ -1287,7 +1288,7 @@ export default function InviteDrawer({
                   : "mb-3 line-clamp-2 text-xs"
               }`}
             >
-              {postType === "hangout" ? "Event" : "Experience"}:{" "}
+              {postTypeInvitePrefix(postType)}{" "}
               {postCaption || "Untitled"}
             </p>
 

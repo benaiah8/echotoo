@@ -38,6 +38,7 @@ import { preloadImages } from "../lib/imageOptimization";
 import { personalizeFeedBatch } from "../lib/feedPersonalization";
 import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
+import type { WelcomeModalCloseSource } from "../components/ui/WelcomeModal";
 import Modal from "../components/modal/Modal";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
 import {
@@ -141,8 +142,10 @@ export default function HomePage() {
   const homeTopBarRef = useRef<HTMLDivElement>(null);
   const scheduleScrollHomeFeedToTopRef = useRef<() => void>(() => {});
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
-  /** While search is focused (keyboard), keep top chrome pinned — scroll/IME must not slide it away. */
+  /** Input focus (keyboard); does not gate search shell — blur must not exit search. */
   const [homeSearchFocused, setHomeSearchFocused] = useState(false);
+  /** Search shell stays open until explicit X exit; survives blur / keyboard dismiss on scroll. */
+  const [homeSearchShellOpen, setHomeSearchShellOpen] = useState(false);
 
   // [REFACTOR] Removed items/loading state - ProgressiveFeed is now the single source of truth
   // This eliminates race conditions between HomePage's SWR and ProgressiveFeed's loading
@@ -175,9 +178,9 @@ export default function HomePage() {
     [searchMode, search]
   );
 
-  /** Dedicated Home search shell: focused search field or non-empty query. */
+  /** Dedicated Home search shell: explicit open or non-empty query. */
   const homePostSearchActive =
-    homeSearchFocused || search.trim().length > 0;
+    homeSearchShellOpen || search.trim().length > 0;
 
   const prevHomePostSearchActiveRef = useRef(false);
   useLayoutEffect(() => {
@@ -232,9 +235,15 @@ export default function HomePage() {
     input?.blur();
   }, []);
 
+  const handleHomeSearchFocusChange = useCallback((focused: boolean) => {
+    setHomeSearchFocused(focused);
+    if (focused) setHomeSearchShellOpen(true);
+  }, []);
+
   /** Exit Home search shell — clears query, posts mode, closes filters, blurs field. */
   const exitHomePostSearchMode = useCallback(() => {
     blurHomeSearchInput();
+    setHomeSearchShellOpen(false);
     setSearch("");
     setSearchMode("posts");
     setFiltersOpen(false);
@@ -252,13 +261,8 @@ export default function HomePage() {
   /** Never slide chrome off-screen while the Home search shell is open (focused or typed query), even if scroll/pin state ever diverges. */
   const effectiveHomeTopHidden =
     !homePostSearchActive && isHidden && !pinHomeTopBar;
-  /**
-   * Bar width/pill shape follows scroll in browse mode only.
-   * Users search scrolls the window over inline results — keep full-width flush bar so the pill transform does not track scroll.
-   * Do not OR `homeSearchFocused` for browse atTop — that forced full-width on focus and broke pill + safe-area on native keyboards.
-   */
-  const effectiveHomeAtTop =
-    homePostSearchActive && searchMode === "users" ? true : isAtTop;
+  /** Bar width/pill shape follows scroll in browse mode only; frozen full-width while search shell is open. */
+  const effectiveHomeAtTop = homePostSearchActive ? true : isAtTop;
 
   useEffect(() => {
     if (effectiveHomeTopHidden && !forceRevealHeader) setFiltersOpen(false);
@@ -269,12 +273,13 @@ export default function HomePage() {
     dispatchBottomTabPeek("home", effectiveHomeTopHidden);
   }, [effectiveHomeTopHidden, isHomeTabActive]);
 
-  // auth state and modal state for logo functionality
+  // auth state for feed personalization
   const dispatch = useDispatch();
   const authState = useSelector((state: RootState) => state.auth);
   const isAuthenticated = !!authState?.user;
   const currentUserId = authState?.user?.id;
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const pendingAuthAfterWelcomeCloseRef = useRef(false);
 
   // Viewer profile id (profile.id) for cache scoping; different from auth user id
   // Keep stable during session; fetched once
@@ -550,6 +555,7 @@ export default function HomePage() {
     setViewMode(INITIAL_HOME_TYPE_FILTER);
     setFriendsFilter(false);
     setSelectedTags([]);
+    setHomeSearchShellOpen(false);
     setSearch("");
     setSearchMode("posts");
     setFiltersOpen(false);
@@ -589,6 +595,7 @@ export default function HomePage() {
 
   const handleSearchChange = useCallback(
     (q: string) => {
+      if (q.trim().length > 0) setHomeSearchShellOpen(true);
       setSearch(q);
       if (q === "") {
         scheduleScrollHomeFeedToTop();
@@ -731,14 +738,28 @@ export default function HomePage() {
     scheduleScrollHomeFeedToTop();
   }, [scheduleScrollHomeFeedToTop, blurHomeSearchInput]);
 
-  // Handle logo click - show login modal if not authenticated, info popup if authenticated
+  // Logo opens brand/about info; logged-out X close may open auth (see handleWelcomeClose)
   const handleLogoClick = useCallback(() => {
-    if (isAuthenticated) {
-      setShowInfoModal(true);
-    } else {
-      dispatch(setAuthModal(true));
-    }
-  }, [isAuthenticated, dispatch]);
+    pendingAuthAfterWelcomeCloseRef.current = !isAuthenticated;
+    setShowInfoModal(true);
+  }, [isAuthenticated]);
+
+  const handleWelcomeClose = useCallback(
+    (source: WelcomeModalCloseSource) => {
+      const pendingAuth = pendingAuthAfterWelcomeCloseRef.current;
+      pendingAuthAfterWelcomeCloseRef.current = false;
+      setShowInfoModal(false);
+
+      if (source !== "x" || !pendingAuth || authState?.user) {
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        dispatch(setAuthModal(true));
+      });
+    },
+    [authState?.user, dispatch]
+  );
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize computed values
   // Why: Prevents recalculation on every render
@@ -847,10 +868,11 @@ export default function HomePage() {
     [viewerProfileId]
   );
 
-  const searchFieldPlaceholder =
-    homePostSearchActive && searchMode === "users"
+  const searchFieldPlaceholder = homePostSearchActive
+    ? searchMode === "users"
       ? "Search users"
-      : "Where To?";
+      : "Search posts"
+    : "Where To?";
 
   const homePostsLoadItems = useCallback(
     async (offset: number, limit: number) => {
@@ -979,11 +1001,11 @@ export default function HomePage() {
           search={search}
           searchMode={searchMode}
           onSearchModeChange={handleHomeSearchModeChange}
-          showSearchKindToggle={false}
+          showSearchKindToggle={homePostSearchActive}
           homePostSearchActive={homePostSearchActive}
           onExitPostSearch={exitHomePostSearchMode}
           searchFieldPlaceholder={searchFieldPlaceholder}
-          onSearchFocusChange={setHomeSearchFocused}
+          onSearchFocusChange={handleHomeSearchFocusChange}
           hasActiveFilters={hasActiveFilters}
           filtersOpen={filtersOpen}
           selectedTags={selectedTags}
@@ -1004,7 +1026,9 @@ export default function HomePage() {
         {/* MAIN CONTENT */}
         <div
           style={{
-            paddingTop: "calc(90px + var(--safe-area-top-layout))",
+            paddingTop: homePostSearchActive
+              ? "calc(118px + var(--safe-area-top-layout))"
+              : "calc(90px + var(--safe-area-top-layout))",
             paddingBottom: FOOTER_HEIGHT,
           }}
         >
@@ -1084,7 +1108,7 @@ export default function HomePage() {
 
       <WelcomeModal
         isOpen={showInfoModal}
-        onClose={() => setShowInfoModal(false)}
+        onClose={handleWelcomeClose}
       />
     </>
   );

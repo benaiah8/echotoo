@@ -32,7 +32,7 @@ type Props = {
 
 /** Shared copy: saved hangout flow + profile menu — broad notification scope. */
 const EXPLAINER_BODY =
-  "Get reminders and updates on your phone for the hangouts and creators you choose to follow.";
+  "Get reminders and updates on your phone for the events and creators you choose to follow.";
 
 /** Equal-width row — same flex weight for both pills (contextual + manual top rows). */
 const manualPillBase =

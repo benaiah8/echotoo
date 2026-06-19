@@ -13,11 +13,7 @@ import {
   lastCreateFlowBottomTabWidthPx,
 } from "../../lib/createFlowChrome";
 import { Paths } from "../../router/Paths";
-
-const LABELS = {
-  hangout: "Event",
-  experience: "Experience",
-} as const;
+import { postTypeCompactLabel } from "../../lib/postTypeLabels";
 
 function phaseLabel(pathname: string): string {
   if (pathname.startsWith(Paths.createFinalize)) return "Create post";
@@ -98,7 +94,7 @@ export default function CreateFlowTopBar({
 
   const postTypeRaw = (searchParams.get("type") || "experience").toLowerCase();
   const isHangout = postTypeRaw === "hangout";
-  const typeLabel = isHangout ? LABELS.hangout : LABELS.experience;
+  const typeLabel = postTypeCompactLabel(postTypeRaw);
 
   const hasSideActions = Boolean(leftAction || rightAction);
 

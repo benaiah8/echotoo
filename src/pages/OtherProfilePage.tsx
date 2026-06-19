@@ -23,6 +23,7 @@ import {
   PiUserPlus,
 } from "react-icons/pi";
 import WelcomeModal from "../components/ui/WelcomeModal";
+import type { WelcomeModalCloseSource } from "../components/ui/WelcomeModal";
 import ProfileTopBar from "../components/profile/ProfileTopBar";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import {
@@ -306,6 +307,7 @@ export default function OtherProfilePage({
   }, [profile?.user_id, profile?.id, flushCachesAfterBlockChange, navigate]);
 
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const pendingAuthAfterWelcomeCloseRef = useRef(false);
 
   // Get viewer ID
   useEffect(() => {
@@ -572,12 +574,26 @@ export default function OtherProfilePage({
 
   // Handle logo click
   const handleLogoClick = () => {
-    if (isAuthenticated) {
-      setShowInfoModal(true);
-    } else {
-      dispatch(setAuthModal(true));
-    }
+    pendingAuthAfterWelcomeCloseRef.current = !isAuthenticated;
+    setShowInfoModal(true);
   };
+
+  const handleWelcomeClose = useCallback(
+    (source: WelcomeModalCloseSource) => {
+      const pendingAuth = pendingAuthAfterWelcomeCloseRef.current;
+      pendingAuthAfterWelcomeCloseRef.current = false;
+      setShowInfoModal(false);
+
+      if (source !== "x" || !pendingAuth || authState?.user) {
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        dispatch(setAuthModal(true));
+      });
+    },
+    [authState?.user, dispatch]
+  );
 
   // Hero section: Follow counts - Load cached immediately, then fetch fresh
   useEffect(() => {
@@ -1365,7 +1381,7 @@ export default function OtherProfilePage({
 
       <WelcomeModal
         isOpen={showInfoModal}
-        onClose={() => setShowInfoModal(false)}
+        onClose={handleWelcomeClose}
       />
 
       <ReportModal

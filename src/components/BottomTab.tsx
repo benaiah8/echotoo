@@ -49,7 +49,7 @@ import {
  * Transition classes below still apply whenever `hidden` is true (e.g. if extended later).
  */
 const BOTTOM_TAB_SCROLL_LINKED_VISIBILITY = false;
-const GUEST_PROMPT_DELAY_MS = 45_000;
+const GUEST_PROMPT_DELAY_MS = 20_000;
 
 function isGuestPromptEligiblePath(pathname: string): boolean {
   if (pathname === "/" || pathname === Paths.home) return true;

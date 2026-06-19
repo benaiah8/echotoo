@@ -378,7 +378,7 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {homePostSearchActive ? (
+        {homePostSearchActive && !showSearchKindToggle ? (
           <div
             className={[
               "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
@@ -449,7 +449,7 @@ export default function HomeTopBar({
                 }
                 className={chipButtonClass(viewMode === "experiences")}
               >
-                Experiences
+                Places
               </button>
             </div>
           </div>
@@ -559,7 +559,7 @@ export default function HomeTopBar({
                     isHomeTypeFilterActive(viewMode, "experiences")
                   )}
                 >
-                  Experiences
+                  Places
                 </button>
               </div>
             </div>
