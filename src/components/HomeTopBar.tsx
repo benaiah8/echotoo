@@ -378,7 +378,7 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {homePostSearchActive && !showSearchKindToggle ? (
+        {homePostSearchActive ? (
           <div
             className={[
               "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
@@ -394,10 +394,10 @@ export default function HomeTopBar({
                 )
               }
               className={[
-                "rounded-full px-3 py-1 text-[10px] font-medium leading-none transition-colors",
+                "rounded-full px-4 py-1.5 text-[11px] font-semibold leading-none transition-colors",
                 "border border-[var(--border)]",
                 "bg-[color-mix(in_oklab,var(--surface)_38%,transparent)]",
-                "text-[var(--text)]/78 hover:text-[var(--text)]",
+                "text-[var(--text)]/90 hover:text-[var(--text)]",
                 "hover:bg-[color-mix(in_oklab,var(--text)_10%,transparent)]",
                 "active:scale-[0.97]",
               ].join(" ")}

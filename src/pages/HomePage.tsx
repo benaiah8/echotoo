@@ -47,6 +47,8 @@ import {
 } from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
+import { subscribeAndroidHardwareBack } from "../lib/androidPostDetailModalBack";
+import { isPostDetailRoutePath } from "../lib/inviteOverlayHistory";
 import {
   logTodaySpotlight,
   resolveDateSpotlightWithFallback,
@@ -73,6 +75,9 @@ import {
 
 /** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
 const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
+
+/** Synthetic history marker while Home search shell is open (browser / iOS swipe back). */
+const HOME_SEARCH_HISTORY_MARKER = "homeSearchShell";
 
 /** Cumulative scroll intent for Home chrome (stricter than default `useScrollDirection`). */
 const HOME_SCROLL_CHROME_OPTS: UseScrollDirectionOptions = {
@@ -142,10 +147,14 @@ export default function HomePage() {
   const homeTopBarRef = useRef<HTMLDivElement>(null);
   const scheduleScrollHomeFeedToTopRef = useRef<() => void>(() => {});
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
-  /** Input focus (keyboard); does not gate search shell — blur must not exit search. */
+  /** Input focus (keyboard) only — blur must not exit search shell. */
   const [homeSearchFocused, setHomeSearchFocused] = useState(false);
-  /** Search shell stays open until explicit X exit; survives blur / keyboard dismiss on scroll. */
+  /** Search shell stays open until X, back, or full reset; survives blur / keyboard dismiss. */
   const [homeSearchShellOpen, setHomeSearchShellOpen] = useState(false);
+  const homeSearchHistoryPushedRef = useRef(false);
+  const homeSearchSkipPopstateRef = useRef(false);
+  /** Search-only inner scroll layer (keyboard open — avoids window scroll + fixed header drift). */
+  const homeSearchScrollRef = useRef<HTMLDivElement>(null);
 
   // [REFACTOR] Removed items/loading state - ProgressiveFeed is now the single source of truth
   // This eliminates race conditions between HomePage's SWR and ProgressiveFeed's loading
@@ -250,6 +259,89 @@ export default function HomePage() {
     setHomeSearchFocused(false);
     scheduleScrollHomeFeedToTopRef.current();
   }, [blurHomeSearchInput]);
+
+  const exitHomePostSearchModeRef = useRef(exitHomePostSearchMode);
+  exitHomePostSearchModeRef.current = exitHomePostSearchMode;
+
+  const filtersOpenRef = useRef(filtersOpen);
+  filtersOpenRef.current = filtersOpen;
+
+  const handleHomeSearchBackAction = useCallback(() => {
+    if (filtersOpenRef.current) {
+      setFiltersOpen(false);
+      return;
+    }
+    exitHomePostSearchModeRef.current();
+  }, []);
+
+  const engageHomeSearchBack =
+    isHomeTabActive &&
+    homeSearchShellOpen &&
+    !isPostDetailRoutePath(location.pathname);
+
+  /** Browser / iOS swipe / Android back: close filters first, then search; X cleanup via effect teardown. */
+  useEffect(() => {
+    if (!engageHomeSearchBack) {
+      return;
+    }
+
+    if (typeof window !== "undefined" && !homeSearchHistoryPushedRef.current) {
+      window.history.pushState(
+        { [HOME_SEARCH_HISTORY_MARKER]: true } as Record<string, boolean>,
+        "",
+        window.location.href
+      );
+      homeSearchHistoryPushedRef.current = true;
+    }
+
+    const onPopState = () => {
+      if (homeSearchSkipPopstateRef.current) {
+        homeSearchSkipPopstateRef.current = false;
+        return;
+      }
+      if (filtersOpenRef.current) {
+        setFiltersOpen(false);
+        window.history.pushState(
+          { [HOME_SEARCH_HISTORY_MARKER]: true } as Record<string, boolean>,
+          "",
+          window.location.href
+        );
+        return;
+      }
+      exitHomePostSearchModeRef.current();
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleHomeSearchBackAction();
+      }
+    };
+
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("keydown", onKeyDown);
+    const unsubAndroid = subscribeAndroidHardwareBack(() => {
+      handleHomeSearchBackAction();
+    });
+
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("keydown", onKeyDown);
+      unsubAndroid();
+
+      if (typeof window === "undefined") {
+        homeSearchHistoryPushedRef.current = false;
+        return;
+      }
+      if (homeSearchHistoryPushedRef.current) {
+        const st = window.history.state as Record<string, boolean> | null;
+        if (st && st[HOME_SEARCH_HISTORY_MARKER] === true) {
+          homeSearchSkipPopstateRef.current = true;
+          window.history.back();
+        }
+        homeSearchHistoryPushedRef.current = false;
+      }
+    };
+  }, [engageHomeSearchBack, handleHomeSearchBackAction]);
 
   const scrollDir = useScrollDirection(HOME_SCROLL_CHROME_OPTS);
   const isHidden = scrollDir === "down";
@@ -401,6 +493,8 @@ export default function HomePage() {
   // tweak these if your actual header/footer heights differ (floating top bar + quick chips + gradient)
   const HEADER_HEIGHT = 96;
   const FOOTER_HEIGHT = 80;
+  /** Inner search scroll shell inset — matches prior search-mode content paddingTop. */
+  const HOME_SEARCH_SCROLL_TOP = "calc(86px + var(--safe-area-top-layout))";
 
   // Track and persist scroll position per feed key to restore when navigating back
   const latestScrollRef = useRef(0);
@@ -444,6 +538,9 @@ export default function HomePage() {
   }, []);
 
   const scrollHomeFeedToTop = useCallback(() => {
+    if (homeSearchScrollRef.current) {
+      homeSearchScrollRef.current.scrollTop = 0;
+    }
     window.scrollTo({ top: 0, behavior: "auto" });
     latestScrollRef.current = 0;
     saveScrollPosition(feedCacheKey, 0);
@@ -456,6 +553,32 @@ export default function HomePage() {
   useEffect(() => {
     scheduleScrollHomeFeedToTopRef.current = scheduleScrollHomeFeedToTop;
   }, [scheduleScrollHomeFeedToTop]);
+
+  /** Search mode: inner scroll shell — lock document scroll so fixed header stays put with IME open. */
+  useEffect(() => {
+    if (!homePostSearchActive || !isHomeTabActive) return;
+
+    saveScrollPosition(feedCacheKey, latestScrollRef.current);
+
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const lockedScrollY = window.scrollY;
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    window.scrollTo(0, 0);
+
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      window.scrollTo(0, lockedScrollY);
+    };
+  }, [
+    homePostSearchActive,
+    isHomeTabActive,
+    feedCacheKey,
+    saveScrollPosition,
+  ]);
 
   /** Memory + persisted first-page snapshot — sync read for cold offline open before dataCache.ready. */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
@@ -640,7 +763,7 @@ export default function HomePage() {
     pullProgress,
     isRefreshing: ptrRefreshing,
   } = useHomePullToRefresh({
-    enabled: isHomeTabActive,
+    enabled: isHomeTabActive && !homePostSearchActive,
     onCommit: () => {
       window.dispatchEvent(
         new CustomEvent(HOME_TAB_REFRESH_EVENT, {
@@ -963,9 +1086,66 @@ export default function HomePage() {
     [feedCacheKey]
   );
 
+  const homeSearchResultsContent = (
+    <>
+      {searchMode === "users" ? (
+        <div className="w-full max-w-[640px] mx-auto px-1.5 pt-1 pb-1">
+          {debouncedUserSearchQuery.trim().length < 2 ? (
+            <p className="text-[11px] text-[var(--text)]/75 px-2 py-2 leading-snug">
+              Type at least 2 characters to search users.
+            </p>
+          ) : (
+            <ProfileSearchResults
+              query={debouncedUserSearchQuery}
+              viewerId={viewerProfileId}
+              layout="inline"
+              pageSize={10}
+              enableLoadMore
+            />
+          )}
+        </div>
+      ) : null}
+
+      {showHomePostsFeed ? (
+        <div className="w-full max-w-[640px] mx-auto px-0 [&>div]:!mt-0">
+          <HomePostsSection
+            key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
+            suppressBrowseRails={suppressBrowseRails}
+            viewMode={viewMode}
+            hasActiveFilters={hasActiveFilters}
+            tagFallbackItems={tagFallbackItems}
+            tagFallbackLoading={tagFallbackLoading}
+            showTagFallback={showTagFallback}
+            selectedTags={selectedTags}
+            isVisible={isHomeVisible}
+            tabId="home"
+            useProgressiveFeed={true}
+            loadItems={homePostsLoadItems}
+            initialItems={homeVerticalWarmInitialItems}
+            getCachedItems={homePostsGetCachedItems}
+            setCachedItems={homePostsSetCachedItems}
+            feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
+            dateSpotlightActive={dateSpotlightActive}
+            dateFilter={dateFilter}
+            dateSpotlightItems={dateSpotlightItems}
+            dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
+            dateSpotlightFallbackItems={dateSpotlightFallbackItems}
+            dateSpotlightLoading={dateSpotlightLoading}
+            dateSpotlightResolved={dateSpotlightResolved}
+            railLoadItems={railLoadItems}
+            railGetCachedItems={railGetCachedItems}
+            railSetCachedItems={railSetCachedItems}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <>
-      {isHomeTabActive && (pullPx > 2 || ptrRefreshing) ? (
+      {isHomeTabActive &&
+      !homePostSearchActive &&
+      (pullPx > 2 || ptrRefreshing) ? (
         <div
           role="progressbar"
           aria-valuemin={0}
@@ -1001,7 +1181,7 @@ export default function HomePage() {
           search={search}
           searchMode={searchMode}
           onSearchModeChange={handleHomeSearchModeChange}
-          showSearchKindToggle={homePostSearchActive}
+          showSearchKindToggle={false}
           homePostSearchActive={homePostSearchActive}
           onExitPostSearch={exitHomePostSearchMode}
           searchFieldPlaceholder={searchFieldPlaceholder}
@@ -1023,23 +1203,20 @@ export default function HomePage() {
           onClearAllFilters={clearAllHomeFilters}
         />
 
-        {/* MAIN CONTENT */}
-        <div
-          style={{
-            paddingTop: homePostSearchActive
-              ? "calc(118px + var(--safe-area-top-layout))"
-              : "calc(90px + var(--safe-area-top-layout))",
-            paddingBottom: FOOTER_HEIGHT,
-          }}
-        >
-          {/* HORIZONTAL RAIL AT TOP — browse-only; hidden during post search mode (Phase 1.5) */}
-          {!homePostSearchActive ? (
+        {/* Browse: window scroll (unchanged). Search: fixed inner scroll shell below header. */}
+        {!homePostSearchActive ? (
+          <div
+            style={{
+              paddingTop: "calc(90px + var(--safe-area-top-layout))",
+              paddingBottom: FOOTER_HEIGHT,
+            }}
+          >
             <div className="w-full max-w-[640px] mx-auto px-0">
               <HomeHangoutSection
                 key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
                 items={[]}
                 loading={false}
-                batchedData={null} // [PHASE 1-4] Removed - PostgreSQL provides all data in FeedItem
+                batchedData={null}
                 useProgressiveLoading={true}
                 isVisible={isHomeVisible}
                 tabId="home"
@@ -1049,61 +1226,51 @@ export default function HomePage() {
                 setCachedItems={topRailSetCachedItems}
               />
             </div>
-          ) : null}
 
-          {homePostSearchActive && searchMode === "users" ? (
-            <div className="w-full max-w-[640px] mx-auto px-1.5 pt-1 pb-1">
-              {debouncedUserSearchQuery.trim().length < 2 ? (
-                <p className="text-[11px] text-[var(--text)]/75 px-2 py-2 leading-snug">
-                  Type at least 2 characters to search users.
-                </p>
-              ) : (
-                <ProfileSearchResults
-                  query={debouncedUserSearchQuery}
-                  viewerId={viewerProfileId}
-                  layout="inline"
-                  pageSize={10}
-                  enableLoadMore
-                />
-              )}
+            <div className="w-full max-w-[640px] mx-auto px-0">
+              <HomePostsSection
+                key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
+                suppressBrowseRails={false}
+                viewMode={viewMode}
+                hasActiveFilters={hasActiveFilters}
+                tagFallbackItems={tagFallbackItems}
+                tagFallbackLoading={tagFallbackLoading}
+                showTagFallback={showTagFallback}
+                selectedTags={selectedTags}
+                isVisible={isHomeVisible}
+                tabId="home"
+                useProgressiveFeed={true}
+                loadItems={homePostsLoadItems}
+                initialItems={homeVerticalWarmInitialItems}
+                getCachedItems={homePostsGetCachedItems}
+                setCachedItems={homePostsSetCachedItems}
+                feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
+                dateSpotlightActive={dateSpotlightActive}
+                dateFilter={dateFilter}
+                dateSpotlightItems={dateSpotlightItems}
+                dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
+                dateSpotlightFallbackItems={dateSpotlightFallbackItems}
+                dateSpotlightLoading={dateSpotlightLoading}
+                dateSpotlightResolved={dateSpotlightResolved}
+                railLoadItems={railLoadItems}
+                railGetCachedItems={railGetCachedItems}
+                railSetCachedItems={railSetCachedItems}
+              />
             </div>
-          ) : null}
-
-          {/* POSTS & INJECTIONS */}
-          {showHomePostsFeed ? (
-          <div className="w-full max-w-[640px] mx-auto px-0">
-            <HomePostsSection
-              key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
-              suppressBrowseRails={suppressBrowseRails}
-              viewMode={viewMode}
-              hasActiveFilters={hasActiveFilters}
-              tagFallbackItems={tagFallbackItems}
-              tagFallbackLoading={tagFallbackLoading}
-              showTagFallback={showTagFallback}
-              selectedTags={selectedTags}
-              isVisible={isHomeVisible}
-              tabId="home"
-              // [REFACTOR] ProgressiveFeed now owns all loading - HomePage is thin
-              useProgressiveFeed={true}
-              loadItems={homePostsLoadItems}
-              initialItems={homeVerticalWarmInitialItems}
-              getCachedItems={homePostsGetCachedItems}
-              setCachedItems={homePostsSetCachedItems}
-              feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
-              dateSpotlightActive={dateSpotlightActive}
-              dateFilter={dateFilter}
-              dateSpotlightItems={dateSpotlightItems}
-              dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
-              dateSpotlightFallbackItems={dateSpotlightFallbackItems}
-              dateSpotlightLoading={dateSpotlightLoading}
-              dateSpotlightResolved={dateSpotlightResolved}
-              railLoadItems={railLoadItems}
-              railGetCachedItems={railGetCachedItems}
-              railSetCachedItems={railSetCachedItems}
-            />
           </div>
-          ) : null}
-        </div>
+        ) : (
+          <div
+            ref={homeSearchScrollRef}
+            className="fixed left-0 right-0 z-[25] overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
+            style={{
+              top: HOME_SEARCH_SCROLL_TOP,
+              bottom: 0,
+              paddingBottom: FOOTER_HEIGHT,
+            }}
+          >
+            {homeSearchResultsContent}
+          </div>
+        )}
       </PrimaryPageContainer>
 
       <WelcomeModal
