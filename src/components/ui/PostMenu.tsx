@@ -1,14 +1,24 @@
 import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { PiDotsThree, PiFlag, PiPencilSimple, PiTrash } from "react-icons/pi";
+import {
+  PiDotsThree,
+  PiFlag,
+  PiPencilSimple,
+  PiTrash,
+  PiUserSwitch,
+} from "react-icons/pi";
 import toast from "react-hot-toast";
 import { deletePost } from "../../api/services/posts";
 import { discardAllDrafts, isDraftPostId } from "../../lib/drafts";
 import { emitPostDeleted } from "../../lib/postEvents";
+import { useIsReportReviewer } from "../../hooks/useIsReportReviewer";
+import AdminAssignPostDialog from "../admin/AdminAssignPostDialog";
 import ConfirmDialog from "./ConfirmDialog";
 
 interface PostMenuProps {
   postId: string;
+  /** Auth user id of current post owner (`posts.author_id`). */
+  currentAuthorId?: string | null;
   onEdit?: () => void;
   /** After successful server delete only — navigate, close modal, or list cleanup. Do not call deletePost here. */
   onDelete?: () => void;
@@ -23,6 +33,7 @@ interface PostMenuProps {
 
 export default function PostMenu({
   postId,
+  currentAuthorId,
   onEdit,
   onDelete,
   className = "",
@@ -31,12 +42,17 @@ export default function PostMenu({
   isOwner = true,
   onRequestReport,
 }: PostMenuProps) {
+  const { isReportReviewer } = useIsReportReviewer();
   const [isOpen, setIsOpen] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const showAssignAction =
+    isReportReviewer && !isDraft && !isDraftPostId(postId);
 
   // Close menu when clicking outside (trigger or portaled dropdown)
   useEffect(() => {
@@ -84,6 +100,13 @@ export default function PostMenu({
     setShowDeleteModal(true);
   };
 
+  const handleAssign = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsOpen(false);
+    setShowAssignDialog(true);
+  };
+
   const confirmDelete = async () => {
     setIsDeleting(true);
     try {
@@ -107,6 +130,9 @@ export default function PostMenu({
       setIsDeleting(false);
     }
   };
+
+  const menuItemClass =
+    "w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2";
 
   return (
     <div className={`relative ${className}`}>
@@ -148,10 +174,7 @@ export default function PostMenu({
           >
             {isOwner ? (
               <>
-                <button
-                  onClick={handleEdit}
-                  className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
-                >
+                <button onClick={handleEdit} className={menuItemClass}>
                   <PiPencilSimple size={16} />
                   Edit
                 </button>
@@ -170,12 +193,18 @@ export default function PostMenu({
                   setIsOpen(false);
                   onRequestReport?.();
                 }}
-                className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
+                className={menuItemClass}
               >
                 <PiFlag size={16} />
                 Report
               </button>
             )}
+            {showAssignAction ? (
+              <button onClick={handleAssign} className={menuItemClass}>
+                <PiUserSwitch size={16} />
+                Assign post
+              </button>
+            ) : null}
           </div>,
           document.body
         )}
@@ -191,6 +220,15 @@ export default function PostMenu({
         confirmVariant="danger"
         isLoading={isDeleting}
       />
+
+      {showAssignAction ? (
+        <AdminAssignPostDialog
+          open={showAssignDialog}
+          onClose={() => setShowAssignDialog(false)}
+          postId={postId}
+          currentAuthorId={currentAuthorId}
+        />
+      ) : null}
     </div>
   );
 }

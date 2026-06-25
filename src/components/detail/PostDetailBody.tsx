@@ -651,6 +651,7 @@ export default function PostDetailBody({
               <div className="ml-auto flex items-center gap-2" data-post-menu>
                 <PostMenu
                   postId={post.id}
+                  currentAuthorId={post.author_id}
                   isOwner={isOwner}
                   onEdit={handleEdit}
                   onDelete={handleAfterDelete}

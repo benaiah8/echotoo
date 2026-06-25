@@ -29,6 +29,14 @@ export type PostPatch = {
   effectiveRatingCount?: number | null;
   viewerRating?: number | null;
   ratingEnabled?: boolean;
+  /** Admin ownership transfer — updates feed/detail author display without refetch. */
+  author_id?: string;
+  author?: {
+    id: string;
+    username: string | null;
+    display_name: string | null;
+    avatar_url: string | null;
+  } | null;
 };
 
 export function emitPostChanged(postId: string, patch: PostPatch): void {

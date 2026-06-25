@@ -2,6 +2,8 @@ import { supabase } from "../../lib/supabaseClient";
 
 export type ProfileSearchRow = {
   id: string;
+  /** Auth user id — use for `posts.author_id`, not `id`. */
+  user_id: string;
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
@@ -32,7 +34,7 @@ export async function searchProfiles(
     .from("profiles")
     .select(
       `
-      id, username, display_name, avatar_url, member_no
+      id, user_id, username, display_name, avatar_url, member_no
     `
     )
     .is("deleted_at", null)

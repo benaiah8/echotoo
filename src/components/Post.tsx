@@ -745,6 +745,7 @@ function Post({
           <div className="absolute top-0 right-0">
             <PostMenu
               postId={postId}
+              currentAuthorId={authorId}
               isOwner={isOwner}
               onEdit={handleEdit}
               onDelete={onDelete}

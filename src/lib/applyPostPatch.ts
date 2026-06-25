@@ -112,6 +112,12 @@ export function applyPostPatch<T extends Record<string, unknown>>(
   if (typeof p.ratingEnabled === "boolean") {
     (updated as any).rating_enabled = p.ratingEnabled;
   }
+  if (p.author_id !== undefined) {
+    (updated as any).author_id = p.author_id;
+  }
+  if (p.author !== undefined) {
+    (updated as any).author = p.author;
+  }
 
   return updated as T;
 }
