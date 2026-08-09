@@ -1,6 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { onPostChanged, onPostDeleted } from "../../lib/postEvents";
+import { onBlockStatusChanged } from "../../lib/blockStatusCache";
 import { getPostDeleteExitDurationMs } from "../../lib/postDeleteExitAnimation";
 import { applyPostPatch } from "../../lib/applyPostPatch";
 import Hangout from "../../components/Hangout";
@@ -293,6 +294,18 @@ export default function HomeHangoutSection({
       deleteExitTimersRef.current.set(postId, t);
     });
     return cleanup;
+  }, []);
+
+  useEffect(() => {
+    return onBlockStatusChanged(({ blockedUserId, blocked }) => {
+      if (!blocked) return;
+      if (!railItemsRef.current.some((i) => i.author_id === blockedUserId)) {
+        return;
+      }
+      setRailItems((prev) =>
+        prev.filter((item) => item.author_id !== blockedUserId)
+      );
+    });
   }, []);
 
   const railItemShellClass = useCallback(

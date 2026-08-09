@@ -1,0 +1,443 @@
+-- =============================================================================
+-- STAGING ONLY — manual verification for owner_create_post / owner_republish_post
+-- =============================================================================
+-- Do NOT run in production.
+-- Do NOT execute automatically in CI.
+-- Do NOT commit these UUIDs to application code.
+--
+-- Prerequisites:
+--   1. Migration 20260628120000_owner_publish_post applied on STAGING only.
+--   2. Two authenticated test users (User A = primary owner, User B = other user).
+--   3. Optional: User A has at least one follower with post notifications enabled
+--      (needed for section E notification replay).
+--
+-- How to run:
+--   Supabase SQL editor (authenticated as User A unless noted), or:
+--   supabase db execute --file supabase/scripts/verify_owner_publish_post_staging.sql
+--   (only after uncommenting the section you are running)
+--
+-- Test UUID namespace (staging only — never reuse in prod):
+--   00000000-0000-4000-8000-000000000001  experience, no activities (A, C, E, F, K)
+--   00000000-0000-4000-8000-000000000002  hangout, multiple activities (B, I, J, K)
+--   00000000-0000-4000-8000-000000000003  concurrent race target (D)
+--   00000000-0000-4000-8000-000000000004  draft UUID conflict seed (G)
+--   00000000-0000-4000-8000-000000000005  forced new-publish rollback (H)
+--   00000000-0000-4000-8000-000000000006  forced republish rollback (J)
+--
+-- =============================================================================
+
+
+-- =============================================================================
+-- A. NEW POST — NO ACTIVITIES
+-- Expected: created = true, exactly one posts row, zero activities
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "Staging A — no activities",
+--     "visibility": "public",
+--     "tags": ["staging-verify"],
+--     "selected_dates": [],
+--     "is_recurring": false,
+--     "recurrence_days": [],
+--     "rating_enabled": false,
+--     "activities": []
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS post_count FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: 1
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: 0
+
+
+-- =============================================================================
+-- B. NEW POST — MULTIPLE ACTIVITIES
+-- Expected: created = true, one posts row, all activity rows present
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{
+--     "type": "hangout",
+--     "caption": "Staging B — multiple stops",
+--     "visibility": "public",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       { "title": "Coffee", "activity_type": "coffee", "order_idx": 0 },
+--       { "title": "Walk", "activity_type": "walk", "order_idx": 1 },
+--       { "title": "Dinner", "activity_type": "dinner", "order_idx": 2 }
+--     ]
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS post_count FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: 1
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: 3
+--
+-- SELECT order_idx, title FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid
+--   ORDER BY order_idx;
+-- -- expect: 0 Coffee, 1 Walk, 2 Dinner
+
+
+-- =============================================================================
+-- C. SEQUENTIAL IDEMPOTENT REPLAY
+-- Run AFTER section A or B. Re-call with same UUID (different caption is OK).
+-- Expected: created = false, same post id, still exactly one post row
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '{"type":"experience","caption":"Replay caption must NOT apply"}'::jsonb
+-- );
+-- -- expect: created = false
+--
+-- SELECT count(*) AS post_count FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: 1
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: original caption from section A, NOT "Replay caption must NOT apply"
+
+
+-- =============================================================================
+-- D. CONCURRENT SAME-UUID TEST (requires TWO SQL sessions)
+-- =============================================================================
+-- A true race cannot be reproduced in a single sequential script. Use two
+-- Supabase SQL editor tabs (or psql sessions), both authenticated as User A.
+--
+-- Shared UUID: 00000000-0000-4000-8000-000000000003
+--
+-- In BOTH sessions, start a transaction and pause BEFORE commit:
+--
+-- SESSION A:
+--   BEGIN;
+--   SELECT * FROM public.owner_create_post(
+--     '00000000-0000-4000-8000-000000000003'::uuid,
+--     '{"type":"experience","caption":"Concurrent winner","is_recurring":false,"rating_enabled":false}'::jsonb
+--   );
+--   -- expect: created = true (do NOT commit yet)
+--
+-- SESSION B (while A is still uncommitted):
+--   SELECT * FROM public.owner_create_post(
+--     '00000000-0000-4000-8000-000000000003'::uuid,
+--     '{"type":"experience","caption":"Concurrent loser","is_recurring":false,"rating_enabled":false}'::jsonb
+--   );
+--   -- B blocks until A commits, then resolves idempotently:
+--   -- expect: created = false, NO unique_violation error to caller
+--
+-- Then SESSION A: COMMIT;
+-- SESSION B should already have returned created = false.
+--
+-- Verify:
+-- SELECT count(*) FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000003'::uuid;
+-- -- expect: 1
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000003'::uuid;
+-- -- expect: "Concurrent winner" (Session A payload)
+
+
+-- =============================================================================
+-- E. NOTIFICATION REPLAY (requires User A to have followers w/ post notifs on)
+-- Run AFTER section B (published hangout). Capture count, replay, compare.
+-- Expected: notification count does NOT increase on idempotent replay
+-- =============================================================================
+-- SELECT count(*) AS notification_count_before FROM public.notifications
+--   WHERE type = 'post'
+--     AND entity_type = 'post'
+--     AND entity_id = '00000000-0000-4000-8000-000000000002'::uuid;
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{"type":"hangout","caption":"Replay should not notify"}'::jsonb
+-- );
+-- -- expect: created = false
+--
+-- SELECT count(*) AS notification_count_after FROM public.notifications
+--   WHERE type = 'post'
+--     AND entity_type = 'post'
+--     AND entity_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: notification_count_after = notification_count_before
+
+
+-- =============================================================================
+-- F. WRONG OWNER UUID
+-- Authenticated as User B. Attempt create using UUID owned by User A (from A/B).
+-- Expected: rejected (42501), no mutation
+-- =============================================================================
+-- -- Run as User B:
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '{"type":"experience","caption":"User B hijack attempt"}'::jsonb
+-- );
+-- -- expect: ERROR Not authorized to publish with this post id
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: unchanged (User A caption)
+
+
+-- =============================================================================
+-- G. DRAFT UUID CONFLICT
+-- Seed a draft at UUID 000004 for User A, then call owner_create_post.
+-- Expected: RPC rejects; draft row unchanged
+-- =============================================================================
+-- -- As User A, seed draft (direct insert or existing draft flow):
+-- INSERT INTO public.posts (id, author_id, type, caption, status)
+-- VALUES (
+--   '00000000-0000-4000-8000-000000000004'::uuid,
+--   auth.uid(),
+--   'experience',
+--   'Draft seed for conflict test',
+--   'draft'
+-- );
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000004'::uuid,
+--   '{"type":"experience","caption":"Should not publish over draft"}'::jsonb
+-- );
+-- -- expect: ERROR Post id is reserved by a draft
+--
+-- SELECT status, caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000004'::uuid;
+-- -- expect: status = draft, caption = "Draft seed for conflict test"
+
+
+-- =============================================================================
+-- H. FORCED NEW-PUBLISH ACTIVITY FAILURE (transaction rollback)
+-- Invalid order_idx text causes integer cast failure inside activity loop.
+-- Expected: RPC fails; NO post row; NO activities; NO trigger notifications
+-- =============================================================================
+-- SELECT count(*) AS post_count_before FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000005'::uuid;
+-- -- expect: 0
+--
+-- SELECT count(*) AS notification_count_before FROM public.notifications
+--   WHERE entity_type = 'post'
+--     AND entity_id = '00000000-0000-4000-8000-000000000005'::uuid;
+-- -- expect: 0
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000005'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "Rollback test — should not persist",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{
+--       "title": "Bad stop",
+--       "order_idx": "not-an-integer"
+--     }]
+--   }'::jsonb
+-- );
+-- -- expect: ERROR (invalid input syntax for type integer)
+--
+-- SELECT count(*) AS post_count_after FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000005'::uuid;
+-- -- expect: 0
+--
+-- SELECT count(*) AS activity_count_after FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000005'::uuid;
+-- -- expect: 0
+--
+-- SELECT count(*) AS notification_count_after FROM public.notifications
+--   WHERE entity_type = 'post'
+--     AND entity_id = '00000000-0000-4000-8000-000000000005'::uuid;
+-- -- expect: 0
+
+
+-- =============================================================================
+-- I. OWNER REPUBLISH SUCCESS
+-- Run AFTER section B. Replace activities atomically.
+-- Expected: post updated, activities replaced
+-- =============================================================================
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{
+--     "caption": "Republished caption",
+--     "visibility": "public",
+--     "tags": ["republished"],
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{
+--       "title": "Replacement stop",
+--       "location_name": "New location"
+--     }]
+--   }'::jsonb
+-- );
+-- -- expect: updated = true
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: "Republished caption"
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: 1
+--
+-- SELECT title, location_name FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: "Replacement stop", "New location"
+
+
+-- =============================================================================
+-- J. OWNER REPUBLISH FAILURE (rollback preserves prior state)
+-- Seed post 000006 with known scalar + activities, then republish with bad activity.
+-- Expected after failed RPC: original caption and original activities remain
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000006'::uuid,
+--   '{
+--     "type": "hangout",
+--     "caption": "Original caption before failed republish",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{
+--       "title": "Original stop",
+--       "activity_type": "coffee"
+--     }]
+--   }'::jsonb
+-- );
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000006'::uuid,
+--   '{
+--     "caption": "Would-be new caption",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{
+--       "title": "Bad replacement",
+--       "order_idx": "not-an-integer"
+--     }]
+--   }'::jsonb
+-- );
+-- -- expect: ERROR
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000006'::uuid;
+-- -- expect: "Original caption before failed republish" (NOT "Would-be new caption")
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000006'::uuid;
+-- -- expect: 1
+--
+-- SELECT title FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000006'::uuid;
+-- -- expect: "Original stop"
+
+
+-- =============================================================================
+-- K. EMPTY ACTIVITIES — CURRENT PRODUCT SEMANTICS (intentionally unchanged)
+-- owner_republish_post with activities: [] must NOT delete existing activities.
+-- This matches current createFlowPublish owner-edit behavior.
+-- "Remove all stops" is a known separate product limitation — NOT Phase 1 scope.
+-- =============================================================================
+-- -- Ensure section I left one activity on post 000002, then:
+-- SELECT count(*) AS activity_count_before FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- record count (expect >= 1)
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{
+--     "caption": "Caption updated but stops preserved",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": []
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count_after FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: activity_count_after = activity_count_before (unchanged)
+
+
+-- =============================================================================
+-- L. CROSS-USER REPUBLISH
+-- Authenticated as User B. Attempt republish on User A post (000001).
+-- Expected: denied (42501), no mutation
+-- =============================================================================
+-- -- Run as User B:
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '{"caption":"User B republish attempt","is_recurring":false,"rating_enabled":false}'::jsonb
+-- );
+-- -- expect: ERROR Not authorized
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000001'::uuid;
+-- -- expect: unchanged
+
+
+-- =============================================================================
+-- M. ANON EXECUTION DENIED
+-- Run with anon role / without auth session.
+-- Expected: anon cannot execute either RPC
+-- =============================================================================
+-- SET ROLE anon;
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000099'::uuid,
+--   '{"type":"experience","caption":"anon create"}'::jsonb
+-- );
+-- -- expect: permission denied for function owner_create_post
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '{"caption":"anon republish"}'::jsonb
+-- );
+-- -- expect: permission denied for function owner_republish_post
+-- RESET ROLE;
+
+
+-- =============================================================================
+-- N. LEGACY TYPE SAFETY
+-- Only if a staging rendezvous/playbook row already exists OR you create one
+-- explicitly for staging. Do NOT alter production legacy records.
+-- Expected: owner_republish_post does NOT change post.type
+-- =============================================================================
+-- -- Example (staging-only legacy seed — skip if you already have a test row):
+-- -- INSERT INTO public.posts (id, author_id, type, caption, status)
+-- -- VALUES (
+-- --   '00000000-0000-4000-8000-000000000007'::uuid,
+-- --   auth.uid(),
+-- --   'rendezvous',
+-- --   'Legacy staging row',
+-- --   'published'
+-- -- );
+--
+-- -- SELECT type FROM public.posts WHERE id = '<legacy-staging-uuid>'::uuid;
+-- -- -- record type (rendezvous or playbook)
+--
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '<legacy-staging-uuid>'::uuid,
+-- --   '{"caption":"Legacy caption updated","is_recurring":false,"rating_enabled":false}'::jsonb
+-- -- );
+--
+-- -- SELECT type, caption FROM public.posts WHERE id = '<legacy-staging-uuid>'::uuid;
+-- -- expect: type unchanged, caption updated
+
+
+-- =============================================================================
+-- O. CLEANUP (staging only — deletes ONLY known test UUIDs from this script)
+-- =============================================================================
+-- DELETE FROM public.posts WHERE id IN (
+--   '00000000-0000-4000-8000-000000000001'::uuid,
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '00000000-0000-4000-8000-000000000003'::uuid,
+--   '00000000-0000-4000-8000-000000000004'::uuid,
+--   '00000000-0000-4000-8000-000000000005'::uuid,
+--   '00000000-0000-4000-8000-000000000006'::uuid
+--   -- add 000000000007 here only if you created it in section N
+-- );
+-- -- activities and notifications cascade per existing FK/trigger rules

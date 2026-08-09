@@ -26,6 +26,10 @@ import { clearCachedAvatar } from "./avatarCache";
 import { clearMutualFriendsCache } from "./mutualFriendsCache";
 import { invalidatePostDetailCache } from "../api/queries/getPostById";
 import { clearCachedRSVPData } from "./rsvpCache";
+import {
+  invalidateCachesAfterProfileDisplayUpdate,
+  parseProfileAuthorDisplayPayload,
+} from "./profileAuthorSync";
 
 const DEBUG_CACHE_INVALIDATION = false;
 
@@ -156,12 +160,8 @@ export function setupCacheInvalidationListeners(): void {
       console.log("[CacheInvalidation] Profile updated event:", profileId);
     }
 
-    // profile_created_* caches are keyed by auth user_id (posts.author_id / profile.user_id), not profiles.id.
-    const postsUserId =
-      event.detail?.profile &&
-      typeof event.detail.profile.user_id === "string"
-        ? event.detail.profile.user_id
-        : null;
+    const profilePayload = parseProfileAuthorDisplayPayload(event.detail);
+    const postsUserId = profilePayload?.user_id ?? null;
 
     // Do not clear profile row here — FullScreenProfileCreation / editors write fresh
     // data first; clearing caused stale UI and races with OwnProfilePage. Still
@@ -170,6 +170,15 @@ export function setupCacheInvalidationListeners(): void {
       followCounts: [profileId],
       posts: postsUserId ? [postsUserId] : [],
     });
+
+    if (postsUserId) {
+      invalidateCachesAfterProfileDisplayUpdate(postsUserId).catch((error) => {
+        console.warn(
+          "[CacheInvalidation] Failed to clear author display caches:",
+          error
+        );
+      });
+    }
   });
 
   // Listen for follow status changes

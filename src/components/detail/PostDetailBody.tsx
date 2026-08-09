@@ -657,6 +657,19 @@ export default function PostDetailBody({
                   onDelete={handleAfterDelete}
                   isDraft={isDraft}
                   onRequestReport={handleRequestPostReport}
+                  editReturnPath={window.location.pathname}
+                  editReturnState={
+                    (() => {
+                      const navState =
+                        routerLocation.state as PostDetailNavigateState | null;
+                      const overlayBg = navState?.backgroundLocation;
+                      if (overlayBg == null) return undefined;
+                      return {
+                        backgroundLocation: overlayBg as unknown,
+                        initialPost: post as unknown,
+                      };
+                    })()
+                  }
                 />
               </div>
             ) : null}

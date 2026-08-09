@@ -1,6 +1,121 @@
 import { clearCreateFlowResumedLocalDraft } from "./draftEntryGate";
+import { EDIT_POST_DATA_KEY } from "./editPostBootstrap";
+
+export const DRAFT_META_KEY = "draftMeta";
 
 export const DRAFT_KEYS = ["draftMeta", "draftActivities", "draftCategories"];
+
+/** Shared local create draft metadata (finalize + legacy wizard pages). */
+export type DraftMeta = {
+  caption?: string;
+  tags?: string[];
+  visibility?: "public" | "friends" | "anonymous";
+  rsvpCapacity?: number | null | "";
+  rsvpEnabled?: boolean;
+  selectedDates?: string[];
+  isRecurring?: boolean;
+  recurrenceDays?: string[];
+  ratingEnabled?: boolean;
+  /** Legacy title step fields */
+  duration?: string;
+  durationNotes?: string;
+  /** Legacy categories compact section */
+  title?: string;
+  description?: string;
+  /** Legacy preview anonymous fields */
+  anonymousName?: string;
+  anonymousAvatar?: string;
+  /** Stable client id for Phase 3 owner_create_post idempotency */
+  publishPostId?: string;
+};
+
+const UUID_V4ISH =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isPublishPostIdShape(value: unknown): value is string {
+  return typeof value === "string" && UUID_V4ISH.test(value.trim());
+}
+
+function readDraftMetaRecord(): DraftMeta {
+  try {
+    const raw = localStorage.getItem(DRAFT_META_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as DraftMeta) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDraftMetaRecord(meta: DraftMeta): void {
+  localStorage.setItem(DRAFT_META_KEY, JSON.stringify(meta));
+}
+
+function isEditModeActive(): boolean {
+  try {
+    return localStorage.getItem(EDIT_POST_DATA_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensures a stable publish UUID for the current local create draft.
+ * Never used in owner/admin edit mode ({@link EDIT_POST_DATA_KEY} present).
+ */
+export function ensureDraftPublishPostId(options?: {
+  fresh?: boolean;
+}): string | null {
+  if (isEditModeActive()) {
+    return null;
+  }
+
+  try {
+    const prev = readDraftMetaRecord();
+    const fresh = options?.fresh === true;
+
+    if (!fresh && isPublishPostIdShape(prev.publishPostId)) {
+      return prev.publishPostId!;
+    }
+
+    const publishPostId = crypto.randomUUID();
+    writeDraftMetaRecord({ ...prev, publishPostId });
+    return publishPostId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns draftMeta.publishPostId when valid, else null (legacy paths without Phase 2 id).
+ */
+export function readDraftPublishPostId(): string | null {
+  if (isEditModeActive()) {
+    return null;
+  }
+  try {
+    const prev = readDraftMetaRecord();
+    if (isPublishPostIdShape(prev.publishPostId)) {
+      return prev.publishPostId!;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strict publish id for atomic owner_create_post. Throws if missing/invalid — never generates a new UUID.
+ */
+export function getDraftPublishPostIdForPublish(): string {
+  const id = readDraftPublishPostId();
+  if (!id) {
+    throw new Error(
+      "Missing publish id for this draft. Leave and re-enter the create flow, then try again."
+    );
+  }
+  return id;
+}
 
 /** Returns true if id is falsy, "draft", or "draft-*". Use to skip DB/RPC for draft previews. */
 export function isDraftPostId(id?: string | null): boolean {

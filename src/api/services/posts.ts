@@ -10,7 +10,7 @@ export type PostType = "experience" | "hangout";
  * Best-effort FCM for new post: Edge resolves recipients from notifications (server fan-out)
  * and must not throw (publish should succeed regardless).
  */
-async function invokePostPublishedPush(data: {
+export async function invokePostPublishedPush(data: {
   id: string;
   type: PostType;
   author_id: string;

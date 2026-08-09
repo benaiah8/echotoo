@@ -46,7 +46,12 @@ import { Paths, postDetailPath } from "../router/Paths";
 import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
 import { shareUrl } from "../lib/shareUrl";
 import { supabase } from "../lib/supabaseClient";
-import { discardAllDrafts, notifyLocalDraftPersisted } from "../lib/drafts";
+import {
+  discardAllDrafts,
+  ensureDraftPublishPostId,
+  notifyLocalDraftPersisted,
+  type DraftMeta,
+} from "../lib/drafts";
 import {
   markCreateFlowResumedLocalDraft,
   markCreateFlowSessionActive,
@@ -104,19 +109,6 @@ const FINALIZE_DESKTOP_CAPTION_FOCUS_MS =
 
 // [LAUNCH] Anonymous posting disabled — coerce to public/friends for controls
 type VisibilityCtl = "public" | "friends";
-
-type DraftMeta = {
-  caption?: string;
-  tags?: string[];
-  visibility?: "public" | "friends" | "anonymous";
-  rsvpCapacity?: number | null | "";
-  rsvpEnabled?: boolean;
-  selectedDates?: string[];
-  isRecurring?: boolean;
-  recurrenceDays?: string[];
-  /** Mirrors `posts.rating_enabled`; defaults false until rating UI exists. */
-  ratingEnabled?: boolean;
-};
 
 type DraftActivity = {
   title?: string;
@@ -335,6 +327,7 @@ export default function CreateFinalizePage() {
   /** UGC policy violation: show inline alert in publish confirm (no top toast). */
   const [publishModalUgcInline, setPublishModalUgcInline] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const publishInFlightRef = useRef(false);
   const [showPostedModal, setShowPostedModal] = useState(false);
   const [newPostId, setNewPostId] = useState<string | null>(null);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
@@ -737,8 +730,9 @@ export default function CreateFinalizePage() {
           localStorage.setItem("editPostData", JSON.stringify(parsed));
         }
       } else {
+        ensureDraftPublishPostId({ fresh: false });
         const raw = localStorage.getItem("draftMeta");
-        const prev = raw ? JSON.parse(raw) : {};
+        const prev = raw ? (JSON.parse(raw) as DraftMeta) : {};
         localStorage.setItem(
           "draftMeta",
           JSON.stringify({
@@ -976,7 +970,8 @@ export default function CreateFinalizePage() {
   };
 
   const handleFinalizePublish = async () => {
-    if (publishing) return;
+    if (publishing || publishInFlightRef.current) return;
+    publishInFlightRef.current = true;
     setPublishModalUgcInline(false);
     setPublishing(true);
     try {
@@ -1014,7 +1009,18 @@ export default function CreateFinalizePage() {
         activities: sanitizedActivities,
         isEditMode,
         editPostId: isEditMode ? editData.postId : undefined,
+        isAdminEdit: isEditMode && editData?.isAdminEdit === true,
+        authorUserId: editData?.authorUserId,
+        originalPostType: isEditMode
+          ? (editData.type as "experience" | "hangout" | undefined)
+          : undefined,
+        isAnonymous: isEditMode ? (editData?.is_anonymous ?? false) : undefined,
+        anonymousName: isEditMode ? (editData?.anonymous_name ?? null) : undefined,
+        anonymousAvatar: isEditMode
+          ? (editData?.anonymous_avatar ?? null)
+          : undefined,
         ratingEnabled,
+        atomicPublish: !isEditMode,
       });
 
       if (isEditMode && editData?.postId) {
@@ -1043,6 +1049,7 @@ export default function CreateFinalizePage() {
         toast.error(msg.trim() ? msg : "Publish failed");
       }
     } finally {
+      publishInFlightRef.current = false;
       setPublishing(false);
     }
   };

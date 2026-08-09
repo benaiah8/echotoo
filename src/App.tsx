@@ -153,6 +153,17 @@ function App() {
               error
             );
           });
+
+        import("./lib/blockStatusCache")
+          .then(({ clearBlockedUserCache }) => {
+            clearBlockedUserCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear blocked user cache on logout:",
+              error
+            );
+          });
       }
 
       clearAuthCache(); // Clear auth cache and mutual friends cache (feed cache cleared separately above)

@@ -201,8 +201,16 @@ export function setCachedProfile(profileData: {
     // [FIX] Preserve onboarding fields when incoming data is partial (e.g. from Post prefetch, FollowListDrawer)
     // Prevents OnboardingWrapper from incorrectly showing onboarding after cache overwrite
     const existing = getCachedProfile(profileData.id);
+    const incomingUserId = profileData.user_id?.trim() ?? "";
+    const user_id =
+      incomingUserId && /^[0-9a-f-]{36}$/i.test(incomingUserId)
+        ? incomingUserId
+        : existing?.user_id && /^[0-9a-f-]{36}$/i.test(existing.user_id)
+          ? existing.user_id
+          : profileData.user_id;
     const entry: ProfileCacheEntry = {
       ...profileData,
+      user_id,
       // Preserve onboarding_completed/onboarding_step if incoming does not provide them
       onboarding_completed:
         profileData.onboarding_completed !== undefined

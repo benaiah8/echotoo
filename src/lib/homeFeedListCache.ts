@@ -67,3 +67,29 @@ export function writePersistedHomeFeed(
     console.warn("[homeFeedListCache] write failed:", e);
   }
 }
+
+/** Remove one persisted home feed snapshot. */
+export function clearPersistedHomeFeed(feedCacheKey: string): void {
+  if (!feedCacheKey) return;
+  try {
+    localStorage.removeItem(storageKey(feedCacheKey));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Remove all persisted home feed snapshots (profile author display changed). */
+export function clearAllPersistedHomeFeeds(): void {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(HOME_FEED_LIST_CACHE_KEY_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    /* ignore */
+  }
+}

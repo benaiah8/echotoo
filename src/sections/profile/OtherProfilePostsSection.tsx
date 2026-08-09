@@ -21,6 +21,7 @@ import {
   readPersistedProfilePosts,
   writePersistedProfilePosts,
 } from "../../lib/profilePostListCache";
+import { onPostOwnershipChanged } from "../../lib/postEvents";
 
 /**
  * OtherProfilePostsSection - Posts section for OTHER profiles
@@ -47,6 +48,12 @@ export default function OtherProfilePostsSection({
 }: OtherProfilePostsSectionProps) {
   const { profile } = useProfile();
   const [tab, setTab] = useState<"created" | "interacted">("created");
+  const [createdOwnershipRemoveRevision, setCreatedOwnershipRemoveRevision] =
+    useState(0);
+  const [createdOwnershipRemovePostId, setCreatedOwnershipRemovePostId] =
+    useState<string | null>(null);
+  const [createdOwnershipSoftRefreshEpoch, setCreatedOwnershipSoftRefreshEpoch] =
+    useState(0);
 
   // Use profile.user_id consistently (not profile.id)
   const userId = profile?.user_id || "";
@@ -196,6 +203,37 @@ export default function OtherProfilePostsSection({
     },
     [profileCreatedDataCacheKey, userId]
   );
+
+  const removePostFromCreatedCache = useCallback(
+    (postId: string) => {
+      if (!userId || !postId) return;
+      const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+      const persisted = readPersistedProfilePosts("created", userId);
+      const source =
+        cached?.length ? cached : persisted?.items?.length ? persisted.items : [];
+      const filtered = source.filter((item) => item.id !== postId);
+      if (filtered.length !== source.length) {
+        setCachedCreated(filtered);
+      }
+    },
+    [userId, profileCreatedDataCacheKey, setCachedCreated]
+  );
+
+  useEffect(() => {
+    if (!userId) return;
+    return onPostOwnershipChanged(
+      ({ postId, oldAuthorId, newAuthorId }) => {
+        if (oldAuthorId === userId) {
+          setCreatedOwnershipRemovePostId(postId);
+          setCreatedOwnershipRemoveRevision((n) => n + 1);
+          removePostFromCreatedCache(postId);
+        }
+        if (newAuthorId === userId && oldAuthorId !== newAuthorId) {
+          setCreatedOwnershipSoftRefreshEpoch((n) => n + 1);
+        }
+      }
+    );
+  }, [userId, removePostFromCreatedCache]);
 
   /** Memory + persisted first page — only when viewer can see Created. */
   const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
@@ -493,10 +531,18 @@ export default function OtherProfilePostsSection({
       if (!belongsToPageProfile) return post.author;
       return {
         ...post.author,
+        display_name: profile.display_name ?? post.author.display_name ?? null,
+        username: profile.username ?? post.author.username ?? null,
         avatar_url: profile.avatar_url ?? post.author.avatar_url ?? null,
       };
     },
-    [profile?.user_id, profile?.id, profile?.avatar_url]
+    [
+      profile?.user_id,
+      profile?.id,
+      profile?.display_name,
+      profile?.username,
+      profile?.avatar_url,
+    ]
   );
 
   // [FIX] Memoize renderItem functions to prevent ProgressiveFeed re-renders
@@ -626,6 +672,10 @@ export default function OtherProfilePostsSection({
               emptyMessage={`${
                 profile?.display_name || profile?.username || "This user"
               } hasn't posted yet.`}
+              backgroundRevalidateOnMount
+              externalRemoveRevision={createdOwnershipRemoveRevision}
+              externalRemovePostId={createdOwnershipRemovePostId}
+              softRefreshEpoch={createdOwnershipSoftRefreshEpoch}
             />
           </div>
         )}

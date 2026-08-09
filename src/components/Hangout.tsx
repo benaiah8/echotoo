@@ -7,9 +7,11 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useSelector } from "react-redux";
 import { Paths } from "../router/Paths";
+import { type RootState } from "../app/store";
 
-import { PiPencilSimple, PiTrash, PiUserPlus } from "react-icons/pi";
+import { PiFlag, PiPencilSimple, PiTrash, PiUserPlus, PiUserSwitch } from "react-icons/pi";
 import Avatar from "./ui/Avatar";
 import { PostTypeMetaChip } from "./ui/PostFeedSurfaceMeta";
 import FollowButton from "./ui/FollowButton";
@@ -21,9 +23,17 @@ import SaveButton from "./ui/SaveButton";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import { getPostForEdit, deletePost } from "../api/services/posts";
 import {
+  adminDeletePost,
+  adminGetPostForEdit,
+  invalidateCachesAfterPostDelete,
+} from "../api/services/adminPosts";
+import {
+  buildAdminEditPostData,
   buildCanonicalEditPostData,
   createEditActivitiesHref,
   persistCanonicalEditPostData,
+  type EditActivitySourceRow,
+  type EditPostSourceRow,
 } from "../lib/editPostBootstrap";
 import toast from "react-hot-toast";
 import { emitPostDeleted } from "../lib/postEvents";
@@ -34,9 +44,16 @@ import {
 } from "../lib/postScheduleLabelStyles";
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { getRailCardCoverUrl } from "../lib/railCardCoverUrl";
-import { discardAllDrafts } from "../lib/drafts";
+import { discardAllDrafts, isDraftPostId } from "../lib/drafts";
 import RailCardImageBackdrop from "./RailCardImageBackdrop";
 import useAuthActionGate from "../hooks/useAuthActionGate";
+import { useIsReportReviewer } from "../hooks/useIsReportReviewer";
+import AdminAssignPostDialog from "./admin/AdminAssignPostDialog";
+import ReportModal from "./ui/ReportModal";
+import {
+  buildPostReportDraftFromFeedItem,
+  type ReportDraft,
+} from "../types/report";
 
 /** Fixed rail top label row height (pill + plain posted-age share the same footprint). */
 const RAIL_LABEL_ROW_CLASS =
@@ -68,6 +85,8 @@ type Props = {
   post?: FeedItem;
 };
 
+type DeleteMode = "owner" | "admin";
+
 export default function Hangout({
   id,
   caption,
@@ -92,17 +111,46 @@ export default function Hangout({
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteMode, setDeleteMode] = useState<DeleteMode>("owner");
+  const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isAdminEditLoading, setIsAdminEditLoading] = useState(false);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const [railImageFailed, setRailImageFailed] = useState(false);
+  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
   const { ensureAuthed } = useAuthActionGate();
+  const { isReportReviewer } = useIsReportReviewer();
+  const authUserId = useSelector(
+    (state: RootState) => state.auth?.user?.id ?? null
+  );
   const triggerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isDraft = status === "draft";
+  const isDraftPost = isDraft || id.startsWith("draft-") || isDraftPostId(id);
+  const effectiveAuthorId = post?.author_id ?? authorId;
+  const effectiveIsOwner =
+    isOwner ||
+    (authUserId != null &&
+      effectiveAuthorId != null &&
+      authUserId === effectiveAuthorId);
+  const showAssignAction = isReportReviewer && !isDraftPost;
+  const showReportAction = !effectiveIsOwner && !isDraftPost;
+  const showAdminDeleteAction =
+    isReportReviewer && !effectiveIsOwner && !isDraftPost;
+  const showAdminEditAction =
+    isReportReviewer && !effectiveIsOwner && !isDraftPost;
+  const showMenu =
+    effectiveIsOwner ||
+    showReportAction ||
+    showAssignAction ||
+    showAdminDeleteAction ||
+    showAdminEditAction;
+  const menuItemClass =
+    "w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2";
   // Prefer post object when provided (patched by post:changed); fallback to primitive props
   const effectiveIsSaved = post?.is_saved ?? isSaved;
   const effectiveFollowStatus = post?.follow_status ?? followStatus;
@@ -229,6 +277,21 @@ export default function Hangout({
     }
     setIsDeleting(true);
     try {
+      if (deleteMode === "admin") {
+        const result = await adminDeletePost(id);
+        if (!result.deleted) {
+          toast("Post was not deleted.");
+          setShowDeleteModal(false);
+          return;
+        }
+        await invalidateCachesAfterPostDelete(result.postId, result.authorId);
+        toast.success("Post deleted");
+        emitPostDeleted(result.postId);
+        onDelete?.();
+        setShowDeleteModal(false);
+        return;
+      }
+
       await deletePost(id);
       toast.success("Event deleted successfully");
       emitPostDeleted(id);
@@ -236,16 +299,85 @@ export default function Hangout({
       setShowDeleteModal(false);
     } catch (error) {
       console.error("Error deleting hangout:", error);
-      toast.error("Failed to delete event");
+      toast.error(
+        deleteMode === "admin" ? "Failed to delete post" : "Failed to delete event"
+      );
     } finally {
       setIsDeleting(false);
     }
   };
 
+  const openDeleteConfirm = useCallback((mode: DeleteMode) => {
+    setIsMenuOpen(false);
+    setDeleteMode(mode);
+    setShowDeleteModal(true);
+  }, []);
+
   const handleInvite = () => {
     console.log("Opening invite drawer for hangout:", id);
     setShowInviteDrawer(true);
   };
+
+  const handleRequestPostReport = useCallback(() => {
+    if (!ensureAuthed()) return;
+    if (!post) {
+      toast.error("Unable to report this post right now.");
+      return;
+    }
+    setReportDraft(buildPostReportDraftFromFeedItem(post));
+  }, [ensureAuthed, post]);
+
+  const handleAssign = useCallback(() => {
+    setIsMenuOpen(false);
+    setShowAssignDialog(true);
+  }, []);
+
+  const handleAdminEdit = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setIsMenuOpen(false);
+      if (isAdminEditLoading) return;
+
+      setIsAdminEditLoading(true);
+      const loadingToast = toast.loading("Loading post for edit…");
+      try {
+        const { post: editPost, activities } = await adminGetPostForEdit(id);
+        const editData = buildAdminEditPostData(
+          editPost as unknown as EditPostSourceRow,
+          activities as unknown as EditActivitySourceRow[],
+          {
+            returnPath: window.location.pathname,
+            returnState: post
+              ? {
+                  backgroundLocation: location,
+                  initialPost: post,
+                }
+              : undefined,
+          }
+        );
+        persistCanonicalEditPostData(editData);
+        toast.dismiss(loadingToast);
+        navigate(createEditActivitiesHref(editPost.type as string));
+      } catch (error) {
+        console.error("Error loading hangout for admin edit:", error);
+        toast.dismiss(loadingToast);
+        const msg = error instanceof Error ? error.message : "";
+        toast.error(msg.trim() ? msg : "Failed to load post for editing");
+      } finally {
+        setIsAdminEditLoading(false);
+      }
+    },
+    [id, isAdminEditLoading, location, navigate, post]
+  );
+
+  const deleteConfirmTitle =
+    deleteMode === "admin" ? "Delete post?" : "Delete event?";
+  const deleteConfirmMessage =
+    deleteMode === "admin"
+      ? "Permanently delete this post for all users? This cannot be undone."
+      : "Are you sure you want to delete this event? This action cannot be undone.";
+  const deleteConfirmLabel = deleteMode === "admin" ? "Delete post" : "Delete";
 
   return (
     <div
@@ -312,7 +444,7 @@ export default function Hangout({
         {/* save: straddles bottom card edge (~half in / half out). Rail shells stay overflow-visible. */}
         <div
           className={`absolute bottom-0 z-20 translate-y-1/2 ${
-            isOwner ? "left-11" : "left-3"
+            effectiveIsOwner ? "left-11" : "left-3"
           }`}
           onClick={(e) => {
             e.stopPropagation();
@@ -382,9 +514,9 @@ export default function Hangout({
 
           {/* Action Button - Follow for experiences and hangouts in horizontal rail */}
           <div className="pt-1 flex items-center justify-between h-7">
-            {/* Three dots menu for owner's hangouts */}
+            {/* Three dots menu — owner, report (non-owner), assign (reviewer) */}
             <div className="flex items-center h-full">
-              {isOwner ? (
+              {showMenu ? (
                 <div
                   ref={triggerRef}
                   className="relative flex items-center h-full"
@@ -422,44 +554,104 @@ export default function Hangout({
                           border: "1px solid var(--border)",
                         }}
                       >
-                        {!isDraft && (
+                        {effectiveIsOwner ? (
+                          <>
+                            {!isDraftPost && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setIsMenuOpen(false);
+                                  handleInvite();
+                                }}
+                                className={menuItemClass}
+                              >
+                                <PiUserPlus size={16} />
+                                Invite
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setIsMenuOpen(false);
+                                handleEdit();
+                              }}
+                              className={menuItemClass}
+                            >
+                              <PiPencilSimple size={16} />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                openDeleteConfirm("owner");
+                              }}
+                              className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2"
+                            >
+                              <PiTrash size={16} />
+                              Delete
+                            </button>
+                          </>
+                        ) : null}
+                        {showReportAction ? (
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
                               setIsMenuOpen(false);
-                              handleInvite();
+                              handleRequestPostReport();
                             }}
-                            className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
+                            className={menuItemClass}
                           >
-                            <PiUserPlus size={16} />
-                            Invite
+                            <PiFlag size={16} />
+                            Report
                           </button>
-                        )}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            setIsMenuOpen(false);
-                            handleEdit();
-                          }}
-                          className="w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2"
-                        >
-                          <PiPencilSimple size={16} />
-                          Edit
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            setIsMenuOpen(false);
-                            setShowDeleteModal(true);
-                          }}
-                          className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2"
-                        >
-                          <PiTrash size={16} />
-                          Delete
-                        </button>
+                        ) : null}
+                        {showAssignAction ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              handleAssign();
+                            }}
+                            className={menuItemClass}
+                          >
+                            <PiUserSwitch size={16} />
+                            Assign post
+                          </button>
+                        ) : null}
+                        {showAdminEditAction ? (
+                          <button
+                            type="button"
+                            onClick={handleAdminEdit}
+                            disabled={isAdminEditLoading}
+                            className={menuItemClass}
+                          >
+                            <PiPencilSimple size={16} />
+                            Edit post
+                          </button>
+                        ) : null}
+                        {showAdminDeleteAction ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              openDeleteConfirm("admin");
+                            }}
+                            className="w-full px-3 py-2 text-left text-sm text-red-500 hover:bg-red-500/10 flex items-center gap-2"
+                          >
+                            <PiTrash size={16} />
+                            Delete post
+                          </button>
+                        ) : null}
                       </div>,
                       document.body
                     )}
@@ -528,9 +720,9 @@ export default function Hangout({
         open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
         onConfirm={handleDelete}
-        title="Delete event?"
-        message="Are you sure you want to delete this event? This action cannot be undone."
-        confirmLabel="Delete"
+        title={deleteConfirmTitle}
+        message={deleteConfirmMessage}
+        confirmLabel={deleteConfirmLabel}
         confirmVariant="danger"
         isLoading={isDeleting}
       />
@@ -552,6 +744,21 @@ export default function Hangout({
         ratingAverage={post?.effective_rating_average ?? post?.rating_average ?? null}
         ratingCount={post?.effective_rating_count ?? post?.rating_count ?? null}
         viewerRating={post?.viewer_rating ?? null}
+      />
+
+      {showAssignAction ? (
+        <AdminAssignPostDialog
+          open={showAssignDialog}
+          onClose={() => setShowAssignDialog(false)}
+          postId={id}
+          currentAuthorId={effectiveAuthorId ?? null}
+        />
+      ) : null}
+
+      <ReportModal
+        open={reportDraft !== null}
+        draft={reportDraft}
+        onClose={() => setReportDraft(null)}
       />
     </div>
   );

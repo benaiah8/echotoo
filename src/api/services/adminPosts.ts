@@ -1,8 +1,16 @@
 import { supabase } from "../../lib/supabaseClient";
+import type { ProfileSearchRow } from "../queries/searchProfiles";
 import { invalidatePostDetailCache } from "../queries/getPostById";
 import { dataCache } from "../../lib/dataCache";
 import { clearPersistedProfilePosts } from "../../lib/profilePostListCache";
-import { emitPostChanged } from "../../lib/postEvents";
+import { clearAllPersistedHomeFeeds } from "../../lib/homeFeedListCache";
+import {
+  emitPostChanged,
+  emitPostOwnershipChanged,
+} from "../../lib/postEvents";
+
+const AUDIT_RECENT_FETCH_LIMIT = 50;
+const DEFAULT_QUICK_TARGET_LIMIT = 8;
 
 export type AdminTransferPostOwnershipResult = {
   postId: string;
@@ -11,15 +19,51 @@ export type AdminTransferPostOwnershipResult = {
   didChange: boolean;
 };
 
-type RpcRow = {
+export type AdminDeletePostResult = {
+  postId: string;
+  authorId: string;
+  deleted: boolean;
+};
+
+export type AdminRepublishPostResult = {
+  postId: string;
+  authorId: string;
+  updated: boolean;
+};
+
+export type AdminGetPostForEditResult = {
+  post: Record<string, unknown>;
+  activities: Record<string, unknown>[];
+};
+
+type TransferRpcRow = {
   post_id: string;
   old_author_id: string;
   new_author_id: string;
   did_change: boolean;
 };
 
-function parseRpcRow(raw: unknown): AdminTransferPostOwnershipResult {
-  const row = (Array.isArray(raw) ? raw[0] : raw) as RpcRow | null | undefined;
+type DeleteRpcRow = {
+  post_id: string;
+  author_id: string;
+  deleted: boolean;
+};
+
+type RepublishRpcRow = {
+  post_id: string;
+  author_id: string;
+  updated: boolean;
+};
+
+type GetForEditRpcRow = {
+  post: Record<string, unknown>;
+  activities: unknown;
+};
+
+const PROFILE_POST_TABS = ["created", "interacted", "saved"] as const;
+
+function parseTransferRpcRow(raw: unknown): AdminTransferPostOwnershipResult {
+  const row = (Array.isArray(raw) ? raw[0] : raw) as TransferRpcRow | null | undefined;
   if (!row?.post_id || !row.old_author_id || !row.new_author_id) {
     throw new Error("Transfer failed: invalid response from server");
   }
@@ -28,6 +72,18 @@ function parseRpcRow(raw: unknown): AdminTransferPostOwnershipResult {
     oldAuthorId: row.old_author_id,
     newAuthorId: row.new_author_id,
     didChange: Boolean(row.did_change),
+  };
+}
+
+function parseDeleteRpcRow(raw: unknown): AdminDeletePostResult {
+  const row = (Array.isArray(raw) ? raw[0] : raw) as DeleteRpcRow | null | undefined;
+  if (!row?.post_id || !row.author_id) {
+    throw new Error("Delete failed: invalid response from server");
+  }
+  return {
+    postId: row.post_id,
+    authorId: row.author_id,
+    deleted: Boolean(row.deleted),
   };
 }
 
@@ -50,7 +106,203 @@ export async function adminTransferPostOwnership(
     throw new Error(error.message || "Could not transfer post ownership");
   }
 
-  return parseRpcRow(data);
+  return parseTransferRpcRow(data);
+}
+
+/**
+ * Reviewer-only RPC: permanently delete any post (SECURITY DEFINER on server).
+ */
+export async function adminDeletePost(
+  postId: string
+): Promise<AdminDeletePostResult> {
+  if (!postId?.trim()) throw new Error("Missing post id");
+
+  const { data, error } = await supabase.rpc("admin_delete_post", {
+    p_post_id: postId,
+  });
+
+  if (error) {
+    throw new Error(error.message || "Could not delete post");
+  }
+
+  return parseDeleteRpcRow(data);
+}
+
+function parseRepublishRpcRow(raw: unknown): AdminRepublishPostResult {
+  const row = (Array.isArray(raw) ? raw[0] : raw) as RepublishRpcRow | null | undefined;
+  if (!row?.post_id || !row.author_id) {
+    throw new Error("Republish failed: invalid response from server");
+  }
+  return {
+    postId: row.post_id,
+    authorId: row.author_id,
+    updated: Boolean(row.updated),
+  };
+}
+
+/**
+ * Reviewer-only RPC: load post + activities for admin edit UI.
+ */
+export async function adminGetPostForEdit(
+  postId: string
+): Promise<AdminGetPostForEditResult> {
+  if (!postId?.trim()) throw new Error("Missing post id");
+
+  const { data, error } = await supabase.rpc("admin_get_post_for_edit", {
+    p_post_id: postId,
+  });
+
+  if (error) {
+    throw new Error(error.message || "Could not load post for admin edit");
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as GetForEditRpcRow | null;
+  if (!row?.post || typeof row.post !== "object") {
+    throw new Error("Could not load post for admin edit");
+  }
+
+  const post = row.post as Record<string, unknown>;
+  if (typeof post.id !== "string" || !post.id) {
+    throw new Error("Invalid post data from server");
+  }
+
+  let activities: Record<string, unknown>[] = [];
+  if (Array.isArray(row.activities)) {
+    activities = row.activities.filter(
+      (a): a is Record<string, unknown> => !!a && typeof a === "object"
+    );
+  }
+
+  return { post, activities };
+}
+
+/**
+ * Reviewer-only RPC: republish post edits without changing author_id.
+ */
+export async function adminRepublishPost(
+  postId: string,
+  payload: unknown
+): Promise<AdminRepublishPostResult> {
+  if (!postId?.trim()) throw new Error("Missing post id");
+
+  const { data, error } = await supabase.rpc("admin_republish_post", {
+    p_post_id: postId,
+    p_payload: payload,
+  });
+
+  if (error) {
+    throw new Error(error.message || "Could not save admin edit");
+  }
+
+  return parseRepublishRpcRow(data);
+}
+
+/**
+ * Clear caches after admin edit — uses post owner id, not session user.
+ */
+export async function invalidateCachesAfterAdminPostEdit(
+  postId: string,
+  authorId: string
+): Promise<void> {
+  if (!postId || !authorId) return;
+
+  invalidatePostDetailCache(postId);
+  dataCache.delete(`profile_created_${authorId}`);
+  dataCache.delete(`profile_interacted_${authorId}`);
+  dataCache.delete(`profile_saved_${authorId}`);
+  for (const tab of PROFILE_POST_TABS) {
+    clearPersistedProfilePosts(tab, authorId);
+  }
+  clearAllPersistedHomeFeeds();
+  await dataCache.clearFeedCache();
+}
+
+/**
+ * Clear caches that may still embed a deleted post. Visible lists rely on emitPostDeleted.
+ */
+export async function invalidateCachesAfterPostDelete(
+  postId: string,
+  authorId?: string | null
+): Promise<void> {
+  invalidatePostDetailCache(postId);
+
+  if (authorId) {
+    dataCache.delete(`profile_created_${authorId}`);
+    dataCache.delete(`profile_interacted_${authorId}`);
+    dataCache.delete(`profile_saved_${authorId}`);
+    for (const tab of PROFILE_POST_TABS) {
+      clearPersistedProfilePosts(tab, authorId);
+    }
+  }
+}
+
+/**
+ * Reviewer-only: recent transfer targets from `admin_post_action_audit`, hydrated from profiles.
+ */
+export async function listRecentAdminAssignmentTargets(
+  limit = DEFAULT_QUICK_TARGET_LIMIT
+): Promise<ProfileSearchRow[]> {
+  const cap = Math.min(Math.max(limit, 1), 12);
+
+  const { data: auditRows, error: auditError } = await supabase
+    .from("admin_post_action_audit")
+    .select("new_author_id, created_at")
+    .eq("action", "transfer_ownership")
+    .not("new_author_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(AUDIT_RECENT_FETCH_LIMIT);
+
+  if (auditError) {
+    console.error(
+      "[adminPosts] listRecentAdminAssignmentTargets audit",
+      auditError
+    );
+    return [];
+  }
+  if (!auditRows?.length) return [];
+
+  const orderedUserIds: string[] = [];
+  const seen = new Set<string>();
+  for (const row of auditRows) {
+    const uid = row.new_author_id as string | null;
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    orderedUserIds.push(uid);
+    if (orderedUserIds.length >= cap) break;
+  }
+
+  if (!orderedUserIds.length) return [];
+
+  const { data: profiles, error: profileError } = await supabase
+    .from("profiles")
+    .select("id, user_id, username, display_name, avatar_url")
+    .in("user_id", orderedUserIds)
+    .is("deleted_at", null);
+
+  if (profileError) {
+    console.error(
+      "[adminPosts] listRecentAdminAssignmentTargets profiles",
+      profileError
+    );
+    return [];
+  }
+  if (!profiles?.length) return [];
+
+  const byUserId = new Map(profiles.map((p) => [p.user_id, p]));
+
+  return orderedUserIds
+    .map((uid) => byUserId.get(uid))
+    .filter((p): p is NonNullable<typeof p> => !!p?.user_id)
+    .map((p) => ({
+      id: p.id,
+      user_id: p.user_id,
+      username: p.username,
+      display_name: p.display_name,
+      avatar_url: p.avatar_url,
+      member_no: null,
+      follows_you: false,
+      you_follow: false,
+    }));
 }
 
 /**
@@ -93,5 +345,9 @@ export async function invalidateCachesAfterPostOwnershipTransfer(
     }
   } catch {
     emitPostChanged(postId, { author_id: newAuthorId });
+  }
+
+  if (oldAuthorId !== newAuthorId) {
+    emitPostOwnershipChanged(postId, oldAuthorId, newAuthorId);
   }
 }

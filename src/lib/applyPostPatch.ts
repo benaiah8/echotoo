@@ -118,6 +118,99 @@ export function applyPostPatch<T extends Record<string, unknown>>(
   if (p.author !== undefined) {
     (updated as any).author = p.author;
   }
+  if (p.caption !== undefined) {
+    (updated as any).caption = p.caption;
+  }
+  if (p.tags !== undefined) {
+    (updated as any).tags = p.tags;
+  }
+  if (p.visibility !== undefined) {
+    (updated as any).visibility = p.visibility;
+  }
+  if (p.selected_dates !== undefined) {
+    (updated as any).selected_dates = p.selected_dates;
+  }
+  if (p.rsvp_capacity !== undefined) {
+    (updated as any).rsvp_capacity = p.rsvp_capacity;
+  }
+  if (p.is_recurring !== undefined) {
+    (updated as any).is_recurring = p.is_recurring;
+  }
+  if (p.recurrence_days !== undefined) {
+    (updated as any).recurrence_days = p.recurrence_days;
+  }
+  if (p.activities !== undefined) {
+    (updated as any).activities = p.activities;
+  }
+  if (p.first_image_url !== undefined) {
+    (updated as any).first_image_url = p.first_image_url;
+  }
+  if (p.has_images !== undefined) {
+    (updated as any).has_images = p.has_images;
+  }
+  if (p.image_count !== undefined) {
+    (updated as any).image_count = p.image_count;
+  }
 
   return updated as T;
+}
+
+/**
+ * When soft-refresh merges a server row over an existing feed row, keep viewer-local
+ * fields if the server snapshot omitted them or is stale vs optimistic UI.
+ */
+export function preserveViewerLocalFeedFields<
+  T extends Record<string, unknown>,
+>(fresh: T, prev: T | undefined): T {
+  if (!prev) return fresh;
+
+  const out = { ...fresh } as Record<string, unknown>;
+  const p = prev as Record<string, unknown>;
+
+  if (out.is_liked === undefined && p.is_liked !== undefined) {
+    out.is_liked = p.is_liked;
+  }
+  if (out.is_saved === undefined && p.is_saved !== undefined) {
+    out.is_saved = p.is_saved;
+  }
+  if (out.viewer_rating === undefined && p.viewer_rating !== undefined) {
+    out.viewer_rating = p.viewer_rating;
+  }
+
+  const countKeys = [
+    "like_count",
+    "effective_like_count",
+    "save_count",
+    "effective_save_count",
+    "rating_average",
+    "effective_rating_average",
+    "rating_count",
+    "effective_rating_count",
+  ] as const;
+
+  for (const key of countKeys) {
+    const freshVal = out[key];
+    const prevVal = p[key];
+
+    if (freshVal === undefined && prevVal !== undefined) {
+      out[key] = prevVal;
+      continue;
+    }
+
+    if (
+      typeof freshVal === "number" &&
+      typeof prevVal === "number" &&
+      prevVal > freshVal
+    ) {
+      if (key.includes("like") && p.is_liked === true) {
+        out[key] = prevVal;
+      } else if (key.includes("save") && p.is_saved === true) {
+        out[key] = prevVal;
+      } else if (key.includes("rating") && p.viewer_rating != null) {
+        out[key] = prevVal;
+      }
+    }
+  }
+
+  return out as T;
 }

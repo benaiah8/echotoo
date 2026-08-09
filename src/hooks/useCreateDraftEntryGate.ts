@@ -8,6 +8,7 @@ import {
 } from "../lib/draftEntryGate";
 import {
   discardAllDrafts,
+  ensureDraftPublishPostId,
   hasAnyDraftData,
   runCreateEntryDraftCleanup,
 } from "../lib/drafts";
@@ -48,6 +49,9 @@ export function useCreateDraftEntryGate(
       markCreateFlowSessionActive();
       if (resumeDraft) {
         markCreateFlowResumedLocalDraft();
+        ensureDraftPublishPostId({ fresh: false });
+      } else {
+        ensureDraftPublishPostId({ fresh: !hasAnyDraftData() });
       }
       closeChooserOverlay?.();
       window.setTimeout(() => {

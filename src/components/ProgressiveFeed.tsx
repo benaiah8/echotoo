@@ -33,7 +33,13 @@ import {
   normalizeLoadResult,
 } from "../lib/offsetAwareLoader";
 import { onPostChanged, onPostDeleted } from "../lib/postEvents";
-import { applyPostPatch } from "../lib/applyPostPatch";
+import { onBlockStatusChanged } from "../lib/blockStatusCache";
+import { applyPostPatch, preserveViewerLocalFeedFields } from "../lib/applyPostPatch";
+import { applyPendingPostPatchesToItems } from "../lib/pendingPostPatches";
+import {
+  onProfileAuthorDisplayUpdated,
+  patchPostAuthorForProfileUpdate,
+} from "../lib/profileAuthorSync";
 import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import { batchFetchActivitiesForPosts } from "../api/services/activitiesBatch";
@@ -153,6 +159,8 @@ export interface ProgressiveFeedProps<T> {
   isVisible?: boolean; // Default: true (backward compatible) - gates auto-load when hidden
   /** [PROFILE] Bump to refetch first page without remounting — see soft-refresh effect */
   softRefreshEpoch?: number;
+  /** Home: after cache/initialItems hydrate, refetch offset 0 in background (once per mount) */
+  backgroundRevalidateOnMount?: boolean;
   /** Telemetry for targeted flows (Created tab publish refresh) */
   onSoftRefreshStart?: () => void;
   onSoftRefreshDone?: (args: {
@@ -167,6 +175,10 @@ export interface ProgressiveFeedProps<T> {
   /** Bump to replace in-place by id (silent reconcile) */
   externalReplaceRevision?: number;
   externalReplaceItem?: T | null;
+
+  /** Bump to remove a post by id (e.g. ownership left Created tab) */
+  externalRemoveRevision?: number;
+  externalRemovePostId?: string | null;
 
   /**
    * Own Profile Created publish return: merged cache rows + locally built new post (+ drafts).
@@ -196,7 +208,7 @@ export interface ProgressiveFeedProps<T> {
  * />
  * ```
  */
-export default function ProgressiveFeed<T extends { id: string }>({
+export default function ProgressiveFeed<T extends { id: string; author_id?: string | null }>({
   loadItems,
   renderItem,
   initialItems,
@@ -221,12 +233,15 @@ export default function ProgressiveFeed<T extends { id: string }>({
   isVisible = true, // [STEP 1] Default: true for backward compatibility
   tabId = "unknown",
   softRefreshEpoch,
+  backgroundRevalidateOnMount = false,
   onSoftRefreshStart,
   onSoftRefreshDone,
   externalPrependRevision = 0,
   externalPrependItems,
   externalReplaceRevision = 0,
   externalReplaceItem = null,
+  externalRemoveRevision = 0,
+  externalRemovePostId = null,
   authoritativeHydratedSeed,
 }: ProgressiveFeedProps<T>) {
   // PWA detection: Use centralized utility
@@ -266,6 +281,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
       rows = Array.from(
         new Map(initialItems.map((item) => [item.id, item])).values()
       );
+    }
+    if (rows.length > 0) {
+      rows = applyPendingPostPatchesToItems(
+        rows as Array<Record<string, unknown> & { id?: string }>
+      ) as T[];
     }
     initialBootstrapSnapshotRef.current = rows;
   }
@@ -311,6 +331,14 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // This avoids calling setCachedItems inside setItems callback (causes infinite loops)
   const itemsRef = useRef<T[]>(initialItemsArray);
 
+  /** Persist patched bootstrap rows (e.g. pending admin edit patch) into parent cache. */
+  useLayoutEffect(() => {
+    if (initialItemsArray.length > 0 && setCachedItems) {
+      setCachedItems(initialItemsArray);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // [STEP 1] New refs for visibility gating and deduplication
   // [FIX C] Track in-flight offsets with pageSize to prevent duplicate requests
   const inFlightOffsetsRef = useRef<Set<string>>(new Set());
@@ -324,8 +352,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
   // [FIX A] Store observer in ref for proper cleanup
   const observerRef = useRef<IntersectionObserver | null>(null);
 
-  const softEpochRef = useRef(0);
-  softEpochRef.current = softRefreshEpoch ?? 0;
+  const [internalSoftEpoch, setInternalSoftEpoch] = useState(0);
+  const mergedSoftRefreshEpoch = Math.max(
+    softRefreshEpoch ?? 0,
+    internalSoftEpoch
+  );
   /** Latest epoch deemed satisfied by initial load / cache hydrate or a completed soft refresh */
   const softBaselineEpochRef = useRef<number>(0);
   const softBaselineCapturedRef = useRef(false);
@@ -333,9 +364,10 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
   const lastExternalPrependRevisionAppliedRef = useRef(0);
   const lastExternalReplaceRevisionAppliedRef = useRef(0);
+  const lastExternalRemoveRevisionAppliedRef = useRef(0);
 
   const captureSoftBaselineEpoch = () => {
-    softBaselineEpochRef.current = softEpochRef.current;
+    softBaselineEpochRef.current = mergedSoftRefreshEpoch;
     softBaselineCapturedRef.current = true;
   };
 
@@ -365,6 +397,18 @@ export default function ProgressiveFeed<T extends { id: string }>({
     rafsRef.current.push(id);
     return id;
   }, []);
+
+  const scheduleBackgroundRevalidate = useCallback(() => {
+    if (!backgroundRevalidateOnMount) return;
+    if (authoritativeHydratedSeed?.length) return;
+    if (!softBaselineCapturedRef.current) {
+      softBaselineEpochRef.current = 0;
+      softBaselineCapturedRef.current = true;
+    }
+    scheduleRaf(() => {
+      setInternalSoftEpoch((prev) => (prev === 0 ? 1 : prev));
+    });
+  }, [backgroundRevalidateOnMount, authoritativeHydratedSeed?.length, scheduleRaf]);
 
   // [CHAIN] Check if sentinel is within prefetch distance of viewport bottom
   const isSentinelNearBottom = useCallback((): boolean => {
@@ -438,6 +482,34 @@ export default function ProgressiveFeed<T extends { id: string }>({
     return cleanup;
   }, [setCachedItems, scheduleTimeout]);
 
+  // Patch embedded author when profile display name / username changes
+  useEffect(() => {
+    const cleanup = onProfileAuthorDisplayUpdated((profile) => {
+      setItems((prev) => {
+        let changed = false;
+        const next = prev.map((item) => {
+          const patched = patchPostAuthorForProfileUpdate(
+            item as Record<string, unknown>,
+            profile
+          );
+          if (patched) {
+            changed = true;
+            return patched as T;
+          }
+          return item;
+        });
+        if (changed && setCachedItems) {
+          scheduleTimeout(() => {
+            if (!mountedRef.current) return;
+            setCachedItems(next);
+          }, 0);
+        }
+        return changed ? next : prev;
+      });
+    });
+    return cleanup;
+  }, [setCachedItems, scheduleTimeout]);
+
   // Remove deleted posts after a short exit animation, then sync cache (no refetch)
   useEffect(() => {
     const commitRemove = (postId: string) => {
@@ -485,6 +557,29 @@ export default function ProgressiveFeed<T extends { id: string }>({
       deleteExitTimersRef.current.set(postId, t as unknown as number);
     });
     return cleanup;
+  }, [setCachedItems, scheduleTimeout]);
+
+  // Remove blocked author's posts immediately (viewer-initiated block only)
+  useEffect(() => {
+    const removeByAuthor = (blockedUserId: string) => {
+      setItems((prev) => {
+        const next = prev.filter((item) => item.author_id !== blockedUserId);
+        if (next.length === prev.length) return prev;
+        if (setCachedItems) {
+          scheduleTimeout(() => {
+            if (!mountedRef.current) return;
+            setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    };
+
+    return onBlockStatusChanged(({ blockedUserId, blocked }) => {
+      if (!blocked) return;
+      if (!itemsRef.current.some((i) => i.author_id === blockedUserId)) return;
+      removeByAuthor(blockedUserId);
+    });
   }, [setCachedItems, scheduleTimeout]);
 
   // Local prepend after publish (no loadItems); keeps existing rows, dedupes by id
@@ -548,6 +643,37 @@ export default function ProgressiveFeed<T extends { id: string }>({
   }, [
     externalReplaceRevision,
     externalReplaceItem,
+    setCachedItems,
+    scheduleTimeout,
+  ]);
+
+  /** Remove one row by id (ownership transfer off Created tab, etc.) */
+  useEffect(() => {
+    const rev = externalRemoveRevision ?? 0;
+    const postId = externalRemovePostId;
+    if (
+      !postId ||
+      rev <= 0 ||
+      rev <= lastExternalRemoveRevisionAppliedRef.current
+    ) {
+      return;
+    }
+    lastExternalRemoveRevisionAppliedRef.current = rev;
+
+    setItems((prev) => {
+      const next = prev.filter((item) => item.id !== postId);
+      if (next.length === prev.length) return prev;
+      if (setCachedItems) {
+        scheduleTimeout(() => {
+          if (!mountedRef.current) return;
+          setCachedItems(next);
+        }, 0);
+      }
+      return next;
+    });
+  }, [
+    externalRemoveRevision,
+    externalRemovePostId,
     setCachedItems,
     scheduleTimeout,
   ]);
@@ -1060,6 +1186,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
         const deduplicated = Array.from(
           new Map(cached.map((item) => [item.id, item])).values()
         );
+        const patched = applyPendingPostPatchesToItems(
+          deduplicated as Array<Record<string, unknown> & { id?: string }>
+        ) as T[];
         if (DEBUG_RSVP_POST_ID) {
           const ch = deduplicated.find((i) => i.id === DEBUG_RSVP_POST_ID);
           if (ch) {
@@ -1076,15 +1205,19 @@ export default function ProgressiveFeed<T extends { id: string }>({
             debugPostInCache: !!ch,
           });
         }
-        setItems(deduplicated);
-        offsetRef.current = deduplicated.length;
-        debugRsvpMerged(deduplicated, "after-cache-hydrate-setItems");
+        setItems(patched);
+        offsetRef.current = patched.length;
+        debugRsvpMerged(patched, "after-cache-hydrate-setItems");
         if (setCachedItems) {
-          setCachedItems(deduplicated);
+          setCachedItems(patched);
         }
         initialLoadCompleteRef.current = true;
         setEmptySurfaceAwaitingInitialResponse(false);
-        captureSoftBaselineEpoch();
+        if (backgroundRevalidateOnMount) {
+          scheduleBackgroundRevalidate();
+        } else {
+          captureSoftBaselineEpoch();
+        }
         return; // Cache loaded, don't proceed to API load
       }
     }
@@ -1307,7 +1440,11 @@ export default function ProgressiveFeed<T extends { id: string }>({
       // If we have items (from cache or initialItems), mark initial load as complete
       initialLoadCompleteRef.current = true;
       setEmptySurfaceAwaitingInitialResponse(false);
-      captureSoftBaselineEpoch();
+      if (backgroundRevalidateOnMount && !authoritativeHydratedSeed?.length) {
+        scheduleBackgroundRevalidate();
+      } else {
+        captureSoftBaselineEpoch();
+      }
     }
 
     // [FIX] Do NOT reset guard in cleanup - prevents StrictMode mount/unmount/mount from
@@ -1316,11 +1453,9 @@ export default function ProgressiveFeed<T extends { id: string }>({
     return () => {};
   }, [isVisible]);
 
-  // Refetch offset 0 in place when `softRefreshEpoch` bumps — keeps existing rows until fresh first page merges
+  // Refetch offset 0 in place when soft-refresh epoch bumps — keeps existing rows until fresh first page merges
   useEffect(() => {
-    if (softRefreshEpoch === undefined) return;
-
-    const target = softEpochRef.current;
+    const target = mergedSoftRefreshEpoch;
     if (
       target <= 0 ||
       !softBaselineCapturedRef.current ||
@@ -1410,11 +1545,20 @@ export default function ProgressiveFeed<T extends { id: string }>({
 
         setItems((prev) => {
           const seenFresh = new Set<string>();
+          const prevById = new Map(prev.map((item) => [item.id, item]));
           const headUnique: T[] = [];
           for (const it of fetchedItems) {
             if (!seenFresh.has(it.id)) {
               seenFresh.add(it.id);
-              headUnique.push(it);
+              const prevRow = prevById.get(it.id);
+              headUnique.push(
+                prevRow
+                  ? (preserveViewerLocalFeedFields(
+                      it as Record<string, unknown>,
+                      prevRow as Record<string, unknown>
+                    ) as T)
+                  : it
+              );
             }
           }
 
@@ -1477,7 +1621,7 @@ export default function ProgressiveFeed<T extends { id: string }>({
       cancelled = true;
     };
   }, [
-    softRefreshEpoch,
+    mergedSoftRefreshEpoch,
     isVisible,
     items.length,
     loadItems,

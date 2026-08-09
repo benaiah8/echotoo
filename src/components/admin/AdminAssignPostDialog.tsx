@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import Avatar from "../ui/Avatar";
 import ConfirmDialog from "../ui/ConfirmDialog";
@@ -13,8 +13,14 @@ import {
 import {
   adminTransferPostOwnership,
   invalidateCachesAfterPostOwnershipTransfer,
+  listRecentAdminAssignmentTargets,
 } from "../../api/services/adminPosts";
 import { getViewerAuthUserId } from "../../api/services/follows";
+import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
+
+/** Aligns with BottomDrawer / useCreateKeyboardInset — keyboard affects layout. */
+const KEYBOARD_MAX_HEIGHT_THRESHOLD_PX = 48;
 
 type Props = {
   open: boolean;
@@ -44,21 +50,87 @@ export default function AdminAssignPostDialog({
   const [selected, setSelected] = useState<ProfileSearchRow | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [transferring, setTransferring] = useState(false);
+  const [quickTargets, setQuickTargets] = useState<ProfileSearchRow[]>([]);
+  const [quickTargetsLoading, setQuickTargetsLoading] = useState(false);
+
+  const loadQuickTargets = useCallback(async () => {
+    setQuickTargetsLoading(true);
+    try {
+      const rows = await listRecentAdminAssignmentTargets(8);
+      setQuickTargets(rows);
+    } catch (e) {
+      console.error("[AdminAssignPostDialog] quick targets", e);
+      setQuickTargets([]);
+    } finally {
+      setQuickTargetsLoading(false);
+    }
+  }, []);
+
+  const { keyboardInsetPx } = useCreateKeyboardInset();
+  const kbRounded = Math.round(keyboardInsetPx);
+  const keyboardShrinksSheet = kbRounded > KEYBOARD_MAX_HEIGHT_THRESHOLD_PX;
+
+  const panelMaxHeight = useMemo(
+    () =>
+      keyboardShrinksSheet
+        ? `min(28rem, calc(100dvh - ${kbRounded}px - env(safe-area-inset-top, 0px) - 0.75rem))`
+        : `min(28rem, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 2rem))`,
+    [keyboardShrinksSheet, kbRounded]
+  );
+
+  const panelStyle = useMemo(
+    () => ({
+      ...frostedModalPanelStyle,
+      maxHeight: panelMaxHeight,
+      transition: "max-height 220ms ease-out",
+    }),
+    [panelMaxHeight]
+  );
+
+  const searchDialogVisible = open && !confirmOpen;
+
+  const quickTargetUserIds = useMemo(
+    () => new Set(quickTargets.map((t) => t.user_id)),
+    [quickTargets]
+  );
+
+  const displayedSearchResults = useMemo(
+    () => results.filter((r) => !quickTargetUserIds.has(r.user_id)),
+    [results, quickTargetUserIds]
+  );
 
   useEffect(() => {
     if (!open) return;
     void getViewerAuthUserId().then(setViewerId);
-  }, [open]);
+    void loadQuickTargets();
+  }, [open, loadQuickTargets]);
 
   useEffect(() => {
     if (!open) {
       setQuery("");
       setResults([]);
+      setQuickTargets([]);
       setSelected(null);
       setConfirmOpen(false);
       setSearching(false);
       setTransferring(false);
+      setQuickTargetsLoading(false);
     }
+  }, [open]);
+
+  /** Lock page scroll while assign flow is open (search + confirm). */
+  useEffect(() => {
+    if (!open) return;
+    const scrollbarWidth =
+      window.innerWidth - document.documentElement.clientWidth;
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = "hidden";
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -96,6 +168,7 @@ export default function AdminAssignPostDialog({
         toast("This user is already the post owner.");
         return;
       }
+      blurActiveEditableFirst();
       setSelected(profile);
       setConfirmOpen(true);
     },
@@ -119,6 +192,11 @@ export default function AdminAssignPostDialog({
 
       if (result.didChange) {
         toast.success(`Post assigned to ${profileLabel(selected)}`);
+        setQuickTargets((prev) => {
+          const rest = prev.filter((p) => p.user_id !== selected.user_id);
+          return [selected, ...rest].slice(0, 8);
+        });
+        void loadQuickTargets();
       } else {
         toast("Post is already owned by that user.");
       }
@@ -138,17 +216,22 @@ export default function AdminAssignPostDialog({
   return (
     <>
       <FrostedCenterModal
-        open={open && !confirmOpen}
+        open={searchDialogVisible}
         onBackdropClick={onClose}
         zTier="aboveDialog"
         aria-labelledby="admin-assign-post-title"
+        containerClassName={
+          keyboardShrinksSheet
+            ? "items-start justify-center pt-[max(0.5rem,env(safe-area-inset-top))]"
+            : ""
+        }
       >
         <div
-          className={`${frostedModalPanelClassName} w-[min(100%,22rem)] max-h-[min(80vh,28rem)] flex flex-col`}
-          style={frostedModalPanelStyle}
+          className={`${frostedModalPanelClassName} w-[min(100%,22rem)] flex min-h-0 flex-col !p-0 overflow-hidden`}
+          style={panelStyle}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-4 pt-4 pb-2 border-b border-[var(--border)]/60">
+          <div className="shrink-0 px-4 pt-4 pb-2 border-b border-[var(--border)]/60">
             <h2
               id="admin-assign-post-title"
               className="text-sm font-semibold text-[var(--text)]"
@@ -161,7 +244,60 @@ export default function AdminAssignPostDialog({
             </p>
           </div>
 
-          <div className="px-4 py-3">
+          <div className="shrink-0 px-4 pb-2 border-b border-[var(--border)]/40">
+            <p className="text-[10px] font-medium text-[var(--text)]/50 uppercase tracking-wide mb-1.5">
+              Quick targets
+            </p>
+            {quickTargetsLoading && quickTargets.length === 0 ? (
+              <p className="text-[11px] text-[var(--text)]/45">Loading…</p>
+            ) : quickTargets.length === 0 ? (
+              <p className="text-[11px] text-[var(--text)]/45 leading-snug">
+                Recent assignment targets will appear here.
+              </p>
+            ) : (
+              <div
+                className="flex gap-2 overflow-x-auto overscroll-x-contain pb-0.5 [-webkit-overflow-scrolling:touch]"
+                role="list"
+                aria-label="Quick assignment targets"
+              >
+                {quickTargets.map((t) => {
+                  const isCurrent =
+                    !!currentAuthorId && t.user_id === currentAuthorId;
+                  const label =
+                    t.display_name?.trim() || t.username?.trim() || "User";
+                  return (
+                    <button
+                      key={t.user_id}
+                      type="button"
+                      role="listitem"
+                      disabled={isCurrent}
+                      onClick={() => handleSelect(t)}
+                      title={
+                        isCurrent
+                          ? "Current owner"
+                          : t.username
+                            ? `@${t.username}`
+                            : label
+                      }
+                      className="shrink-0 flex max-w-[9.5rem] items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg)]/40 app-light:bg-white/80 px-2 py-1.5 text-left hover:bg-[var(--glass-active-bg)] disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation"
+                    >
+                      <Avatar
+                        url={t.avatar_url}
+                        name={label}
+                        size={22}
+                        className="shrink-0"
+                      />
+                      <span className="min-w-0 truncate text-[11px] font-medium text-[var(--text)]">
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="shrink-0 px-4 py-3">
             <input
               type="search"
               autoComplete="off"
@@ -173,7 +309,7 @@ export default function AdminAssignPostDialog({
             />
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-3">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-3 [-webkit-overflow-scrolling:touch]">
             {query.trim().length < 2 ? (
               <p className="px-2 py-2 text-xs text-[var(--text)]/50">
                 Type at least 2 characters to search.
@@ -182,13 +318,13 @@ export default function AdminAssignPostDialog({
               <p className="px-2 py-2 text-xs text-[var(--text)]/50">
                 Searching…
               </p>
-            ) : results.length === 0 ? (
+            ) : displayedSearchResults.length === 0 ? (
               <p className="px-2 py-2 text-xs text-[var(--text)]/50">
                 No users found.
               </p>
             ) : (
-              <ul className="flex flex-col gap-1">
-                {results.map((r) => {
+              <ul className="flex flex-col gap-1 pb-1">
+                {displayedSearchResults.map((r) => {
                   const isCurrent =
                     !!currentAuthorId && r.user_id === currentAuthorId;
                   return (
@@ -227,7 +363,7 @@ export default function AdminAssignPostDialog({
             )}
           </div>
 
-          <div className="px-4 py-3 border-t border-[var(--border)]/60">
+          <div className="shrink-0 px-4 py-3 border-t border-[var(--border)]/60">
             <button
               type="button"
               onClick={onClose}

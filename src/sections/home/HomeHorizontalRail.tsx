@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import Hangout from "../../components/Hangout";
 import { onPostChanged, onPostDeleted } from "../../lib/postEvents";
+import { onBlockStatusChanged } from "../../lib/blockStatusCache";
 import { applyPostPatch } from "../../lib/applyPostPatch";
 import { getPostDeleteExitDurationMs } from "../../lib/postDeleteExitAnimation";
 
@@ -103,6 +104,22 @@ export default function HomeHorizontalRail({
       deleteExitTimersRef.current.set(postId, t);
     });
     return cleanup;
+  }, []);
+
+  useEffect(() => {
+    const dropByAuthor = (blockedUserId: string) => (prev: FeedItem[]) =>
+      prev.filter((item) => item.author_id !== blockedUserId);
+
+    return onBlockStatusChanged(({ blockedUserId, blocked }) => {
+      if (!blocked) return;
+      const { recent: r, friends: f, location: l } = listsRef.current;
+      if (![...r, ...f, ...l].some((p) => p.author_id === blockedUserId)) {
+        return;
+      }
+      setRecent(dropByAuthor(blockedUserId));
+      setFriends(dropByAuthor(blockedUserId));
+      setLocation(dropByAuthor(blockedUserId));
+    });
   }, []);
 
   const railItemShellClass = useCallback(

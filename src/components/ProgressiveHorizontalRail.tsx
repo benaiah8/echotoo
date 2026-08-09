@@ -23,7 +23,12 @@ import React, {
 import { useScrollStopDetection } from "../hooks/useScrollStopDetection";
 import { useAdaptiveBuffer } from "../hooks/useAdaptiveBuffer";
 import { onPostChanged, onPostDeleted } from "../lib/postEvents";
+import { onBlockStatusChanged } from "../lib/blockStatusCache";
 import { applyPostPatch } from "../lib/applyPostPatch";
+import {
+  onProfileAuthorDisplayUpdated,
+  patchPostAuthorForProfileUpdate,
+} from "../lib/profileAuthorSync";
 import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import FeedLoadErrorState from "./ui/FeedLoadErrorState";
@@ -86,7 +91,7 @@ export interface ProgressiveHorizontalRailProps<T> {
  * />
  * ```
  */
-export default function ProgressiveHorizontalRail<T extends { id: string }>({
+export default function ProgressiveHorizontalRail<T extends { id: string; author_id?: string | null }>({
   loadItems,
   renderItem,
   initialItems,
@@ -149,6 +154,33 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
           }, 0);
         }
         return next;
+      });
+    });
+    return cleanup;
+  }, [setCachedItems]);
+
+  // Patch embedded author when profile display name / username changes
+  useEffect(() => {
+    const cleanup = onProfileAuthorDisplayUpdated((profile) => {
+      setItems((prev) => {
+        let changed = false;
+        const next = prev.map((item) => {
+          const patched = patchPostAuthorForProfileUpdate(
+            item as Record<string, unknown>,
+            profile
+          );
+          if (patched) {
+            changed = true;
+            return patched as T;
+          }
+          return item;
+        });
+        if (changed && setCachedItems) {
+          setTimeout(() => {
+            if (aliveRef.current) setCachedItems(next);
+          }, 0);
+        }
+        return changed ? next : prev;
       });
     });
     return cleanup;
@@ -226,6 +258,28 @@ export default function ProgressiveHorizontalRail<T extends { id: string }>({
       deleteExitTimersRef.current.set(postId, t);
     });
     return cleanup;
+  }, [setCachedItems]);
+
+  useEffect(() => {
+    const removeByAuthor = (blockedUserId: string) => {
+      setItems((prev) => {
+        const next = prev.filter((item) => item.author_id !== blockedUserId);
+        if (next.length === prev.length) return prev;
+        if (setCachedItems) {
+          setTimeout(() => {
+            if (!aliveRef.current) return;
+            setCachedItems(next);
+          }, 0);
+        }
+        return next;
+      });
+    };
+
+    return onBlockStatusChanged(({ blockedUserId, blocked }) => {
+      if (!blocked) return;
+      if (!itemsRef.current.some((i) => i.author_id === blockedUserId)) return;
+      removeByAuthor(blockedUserId);
+    });
   }, [setCachedItems]);
 
   const railItemShellClass = useCallback(

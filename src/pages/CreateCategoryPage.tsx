@@ -151,7 +151,22 @@ export default function CreateCategoryPage() {
           localStorage.setItem("editPostData", JSON.stringify(parsed));
         }
       } else {
-        localStorage.setItem("draftMeta", JSON.stringify(payload));
+        let prev: Record<string, unknown> = {};
+        try {
+          const raw = localStorage.getItem("draftMeta");
+          if (raw) {
+            const parsed = JSON.parse(raw) as unknown;
+            if (parsed && typeof parsed === "object") {
+              prev = parsed as Record<string, unknown>;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        localStorage.setItem(
+          "draftMeta",
+          JSON.stringify({ ...prev, ...payload })
+        );
         notifyLocalDraftPersisted();
       }
     } catch {}

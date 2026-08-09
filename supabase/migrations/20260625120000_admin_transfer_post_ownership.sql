@@ -22,21 +22,30 @@ REVOKE ALL ON FUNCTION public.is_report_reviewer(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.is_report_reviewer(uuid) TO authenticated;
 
 -- ---------------------------------------------------------------------------
--- Audit log (reviewers can SELECT only)
+-- Audit log (reviewers can SELECT only; target_post_id has no FK to posts)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.admin_post_action_audit (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   action text NOT NULL,
-  post_id uuid NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+  target_post_id uuid,
   actor_user_id uuid NOT NULL,
   old_author_id uuid,
   new_author_id uuid,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT admin_post_action_audit_action_check CHECK (
+    action = ANY (
+      ARRAY[
+        'transfer_ownership'::text,
+        'delete_post'::text,
+        'edit_post'::text
+      ]
+    )
+  )
 );
 
-CREATE INDEX IF NOT EXISTS admin_post_action_audit_post_id_idx
-  ON public.admin_post_action_audit (post_id);
+CREATE INDEX IF NOT EXISTS admin_post_action_audit_target_post_id_idx
+  ON public.admin_post_action_audit (target_post_id);
 
 CREATE INDEX IF NOT EXISTS admin_post_action_audit_created_at_idx
   ON public.admin_post_action_audit (created_at DESC);
@@ -117,7 +126,7 @@ BEGIN
 
   INSERT INTO public.admin_post_action_audit (
     action,
-    post_id,
+    target_post_id,
     actor_user_id,
     old_author_id,
     new_author_id

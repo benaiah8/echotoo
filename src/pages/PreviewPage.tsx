@@ -241,6 +241,18 @@ export default function PreviewPage() {
         activities: sanitizedActivities as DraftActivity[],
         isEditMode,
         editPostId: isEditMode ? editData.postId : undefined,
+        isAdminEdit: isEditMode && editData?.isAdminEdit === true,
+        authorUserId: editData?.authorUserId,
+        originalPostType: isEditMode
+          ? (editData.type as "experience" | "hangout" | undefined)
+          : undefined,
+        isAnonymous: isEditMode ? (editData?.is_anonymous ?? false) : undefined,
+        anonymousName: isEditMode
+          ? (editData?.anonymous_name ?? finalMeta.anonymousName ?? null)
+          : undefined,
+        anonymousAvatar: isEditMode
+          ? (editData?.anonymous_avatar ?? finalMeta.anonymousAvatar ?? null)
+          : undefined,
         ratingEnabled: finalMeta.ratingEnabled ?? false,
       });
 

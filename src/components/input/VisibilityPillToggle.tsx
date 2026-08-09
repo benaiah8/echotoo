@@ -16,7 +16,9 @@ export default function VisibilityPillToggle({
   const stops: Visibility[] = ["public", "friends"];
   const [pos, setPos] = useState<Visibility>(value);
   const trackRef = useRef<HTMLDivElement>(null);
-  useEffect(() => setPos(value), [value]);
+  useEffect(() => {
+    setPos(value);
+  }, [value]);
 
   const snapFromClientX = (clientX: number) => {
     const el = trackRef.current;

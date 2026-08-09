@@ -76,6 +76,10 @@ interface Props {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
+  /** Bump to soft-refresh first page in place (e.g. native app resume) */
+  softRefreshEpoch?: number;
+  /** Refetch offset 0 after showing cached / initial Home rows */
+  backgroundRevalidateOnMount?: boolean;
   /** Home Phase 1.5: hide horizontal Discover More rails while post search mode is active. */
   suppressBrowseRails?: boolean;
   /** Date spotlight (Today / Tomorrow) above normal feed — does not remount ProgressiveFeed */
@@ -115,6 +119,8 @@ export default function HomePostsSection({
   suppressBrowseRails = false,
   isVisible = true,
   tabId = "home",
+  softRefreshEpoch,
+  backgroundRevalidateOnMount = false,
   dateSpotlightActive = false,
   dateFilter = "none",
   dateSpotlightItems = [],
@@ -428,6 +434,8 @@ export default function HomePostsSection({
           setCachedItems={setCachedItems}
           isVisible={isVisible}
           tabId={tabId}
+          softRefreshEpoch={softRefreshEpoch}
+          backgroundRevalidateOnMount={backgroundRevalidateOnMount}
           enableVirtualScrolling={false} // Disable for now, can enable later
           bufferSize="adaptive"
           enableLazyLoading={true}

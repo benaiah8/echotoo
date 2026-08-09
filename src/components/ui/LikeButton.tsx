@@ -32,7 +32,7 @@ export default function LikeButton({
   size = 22,
   compactCount = false,
   showCount = false,
-  likeCount = 0,
+  likeCount,
   onLikeChange,
   isLiked: initialIsLiked, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
   post, // [PHASE 3] Optional post data for personalization
@@ -40,7 +40,9 @@ export default function LikeButton({
   const [isLiked, setIsLiked] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isToggling, setIsToggling] = useState(false);
-  const [currentCount, setCurrentCount] = useState(likeCount);
+  const [currentCount, setCurrentCount] = useState(() =>
+    typeof likeCount === "number" ? likeCount : 0
+  );
   const [isAnimating, setIsAnimating] = useState(false);
   const authState = useSelector((state: RootState) => state.auth);
   const { authLoading, ensureAuthed } = useAuthActionGate();
@@ -124,10 +126,14 @@ export default function LikeButton({
   // so canonical props always win (fixes missed sync when updates arrived during pendingRef).
   useEffect(() => {
     if (isToggling) return;
-    const isLikedProp = initialIsLiked ?? false;
-    const countProp = likeCount ?? 0;
-    setIsLiked((prev) => (prev !== isLikedProp ? isLikedProp : prev));
-    setCurrentCount(countProp);
+    if (typeof initialIsLiked === "boolean") {
+      setIsLiked((prev) =>
+        prev !== initialIsLiked ? initialIsLiked : prev
+      );
+    }
+    if (typeof likeCount === "number") {
+      setCurrentCount(likeCount);
+    }
   }, [initialIsLiked, likeCount, isToggling]);
 
   const handleToggleLike = async () => {

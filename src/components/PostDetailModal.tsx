@@ -14,6 +14,11 @@ import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 import { supabase } from "../lib/supabaseClient";
 import { onPostChanged } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
+import { applyPendingPostPatchToItem } from "../lib/pendingPostPatches";
+import {
+  onProfileAuthorDisplayUpdated,
+  patchPostAuthorForProfileUpdate,
+} from "../lib/profileAuthorSync";
 import { mergeUiCriticalPostFields } from "../lib/mergeUiCriticalPostFields";
 import { PostDetailDismissContext } from "../context/PostDetailDismissContext";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
@@ -72,7 +77,11 @@ export default function PostDetailModal() {
 
   const hasMatchingInitialPost = !!id && !!initialPost && initialPost.id === id;
   const [post, setPost] = useState<Post | null>(() => {
-    if (hasMatchingInitialPost) return initialPost as Post;
+    if (hasMatchingInitialPost) {
+      return applyPendingPostPatchToItem(
+        initialPost as Record<string, unknown> & { id?: string }
+      ) as Post;
+    }
     return null;
   });
   const [loading, setLoading] = useState(!hasMatchingInitialPost);
@@ -164,7 +173,13 @@ export default function PostDetailModal() {
 
   const hasMatching = !!id && !!initialPost && initialPost.id === id;
   useEffect(() => {
-    setPost(hasMatching ? (initialPost as Post) : null);
+    setPost(
+      hasMatching
+        ? (applyPendingPostPatchToItem(
+            initialPost as Record<string, unknown> & { id?: string }
+          ) as Post)
+        : null
+    );
     setLoading(!hasMatching);
     setError(null);
   }, [id, initialPost, hasMatching]);
@@ -225,6 +240,20 @@ export default function PostDetailModal() {
       setPost((prev) => {
         if (!prev || prev.id !== changedPostId) return prev;
         return applyPostPatch(prev as Record<string, unknown>, patch) as Post;
+      });
+    });
+    return cleanup;
+  }, []);
+
+  useEffect(() => {
+    const cleanup = onProfileAuthorDisplayUpdated((profile) => {
+      setPost((prev) => {
+        if (!prev) return prev;
+        const patched = patchPostAuthorForProfileUpdate(
+          prev as Record<string, unknown>,
+          profile
+        );
+        return patched ? (patched as Post) : prev;
       });
     });
     return cleanup;

@@ -199,7 +199,7 @@ function Post({
               if (!cachedProfile && author) {
                 setCachedProfile({
                   id: author.id,
-                  user_id: "", // Will be fetched if needed
+                  user_id: authorId,
                   username: author.username,
                   display_name: author.display_name,
                   avatar_url: author.avatar_url,

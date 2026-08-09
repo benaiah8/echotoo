@@ -37,6 +37,29 @@ export type PostPatch = {
     display_name: string | null;
     avatar_url: string | null;
   } | null;
+  /** Admin / republish content sync — patches visible feed/detail cards without refetch. */
+  caption?: string | null;
+  tags?: string[] | null;
+  visibility?: "public" | "friends" | "private";
+  selected_dates?: string[] | null;
+  rsvp_capacity?: number | null;
+  is_recurring?: boolean | null;
+  recurrence_days?: string[] | null;
+  activities?: Array<{
+    id?: string;
+    title: string | null;
+    images: string[] | null;
+    order_idx: number | null;
+    location_name?: string | null;
+    location_desc?: string | null;
+    location_url?: string | null;
+    location_notes?: string | null;
+    additional_info?: { title: string; value: string }[] | null;
+    tags?: string[] | null;
+  }>;
+  first_image_url?: string | null;
+  has_images?: boolean;
+  image_count?: number;
 };
 
 export function emitPostChanged(postId: string, patch: PostPatch): void {
@@ -70,4 +93,43 @@ export function onPostDeleted(handler: (postId: string) => void): () => void {
   };
   window.addEventListener(POST_DELETED_EVENT, wrapped);
   return () => window.removeEventListener(POST_DELETED_EVENT, wrapped);
+}
+
+/** Fired after admin ownership transfer — list membership changes, not deletion. */
+export const POST_OWNERSHIP_CHANGED_EVENT = "post:ownershipChanged" as const;
+
+export type PostOwnershipChangedDetail = {
+  postId: string;
+  oldAuthorId: string;
+  newAuthorId: string;
+};
+
+export function emitPostOwnershipChanged(
+  postId: string,
+  oldAuthorId: string,
+  newAuthorId: string
+): void {
+  window.dispatchEvent(
+    new CustomEvent(POST_OWNERSHIP_CHANGED_EVENT, {
+      detail: { postId, oldAuthorId, newAuthorId },
+    })
+  );
+}
+
+export function onPostOwnershipChanged(
+  handler: (detail: PostOwnershipChangedDetail) => void
+): () => void {
+  const wrapped = (e: Event) => {
+    const detail = (e as CustomEvent<PostOwnershipChangedDetail>).detail;
+    if (
+      detail &&
+      typeof detail.postId === "string" &&
+      typeof detail.oldAuthorId === "string" &&
+      typeof detail.newAuthorId === "string"
+    ) {
+      handler(detail);
+    }
+  };
+  window.addEventListener(POST_OWNERSHIP_CHANGED_EVENT, wrapped);
+  return () => window.removeEventListener(POST_OWNERSHIP_CHANGED_EVENT, wrapped);
 }

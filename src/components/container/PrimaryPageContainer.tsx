@@ -20,7 +20,9 @@ export default function PrimaryPageContainer({
   topSafeArea = false,
   capacitorNotchScrim = false,
 }: Props) {
-  useEffect(() => window.scrollTo(0, 0), []);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
 
   return (
     <div className="w-full bg-[var(--bg)] text-[var(--text)] min-h-screen flex flex-col">

@@ -6,6 +6,7 @@ import {
   assertPlainTextAllowedForUgc,
 } from "../../lib/ugcTextPolicy";
 import { mapMediaUploadError } from "../../lib/mapMediaUploadError";
+import { getCachedProfile, setCachedProfile } from "../../lib/profileCache";
 
 const PROFILE_AVATAR_UPLOAD_LOG = "[ProfileAvatarUpload]";
 
@@ -117,6 +118,35 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
         .eq("id", profileId);
 
       if (upErr) throw upErr;
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const authUserId = session?.user?.id ?? null;
+      const existing = getCachedProfile(profileId);
+
+      const profilePayload = authUserId
+        ? {
+            id: profileId,
+            user_id: authUserId,
+            username: username.trim(),
+            display_name: displayName.trim(),
+            bio: bio.trim(),
+            avatar_url: avatarUrl || null,
+            xp: existing?.xp ?? null,
+            member_no: existing?.member_no ?? null,
+            instagram_url: instagramUrl.trim() || null,
+            tiktok_url: tiktokUrl.trim() || null,
+            telegram_url: telegramUrl.trim() || null,
+            is_private: existing?.is_private ?? null,
+            social_media_public: existing?.social_media_public ?? null,
+          }
+        : null;
+
+      if (profilePayload) {
+        setCachedProfile(profilePayload as any);
+      }
+
       onClose();
 
       // Mark as onboarded so /u/me does not reopen the modal after saving
@@ -133,7 +163,9 @@ export default function EditProfileModal({ open, onClose, profileId }: Props) {
 
       // Tell the rest of the app to refresh this profile (ProfilePage listener will refetch)
       window.dispatchEvent(
-        new CustomEvent("profile:updated", { detail: { id: profileId } })
+        new CustomEvent("profile:updated", {
+          detail: { id: profileId, profile: profilePayload },
+        })
       );
 
       // Scrub ?edit=1 and soft-refresh (data will re-fetch via listeners)

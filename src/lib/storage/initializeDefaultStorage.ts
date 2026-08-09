@@ -24,7 +24,11 @@ import { MemoryAdapter } from './adapters/MemoryAdapter';
 import { LocalStorageAdapter } from './adapters/LocalStorageAdapter';
 import { IndexedDBAdapter } from './adapters/IndexedDBAdapter';
 // [PHASE 1.2] Import cache version manager for unified version checking
-import { checkAndClearAllCaches } from '../cacheVersionManager';
+import {
+  checkAndClearAllCaches,
+  checkAndMigrateFeedCacheSchema,
+  migrateFeedCacheSchemaSync,
+} from '../cacheVersionManager';
 
 /**
  * Initialize the default storage manager with all web adapters
@@ -46,6 +50,17 @@ export function initializeDefaultStorage(
   storage.addAdapter(new MemoryAdapter(50 * 1024 * 1024)); // 50MB
   storage.addAdapter(new LocalStorageAdapter('storage:', 5 * 1024 * 1024)); // 5MB
   storage.addAdapter(new IndexedDBAdapter(100 * 1024 * 1024)); // 100MB
+
+  // Feed-cache schema migration (sync localStorage) before React reads home_feed_v1 snapshots
+  const didMigrateFeedCache = migrateFeedCacheSchemaSync();
+  if (didMigrateFeedCache) {
+    checkAndMigrateFeedCacheSchema().catch((error) => {
+      console.error(
+        '[initializeDefaultStorage] Error clearing feed cache after schema migration:',
+        error
+      );
+    });
+  }
 
   // [PHASE 1.2] Check cache version and clear all caches if version changed
   // This must happen after StorageManager is initialized so we can clear StorageManager caches

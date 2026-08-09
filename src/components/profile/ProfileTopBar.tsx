@@ -84,6 +84,7 @@ export default function ProfileTopBar({
   onRequestLogout,
   /** Own profile: open full-screen editor scrolled to account deletion (parent owns flow). */
   onRequestDeleteAccount,
+  onRequestBlockList,
 }: {
   onLogoClick?: () => void;
   onSearch?: (q: string) => void;
@@ -105,6 +106,7 @@ export default function ProfileTopBar({
   onRequestEditProfile?: () => void;
   onRequestLogout?: () => void;
   onRequestDeleteAccount?: () => void;
+  onRequestBlockList?: () => void;
 }) {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
@@ -128,6 +130,7 @@ export default function ProfileTopBar({
   const showHangoutReminderMenuItem = Boolean(showHangoutReminderSetupInMenu);
   const showEditProfile = Boolean(onRequestEditProfile);
   const showLogout = Boolean(onRequestLogout);
+  const showBlockList = Boolean(onRequestBlockList);
   /** Own profile: full action sheet + scroll lock; other profiles keep compact pill menu. */
   const useOwnProfileActionSheet = showEditProfile && showLogout;
   const showProfileOverflowMenu =
@@ -570,6 +573,21 @@ export default function ProfileTopBar({
                     <span>Share</span>
                     <span className={ownSheetIconWrapClass}>
                       <PiShareFat size={14} aria-hidden />
+                    </span>
+                  </button>
+                )}
+                {showBlockList && (
+                  <button
+                    type="button"
+                    className={ownSheetRowClass}
+                    onClick={() => {
+                      onRequestBlockList?.();
+                      closeProfileMenu();
+                    }}
+                  >
+                    <span>Blocked accounts</span>
+                    <span className={ownSheetIconWrapClass}>
+                      <PiProhibit size={14} aria-hidden />
                     </span>
                   </button>
                 )}

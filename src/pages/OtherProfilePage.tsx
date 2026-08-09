@@ -66,13 +66,17 @@ import NotificationBell from "../components/ui/NotificationBell";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
 import toast from "react-hot-toast";
 import ReportModal from "../components/ui/ReportModal";
-import { invalidatePostDetailCacheForViewer } from "../api/queries/getPostById";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import {
   blockUser,
   isBlockingUser,
   unblockUser,
 } from "../api/services/blocks";
+import {
+  isUserBlockedLocally,
+  loadMyBlockedUserIds,
+  markUserBlocked,
+} from "../lib/blockStatusCache";
 import { submitProfileReport } from "../api/services/reports";
 import { clearAllCommentsClientCache } from "../api/services/comments";
 import {
@@ -83,10 +87,8 @@ import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
 import { shareUrl } from "../lib/shareUrl";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import {
-  HOME_TAB_REFRESH_EVENT,
   PROFILE_TAB_REFRESH_EVENT,
 } from "../lib/homeRefreshEvents";
-import { dataCache } from "../lib/dataCache";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 
 const AUTOMATIC_BLOCK_MODERATION_DETAILS =
@@ -230,7 +232,9 @@ export default function OtherProfilePage({
   const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [blockActionLoading, setBlockActionLoading] = useState(false);
-  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockCheck, setBlockCheck] = useState<
+    "pending" | "not_blocked" | "blocked"
+  >("not_blocked");
 
   const handleRequestProfileReport = useCallback(() => {
     const authLoading = authState?.loading ?? true;
@@ -245,21 +249,15 @@ export default function OtherProfilePage({
     setReportDraft(buildProfileReportDraftFromProfile(profile));
   }, [authState?.loading, dispatch, isAuthenticated, profile]);
 
-  const flushCachesAfterBlockChange = useCallback(async () => {
-    await dataCache.clearFeedCache();
-    if (profile?.id) invalidateProfile(profile.id);
-    invalidatePostDetailCacheForViewer(viewerId);
-    window.dispatchEvent(new CustomEvent(PROFILE_TAB_REFRESH_EVENT));
-    window.dispatchEvent(new CustomEvent(HOME_TAB_REFRESH_EVENT));
-  }, [profile?.id, viewerId]);
-
   const handleUnblockUser = useCallback(async () => {
     if (!profile?.user_id) return;
     setBlockActionLoading(true);
     try {
-      await unblockUser(profile.user_id);
-      await flushCachesAfterBlockChange();
-      setIsBlocked(false);
+      await unblockUser(profile.user_id, {
+        affectedProfileId: profile.id,
+        viewerProfileId: viewerId,
+      });
+      setBlockCheck("not_blocked");
       setProfileReloadNonce((n) => n + 1);
       toast.success("Unblocked");
     } catch (e) {
@@ -267,13 +265,16 @@ export default function OtherProfilePage({
     } finally {
       setBlockActionLoading(false);
     }
-  }, [profile?.user_id, flushCachesAfterBlockChange]);
+  }, [profile?.user_id, profile?.id, viewerId]);
 
   const handleConfirmBlockUser = useCallback(async () => {
     if (!profile?.user_id) return;
     setBlockActionLoading(true);
     try {
-      await blockUser(profile.user_id);
+      await blockUser(profile.user_id, {
+        affectedProfileId: profile.id,
+        viewerProfileId: viewerId,
+      });
 
       try {
         if (profile.id) {
@@ -291,11 +292,10 @@ export default function OtherProfilePage({
         );
       }
 
-      await flushCachesAfterBlockChange();
       clearAllCommentsClientCache();
 
       setShowBlockConfirm(false);
-      setIsBlocked(true);
+      setBlockCheck("blocked");
       setProfile(null);
       navigate(Paths.home, { replace: true });
       toast.success("Blocked");
@@ -304,7 +304,7 @@ export default function OtherProfilePage({
     } finally {
       setBlockActionLoading(false);
     }
-  }, [profile?.user_id, profile?.id, flushCachesAfterBlockChange, navigate]);
+  }, [profile?.user_id, profile?.id, viewerId, navigate]);
 
   const [showInfoModal, setShowInfoModal] = useState(false);
   const pendingAuthAfterWelcomeCloseRef = useRef(false);
@@ -325,14 +325,31 @@ export default function OtherProfilePage({
     let cancelled = false;
     (async () => {
       if (!profile?.user_id || !viewerId || profile.user_id === viewerId) {
-        if (!cancelled) setIsBlocked(false);
+        if (!cancelled) setBlockCheck("not_blocked");
         return;
       }
+
+      if (isUserBlockedLocally(profile.user_id)) {
+        if (!cancelled) setBlockCheck("blocked");
+        return;
+      }
+
+      if (!cancelled) setBlockCheck("pending");
+
       try {
-        const b = await isBlockingUser(profile.user_id);
-        if (!cancelled) setIsBlocked(b);
+        await loadMyBlockedUserIds();
+        if (cancelled) return;
+        if (isUserBlockedLocally(profile.user_id)) {
+          setBlockCheck("blocked");
+          return;
+        }
+
+        const blocked = await isBlockingUser(profile.user_id);
+        if (cancelled) return;
+        if (blocked) markUserBlocked(profile.user_id);
+        setBlockCheck(blocked ? "blocked" : "not_blocked");
       } catch {
-        if (!cancelled) setIsBlocked(false);
+        if (!cancelled) setBlockCheck("not_blocked");
       }
     })();
     return () => {
@@ -347,10 +364,23 @@ export default function OtherProfilePage({
         profile &&
           viewerId &&
           profile.user_id !== viewerId &&
-          isBlocked
+          blockCheck === "blocked"
       ),
-    [profile, viewerId, isBlocked]
+    [profile, viewerId, blockCheck]
   );
+
+  const blockCheckPending = useMemo(
+    () =>
+      Boolean(
+        profile &&
+          viewerId &&
+          profile.user_id !== viewerId &&
+          blockCheck === "pending"
+      ),
+    [profile, viewerId, blockCheck]
+  );
+
+  const hideProfileContent = shellMode || blockCheckPending;
 
   useEffect(() => {
     const onTabRefresh = () => {
@@ -597,7 +627,7 @@ export default function OtherProfilePage({
 
   // Hero section: Follow counts - Load cached immediately, then fetch fresh
   useEffect(() => {
-    if (!profile?.id || shellMode) {
+    if (!profile?.id || hideProfileContent) {
       setCountsLoading(false);
       return;
     }
@@ -632,12 +662,12 @@ export default function OtherProfilePage({
         }
         setCountsLoading(false);
       });
-  }, [profile?.id, shellMode]);
+  }, [profile?.id, hideProfileContent]);
 
   // Hero section: Load cached follow status immediately, then fetch fresh
   useEffect(() => {
     (async () => {
-      if (!profile?.id || shellMode) {
+      if (!profile?.id || hideProfileContent) {
         setFollowStatus(null);
         return;
       }
@@ -716,7 +746,7 @@ export default function OtherProfilePage({
         setFollowStatusLoading(false);
       }
     })();
-  }, [profile?.id, shellMode]);
+  }, [profile?.id, hideProfileContent]);
 
   // Check if viewer has access to private account content
   useEffect(() => {
@@ -724,7 +754,7 @@ export default function OtherProfilePage({
       setHasAccess(null);
       return;
     }
-    if (shellMode) {
+    if (hideProfileContent) {
       setHasAccess(false);
       return;
     }
@@ -741,7 +771,7 @@ export default function OtherProfilePage({
     } else {
       setHasAccess(false);
     }
-  }, [profile?.is_private, followStatus, shellMode]);
+  }, [profile?.is_private, followStatus, hideProfileContent]);
 
   // Cleanup tooltip timer on unmount
   useEffect(() => {
@@ -754,7 +784,7 @@ export default function OtherProfilePage({
 
   // Hero section: Real-time follow updates
   useEffect(() => {
-    if (!profile?.id || shellMode) return;
+    if (!profile?.id || hideProfileContent) return;
     const pid = profile.id;
 
     const channel = supabase
@@ -806,7 +836,7 @@ export default function OtherProfilePage({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [profile?.id, shellMode]);
+  }, [profile?.id, hideProfileContent]);
 
   // Generate profile URL
   const profileUrl = useMemo(() => {
@@ -1044,7 +1074,7 @@ export default function OtherProfilePage({
                 !!viewerId &&
                 profile.user_id !== viewerId
               }
-              isBlocked={isBlocked}
+              isBlocked={blockCheck === "blocked"}
               onRequestBlock={() => setShowBlockConfirm(true)}
               onRequestUnblock={handleUnblockUser}
               blockBusy={blockActionLoading}
@@ -1052,7 +1082,7 @@ export default function OtherProfilePage({
             />
           </div>
 
-          {userQuery && !shellMode && (
+          {userQuery && !hideProfileContent && (
             <div
               className="fixed inset-0 z-[60]"
               onClick={() => setUserQuery("")}
@@ -1086,7 +1116,7 @@ export default function OtherProfilePage({
             <div className="relative w-full">
               <ProfileHeroAvatarAtmosphere
                 avatarPath={profile?.avatar_url}
-                active={!shellMode}
+                active={!shellMode && !blockCheckPending}
               />
               <div
                 className="relative z-[1]"
@@ -1105,6 +1135,10 @@ export default function OtherProfilePage({
                       Posts and profile details are hidden. Use Unblock in the
                       bar above to restore access.
                     </p>
+                  </div>
+                ) : blockCheckPending ? (
+                  <div className="px-4 py-12 text-center max-w-sm mx-auto">
+                    <p className="text-sm text-[var(--text)]/60">Loading…</p>
                   </div>
                 ) : (
                   <>
@@ -1322,7 +1356,7 @@ export default function OtherProfilePage({
             </div>
 
             {/* Posts Section - Pass hasAccess + visible (parent tab active) */}
-            {profile && !shellMode && (
+            {profile && !hideProfileContent && (
               <OtherProfilePostsSection
                 hasAccess={hasAccess}
                 visible={isOtherProfileVisible}
@@ -1331,7 +1365,7 @@ export default function OtherProfilePage({
             )}
 
             {/* Modals and drawers */}
-            {profile && !shellMode && (
+            {profile && !hideProfileContent && (
               <>
                 {drawerOpen && (
                   <FollowListDrawer

@@ -32,6 +32,7 @@ import {
   readPersistedHomeFeed,
   writePersistedHomeFeed,
 } from "../lib/homeFeedListCache";
+import { applyPendingPostPatchesToItems } from "../lib/pendingPostPatches";
 import { mixHangoutsAndExperiences } from "../lib/horizontalRailFilters";
 import { filterRailsItems } from "../lib/feedExpiryFilters";
 import { preloadImages } from "../lib/imageOptimization";
@@ -48,6 +49,7 @@ import {
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import { subscribeAndroidHardwareBack } from "../lib/androidPostDetailModalBack";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { isPostDetailRoutePath } from "../lib/inviteOverlayHistory";
 import {
   logTodaySpotlight,
@@ -583,10 +585,15 @@ export default function HomePage() {
   /** Memory + persisted first-page snapshot — sync read for cold offline open before dataCache.ready. */
   const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
     const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
-    const persisted = readPersistedHomeFeed(feedCacheKey);
-    if (persisted?.items?.length) return persisted.items;
-    return undefined;
+    let items: FeedItem[] | undefined;
+    if (Array.isArray(cached) && cached.length > 0) {
+      items = cached;
+    } else {
+      const persisted = readPersistedHomeFeed(feedCacheKey);
+      if (persisted?.items?.length) items = persisted.items;
+    }
+    if (!items?.length) return undefined;
+    return applyPendingPostPatchesToItems(items);
   }, [feedCacheKey]);
 
   /** Date spotlight fetch — independent of ProgressiveFeed; all date filters use spotlight. */
@@ -729,6 +736,10 @@ export default function HomePage() {
 
   /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
+  /** In-place Home feed soft refresh (native resume) without remounting ProgressiveFeed */
+  const [homeFeedSoftRefreshEpoch, setHomeFeedSoftRefreshEpoch] = useState(1);
+  const isHomeTabActiveRef = useRef(isHomeTabActive);
+  isHomeTabActiveRef.current = isHomeTabActive;
 
   useEffect(() => {
     const onRefreshRequest = (e: Event) => {
@@ -757,6 +768,37 @@ export default function HomePage() {
       window.removeEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     };
   }, [isHomeTabActive, clearAllHomeFilters]);
+
+  useEffect(() => {
+    if (!isNativeApp()) return;
+
+    let cancelled = false;
+    let removeResume: (() => void) | undefined;
+
+    void (async () => {
+      try {
+        const { App } = await import("@capacitor/app");
+        const handle = await App.addListener("resume", () => {
+          if (!isHomeTabActiveRef.current) return;
+          setHomeFeedSoftRefreshEpoch((n) => n + 1);
+        });
+        if (!cancelled) {
+          removeResume = () => {
+            void handle.remove();
+          };
+        } else {
+          void handle.remove();
+        }
+      } catch {
+        /* noop */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      removeResume?.();
+    };
+  }, []);
 
   const {
     pullPx,
@@ -1072,9 +1114,14 @@ export default function HomePage() {
 
   const homePostsGetCachedItems = useCallback(() => {
     const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
+    if (Array.isArray(cached) && cached.length > 0) {
+      return applyPendingPostPatchesToItems(cached);
+    }
     const persisted = readPersistedHomeFeed(feedCacheKey);
-    return persisted?.items?.length ? persisted.items : null;
+    if (persisted?.items?.length) {
+      return applyPendingPostPatchesToItems(persisted.items);
+    }
+    return null;
   }, [feedCacheKey]);
 
   const homePostsSetCachedItems = useCallback(
@@ -1125,6 +1172,8 @@ export default function HomePage() {
             getCachedItems={homePostsGetCachedItems}
             setCachedItems={homePostsSetCachedItems}
             feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
+            backgroundRevalidateOnMount
+            softRefreshEpoch={homeFeedSoftRefreshEpoch}
             dateSpotlightActive={dateSpotlightActive}
             dateFilter={dateFilter}
             dateSpotlightItems={dateSpotlightItems}
@@ -1245,6 +1294,8 @@ export default function HomePage() {
                 getCachedItems={homePostsGetCachedItems}
                 setCachedItems={homePostsSetCachedItems}
                 feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
+                backgroundRevalidateOnMount
+                softRefreshEpoch={homeFeedSoftRefreshEpoch}
                 dateSpotlightActive={dateSpotlightActive}
                 dateFilter={dateFilter}
                 dateSpotlightItems={dateSpotlightItems}

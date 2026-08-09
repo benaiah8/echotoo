@@ -27,10 +27,13 @@ export type EditActivitySourceRow = {
 /** Post row from `posts` table (subset). */
 export type EditPostSourceRow = {
   id: string;
+  author_id?: string;
   type: string;
   caption: string | null;
   visibility?: string | null;
   is_anonymous?: boolean | null;
+  anonymous_name?: string | null;
+  anonymous_avatar?: string | null;
   rsvp_capacity?: number | null;
   selected_dates?: string[] | null;
   is_recurring?: boolean | null;
@@ -70,6 +73,8 @@ export type CanonicalEditPostData = {
   caption: string | null;
   visibility: string | null | undefined;
   is_anonymous: boolean | null;
+  anonymous_name?: string | null;
+  anonymous_avatar?: string | null;
   rsvp_capacity: number | null;
   selected_dates: string[] | null;
   is_recurring: boolean | null;
@@ -82,6 +87,10 @@ export type CanonicalEditPostData = {
   /** When set, republish navigates with `state` so overlay detail restores (see {@link navigateAfterEditPublish}). */
   returnState?: EditPostReturnState;
   activities: EditActivityClientShape[];
+  /** Reviewer editing another user's post — save via admin RPC. */
+  isAdminEdit?: boolean;
+  /** Original post owner auth user id (`posts.author_id`) for cache invalidation. */
+  authorUserId?: string;
 };
 
 export function normalizePostTypeForEdit(
@@ -137,6 +146,8 @@ export function buildCanonicalEditPostData(
     caption: post.caption,
     visibility: post.visibility,
     is_anonymous: post.is_anonymous ?? null,
+    anonymous_name: post.anonymous_name ?? null,
+    anonymous_avatar: post.anonymous_avatar ?? null,
     rsvp_capacity: post.rsvp_capacity ?? null,
     selected_dates: post.selected_dates ?? null,
     is_recurring: post.is_recurring ?? null,
@@ -147,6 +158,39 @@ export function buildCanonicalEditPostData(
     ...(returnState !== undefined ? { returnState } : {}),
     activities: activities.map(mapActivityRowToClientShape),
   };
+}
+
+/** Admin edit bootstrap: same as owner edit plus reviewer flags. */
+export function buildAdminEditPostData(
+  post: EditPostSourceRow,
+  activities: EditActivitySourceRow[],
+  options?: {
+    returnPath?: string | null;
+    returnState?: EditPostReturnState | null;
+  }
+): CanonicalEditPostData {
+  const base = buildCanonicalEditPostData(post, activities, options);
+  const authorUserId = post.author_id;
+  if (!authorUserId) {
+    throw new Error("Missing post author for admin edit");
+  }
+  return {
+    ...base,
+    isAdminEdit: true,
+    authorUserId,
+  };
+}
+
+export function readCanonicalEditPostData(): CanonicalEditPostData | null {
+  try {
+    const raw = localStorage.getItem(EDIT_POST_DATA_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CanonicalEditPostData;
+    if (!parsed?.postId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 export function persistCanonicalEditPostData(

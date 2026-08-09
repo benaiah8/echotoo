@@ -97,9 +97,10 @@ export default function CreateCategoriesCompactSection({
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [categoriesData.length]);
 
-  // keep meta in sync (used elsewhere)
+  // keep meta in sync (used elsewhere); preserve unknown draftMeta fields (e.g. publishPostId)
   useEffect(() => {
-    write("draftMeta", meta);
+    const prev = read<Record<string, unknown>>("draftMeta", {});
+    write("draftMeta", { ...prev, ...meta });
     notifyLocalDraftPersisted();
   }, [meta]);
 

@@ -884,7 +884,7 @@ export async function getProfileByIdOrUsername(
   const isUuid = /^[0-9a-f-]{36}$/i.test(identifier);
   if (isUuid) {
     const cached = getCachedProfile(identifier);
-    if (cached) {
+    if (cached && AUTH_USER_ID_UUID_RE.test(cached.user_id)) {
       console.log(
         `[getProfileByIdOrUsername] ✅ Cache HIT by profile ID: ${identifier}`
       );

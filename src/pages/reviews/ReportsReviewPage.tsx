@@ -120,6 +120,12 @@ export default function ReportsReviewPage() {
                 postType
                   ? postDetailPath(postType, r.target_post_id)
                   : null;
+              const profileReportHref =
+                r.report_kind === "profile" && r.target_profile_id
+                  ? `/u/${r.target_profile_id}`
+                  : null;
+              const linkButtonClass =
+                "font-mono text-[10px] text-left text-[var(--brand)] underline decoration-[var(--brand)]/35 underline-offset-2 hover:opacity-90 active:opacity-80 break-all touch-manipulation";
               return (
                 <li
                   key={r.id}
@@ -161,7 +167,7 @@ export default function ReportsReviewPage() {
                                 r.target_post_id
                               );
                             }}
-                            className="font-mono text-[10px] text-left text-[var(--brand)] underline decoration-[var(--brand)]/35 underline-offset-2 hover:opacity-90 active:opacity-80 break-all touch-manipulation"
+                            className={linkButtonClass}
                           >
                             {r.target_post_id}
                           </button>
@@ -171,7 +177,20 @@ export default function ReportsReviewPage() {
                       </div>
                       <div>
                         <span className="text-[var(--text)]/55">profile: </span>
-                        {r.target_profile_id ?? "—"}
+                        {profileReportHref ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!r.target_profile_id) return;
+                              navigate(profileReportHref);
+                            }}
+                            className={linkButtonClass}
+                          >
+                            View profile
+                          </button>
+                        ) : (
+                          (r.target_profile_id ?? "—")
+                        )}
                       </div>
                       <div>
                         <span className="text-[var(--text)]/55">

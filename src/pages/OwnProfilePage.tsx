@@ -22,6 +22,8 @@ import {
   setCachedProfile,
   invalidateProfile,
 } from "../lib/profileCache";
+import { dataCache } from "../lib/dataCache";
+import { clearPersistedProfilePosts } from "../lib/profilePostListCache";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import {
   getCachedAvatar,
@@ -41,6 +43,7 @@ import {
 } from "../lib/followCountsCache";
 import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
+import BlockListDrawer from "../components/profile/BlockListDrawer";
 import AvatarPreviewLightbox, {
   AvatarPreviewLightboxAction,
 } from "../components/profile/AvatarPreviewLightbox";
@@ -187,6 +190,7 @@ export default function OwnProfilePage() {
     useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [blockListOpen, setBlockListOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showPrivateTooltip, setShowPrivateTooltip] = useState(false);
   const tooltipTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -239,14 +243,20 @@ export default function OwnProfilePage() {
     const onTabRefresh = () => {
       if (!isProfileTabVisible) return;
 
-      /** Keep profile_* feed keys in memory for initialItems/getCachedItems during epoch remount; success overwrites via setCachedItems */
       if (profile?.id) invalidateProfile(profile.id);
+
+      const createdOwnerId = profile?.user_id;
+      if (createdOwnerId) {
+        dataCache.delete(`profile_created_${createdOwnerId}`);
+        clearPersistedProfilePosts("created", createdOwnerId);
+      }
+
       setProfileFeedRefreshEpoch((n) => n + 1);
     };
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
     return () =>
       window.removeEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
-  }, [isProfileTabVisible, profile?.id]);
+  }, [isProfileTabVisible, profile?.id, profile?.user_id]);
 
   /** Publish success → profile: scroll top, remount Created feed, then clear one-shot nav state */
   useEffect(() => {
@@ -912,6 +922,7 @@ export default function OwnProfilePage() {
               onRequestEditProfile={() => setFullScreenEditOpen(true)}
               onRequestLogout={() => setShowLogoutConfirm(true)}
               onRequestDeleteAccount={handleRequestDeleteAccount}
+              onRequestBlockList={() => setBlockListOpen(true)}
             />
           </div>
 
@@ -1180,6 +1191,10 @@ export default function OwnProfilePage() {
                     mode={drawerOpen}
                   />
                 )}
+                <BlockListDrawer
+                  open={blockListOpen}
+                  onClose={() => setBlockListOpen(false)}
+                />
                 {profile.avatar_url && avatarDisplayUrl(profile.avatar_url) && (
                   <AvatarPreviewLightbox
                     src={avatarDisplayUrl(profile.avatar_url)!}
