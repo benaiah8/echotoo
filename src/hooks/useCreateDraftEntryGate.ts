@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -9,9 +10,11 @@ import {
 import {
   discardAllDrafts,
   ensureDraftPublishPostId,
-  hasAnyDraftData,
+  isLocalCreateDraftOwnedBy,
+  prepareFreshOwnedCreateDraft,
   runCreateEntryDraftCleanup,
 } from "../lib/drafts";
+import { supabase } from "../lib/supabaseClient";
 
 const EXPIRED_DRAFT_TOAST = "Draft expired; starting fresh.";
 
@@ -37,6 +40,17 @@ export function useCreateDraftEntryGate(
   const navigate = useNavigate();
   const [gateOpen, setGateOpen] = useState(false);
   const [pendingType, setPendingType] = useState<PickerType | null>(null);
+  const authUserIdFromRedux = useSelector(
+    (s: { auth?: { user?: { id?: string } } }) => s.auth?.user?.id
+  );
+
+  const resolveAuthUserId = useCallback(async (): Promise<string | null> => {
+    if (authUserIdFromRedux) return authUserIdFromRedux;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.user?.id ?? null;
+  }, [authUserIdFromRedux]);
 
   const runCleanupAndToast = useCallback(() => {
     if (runCreateEntryDraftCleanup()) {
@@ -45,13 +59,19 @@ export function useCreateDraftEntryGate(
   }, []);
 
   const navigateToCreatePost = useCallback(
-    (type: PickerType, resumeDraft: boolean) => {
+    (
+      type: PickerType,
+      resumeDraft: boolean,
+      ownerUserId: string | null | undefined
+    ) => {
       markCreateFlowSessionActive();
       if (resumeDraft) {
         markCreateFlowResumedLocalDraft();
         ensureDraftPublishPostId({ fresh: false });
+      } else if (ownerUserId) {
+        prepareFreshOwnedCreateDraft(ownerUserId);
       } else {
-        ensureDraftPublishPostId({ fresh: !hasAnyDraftData() });
+        ensureDraftPublishPostId({ fresh: true });
       }
       closeChooserOverlay?.();
       window.setTimeout(() => {
@@ -65,32 +85,42 @@ export function useCreateDraftEntryGate(
   const onPickerContinue = useCallback(
     (type: PickerType) => {
       runCleanupAndToast();
-      if (!hasAnyDraftData()) {
-        navigateToCreatePost(type, false);
-        return;
-      }
-      setPendingType(type);
-      setGateOpen(true);
+      void resolveAuthUserId().then((userId) => {
+        if (userId && isLocalCreateDraftOwnedBy(userId)) {
+          setPendingType(type);
+          setGateOpen(true);
+          return;
+        }
+        navigateToCreatePost(type, false, userId);
+      });
     },
-    [navigateToCreatePost, runCleanupAndToast]
+    [navigateToCreatePost, resolveAuthUserId, runCleanupAndToast]
   );
 
   const onContinueDraft = useCallback(() => {
     if (!pendingType) return;
     const t = pendingType;
-    setGateOpen(false);
-    setPendingType(null);
-    navigateToCreatePost(t, true);
-  }, [navigateToCreatePost, pendingType]);
+    void resolveAuthUserId().then((userId) => {
+      if (!userId || !isLocalCreateDraftOwnedBy(userId)) {
+        setGateOpen(false);
+        setPendingType(null);
+        return;
+      }
+      setGateOpen(false);
+      setPendingType(null);
+      navigateToCreatePost(t, true, userId);
+    });
+  }, [navigateToCreatePost, pendingType, resolveAuthUserId]);
 
   const onStartNew = useCallback(() => {
     if (!pendingType) return;
     const t = pendingType;
-    discardAllDrafts();
-    setGateOpen(false);
-    setPendingType(null);
-    navigateToCreatePost(t, false);
-  }, [navigateToCreatePost, pendingType]);
+    void resolveAuthUserId().then((userId) => {
+      setGateOpen(false);
+      setPendingType(null);
+      navigateToCreatePost(t, false, userId);
+    });
+  }, [navigateToCreatePost, pendingType, resolveAuthUserId]);
 
   const onDeleteDraft = useCallback(() => {
     discardAllDrafts();

@@ -5,7 +5,7 @@
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { isNativeApp } from "./storage/utils/capacitorDetection";
-import { Paths, postDetailPath } from "../router/Paths";
+import { resolveNotificationRoute } from "./notifications/notificationRouteResolver";
 
 let tapListenerAdded = false;
 let navigateHandler: ((path: string) => void) | null = null;
@@ -30,37 +30,6 @@ export function setNativePushTapNavigateHandler(
     console.log("[PUSH_TAP] navigate", { path: p, fromPending: true });
     fn(p);
   }
-}
-
-function parsePostPushData(
-  data: Record<string, unknown> | null | undefined
-): { postId: string; postType: "hangout" | "experience" } | null {
-  if (!data) {
-    console.log("[PUSH_TAP] ignored_invalid_payload", { reason: "no_data" });
-    return null;
-  }
-  const postId = String(data.postId ?? "")
-    .trim();
-  const postTypeRaw = String(data.postType ?? "")
-    .trim();
-  if (
-    !postId ||
-    (postTypeRaw !== "hangout" && postTypeRaw !== "experience")
-  ) {
-    console.log("[PUSH_TAP] ignored_invalid_payload", {
-      postId: postId || null,
-      postType: postTypeRaw || null,
-    });
-    return null;
-  }
-  return { postId, postType: postTypeRaw as "hangout" | "experience" };
-}
-
-function isInvitePushData(
-  data: Record<string, unknown> | null | undefined
-): boolean {
-  const typeRaw = String(data?.type ?? "").trim();
-  return typeRaw === "invite";
 }
 
 /** Safe tap diagnostics: keys + presence flags only (no full tokens/IDs). */
@@ -99,24 +68,6 @@ function logPushTapPayloadMeta(
   });
 }
 
-/** Deep-link to notifications tab with optional invite/thread ids from FCM data. */
-function buildInviteNotificationsPath(
-  data: Record<string, unknown> | null | undefined
-): string {
-  const inviteId = String(data?.inviteId ?? "").trim();
-  const threadId = String(data?.threadId ?? "").trim();
-  const threadKind = String(data?.threadKind ?? "").trim();
-  if (!inviteId && !threadId) {
-    return Paths.notification;
-  }
-  const params = new URLSearchParams();
-  params.set("source", "push");
-  if (inviteId) params.set("inviteId", inviteId);
-  if (threadId) params.set("threadId", threadId);
-  if (threadKind) params.set("threadKind", threadKind);
-  return `${Paths.notification}?${params.toString()}`;
-}
-
 /**
  * Call once on native; safe to call from React useEffect. Idempotent.
  */
@@ -143,14 +94,15 @@ export function registerNativePushTapListener(): void {
               ? (data as Record<string, unknown>)
               : undefined;
           logPushTapPayloadMeta(record);
-          if (isInvitePushData(record)) {
-            deliverPath(buildInviteNotificationsPath(record));
+          const route = resolveNotificationRoute(record);
+          if (!route.supported) {
+            console.log("[PUSH_TAP] ignored_invalid_payload", {
+              reason: route.reason,
+              kind: route.kind,
+            });
             return;
           }
-          const parsed = parsePostPushData(record);
-          if (!parsed) return;
-          const path = postDetailPath(parsed.postType, parsed.postId);
-          deliverPath(path);
+          deliverPath(route.path);
         }
       );
     } catch (e) {

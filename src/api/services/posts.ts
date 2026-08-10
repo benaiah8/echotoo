@@ -1,7 +1,6 @@
 // src/api/services/posts.ts
 import { isDraftPostId, discardAllDrafts } from "../../lib/drafts";
 import { supabase } from "../../lib/supabaseClient";
-import { createPostNotifications } from "./notifications";
 import { retry } from "../../lib/retry";
 
 export type PostType = "experience" | "hangout";
@@ -91,14 +90,8 @@ export async function insertPost(input: NewPost) {
 
   if (error) throw error;
 
-  // Create notifications for followers when a post is published
+  // Follower notifications: DB trigger fan-out; push via Edge (same as atomic publish path).
   if (data.status === "published") {
-    try {
-      await createPostNotifications(data.id, data.type, data.author_id);
-    } catch (notificationError) {
-      console.error("Error creating post notifications:", notificationError);
-      // Don't throw here - post creation succeeded, notification failure shouldn't break it
-    }
     void invokePostPublishedPush(data);
   }
 

@@ -10,17 +10,17 @@
  * No `android.notification.image` (avoids large expanded image; sender avatar needs native later).
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import {
-  getFcmAccessToken,
-  sendFcmToDevice,
-  type PushDevicePlatform,
-} from "./fcm.ts";
+import { getFcmAccessToken } from "../_shared/push/fcm.ts";
+import { loadPushDeviceTargets } from "../_shared/push/recipientDevices.ts";
+import { sendPushToDeviceTargets } from "../_shared/push/sendPushToUsers.ts";
 
 /** Keep in sync with `INVITE_NOTE_MAX_LENGTH` in `src/api/services/invites.ts`. */
 const INVITE_NOTE_MAX_LENGTH = 200;
 
 /** Post caption preview for push when invite note is absent (or second line when note exists). */
 const CAPTION_PREVIEW_MAX_LENGTH = 200;
+
+const LOG_PREFIX = "[send-invite-push]";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -48,63 +48,6 @@ type InvitePushBody = {
   thread_kind?: string;
   target?: string;
 };
-
-type PushDeviceTarget = {
-  token: string;
-  platform: PushDevicePlatform;
-};
-
-type PlatformCounts = Record<PushDevicePlatform, number>;
-
-type DeviceRowPlatformCounts = PlatformCounts & {
-  other: number;
-};
-
-function isPushDevicePlatform(value: unknown): value is PushDevicePlatform {
-  return value === "android" || value === "ios";
-}
-
-function emptyPlatformCounts(): PlatformCounts {
-  return { android: 0, ios: 0 };
-}
-
-function emptyDeviceRowPlatformCounts(): DeviceRowPlatformCounts {
-  return { android: 0, ios: 0, other: 0 };
-}
-
-function safeTokenPreview(token: string): string {
-  const trimmed = token.trim();
-  if (!trimmed) return "empty(len=0)";
-  return `${trimmed.slice(0, 8)}...(len=${trimmed.length})`;
-}
-
-function sanitizeErrorPreview(value: string | undefined, max = 240): string | undefined {
-  if (!value) return undefined;
-  const singleLine = value.replace(/\s+/g, " ").trim();
-  if (!singleLine) return undefined;
-  return singleLine.length > max ? `${singleLine.slice(0, max)}...` : singleLine;
-}
-
-function countDeviceRowsByPlatform(rows: unknown[] | null): DeviceRowPlatformCounts {
-  const counts = emptyDeviceRowPlatformCounts();
-  for (const row of rows ?? []) {
-    const platform = (row as { platform?: unknown }).platform;
-    if (isPushDevicePlatform(platform)) {
-      counts[platform]++;
-    } else {
-      counts.other++;
-    }
-  }
-  return counts;
-}
-
-function countTargetsByPlatform(targets: PushDeviceTarget[]): PlatformCounts {
-  const counts = emptyPlatformCounts();
-  for (const target of targets) {
-    counts[target.platform]++;
-  }
-  return counts;
-}
 
 function toPublicMediaAvatarUrl(
   supabaseUrl: string,
@@ -186,7 +129,7 @@ async function fetchInviteNoteForPush(
       .maybeSingle();
     if (error) {
       console.error(
-        "[send-invite-push] invite note (by id):",
+        `${LOG_PREFIX} invite note (by id):`,
         error.message
       );
       return "";
@@ -204,7 +147,7 @@ async function fetchInviteNoteForPush(
     .in("invitee_id", args.authRecipientIds);
   if (error) {
     console.error(
-      "[send-invite-push] invite note (batch):",
+      `${LOG_PREFIX} invite note (batch):`,
       error.message
     );
     return "";
@@ -233,12 +176,12 @@ Deno.serve(async (req) => {
   const serviceAccountJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-    console.error("[send-invite-push] Missing Supabase env");
+    console.error(`${LOG_PREFIX} Missing Supabase env`);
     return jsonResponse({ error: "Server misconfigured" }, 500);
   }
 
   if (!serviceAccountJson?.trim()) {
-    console.error("[send-invite-push] FIREBASE_SERVICE_ACCOUNT_JSON not set");
+    console.error(`${LOG_PREFIX} FIREBASE_SERVICE_ACCOUNT_JSON not set`);
     return jsonResponse({ error: "Push not configured on server" }, 503);
   }
 
@@ -294,7 +237,7 @@ Deno.serve(async (req) => {
       )
     : [];
 
-  console.log("[send-invite-push] request begin", {
+  console.log(`${LOG_PREFIX} request begin`, {
     hasPostId: Boolean(postId),
     postType: postType ?? null,
     hasActorId: Boolean(actorId),
@@ -350,7 +293,7 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   if (postError) {
-    console.error("[send-invite-push] post read:", postError.message);
+    console.error(`${LOG_PREFIX} post read:`, postError.message);
     return jsonResponse(
       { ok: true, sent: 0, skipped: "post_read_failed", message: postError.message },
       200
@@ -382,7 +325,7 @@ Deno.serve(async (req) => {
     .in("id", resolvedRecipientIds);
 
   if (profileMapError) {
-    console.error("[send-invite-push] profiles map:", profileMapError.message);
+    console.error(`${LOG_PREFIX} profiles map:`, profileMapError.message);
     return jsonResponse(
       {
         ok: true,
@@ -400,50 +343,27 @@ Deno.serve(async (req) => {
   }
 
   const authIdList = [...authIdsForPush];
-  console.log("[send-invite-push] resolved auth ids", {
+  console.log(`${LOG_PREFIX} resolved auth ids`, {
     authIdListCount: authIdList.length,
   });
 
-  const { data: deviceRows, error: devicesError } = await supabaseAdmin
-    .from("push_devices")
-    .select("token, user_id, platform")
-    .in("user_id", authIdList)
-    .in("platform", ["android", "ios"]);
+  const deviceLoad = await loadPushDeviceTargets(supabaseAdmin, authIdList, {
+    logPrefix: LOG_PREFIX,
+  });
 
-  if (devicesError) {
-    console.error("[send-invite-push] push_devices:", devicesError.message);
+  if (!deviceLoad.ok) {
     return jsonResponse(
       {
         ok: true,
         sent: 0,
-        skipped: "push_devices_read_failed",
-        message: devicesError.message,
+        skipped: deviceLoad.skipped,
+        message: deviceLoad.message,
       },
       200
     );
   }
 
-  const rawDevicePlatformCounts = countDeviceRowsByPlatform(deviceRows ?? []);
-  console.log("[send-invite-push] push device rows", {
-    rawDeviceRowCount: deviceRows?.length ?? 0,
-    byPlatform: rawDevicePlatformCounts,
-  });
-
-  const targetByPlatformAndToken = new Map<string, PushDeviceTarget>();
-  for (const row of deviceRows ?? []) {
-    const token = ((row as { token?: string | null }).token ?? "").trim();
-    const platform = (row as { platform?: unknown }).platform;
-    if (!token || !isPushDevicePlatform(platform)) continue;
-    targetByPlatformAndToken.set(`${platform}:${token}`, { token, platform });
-  }
-  const pushTargets = [...targetByPlatformAndToken.values()];
-  const attemptedByPlatform = countTargetsByPlatform(pushTargets);
-  console.log("[send-invite-push] push targets after dedupe", {
-    pushTargetCount: pushTargets.length,
-    byPlatform: attemptedByPlatform,
-  });
-
-  if (pushTargets.length === 0) {
+  if (deviceLoad.targets.length === 0) {
     return jsonResponse(
       {
         ok: true,
@@ -462,7 +382,7 @@ Deno.serve(async (req) => {
     accessToken = t.accessToken;
     projectId = t.projectId;
   } catch (e) {
-    console.error("[send-invite-push] FCM auth:", e);
+    console.error(`${LOG_PREFIX} FCM auth:`, e);
     return jsonResponse({ error: "Failed to authorize FCM" }, 500);
   }
 
@@ -475,7 +395,7 @@ Deno.serve(async (req) => {
     .maybeSingle();
   if (inviterProfileError) {
     console.error(
-      "[send-invite-push] inviter profile:",
+      `${LOG_PREFIX} inviter profile:`,
       inviterProfileError.message
     );
   } else {
@@ -540,66 +460,22 @@ Deno.serve(async (req) => {
     fcmDataPayload.threadKind = threadKind;
   }
 
-  let sent = 0;
-  const sentByPlatform = emptyPlatformCounts();
-  const failures: {
-    platform: PushDevicePlatform;
-    status: number;
-    detail?: string;
-    errorStatus?: string;
-    errorCode?: string;
-    errorMessage?: string;
-  }[] = [];
-
-  for (const targetDevice of pushTargets) {
-    console.log("[send-invite-push] FCM send begin", {
-      platform: targetDevice.platform,
-      tokenPreview: safeTokenPreview(targetDevice.token),
-    });
-    const result = await sendFcmToDevice(
-      accessToken,
-      projectId,
-      targetDevice.token,
-      targetDevice.platform,
-      fcmDataPayload
-    );
-    if (result.ok) {
-      sent++;
-      sentByPlatform[targetDevice.platform]++;
-      console.log("[send-invite-push] FCM send success", {
-        platform: targetDevice.platform,
-        status: result.status,
-      });
-    } else {
-      const detail = sanitizeErrorPreview(result.errorText);
-      const errorMessage = sanitizeErrorPreview(result.errorMessage);
-      console.error("[send-invite-push] FCM send failed", {
-        platform: targetDevice.platform,
-        status: result.status,
-        errorStatus: result.errorStatus,
-        errorCode: result.errorCode,
-        errorMessage,
-        detail,
-      });
-      failures.push({
-        platform: targetDevice.platform,
-        status: result.status,
-        detail,
-        errorStatus: result.errorStatus,
-        errorCode: result.errorCode,
-        errorMessage,
-      });
-    }
-  }
+  const batch = await sendPushToDeviceTargets({
+    accessToken,
+    projectId,
+    targets: deviceLoad.targets,
+    data: fcmDataPayload,
+    logPrefix: LOG_PREFIX,
+  });
 
   return jsonResponse(
     {
       ok: true,
-      sent,
-      attempted: pushTargets.length,
-      attemptedByPlatform,
-      sentByPlatform,
-      failures: failures.length > 0 ? failures.slice(0, 5) : undefined,
+      sent: batch.sent,
+      attempted: deviceLoad.targets.length,
+      attemptedByPlatform: deviceLoad.attemptedByPlatform,
+      sentByPlatform: batch.sentByPlatform,
+      failures: batch.failures.length > 0 ? batch.failures : undefined,
     },
     200
   );

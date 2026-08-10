@@ -8,6 +8,7 @@ import { setAuthUser } from "./reducers/authReducer";
 import { supabase } from "./lib/supabaseClient";
 import { clearAuthCache } from "./api/services/follows";
 import { clearCachedProfile } from "./lib/profileCache";
+import { EDIT_POST_DATA_KEY } from "./lib/editPostBootstrap";
 import { applyTheme, getInitialTheme } from "./lib/theme";
 import { BrowserRouter } from "react-router-dom";
 import { CreateChooserProvider } from "./context/CreateChooserContext";
@@ -31,6 +32,7 @@ import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMoun
 import PushRegistrationMount from "./components/PushRegistrationMount";
 import NativePushPermissionPromptGate from "./components/notifications/NativePushPermissionPromptGate";
 import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
+import NativePushForegroundBridge from "./components/notifications/NativePushForegroundBridge";
 import {
   consumeProfileDefaultsLoginPending,
   persistProviderProfileDefaultsAfterSignIn,
@@ -109,10 +111,11 @@ function App() {
           const profileId = localStorage.getItem("my_profile_id");
           if (profileId) clearCachedProfile(profileId);
           localStorage.removeItem("my_profile_id");
+          localStorage.removeItem(EDIT_POST_DATA_KEY);
         } catch (error) {
           // Ignore localStorage errors (might be unavailable in private browsing)
           console.debug(
-            "[App] Failed to clear profile cache / my_profile_id:",
+            "[App] Failed to clear profile cache / my_profile_id / editPostData:",
             error
           );
         }
@@ -196,6 +199,7 @@ function App() {
       {/* Router MUST wrap BottomTab and all route content */}
       <BrowserRouter>
         {!showSplash && isNativeApp() && <NativePushTapNavigationBridge />}
+        {!showSplash && isNativeApp() && <NativePushForegroundBridge />}
         <PostEngagementRealtimeMount />
         {isNativeApp() && <PushRegistrationMount />}
         {isNativeApp() && <CapacitorOAuthListener />}

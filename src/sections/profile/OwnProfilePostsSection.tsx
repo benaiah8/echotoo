@@ -26,7 +26,7 @@ import {
   convertLikedToFeedItem,
   convertSavedToFeedItem,
 } from "../../lib/profilePostsConverters";
-import { LOCAL_DRAFT_DISCARDED_EVENT } from "../../lib/drafts";
+import { LOCAL_DRAFT_DISCARDED_EVENT, isLocalCreateDraftOwnedBy } from "../../lib/drafts";
 import {
   buildLocalPrependedFeedItem,
   consumeOwnCreatedPrependPending,
@@ -199,6 +199,10 @@ export default function OwnProfilePostsSection({
   // [FIX] Only depend on primitives, not entire profile object - prevents infinite loops
   const getDraftsFromStorage = useCallback(() => {
     try {
+      if (!userId || !isLocalCreateDraftOwnedBy(userId)) {
+        return [];
+      }
+
       const draftMeta = localStorage.getItem("draftMeta");
       const draftActivities = localStorage.getItem("draftActivities");
 
@@ -274,6 +278,10 @@ export default function OwnProfilePostsSection({
     // Only add drafts for Created tab
     if (cached) {
       try {
+        if (!userId || !isLocalCreateDraftOwnedBy(userId)) {
+          return cached || null;
+        }
+
         const draftMeta = localStorage.getItem("draftMeta");
         const draftActivities = localStorage.getItem("draftActivities");
         const hasMeta =

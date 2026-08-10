@@ -2,6 +2,7 @@ import { Toaster } from "react-hot-toast";
 import BottomTab from "./BottomTab";
 import InstallAppButton from "./InstallAppButton";
 import ProfileFinishSoftNudge from "./profile/ProfileFinishSoftNudge";
+import InAppNotificationBannerHost from "./notifications/InAppNotificationBannerHost";
 import { useIsDesktopLayout } from "../lib/desktopLayoutDetection";
 
 /**
@@ -17,6 +18,8 @@ export default function AppFloatingChrome() {
       {!isDesktop ? <BottomTab /> : null}
 
       <ProfileFinishSoftNudge />
+
+      <InAppNotificationBannerHost />
 
       <Toaster
         position="top-center"

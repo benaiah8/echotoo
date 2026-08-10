@@ -27,6 +27,8 @@ export type DraftMeta = {
   anonymousAvatar?: string;
   /** Stable client id for Phase 3 owner_create_post idempotency */
   publishPostId?: string;
+  /** Auth user id (`session.user.id`) that owns this local create draft */
+  ownerUserId?: string;
 };
 
 const UUID_V4ISH =
@@ -51,6 +53,44 @@ function writeDraftMetaRecord(meta: DraftMeta): void {
   localStorage.setItem(DRAFT_META_KEY, JSON.stringify(meta));
 }
 
+/** Returns `draftMeta.ownerUserId` when set, else null. */
+export function readDraftOwnerUserId(): string | null {
+  const owner = readDraftMetaRecord().ownerUserId;
+  return typeof owner === "string" && owner.trim() ? owner.trim() : null;
+}
+
+/**
+ * True when local create draft data exists and `draftMeta.ownerUserId` matches `userId`.
+ * Missing or mismatched owner → false (privacy-first; ownerless drafts are not owned).
+ */
+export function isLocalCreateDraftOwnedBy(userId: string): boolean {
+  if (!userId || !hasAnyDraftData()) return false;
+  const owner = readDraftOwnerUserId();
+  if (!owner) return false;
+  return owner === userId;
+}
+
+/**
+ * Authoritative new-create publish guard. Throws before any post INSERT/RPC when the
+ * stored draft is missing an owner or belongs to another account.
+ */
+export function assertLocalCreateDraftOwnedBy(userId: string): void {
+  if (!userId) {
+    throw new Error("Not authenticated");
+  }
+  if (!hasAnyDraftData()) {
+    throw new Error(
+      "Missing draft data. Leave and re-enter the create flow, then try again."
+    );
+  }
+  const owner = readDraftOwnerUserId();
+  if (!owner || owner !== userId) {
+    throw new Error(
+      "This draft belongs to another account. Leave and start a new post."
+    );
+  }
+}
+
 function isEditModeActive(): boolean {
   try {
     return localStorage.getItem(EDIT_POST_DATA_KEY) !== null;
@@ -65,6 +105,8 @@ function isEditModeActive(): boolean {
  */
 export function ensureDraftPublishPostId(options?: {
   fresh?: boolean;
+  /** Set on fresh draft init; preserved on resume via spread merge. */
+  ownerUserId?: string;
 }): string | null {
   if (isEditModeActive()) {
     return null;
@@ -79,11 +121,24 @@ export function ensureDraftPublishPostId(options?: {
     }
 
     const publishPostId = crypto.randomUUID();
-    writeDraftMetaRecord({ ...prev, publishPostId });
+    const next: DraftMeta = { ...prev, publishPostId };
+    if (options?.ownerUserId) {
+      next.ownerUserId = options.ownerUserId;
+    }
+    writeDraftMetaRecord(next);
     return publishPostId;
   } catch {
     return null;
   }
+}
+
+/**
+ * Discards any existing local create draft and initializes a fresh owned draft with a new publishPostId.
+ */
+export function prepareFreshOwnedCreateDraft(ownerUserId: string): string | null {
+  if (!ownerUserId) return null;
+  discardAllDrafts();
+  return ensureDraftPublishPostId({ fresh: true, ownerUserId });
 }
 
 /**

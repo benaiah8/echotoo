@@ -1,16 +1,17 @@
 /**
- * send-post-push — v1
+ * send-post-push — v2 (shared helpers + iOS)
  * Authenticated: caller must be the post author (actor_id).
- * Loads Android FCM tokens from public.push_devices and sends FCM HTTP v1 (one request per token).
+ * Loads Android/iOS FCM tokens from public.push_devices and sends FCM HTTP v1 (one request per token).
  *
  * Recipients: either `recipient_user_ids` (auth and/or profile ids, legacy) or, when that array
  * is empty/omitted, service-role read of public.notifications (entity_id=post, type=post, actor_id).
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import {
-  getFcmAccessToken,
-  sendFcmToDevice,
-} from "./fcm.ts";
+import { getFcmAccessToken } from "../_shared/push/fcm.ts";
+import { loadPushDeviceTargets } from "../_shared/push/recipientDevices.ts";
+import { sendPushToDeviceTargets } from "../_shared/push/sendPushToUsers.ts";
+
+const LOG_PREFIX = "[send-post-push]";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -50,12 +51,12 @@ Deno.serve(async (req) => {
   const serviceAccountJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT_JSON");
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-    console.error("[send-post-push] Missing Supabase env");
+    console.error(`${LOG_PREFIX} Missing Supabase env`);
     return jsonResponse({ error: "Server misconfigured" }, 500);
   }
 
   if (!serviceAccountJson?.trim()) {
-    console.error("[send-post-push] FIREBASE_SERVICE_ACCOUNT_JSON not set");
+    console.error(`${LOG_PREFIX} FIREBASE_SERVICE_ACCOUNT_JSON not set`);
     return jsonResponse({ error: "Push not configured on server" }, 503);
   }
 
@@ -96,7 +97,9 @@ Deno.serve(async (req) => {
   const entityType = body.entity_type?.trim();
   const actorId = body.actor_id?.trim();
   const recipientUserIds = Array.isArray(body.recipient_user_ids)
-    ? body.recipient_user_ids.filter((id) => typeof id === "string" && id.length > 0)
+    ? body.recipient_user_ids.filter(
+        (id) => typeof id === "string" && id.length > 0
+      )
     : [];
 
   if (!postId || !entityType || !actorId) {
@@ -107,11 +110,17 @@ Deno.serve(async (req) => {
   }
 
   if (entityType !== "hangout" && entityType !== "experience") {
-    return jsonResponse({ error: "entity_type must be hangout or experience" }, 400);
+    return jsonResponse(
+      { error: "entity_type must be hangout or experience" },
+      400
+    );
   }
 
   if (actorId !== user.id) {
-    return jsonResponse({ error: "Forbidden: actor_id must match caller" }, 403);
+    return jsonResponse(
+      { error: "Forbidden: actor_id must match caller" },
+      403
+    );
   }
 
   const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
@@ -130,7 +139,7 @@ Deno.serve(async (req) => {
       .eq("actor_id", actorId);
 
     if (notifErr) {
-      console.error("[send-post-push] notifications:", notifErr.message);
+      console.error(`${LOG_PREFIX} notifications:`, notifErr.message);
       return jsonResponse(
         {
           ok: true,
@@ -156,7 +165,8 @@ Deno.serve(async (req) => {
           ok: true,
           sent: 0,
           skipped: "no_notification_rows",
-          message: "No matching notifications; fan-out may be empty or not committed yet",
+          message:
+            "No matching notifications; fan-out may be empty or not committed yet",
         },
         200
       );
@@ -171,7 +181,7 @@ Deno.serve(async (req) => {
     .in("id", resolvedRecipientIds);
 
   if (profileMapError) {
-    console.error("[send-post-push] profiles map:", profileMapError.message);
+    console.error(`${LOG_PREFIX} profiles map:`, profileMapError.message);
     return jsonResponse(
       {
         ok: true,
@@ -190,40 +200,33 @@ Deno.serve(async (req) => {
 
   const authIdList = [...authIdsForPush];
 
-  const { data: deviceRows, error: devicesError } = await supabaseAdmin
-    .from("push_devices")
-    .select("token, user_id, platform")
-    .in("user_id", authIdList)
-    .eq("platform", "android");
+  const deviceLoad = await loadPushDeviceTargets(supabaseAdmin, authIdList, {
+    logPrefix: LOG_PREFIX,
+    platforms: ["android", "ios"],
+  });
 
-  if (devicesError) {
-    console.error("[send-post-push] push_devices:", devicesError.message);
+  if (!deviceLoad.ok) {
     return jsonResponse(
       {
         ok: true,
         sent: 0,
-        skipped: "push_devices_read_failed",
-        message: devicesError.message,
+        skipped: deviceLoad.skipped,
+        message: deviceLoad.message,
       },
       200
     );
   }
 
-  const tokens = [
-    ...new Set(
-      (deviceRows ?? [])
-        .map((r) => (r.token ?? "").trim())
-        .filter((t) => t.length > 0)
-    ),
-  ];
-
-  if (tokens.length === 0) {
-    return jsonResponse({
-      ok: true,
-      sent: 0,
-      skipped: "no_android_tokens",
-      message: "No Android device tokens for recipients",
-    }, 200);
+  if (deviceLoad.targets.length === 0) {
+    return jsonResponse(
+      {
+        ok: true,
+        sent: 0,
+        skipped: "no_push_tokens",
+        message: "No push device tokens for recipients",
+      },
+      200
+    );
   }
 
   let accessToken: string;
@@ -233,11 +236,8 @@ Deno.serve(async (req) => {
     accessToken = t.accessToken;
     projectId = t.projectId;
   } catch (e) {
-    console.error("[send-post-push] FCM auth:", e);
-    return jsonResponse(
-      { error: "Failed to authorize FCM" },
-      500
-    );
+    console.error(`${LOG_PREFIX} FCM auth:`, e);
+    return jsonResponse({ error: "Failed to authorize FCM" }, 500);
   }
 
   let displayName = "Someone";
@@ -247,7 +247,7 @@ Deno.serve(async (req) => {
     .eq("user_id", actorId)
     .maybeSingle();
   if (authorProfileError) {
-    console.error("[send-post-push] author profile:", authorProfileError.message);
+    console.error(`${LOG_PREFIX} author profile:`, authorProfileError.message);
   } else {
     const ar = authorRow as {
       display_name?: string | null;
@@ -265,28 +265,42 @@ Deno.serve(async (req) => {
       ? `${displayName} posted a new hangout.`
       : `${displayName} posted a new experience.`;
 
-  let sent = 0;
-  const failures: { status: number; detail?: string }[] = [];
+  const fcmDataPayload = {
+    type: "followed_post" as const,
+    title,
+    body: bodyText,
+    postId,
+    postType: entityType,
+    actorId,
+  };
 
-  for (const deviceToken of tokens) {
-    const result = await sendFcmToDevice(
-      accessToken,
-      projectId,
-      deviceToken,
-      { title, body: bodyText },
-      { postId, postType: entityType }
-    );
-    if (result.ok) {
-      sent++;
-    } else {
-      failures.push({ status: result.status, detail: result.errorText });
-    }
-  }
+  const batch = await sendPushToDeviceTargets({
+    accessToken,
+    projectId,
+    targets: deviceLoad.targets,
+    data: fcmDataPayload,
+    logPrefix: LOG_PREFIX,
+    fcmSendOptions: {
+      androidDelivery: "notification_and_data",
+      defaultNotification: { title, body: bodyText },
+    },
+  });
 
-  return jsonResponse({
-    ok: true,
-    sent,
-    attempted: tokens.length,
-    failures: failures.length > 0 ? failures.slice(0, 5) : undefined,
-  }, 200);
+  const failures = batch.failures.map((f) => ({
+    status: f.status,
+    detail: f.detail,
+    ...(f.platform ? { platform: f.platform } : {}),
+  }));
+
+  return jsonResponse(
+    {
+      ok: true,
+      sent: batch.sent,
+      attempted: deviceLoad.targets.length,
+      attemptedByPlatform: deviceLoad.attemptedByPlatform,
+      sentByPlatform: batch.sentByPlatform,
+      failures: failures.length > 0 ? failures.slice(0, 5) : undefined,
+    },
+    200
+  );
 });

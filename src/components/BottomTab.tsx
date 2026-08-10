@@ -99,13 +99,17 @@ function BottomTab() {
     };
     // update when profile is saved
     const onUpdated = () => sync();
+    const onVisibilityChange = () => {
+      if (!document.hidden) sync();
+    };
     window.addEventListener("profile:updated", onUpdated);
 
     // also refresh when tab becomes active again (coming back to the app)
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) sync();
-    });
-    return () => window.removeEventListener("profile:updated", onUpdated);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("profile:updated", onUpdated);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   // Whether Redux currently knows about a signed-in user

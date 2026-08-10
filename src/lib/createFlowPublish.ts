@@ -12,7 +12,7 @@ import {
   ownerCreatePost,
   ownerRepublishPost,
 } from "../api/services/ownerPosts";
-import { getDraftPublishPostIdForPublish } from "./drafts";
+import { assertLocalCreateDraftOwnedBy, getDraftPublishPostIdForPublish } from "./drafts";
 import { invalidatePostDetailCache } from "../api/queries/getPostById";
 import { dataCache } from "./dataCache";
 import { recordSignal } from "./feedPersonalization";
@@ -375,36 +375,40 @@ export async function executeCreateFlowPublish(
       throw new Error("Post was not updated");
     }
     post = rpcPost as ExecuteCreateFlowPublishResult["post"];
-  } else if (input.atomicPublish) {
-    const publishPostId = getDraftPublishPostIdForPublish();
-    const payload = buildOwnerCreatePayload(
-      input,
-      mapActivitiesForOwnerCreate(activitiesToPersist)
-    );
-    const { post: rpcPost, created } = await ownerCreatePost(
-      publishPostId,
-      payload
-    );
-    post = rpcPost as ExecuteCreateFlowPublishResult["post"];
-    publishCreated = created;
   } else {
-    post = await insertPost({
-      type: input.postType === "hangout" ? "hangout" : "experience",
-      caption: input.caption,
-      visibility: dbVisibility as "public" | "friends" | "private",
-      ...ANONYMOUS_GUARD,
-      rsvp_capacity: input.rsvpCapacity,
-      selected_dates: input.selectedDatesIso.length
-        ? input.selectedDatesIso
-        : null,
-      is_recurring: input.isRecurring ?? null,
-      recurrence_days: input.recurrenceDays.length
-        ? input.recurrenceDays
-        : null,
-      tags: tags.length ? tags : null,
-      rating_enabled: ratingEnabled,
-    });
-    publishCreated = true;
+    assertLocalCreateDraftOwnedBy(session.user.id);
+
+    if (input.atomicPublish) {
+      const publishPostId = getDraftPublishPostIdForPublish();
+      const payload = buildOwnerCreatePayload(
+        input,
+        mapActivitiesForOwnerCreate(activitiesToPersist)
+      );
+      const { post: rpcPost, created } = await ownerCreatePost(
+        publishPostId,
+        payload
+      );
+      post = rpcPost as ExecuteCreateFlowPublishResult["post"];
+      publishCreated = created;
+    } else {
+      post = await insertPost({
+        type: input.postType === "hangout" ? "hangout" : "experience",
+        caption: input.caption,
+        visibility: dbVisibility as "public" | "friends" | "private",
+        ...ANONYMOUS_GUARD,
+        rsvp_capacity: input.rsvpCapacity,
+        selected_dates: input.selectedDatesIso.length
+          ? input.selectedDatesIso
+          : null,
+        is_recurring: input.isRecurring ?? null,
+        recurrence_days: input.recurrenceDays.length
+          ? input.recurrenceDays
+          : null,
+        tags: tags.length ? tags : null,
+        rating_enabled: ratingEnabled,
+      });
+      publishCreated = true;
+    }
   }
 
   const runNewCreateOneTimeEffects =

@@ -15,6 +15,9 @@ export default function CapacitorOAuthListener() {
   useEffect(() => {
     if (!isNativeApp()) return;
 
+    let cancelled = false;
+    let listener: { remove: () => Promise<void> } | null = null;
+
     const handler = async (event: { url: string }) => {
       console.log("APP URL OPEN RAW:", event.url);
       console.log("[DBG:OAUTH] appUrlOpen", {
@@ -64,17 +67,34 @@ export default function CapacitorOAuthListener() {
       }
     };
 
-    let listener: { remove: () => Promise<void> } | null = null;
-
     const setup = async () => {
-      const { App } = await import("@capacitor/app");
-      listener = await App.addListener("appUrlOpen", handler);
+      try {
+        const { App } = await import("@capacitor/app");
+        if (cancelled) return;
+
+        const handle = await App.addListener("appUrlOpen", handler);
+        if (cancelled) {
+          void handle.remove();
+          return;
+        }
+
+        listener = handle;
+      } catch (e) {
+        console.warn(
+          "[CapacitorOAuthListener] Failed to register appUrlOpen:",
+          e instanceof Error ? e.message : String(e)
+        );
+      }
     };
 
-    setup();
+    void setup();
 
     return () => {
-      listener?.remove();
+      cancelled = true;
+      if (listener) {
+        void listener.remove();
+        listener = null;
+      }
     };
   }, [navigate]);
 

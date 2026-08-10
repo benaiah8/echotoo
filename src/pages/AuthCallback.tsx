@@ -58,6 +58,17 @@ export default function AuthCallback() {
 
   useEffect(() => {
     let finished = false;
+    let cancelled = false;
+    const timeoutIds: ReturnType<typeof setTimeout>[] = [];
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
+    const schedule = (fn: () => void, ms: number) => {
+      const id = setTimeout(() => {
+        if (!cancelled) fn();
+      }, ms);
+      timeoutIds.push(id);
+      return id;
+    };
 
     const finish = (path = "/", reason = "unspecified") => {
       console.log("[AUTHDBG] finish() called", {
@@ -65,6 +76,7 @@ export default function AuthCallback() {
         navigateReplace: path,
         t: Date.now(),
         skippedAlreadyFinished: finished,
+        cancelled,
       });
       console.log("[DBG:OAUTH] authcallback_finish", {
         t: Date.now(),
@@ -72,7 +84,7 @@ export default function AuthCallback() {
         reason,
         skippedAlreadyFinished: finished,
       });
-      if (finished) return;
+      if (cancelled || finished) return;
       window.history.replaceState({}, "", "/"); // clean address bar
       finished = true;
       nav(path, { replace: true });
@@ -123,13 +135,14 @@ export default function AuthCallback() {
           errDesc,
           href: window.location.href,
         });
-        setError(errorMsg);
-        setTimeout(() => finish("/", "provider_error_delayed"), 3000);
+        if (!cancelled) setError(errorMsg);
+        schedule(() => finish("/", "provider_error_delayed"), 3000);
         return;
       }
 
       // 1) Already have a session? Done.
       const { data: s0 } = await supabase.auth.getSession();
+      if (cancelled) return;
       dbg("AuthCallback:getSession", {
         has: !!s0.session,
         user: s0.session?.user?.id,
@@ -142,6 +155,7 @@ export default function AuthCallback() {
       if (s0.session) {
         console.log("[AUTHDBG] AuthCallback branch session_already_present → finish()");
         await persistProviderProfileDefaultsAfterSignIn(s0.session.user);
+        if (cancelled) return;
         void closeNativeOAuthBrowserBackup();
         return finish("/", "session_already_present");
       }
@@ -167,6 +181,7 @@ export default function AuthCallback() {
               access_token,
               refresh_token,
             });
+            if (cancelled) return;
             console.log("[AUTHDBG] after setSession(hash tokens)", {
               t: Date.now(),
               ok: !error && !!data?.session,
@@ -182,6 +197,7 @@ export default function AuthCallback() {
                 data.session.user?.id
               );
               await persistProviderProfileDefaultsAfterSignIn(data.session.user);
+              if (cancelled) return;
               void closeNativeOAuthBrowserBackup();
               return finish("/", "hash_session_success");
             }
@@ -198,6 +214,7 @@ export default function AuthCallback() {
                 { t: Date.now() }
               );
               const observed = await authCallbackPollObservableSession(20, 160);
+              if (cancelled) return;
               if (observed) {
                 dbg("AuthCallback:hash_session_observed_after_poll");
                 console.log(
@@ -210,6 +227,7 @@ export default function AuthCallback() {
                     polSession.session.user,
                   );
                 }
+                if (cancelled) return;
                 void closeNativeOAuthBrowserBackup();
                 return finish("/", "hash_poll_success");
               }
@@ -219,14 +237,15 @@ export default function AuthCallback() {
                 "[AuthCallback] setSession from hash failed:",
                 error
               );
-              setError(`Sign-in error: ${error.message}`);
-              setTimeout(() => finish("/", "hash_setSession_error"), 5000);
+              if (!cancelled) setError(`Sign-in error: ${error.message}`);
+              schedule(() => finish("/", "hash_setSession_error"), 5000);
               return;
             }
-          } catch (e: any) {
+          } catch (e: unknown) {
             console.error("[AuthCallback] setSession exception:", e);
-            setError(`Sign-in error: ${e?.message || "Unknown error"}`);
-            setTimeout(() => finish("/", "hash_setSession_exception"), 3000);
+            const msg = e instanceof Error ? e.message : "Unknown error";
+            if (!cancelled) setError(`Sign-in error: ${msg}`);
+            schedule(() => finish("/", "hash_setSession_exception"), 3000);
             return;
           }
         }
@@ -254,6 +273,7 @@ export default function AuthCallback() {
           const { data, error } = await supabase.auth.exchangeCodeForSession(
             exchangeUrl
           );
+          if (cancelled) return;
           console.log("EXCHANGE RESULT", data, error);
           if (error) {
             console.log(
@@ -271,6 +291,7 @@ export default function AuthCallback() {
               sessionUserId: data.session.user?.id ?? null,
             });
             await persistProviderProfileDefaultsAfterSignIn(data.session.user);
+            if (cancelled) return;
             void closeNativeOAuthBrowserBackup();
             return finish("/", "exchange_success");
           }
@@ -288,16 +309,19 @@ export default function AuthCallback() {
               exchangeUrlUsed: exchangeUrl,
               redirectUrl: suggestedRedirect,
             });
-            setError(
-              `Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`
-            );
-            setTimeout(() => finish("/", "exchange_error_delayed"), 5000);
+            if (!cancelled) {
+              setError(
+                `Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`
+              );
+            }
+            schedule(() => finish("/", "exchange_error_delayed"), 5000);
             return;
           }
-        } catch (e: any) {
+        } catch (e: unknown) {
           console.error("[AuthCallback] exchange exception:", e);
-          setError(`Sign-in error: ${e?.message || "Unknown error"}`);
-          setTimeout(() => finish("/", "exchange_exception_delayed"), 3000);
+          const msg = e instanceof Error ? e.message : "Unknown error";
+          if (!cancelled) setError(`Sign-in error: ${msg}`);
+          schedule(() => finish("/", "exchange_exception_delayed"), 3000);
           return;
         }
       }
@@ -307,6 +331,7 @@ export default function AuthCallback() {
         t: Date.now(),
       });
       const { data: sub } = supabase.auth.onAuthStateChange((authEvent, session) => {
+        if (cancelled) return;
         dbg("AuthCallback:onAuthStateChange", {
           event: authEvent,
           has: !!session,
@@ -322,31 +347,37 @@ export default function AuthCallback() {
           void persistProviderProfileDefaultsAfterSignIn(
             session.user,
           ).finally(() => {
+            if (cancelled) return;
             void closeNativeOAuthBrowserBackup();
             finish("/", "onAuthStateChange_session");
           });
         }
       });
+      if (cancelled) {
+        sub.subscription.unsubscribe();
+      } else {
+        authSubscription = sub.subscription;
+      }
 
       // 4) Hard stop after 5s to avoid spinner purgatory.
-      const timer = setTimeout(() => {
+      schedule(() => {
         dbg("AuthCallback:timeoutFallback");
         console.warn("[AUTHDBG] AuthCallback timeoutFallback (5s) → error + finish in 2s", {
           t: Date.now(),
         });
-        setError("Sign-in is taking longer than expected. Redirecting...");
-        setTimeout(() => finish("/", "timeout_fallback_delayed"), 2000);
+        if (!cancelled) {
+          setError("Sign-in is taking longer than expected. Redirecting...");
+        }
+        schedule(() => finish("/", "timeout_fallback_delayed"), 2000);
       }, 5000);
-
-      return () => {
-        clearTimeout(timer);
-        sub.subscription.unsubscribe();
-      };
     };
 
-    const cleanup = run();
+    void run();
+
     return () => {
-      void cleanup;
+      cancelled = true;
+      timeoutIds.forEach((id) => clearTimeout(id));
+      authSubscription?.unsubscribe();
     };
   }, [nav, loc.search, loc.hash]);
 
