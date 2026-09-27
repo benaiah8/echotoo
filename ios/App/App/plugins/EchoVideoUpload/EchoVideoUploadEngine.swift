@@ -78,7 +78,7 @@ final class EchoVideoUploadEngine {
             DispatchQueue.main.async { [weak self] in
                 self?.listener?.onCancelled()
             }
-            logDev("cancelled")
+            Self.logDev("cancelled")
         }
     }
 
@@ -98,9 +98,9 @@ final class EchoVideoUploadEngine {
                     guard let self, !self.isTerminal() else { return }
                     self.listener?.onCreated(createdUrl)
                 }
-                logDev("create-ok")
+                Self.logDev("create-ok")
             } else {
-                logDev("resume-url")
+                Self.logDev("resume-url")
             }
 
             guard let uploadUrl else { return }
@@ -114,7 +114,7 @@ final class EchoVideoUploadEngine {
                 fail(EchoVideoUploadErrorCodes.tusOffsetInvalid, "Upload-Offset out of range")
                 return
             }
-            logDev("resume-offset=\(offset)")
+            Self.logDev("resume-offset=\(offset)")
 
             emitProgress(uploaded: offset, total: request.fileSize, force: true)
 
@@ -167,7 +167,7 @@ final class EchoVideoUploadEngine {
                     bytesTotal: total
                 )
             }
-            logDev("completed bytes=\(total)")
+            Self.logDev("completed bytes=\(total)")
             session.finishTasksAndInvalidate()
         } catch let err as EchoVideoUploadPaths.PathValidationError {
             fail(err.code, err.message)
@@ -175,7 +175,7 @@ final class EchoVideoUploadEngine {
             if isCancelled() {
                 finishCancelled()
             } else {
-                fail(EchoVideoUploadErrorCodes.networkFailed, safeMessage(error))
+                fail(EchoVideoUploadErrorCodes.networkFailed, Self.safeMessage(error))
             }
         }
     }
@@ -308,7 +308,7 @@ final class EchoVideoUploadEngine {
 
                 let cls = EchoVideoUploadRetry.classifyHttpStatus(code)
                 if cls == .offsetConflict {
-                    logDev("offset-conflict HEAD resync")
+                    Self.logDev("offset-conflict HEAD resync")
                     do {
                         let synced = try headOffset(uploadUrl)
                         if synced >= 0 && synced <= request.fileSize {
@@ -331,14 +331,14 @@ final class EchoVideoUploadEngine {
                     fail(EchoVideoUploadRetry.errorCode(for: cls), "TUS PATCH HTTP \(code)")
                     return -1
                 }
-                logDev("retry category=\(cls) attempt=\(attempts)")
+                Self.logDev("retry category=\(cls) attempt=\(attempts)")
             } catch {
                 if isCancelled() { return -1 }
                 if attempts >= EchoVideoUploadRetry.maxAttempts() {
-                    fail(EchoVideoUploadErrorCodes.networkFailed, safeMessage(error))
+                    fail(EchoVideoUploadErrorCodes.networkFailed, Self.safeMessage(error))
                     return -1
                 }
-                logDev("retry network attempt=\(attempts)")
+                Self.logDev("retry network attempt=\(attempts)")
                 do {
                     let synced = try headOffset(uploadUrl)
                     if synced >= offset && synced <= request.fileSize {
@@ -379,14 +379,14 @@ final class EchoVideoUploadEngine {
                     fail(EchoVideoUploadRetry.errorCode(for: cls), "HTTP \(code)")
                     return nil
                 }
-                logDev("retry http=\(code) attempt=\(attempts)")
+                Self.logDev("retry http=\(code) attempt=\(attempts)")
             } catch {
                 lastError = error
                 if isCancelled() { return nil }
                 if attempts >= EchoVideoUploadRetry.maxAttempts() {
                     throw error
                 }
-                logDev("retry io attempt=\(attempts)")
+                Self.logDev("retry io attempt=\(attempts)")
             }
         }
         if let lastError { throw lastError }
@@ -502,7 +502,7 @@ final class EchoVideoUploadEngine {
             session.invalidateAndCancel()
             return
         }
-        logDev("error code=\(code)")
+        Self.logDev("error code=\(code)")
         DispatchQueue.main.async { [weak self] in
             self?.listener?.onFailed(code: code, message: message)
         }
@@ -518,7 +518,7 @@ final class EchoVideoUploadEngine {
             DispatchQueue.main.async { [weak self] in
                 self?.listener?.onCancelled()
             }
-            logDev("cancelled")
+            Self.logDev("cancelled")
         }
         session.invalidateAndCancel()
     }
