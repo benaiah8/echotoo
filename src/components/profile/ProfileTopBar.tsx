@@ -42,6 +42,7 @@ import {
   requestNotificationPermissionAndRegister,
   type NativePushReceiveUiState,
 } from "../../lib/explicitNativePushRegistration";
+import { openNativeAppNotificationSettings } from "../../lib/openNativeAppNotificationSettings";
 import { App } from "@capacitor/app";
 import type { Profile } from "../../contexts/ProfileContext";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
@@ -328,6 +329,35 @@ export default function ProfileTopBar({
     refreshNativePushStatus,
   ]);
 
+  /**
+   * Own-profile notification CTA:
+   * - denied → OS notification Settings (cannot re-prompt)
+   * - granted (iOS) → refresh registration
+   * - prompt / other → Hangout explainer → requestNotificationPermissionAndRegister
+   */
+  const handleNativePushMenuClick = useCallback(() => {
+    closeProfileMenu();
+    if (nativePushUi === "denied") {
+      void (async () => {
+        const opened = await openNativeAppNotificationSettings();
+        if (!opened) {
+          toast.error("Open Settings → Notifications to enable alerts.");
+        }
+      })();
+      return;
+    }
+    if (shouldDirectlyRefreshIosPush) {
+      void refreshNativePushRegistration();
+      return;
+    }
+    setShowHangoutReminderModal(true);
+  }, [
+    closeProfileMenu,
+    nativePushUi,
+    refreshNativePushRegistration,
+    shouldDirectlyRefreshIosPush,
+  ]);
+
   // Pill menu only: close on scroll/resize so fixed position does not drift from trigger
   useEffect(() => {
     if (!profileMenuOpen || useOwnProfileActionSheet) return;
@@ -558,14 +588,7 @@ export default function ProfileTopBar({
                     type="button"
                     className={ownSheetRowMultilineClass}
                     disabled={nativePushRegisterBusy}
-                    onClick={() => {
-                      closeProfileMenu();
-                      if (shouldDirectlyRefreshIosPush) {
-                        void refreshNativePushRegistration();
-                        return;
-                      }
-                      setShowHangoutReminderModal(true);
-                    }}
+                    onClick={handleNativePushMenuClick}
                   >
                     <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
                       <span>{nativePushMenuLabel}</span>
@@ -808,14 +831,7 @@ export default function ProfileTopBar({
                 disabled={nativePushRegisterBusy}
                 style={glassMenuSurface}
                 className={`${profileActionPillClass} py-1.5`}
-                onClick={() => {
-                  closeProfileMenu();
-                  if (shouldDirectlyRefreshIosPush) {
-                    void refreshNativePushRegistration();
-                    return;
-                  }
-                  setShowHangoutReminderModal(true);
-                }}
+                onClick={handleNativePushMenuClick}
               >
                 <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 pl-0.5 text-left">
                   <span className="whitespace-nowrap text-[11px] font-medium leading-none tracking-tight">

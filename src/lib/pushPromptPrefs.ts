@@ -3,6 +3,9 @@
  * Separate from hangout save explainer prefs ({@link hangoutNotificationExplainerPrefs}).
  */
 
+/** After splash / shell ready; short delay so first paint is not blocked. */
+export const NATIVE_PUSH_PROMPT_DELAY_MS = 700;
+
 export const PUSH_PROMPT_NEVER_LS_KEY = "push_prompt_never_v1";
 export const PUSH_PROMPT_LATER_UNTIL_MS_LS_KEY = "push_prompt_later_until_ms_v1";
 export const PUSH_PROMPT_SESSION_DISMISS_SS_KEY = "push_prompt_session_dismiss_v1";

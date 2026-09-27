@@ -8,6 +8,7 @@ import {
   applyNativePushPromptLater,
   applyNativePushPromptNever,
   applyNativePushPromptSessionDismiss,
+  NATIVE_PUSH_PROMPT_DELAY_MS,
   shouldShowNativePushPermissionPrompt,
 } from "../../lib/pushPromptPrefs";
 import {
@@ -23,8 +24,6 @@ import FrostedCenterModal, {
 } from "../ui/FrostedCenterModal";
 
 const AUTH_CALLBACK_PATH = "/auth/callback";
-/** After splash / shell ready; avoids stacking with first paint. */
-const PROMPT_DELAY_MS = 2500;
 
 type Props = {
   /** False while splash logo is showing. */
@@ -88,7 +87,8 @@ export default function NativePushPermissionPromptGate({
         }
 
         const { ui } = await getNativePushReceiveState();
-        if (ui === "granted" || ui === "unsupported") {
+        /* Auto gate only for undecided OS permission — never granted/denied/unsupported. */
+        if (ui !== "prompt") {
           openedRef.current = true;
           return;
         }
@@ -101,7 +101,7 @@ export default function NativePushPermissionPromptGate({
         openedRef.current = true;
         setOpen(true);
       })();
-    }, PROMPT_DELAY_MS);
+    }, NATIVE_PUSH_PROMPT_DELAY_MS);
 
     return () => {
       cancelled = true;
@@ -160,11 +160,10 @@ export default function NativePushPermissionPromptGate({
           id="native-push-prompt-title"
           className="text-sm font-semibold mb-1 text-[var(--text)]"
         >
-          Stay updated
+          Stay in the loop
         </div>
         <p className="text-xs text-[var(--text)]/70 mb-3 leading-snug">
-          Turn on notifications so you do not miss invite messages, replies, and
-          activity.
+          Get notified about messages, invites, group updates, and plans.
         </p>
         <div className="flex w-full min-w-0 gap-2">
           <button
