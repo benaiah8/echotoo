@@ -134,37 +134,34 @@ function extractFcmErrorSummary(
   }
 }
 
+const FCM_DATA_KEYS: (keyof FcmDataPayload)[] = [
+  "type",
+  "title",
+  "body",
+  "avatarUrl",
+  "postId",
+  "postType",
+  "inviteId",
+  "threadId",
+  "threadKind",
+  "actorId",
+  "target",
+  "conversationId",
+  "messageId",
+  "senderUserId",
+  "senderName",
+  "groupName",
+  "occurrenceDate",
+  "targetPath",
+];
+
 function buildFcmDataStringMap(data: FcmDataPayload): Record<string, string> {
-  const fcmData: Record<string, string> = {
-    postId: data.postId,
-    postType: data.postType,
-  };
-  if (data.type) {
-    fcmData.type = data.type;
-  }
-  if (data.title) {
-    fcmData.title = data.title;
-  }
-  if (data.body) {
-    fcmData.body = data.body;
-  }
-  if (data.avatarUrl) {
-    fcmData.avatarUrl = data.avatarUrl;
-  }
-  if (data.inviteId) {
-    fcmData.inviteId = data.inviteId;
-  }
-  if (data.threadId) {
-    fcmData.threadId = data.threadId;
-  }
-  if (data.threadKind) {
-    fcmData.threadKind = data.threadKind;
-  }
-  if (data.actorId) {
-    fcmData.actorId = data.actorId;
-  }
-  if (data.target) {
-    fcmData.target = data.target;
+  const fcmData: Record<string, string> = {};
+  for (const key of FCM_DATA_KEYS) {
+    const value = data[key];
+    if (typeof value === "string" && value.trim()) {
+      fcmData[key] = value.trim();
+    }
   }
   return fcmData;
 }
@@ -192,8 +189,8 @@ export async function sendFcmToDevice(
     options?.defaultNotification?.body ?? "Tap to view invite";
 
   const notification = {
-    title: data.title ?? defaultTitle,
-    body: data.body ?? defaultBody,
+    title: options?.defaultNotification?.title ?? data.title ?? defaultTitle,
+    body: options?.defaultNotification?.body ?? data.body ?? defaultBody,
   };
 
   const message =

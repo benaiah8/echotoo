@@ -1,6 +1,7 @@
 import UIKit
 import Capacitor
 import FirebaseCore
+import UserNotifications
 
 private extension Notification.Name {
     static let capacitorDidRegisterForRemoteNotifications = Notification.Name(
@@ -16,7 +17,7 @@ private extension Notification.Name {
 }
 
 @UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
 
     var window: UIWindow?
 
@@ -24,7 +25,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         if FirebaseApp.app() == nil {
             FirebaseApp.configure()
         }
+        UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    /// Foreground: no system banner/sound — Capacitor `pushNotificationReceived` drives in-app banner.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([])
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

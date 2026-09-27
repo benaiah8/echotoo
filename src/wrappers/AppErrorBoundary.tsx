@@ -3,6 +3,8 @@ import {
   frostedModalPanelClassName,
   frostedModalPanelStyle,
 } from "../components/ui/FrostedCenterModal";
+import { reportCapturedCrash } from "../lib/clientCrashReporter";
+import { recordVideoCrashJsError } from "../lib/videoCrashDiagnostics";
 
 type Props = {
   children: ReactNode;
@@ -25,6 +27,12 @@ export default class AppErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("[AppErrorBoundary] Uncaught render error:", error, info);
+    void recordVideoCrashJsError(error);
+    reportCapturedCrash({
+      source: "react_boundary",
+      error,
+      componentStack: info.componentStack,
+    });
   }
 
   render() {

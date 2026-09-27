@@ -181,6 +181,7 @@ export default function FollowListDrawer({
 
         // Cache profiles for future use
         users.forEach((user: any) => {
+          // Thin identity prime — omit member_no (unknown ≠ known-null).
           setCachedProfile({
             id: user.id,
             user_id: user.user_id || "",
@@ -189,7 +190,6 @@ export default function FollowListDrawer({
             avatar_url: user.avatar_url,
             bio: null,
             xp: null,
-            member_no: null,
             instagram_url: null,
             tiktok_url: null,
             telegram_url: null,

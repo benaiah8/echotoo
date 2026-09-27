@@ -1,20 +1,42 @@
 /**
- * Preview-only: compact upload status over the hero carousel (props-only, no hooks).
- * Styling aligned with create-flow progress notice pills.
+ * Preview-only: compact upload/status over the hero carousel (props-only, no hooks).
  */
+import { formatCreateMediaStatusLabel } from "../../lib/createPostMediaUploadLabel";
+
 export type PreviewUploadOverlayPillProps = {
-  uploadingCount: number;
+  imageUploadingCount?: number;
+  /** Bunny network video upload (rare on Finalize during local-first Create). */
+  videoUploadingCount?: number;
+  /** Local native video ingest (V3G0 Create). */
+  videoAddingCount?: number;
+  /** Local Media3 preparation (PASS C3). */
+  videoPreparingCount?: number;
+  /** @deprecated Use imageUploadingCount + videoUploadingCount / videoAddingCount */
+  uploadingCount?: number;
 };
 
 export default function PreviewUploadOverlayPill({
+  imageUploadingCount = 0,
+  videoUploadingCount = 0,
+  videoAddingCount = 0,
+  videoPreparingCount = 0,
   uploadingCount,
 }: PreviewUploadOverlayPillProps) {
-  if (uploadingCount <= 0) return null;
-
-  const label =
-    uploadingCount === 1
-      ? "1 image uploading"
-      : `${uploadingCount} images uploading`;
+  const images =
+    uploadingCount != null &&
+    videoUploadingCount === 0 &&
+    videoAddingCount === 0 &&
+    videoPreparingCount === 0 &&
+    imageUploadingCount === 0
+      ? uploadingCount
+      : imageUploadingCount;
+  const label = formatCreateMediaStatusLabel({
+    imageUploadingCount: images,
+    videoUploadingCount,
+    videoAddingCount,
+    videoPreparingCount,
+  });
+  if (!label) return null;
 
   return (
     <div
@@ -27,6 +49,10 @@ export default function PreviewUploadOverlayPill({
       aria-live="polite"
       aria-busy
       aria-label={label}
+      data-create-video-adding={videoAddingCount > 0 ? "true" : undefined}
+      data-create-video-preparing={
+        videoPreparingCount > 0 ? "true" : undefined
+      }
     >
       <span
         className="inline-block size-3 shrink-0 rounded-full border-2 border-[var(--brand)]/35 border-t-[var(--brand)] animate-spin"

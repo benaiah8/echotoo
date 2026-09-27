@@ -1,71 +1,63 @@
 /**
- * Native push tap → in-app route. FCM `data` uses `postId` + `postType` (from send-post-push).
- * Registers once; bridges navigation via {@link setNativePushTapNavigateHandler} from a Router child.
+ * Native push tap → in-app route. Normalizes FCM data, resolves via shared resolver,
+ * and delivers full route results to {@link setNativePushTapNavigateHandler}.
  */
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { isNativeApp } from "./storage/utils/capacitorDetection";
-import { resolveNotificationRoute } from "./notifications/notificationRouteResolver";
+import {
+  normalizePushRouteData,
+  pushRouteDataKeyMeta,
+} from "./notifications/normalizePushRouteData";
+import {
+  resolveNotificationRoute,
+  type NotificationRouteResult,
+} from "./notifications/notificationRouteResolver";
+
+export type ResolvedNotificationRoute = Extract<
+  NotificationRouteResult,
+  { supported: true }
+>;
 
 let tapListenerAdded = false;
-let navigateHandler: ((path: string) => void) | null = null;
-let pendingPath: string | null = null;
+let navigateHandler: ((route: ResolvedNotificationRoute) => void) | null = null;
+let pendingRoute: ResolvedNotificationRoute | null = null;
 
-function deliverPath(path: string): void {
+function logPushTapResolvedRoute(
+  route: ResolvedNotificationRoute,
+  meta: ReturnType<typeof pushRouteDataKeyMeta>
+): void {
+  console.log("[PUSH_TAP] route_resolved", {
+    kind: route.kind,
+    mode: route.mode,
+    path: route.path,
+    ...meta,
+  });
+}
+
+function deliverRoute(route: ResolvedNotificationRoute): void {
   if (navigateHandler) {
-    console.log("[PUSH_TAP] navigate", { path });
-    navigateHandler(path);
+    navigateHandler(route);
   } else {
-    pendingPath = path;
+    pendingRoute = route;
   }
 }
 
 export function setNativePushTapNavigateHandler(
-  fn: ((path: string) => void) | null
+  fn: ((route: ResolvedNotificationRoute) => void) | null
 ): void {
   navigateHandler = fn;
-  if (fn && pendingPath) {
-    const p = pendingPath;
-    pendingPath = null;
-    console.log("[PUSH_TAP] navigate", { path: p, fromPending: true });
-    fn(p);
-  }
-}
-
-/** Safe tap diagnostics: keys + presence flags only (no full tokens/IDs). */
-function logPushTapPayloadMeta(
-  data: Record<string, unknown> | null | undefined
-): void {
-  if (!data) {
-    console.log("[PUSH_TAP] tap_data_meta", {
-      keys: [],
-      hasType: false,
-      hasInviteId: false,
-      hasThreadId: false,
-      hasThreadKind: false,
+  if (fn && pendingRoute) {
+    const route = pendingRoute;
+    pendingRoute = null;
+    console.log("[PUSH_TAP] navigate", {
+      path: route.path,
+      mode: route.mode,
+      kind: route.kind,
+      fromPending: true,
     });
-    return;
+    fn(route);
   }
-  const keys = Object.keys(data);
-  const hasType =
-    Object.prototype.hasOwnProperty.call(data, "type") &&
-    String(data.type ?? "").trim().length > 0;
-  const hasInviteId =
-    Object.prototype.hasOwnProperty.call(data, "inviteId") &&
-    String(data.inviteId ?? "").trim().length > 0;
-  const hasThreadId =
-    Object.prototype.hasOwnProperty.call(data, "threadId") &&
-    String(data.threadId ?? "").trim().length > 0;
-  const hasThreadKind =
-    Object.prototype.hasOwnProperty.call(data, "threadKind") &&
-    String(data.threadKind ?? "").trim().length > 0;
-  console.log("[PUSH_TAP] tap_data_meta", {
-    keys,
-    hasType,
-    hasInviteId,
-    hasThreadId,
-    hasThreadKind,
-  });
 }
 
 /**
@@ -87,22 +79,45 @@ export function registerNativePushTapListener(): void {
               event as { notification?: { data?: unknown } }
             ).notification,
           });
-          const data = (event as { notification?: { data?: unknown } })
-            .notification?.data;
-          const record =
-            data && typeof data === "object" && !Array.isArray(data)
-              ? (data as Record<string, unknown>)
-              : undefined;
-          logPushTapPayloadMeta(record);
-          const route = resolveNotificationRoute(record);
+
+          const notification = (
+            event as {
+              notification?: {
+                data?: unknown;
+                title?: string;
+                body?: string;
+              };
+            }
+          ).notification;
+
+          const rawForNormalize: Record<string, unknown> = {
+            ...(notification?.data &&
+            typeof notification.data === "object" &&
+            !Array.isArray(notification.data)
+              ? (notification.data as Record<string, unknown>)
+              : {}),
+          };
+
+          const routeData = normalizePushRouteData(rawForNormalize, {
+            title: notification?.title,
+            body: notification?.body,
+          });
+          const meta = pushRouteDataKeyMeta(routeData);
+
+          console.log("[PUSH_TAP] tap_data_meta", meta);
+
+          const route = resolveNotificationRoute(routeData);
           if (!route.supported) {
             console.log("[PUSH_TAP] ignored_invalid_payload", {
               reason: route.reason,
               kind: route.kind,
+              ...meta,
             });
             return;
           }
-          deliverPath(route.path);
+
+          logPushTapResolvedRoute(route, meta);
+          deliverRoute(route);
         }
       );
     } catch (e) {

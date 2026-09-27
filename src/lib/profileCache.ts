@@ -4,6 +4,16 @@
 
 import { getStorageManager } from "./storage/StorageManager";
 import { getCacheDurationMultiplier } from "./connectionAware";
+import {
+  normalizeEchoPreset,
+  normalizeProfilePhotos,
+} from "./profilePhotos";
+
+/** Serve from cache with no network while younger than this (connection-scaled). */
+export const PROFILE_CACHE_FRESH_MS = 30 * 60 * 1000; // 30 minutes
+
+/** Soft-expire: return immediately + background revalidate while younger than this. */
+export const PROFILE_CACHE_MAX_STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface ProfileCacheEntry {
   id: string;
@@ -11,6 +21,8 @@ interface ProfileCacheEntry {
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  profile_photos: string[];
+  echo_preset: string | null;
   bio: string | null;
   xp: number | null;
   member_no: number | null;
@@ -21,6 +33,8 @@ interface ProfileCacheEntry {
   // Why: Instant display of privacy status without flicker, prevents "Sign in" message
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  /** Own-profile only. Do not display for other users. */
+  p2p_discover_enabled?: boolean | null;
   // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields so getProfileByUserId() can be reused everywhere
   // Why: Allows OnboardingWrapper to use getProfileByUserId(), reducing 5 requests to 1
   user_number?: number | null;
@@ -28,6 +42,85 @@ interface ProfileCacheEntry {
   onboarding_step?: number | null;
   timestamp: number;
 }
+
+/** Public shape returned from cache getters (no timestamp). */
+export type CachedProfileData = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  profile_photos: string[];
+  echo_preset: string | null;
+  bio: string | null;
+  xp: number | null;
+  member_no: number | null;
+  instagram_url: string | null;
+  tiktok_url: string | null;
+  telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
+  p2p_discover_enabled?: boolean | null;
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
+};
+
+export type SetCachedProfileInput = {
+  id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  profile_photos?: string[] | null;
+  echo_preset?: string | null;
+  bio: string | null;
+  xp: number | null;
+  /**
+   * Omit when unknown (thin Feed/list primes). Explicit `null` from a full
+   * profile response is authoritative and overwrites a cached number.
+   */
+  member_no?: number | null;
+  instagram_url: string | null;
+  tiktok_url: string | null;
+  telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
+  p2p_discover_enabled?: boolean | null;
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
+};
+
+/** True when cache holds a known member number (not thin / unknown). */
+export function profileCacheHasUsableMemberNo(data: {
+  member_no?: number | null;
+}): boolean {
+  return data.member_no != null;
+}
+
+function resolveCachedMemberNo(
+  profileData: SetCachedProfileInput,
+  existing: CachedProfileData | null | undefined,
+): number | null {
+  if (Object.prototype.hasOwnProperty.call(profileData, "member_no")) {
+    return profileData.member_no ?? null;
+  }
+  return existing?.member_no ?? null;
+}
+
+export type ProfileCacheHit = {
+  data: CachedProfileData;
+  ageMs: number;
+  /** Younger than fresh TTL — no network needed. */
+  fresh: boolean;
+  /** Older than max-stale — only use as offline fallback. */
+  expired: boolean;
+};
+
+const CACHE_KEY = "profile_cache";
+const USERNAME_CACHE_KEY = "profile_username_cache";
+const STORAGE_PREFIX = "profile:"; // [OPTIMIZATION: Phase 3.2] StorageManager prefix
 
 interface ProfileCache {
   [key: string]: ProfileCacheEntry; // key is profile ID
@@ -37,27 +130,97 @@ interface UsernameCache {
   [username: string]: string; // username -> profile ID mapping
 }
 
-const BASE_CACHE_DURATION = 5 * 60 * 1000; // [OPTIMIZATION: Phase 3.2] 5 minutes for own profile (was 30 min)
-const CACHE_KEY = "profile_cache";
-const USERNAME_CACHE_KEY = "profile_username_cache";
-const STORAGE_PREFIX = "profile:"; // [OPTIMIZATION: Phase 3.2] StorageManager prefix
-
-// [OPTIMIZATION: Phase 6 - Connection] Get cache duration based on connection speed
-// Why: Longer cache duration on slow connections to reduce network requests
-function getCacheDuration(): number {
-  try {
-    const multiplier = getCacheDurationMultiplier();
-    return BASE_CACHE_DURATION * multiplier;
-  } catch {
-    // Fallback if connectionAware not available
-    return BASE_CACHE_DURATION;
+function cacheLog(
+  event: "fresh_hit" | "stale_hit" | "revalidate" | "miss" | "expired_fallback",
+  extra?: Record<string, unknown>,
+): void {
+  if (!import.meta.env.DEV) return;
+  if (extra) {
+    console.debug("[profile-cache]", event, extra);
+  } else {
+    console.debug("[profile-cache]", event);
   }
+}
+
+/** Connection-aware fresh window (slow networks keep cache longer). */
+export function getProfileCacheFreshMs(): number {
+  try {
+    return PROFILE_CACHE_FRESH_MS * getCacheDurationMultiplier();
+  } catch {
+    return PROFILE_CACHE_FRESH_MS;
+  }
+}
+
+/** Connection-aware max soft-stale window. */
+export function getProfileCacheMaxStaleMs(): number {
+  try {
+    return PROFILE_CACHE_MAX_STALE_MS * getCacheDurationMultiplier();
+  } catch {
+    return PROFILE_CACHE_MAX_STALE_MS;
+  }
+}
+
+function toCachedProfileData(entry: ProfileCacheEntry): CachedProfileData {
+  return {
+    id: entry.id,
+    user_id: entry.user_id,
+    username: entry.username,
+    display_name: entry.display_name,
+    avatar_url: entry.avatar_url,
+    profile_photos: normalizeProfilePhotos(entry.profile_photos),
+    echo_preset: normalizeEchoPreset(entry.echo_preset),
+    bio: entry.bio,
+    xp: entry.xp,
+    member_no: entry.member_no,
+    instagram_url: entry.instagram_url,
+    tiktok_url: entry.tiktok_url,
+    telegram_url: entry.telegram_url,
+    is_private: entry.is_private,
+    social_media_public: entry.social_media_public,
+    p2p_discover_enabled: entry.p2p_discover_enabled,
+    user_number: entry.user_number,
+    onboarding_completed: entry.onboarding_completed,
+    onboarding_step: entry.onboarding_step,
+  };
+}
+
+function isValidEntry(entry: unknown): entry is ProfileCacheEntry {
+  if (!entry || typeof entry !== "object") return false;
+  const e = entry as ProfileCacheEntry;
+  return (
+    typeof e.id === "string" &&
+    e.id.length > 0 &&
+    typeof e.user_id === "string" &&
+    e.user_id.length > 0 &&
+    typeof e.timestamp === "number" &&
+    Number.isFinite(e.timestamp)
+  );
+}
+
+function classifyAge(ageMs: number): { fresh: boolean; expired: boolean } {
+  const freshMs = getProfileCacheFreshMs();
+  const maxStaleMs = getProfileCacheMaxStaleMs();
+  return {
+    fresh: ageMs <= freshMs,
+    expired: ageMs > maxStaleMs,
+  };
+}
+
+function hitFromEntry(entry: ProfileCacheEntry): ProfileCacheHit {
+  const ageMs = Math.max(0, Date.now() - entry.timestamp);
+  const { fresh, expired } = classifyAge(ageMs);
+  return {
+    data: toCachedProfileData(entry),
+    ageMs,
+    fresh,
+    expired,
+  };
 }
 
 // [OPTIMIZATION: Phase 3.2] Get StorageManager instance (with fallback)
 function getStorage(): {
-  get: (key: string) => Promise<any>;
-  set: (key: string, value: any, ttl?: number) => Promise<void>;
+  get: (key: string) => Promise<unknown>;
+  set: (key: string, value: unknown, ttl?: number) => Promise<void>;
   delete: (key: string) => Promise<void>;
   keys: () => Promise<string[]>;
 } | null {
@@ -72,13 +235,13 @@ function getStorage(): {
 function getFromLocalStorageLegacy<T>(key: string): T | null {
   try {
     const cacheStr = localStorage.getItem(key);
-    return cacheStr ? JSON.parse(cacheStr) : null;
+    return cacheStr ? (JSON.parse(cacheStr) as T) : null;
   } catch {
     return null;
   }
 }
 
-function setToLocalStorageLegacy(key: string, value: any): void {
+function setToLocalStorageLegacy(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
@@ -86,71 +249,112 @@ function setToLocalStorageLegacy(key: string, value: any): void {
   }
 }
 
-// [OPTIMIZATION: Phase 1 - Cache] Get cached profile data including privacy settings
-// Why: Instant display of profile data and privacy status without database queries
-// [OPTIMIZATION: Phase 3.2] Now uses StorageManager with localStorage fallback
-// Note: Function remains synchronous for backward compatibility (StorageManager loads async in background)
-export function getCachedProfile(profileId: string): {
-  id: string;
-  user_id: string;
-  username: string | null;
-  display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  xp: number | null;
-  member_no: number | null;
-  instagram_url: string | null;
-  tiktok_url: string | null;
-  telegram_url: string | null;
-  is_private?: boolean | null;
-  social_media_public?: boolean | null;
-  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
-  user_number?: number | null;
-  onboarding_completed?: boolean | null;
-  onboarding_step?: number | null;
-} | null {
+function readRawEntry(profileId: string): ProfileCacheEntry | null {
   try {
-    // [OPTIMIZATION: Phase 3.2] Use legacy localStorage for synchronous access (backward compatibility)
-    // StorageManager is used for writes, but reads use localStorage for instant access
-    // This ensures backward compatibility while benefiting from StorageManager for writes
     const cache = getFromLocalStorageLegacy<ProfileCache>(CACHE_KEY);
     if (!cache) return null;
-
     const entry = cache[profileId];
-    if (!entry) return null;
-
-    // Check if cache is expired
-    // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
-    if (Date.now() - entry.timestamp > getCacheDuration()) {
-      // Remove expired entry
-      delete cache[profileId];
-      setToLocalStorageLegacy(CACHE_KEY, cache);
+    if (!isValidEntry(entry)) {
+      if (entry) {
+        delete cache[profileId];
+        setToLocalStorageLegacy(CACHE_KEY, cache);
+      }
       return null;
     }
+    return entry;
+  } catch {
+    return null;
+  }
+}
 
-    return {
-      id: entry.id,
-      user_id: entry.user_id,
-      username: entry.username,
-      display_name: entry.display_name,
-      avatar_url: entry.avatar_url,
-      bio: entry.bio,
-      xp: entry.xp,
-      member_no: entry.member_no,
-      instagram_url: entry.instagram_url,
-      tiktok_url: entry.tiktok_url,
-      telegram_url: entry.telegram_url,
-      is_private: entry.is_private,
-      social_media_public: entry.social_media_public,
-      // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
-      user_number: entry.user_number,
-      onboarding_completed: entry.onboarding_completed,
-      onboarding_step: entry.onboarding_step,
-    };
+/**
+ * Inspect cache by profile id (includes expired entries for offline fallback).
+ */
+export function inspectCachedProfile(
+  profileId: string,
+): ProfileCacheHit | null {
+  const entry = readRawEntry(profileId);
+  if (!entry) return null;
+  return hitFromEntry(entry);
+}
+
+/**
+ * Inspect cache by auth user_id.
+ */
+export function inspectCachedProfileByUserId(
+  userId: string,
+): ProfileCacheHit | null {
+  if (!userId) return null;
+  try {
+    const cache = getFromLocalStorageLegacy<ProfileCache>(CACHE_KEY);
+    if (!cache) return null;
+    for (const entry of Object.values(cache)) {
+      if (!isValidEntry(entry)) continue;
+      if (entry.user_id === userId) {
+        return hitFromEntry(entry);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export function isCachedProfileFresh(profileId: string): boolean {
+  const hit = inspectCachedProfile(profileId);
+  return Boolean(hit && hit.fresh && !hit.expired);
+}
+
+/**
+ * Get cached profile for rendering.
+ * Returns fresh + soft-stale entries (age ≤ max-stale).
+ * Does NOT delete soft-stale entries (SWR will refresh in the background).
+ */
+export function getCachedProfile(profileId: string): CachedProfileData | null {
+  try {
+    const hit = inspectCachedProfile(profileId);
+    if (!hit) {
+      cacheLog("miss", { profileId });
+      return null;
+    }
+    if (hit.expired) {
+      // Drop permanently-expired rows from the sync map
+      const cache = getFromLocalStorageLegacy<ProfileCache>(CACHE_KEY);
+      if (cache?.[profileId]) {
+        delete cache[profileId];
+        setToLocalStorageLegacy(CACHE_KEY, cache);
+      }
+      cacheLog("miss", { profileId, reason: "expired" });
+      return null;
+    }
+    cacheLog(hit.fresh ? "fresh_hit" : "stale_hit", {
+      profileId,
+      ageMs: hit.ageMs,
+    });
+    return hit.data;
   } catch (error) {
     console.error("Error reading profile cache:", error);
     return null;
   }
+}
+
+/**
+ * Last-known profile even if past max-stale (offline / fetch-failure fallback).
+ */
+export function peekCachedProfileExpired(
+  profileId: string,
+): CachedProfileData | null {
+  const hit = inspectCachedProfile(profileId);
+  if (!hit) return null;
+  return hit.data;
+}
+
+export function peekCachedProfileByUserIdExpired(
+  userId: string,
+): CachedProfileData | null {
+  const hit = inspectCachedProfileByUserId(userId);
+  if (!hit) return null;
+  return hit.data;
 }
 
 // Helper function to get username cache
@@ -175,32 +379,15 @@ function setUsernameCache(usernameCache: UsernameCache): void {
 // [OPTIMIZATION: Phase 1 - Cache] Set cached profile data including privacy settings
 // Why: Caches privacy settings for instant display and prevents flicker
 // [OPTIMIZATION: Phase 3.2] Now uses StorageManager with localStorage fallback
-export function setCachedProfile(profileData: {
-  id: string;
-  user_id: string;
-  username: string | null;
-  display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  xp: number | null;
-  member_no: number | null;
-  instagram_url: string | null;
-  tiktok_url: string | null;
-  telegram_url: string | null;
-  is_private?: boolean | null;
-  social_media_public?: boolean | null;
-  // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
-  user_number?: number | null;
-  onboarding_completed?: boolean | null;
-  onboarding_step?: number | null;
-}): void {
+export function setCachedProfile(profileData: SetCachedProfileInput): void {
   try {
     const storage = getStorage();
     const storageKey = `${STORAGE_PREFIX}${profileData.id}`;
 
     // [FIX] Preserve onboarding fields when incoming data is partial (e.g. from Post prefetch, FollowListDrawer)
     // Prevents OnboardingWrapper from incorrectly showing onboarding after cache overwrite
-    const existing = getCachedProfile(profileData.id);
+    const existing = peekCachedProfileExpired(profileData.id);
+    const existingEntry = readRawEntry(profileData.id);
     const incomingUserId = profileData.user_id?.trim() ?? "";
     const user_id =
       incomingUserId && /^[0-9a-f-]{36}$/i.test(incomingUserId)
@@ -211,6 +398,19 @@ export function setCachedProfile(profileData: {
     const entry: ProfileCacheEntry = {
       ...profileData,
       user_id,
+      member_no: resolveCachedMemberNo(profileData, existing),
+      profile_photos:
+        profileData.profile_photos !== undefined
+          ? normalizeProfilePhotos(profileData.profile_photos)
+          : (existing?.profile_photos ?? []),
+      echo_preset:
+        profileData.echo_preset !== undefined
+          ? normalizeEchoPreset(profileData.echo_preset)
+          : (existing?.echo_preset ?? null),
+      p2p_discover_enabled:
+        profileData.p2p_discover_enabled !== undefined
+          ? profileData.p2p_discover_enabled
+          : existing?.p2p_discover_enabled,
       // Preserve onboarding_completed/onboarding_step if incoming does not provide them
       onboarding_completed:
         profileData.onboarding_completed !== undefined
@@ -222,14 +422,14 @@ export function setCachedProfile(profileData: {
           : existing?.onboarding_step,
       timestamp: Date.now(),
     };
-    const ttl = getCacheDuration();
+    const ttl = getProfileCacheMaxStaleMs();
 
     // [OPTIMIZATION: Phase 3.2] Store in StorageManager (primary path)
     if (storage) {
       storage.set(storageKey, entry, ttl).catch((error) => {
         console.warn(
           "[ProfileCache] StorageManager failed, using localStorage fallback:",
-          error
+          error,
         );
       });
     }
@@ -239,12 +439,19 @@ export function setCachedProfile(profileData: {
     cache[profileData.id] = entry;
     setToLocalStorageLegacy(CACHE_KEY, cache);
 
-    // Also update username cache if username exists
-    if (profileData.username) {
-      const usernameCache = getUsernameCache();
-      usernameCache[profileData.username.toLowerCase()] = profileData.id;
-      setUsernameCache(usernameCache);
+    // Username index — drop previous username mapping when it changes
+    const usernameCache = getUsernameCache();
+    const prevUsername = existingEntry?.username?.toLowerCase() ?? null;
+    const nextUsername = profileData.username?.toLowerCase() ?? null;
+    if (prevUsername && prevUsername !== nextUsername) {
+      if (usernameCache[prevUsername] === profileData.id) {
+        delete usernameCache[prevUsername];
+      }
     }
+    if (nextUsername) {
+      usernameCache[nextUsername] = profileData.id;
+    }
+    setUsernameCache(usernameCache);
   } catch (error) {
     console.error("Error setting profile cache:", error);
   }
@@ -297,10 +504,10 @@ export function clearAllProfileCache(): void {
         .keys()
         .then((keys: string[]) => {
           const profileKeys = keys.filter((key: string) =>
-            key.startsWith(STORAGE_PREFIX)
+            key.startsWith(STORAGE_PREFIX),
           );
           return Promise.all(
-            profileKeys.map((key: string) => storage!.delete(key))
+            profileKeys.map((key: string) => storage!.delete(key)),
           );
         })
         .catch(() => {
@@ -316,20 +523,10 @@ export function clearAllProfileCache(): void {
   }
 }
 
-// Get cached profile by username or ID
-export function getProfileCached(usernameOrId: string): {
-  id: string;
-  user_id: string;
-  username: string | null;
-  display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  xp: number | null;
-  member_no: number | null;
-  instagram_url: string | null;
-  tiktok_url: string | null;
-  telegram_url: string | null;
-} | null {
+// Get cached profile by username or ID (fresh + soft-stale only)
+export function getProfileCached(
+  usernameOrId: string,
+): CachedProfileData | null {
   try {
     // First, try to get by ID if it looks like a UUID
     const isUuid = /^[0-9a-f-]{36}$/i.test(usernameOrId);
@@ -349,30 +546,20 @@ export function getProfileCached(usernameOrId: string): {
     const cache = getFromLocalStorageLegacy<ProfileCache>(CACHE_KEY);
     if (!cache) return null;
 
-    for (const [id, entry] of Object.entries(cache)) {
-      // Check if cache is expired
-      // [OPTIMIZATION: Phase 6 - Connection] Use connection-aware cache duration
-      if (Date.now() - entry.timestamp > getCacheDuration()) {
-        continue;
-      }
+    const maxStaleMs = getProfileCacheMaxStaleMs();
+    for (const entry of Object.values(cache)) {
+      if (!isValidEntry(entry)) continue;
+      const ageMs = Date.now() - entry.timestamp;
+      if (ageMs > maxStaleMs) continue;
 
       if (
         entry.username &&
         entry.username.toLowerCase() === usernameOrId.toLowerCase()
       ) {
-        return {
-          id: entry.id,
-          user_id: entry.user_id,
-          username: entry.username,
-          display_name: entry.display_name,
-          avatar_url: entry.avatar_url,
-          bio: entry.bio,
-          xp: entry.xp,
+        return toCachedProfileData({
+          ...entry,
           member_no: entry.member_no ?? entry.user_number ?? null,
-          instagram_url: entry.instagram_url,
-          tiktok_url: entry.tiktok_url,
-          telegram_url: entry.telegram_url,
-        };
+        });
       }
     }
 
@@ -383,23 +570,12 @@ export function getProfileCached(usernameOrId: string): {
   }
 }
 
+/** @internal DEV diagnostics helper — re-exported for fetch layer. */
+export { cacheLog as profileCacheDevLog };
+
 // [OPTIMIZATION: Phase 1 - Cache] Cache a profile (alias for setCachedProfile for backward compatibility)
 // Why: Maintains backward compatibility while supporting privacy settings caching
-export function primeProfileCache(profileData: {
-  id: string;
-  user_id: string;
-  username: string | null;
-  display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
-  xp: number | null;
-  member_no: number | null;
-  instagram_url: string | null;
-  tiktok_url: string | null;
-  telegram_url: string | null;
-  is_private?: boolean | null;
-  social_media_public?: boolean | null;
-}): void {
+export function primeProfileCache(profileData: SetCachedProfileInput): void {
   setCachedProfile(profileData);
 }
 
@@ -412,36 +588,28 @@ export function invalidateProfile(profileId: string): void {
 // Why: Efficiently caches multiple profiles at once, including privacy status
 // [OPTIMIZATION: Phase 3.2] Now uses StorageManager with localStorage fallback
 export function setCachedProfiles(
-  profiles: Array<{
-    id: string;
-    user_id: string;
-    username: string | null;
-    display_name: string | null;
-    avatar_url: string | null;
-    bio: string | null;
-    xp: number | null;
-    member_no: number | null;
-    instagram_url: string | null;
-    tiktok_url: string | null;
-    telegram_url: string | null;
-    is_private?: boolean | null;
-    social_media_public?: boolean | null;
-    // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields
-    user_number?: number | null;
-    onboarding_completed?: boolean | null;
-    onboarding_step?: number | null;
-  }>
+  profiles: Array<SetCachedProfileInput>,
 ): void {
   try {
     const storage = getStorage();
     const cache = getFromLocalStorageLegacy<ProfileCache>(CACHE_KEY) || {};
     const usernameCache = getUsernameCache();
-    const ttl = getCacheDuration();
+    const ttl = getProfileCacheMaxStaleMs();
 
     profiles.forEach((profile) => {
-      const existing = getCachedProfile(profile.id);
+      const existing = peekCachedProfileExpired(profile.id);
+      const existingEntry = readRawEntry(profile.id);
       const entry: ProfileCacheEntry = {
         ...profile,
+        member_no: resolveCachedMemberNo(profile, existing),
+        profile_photos:
+          profile.profile_photos !== undefined
+            ? normalizeProfilePhotos(profile.profile_photos)
+            : (existing?.profile_photos ?? []),
+        echo_preset:
+          profile.echo_preset !== undefined
+            ? normalizeEchoPreset(profile.echo_preset)
+            : (existing?.echo_preset ?? null),
         onboarding_completed:
           profile.onboarding_completed !== undefined
             ? profile.onboarding_completed
@@ -464,9 +632,15 @@ export function setCachedProfiles(
       // [OPTIMIZATION: Phase 3.2] Also store in legacy localStorage
       cache[profile.id] = entry;
 
-      // Also update username cache if username exists
-      if (profile.username) {
-        usernameCache[profile.username.toLowerCase()] = profile.id;
+      const prevUsername = existingEntry?.username?.toLowerCase() ?? null;
+      const nextUsername = profile.username?.toLowerCase() ?? null;
+      if (prevUsername && prevUsername !== nextUsername) {
+        if (usernameCache[prevUsername] === profile.id) {
+          delete usernameCache[prevUsername];
+        }
+      }
+      if (nextUsername) {
+        usernameCache[nextUsername] = profile.id;
       }
     });
 

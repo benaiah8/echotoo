@@ -18,13 +18,40 @@ import { dataCache } from "./dataCache";
 import { recordSignal } from "./feedPersonalization";
 import { incrementMyXp } from "../api/services/xp";
 import { sanitizeTagsForPublish } from "./createFlowLimits";
-import { isDefaultStopTitle } from "./createFlowMeaningfulActivity";
+import { isMeaningfulActivityAtIndex as shouldPersistActivityAtIndex } from "./createFlowMeaningfulActivity";
+import { sanitizeV4SectionBodyForCommit } from "./createFlowV4Section";
 import { persistOwnCreatedPrependPending } from "./ownCreatedPendingPrepend";
+import {
+  invalidatePublishedMedia,
+  seedPublishedMediaFromList,
+} from "./publishedMedia";
 import { clearPersistedProfilePosts } from "./profilePostListCache";
 import { assertCreateFlowDraftTextAllowed } from "./ugcTextPolicy";
 import { emitPostChanged, type PostPatch } from "./postEvents";
+import {
+  resolveAdminRepublishTypeGate,
+  withOwnerRepublishTypeKey,
+} from "./createFlowPostType";
+import { resolveCreateFlowPublishRsvpCapacity } from "./createFlowPublishRsvp";
+import { invalidatePairUpForPost } from "./pairUpCache";
+import { invalidateOpenPlanOwnForPost } from "./openPlanCache";
+import { invalidateGroupUpOwnForPost } from "./groupUpCache";
+import { invalidateGroupUpSourceList } from "./groupUpSourceListCache";
 import { enqueuePendingPostPatch } from "./pendingPostPatches";
 import { buildCarouselImages } from "./carouselImages";
+import {
+  mapDraftMediaOrderToPublished,
+  type DraftMediaOrderItem,
+  type PublishedMediaOrderItem,
+} from "./createDraftMediaOrder";
+import { isLocalDraftImageUrl } from "./createDraftImage/localDraftImageUrl";
+import { assertPublishImagePayloadHasNoLocalLeak } from "./createDraftImage/publishDraftImages";
+import {
+  isCanonicalPublishedVideoMediaId,
+  PUBLISHED_VIDEO_MEDIA_ID_REQUIRED_MESSAGE,
+  PUBLISHED_VIDEO_ORDER_REQUIRED_MESSAGE,
+} from "./resolvePublishedVideoMediaId";
+import type { VideoEditPayload } from "./ownerPostMediaEditContract";
 
 /** Legacy sessionStorage key — no longer written; cleared on new publish for hygiene. */
 const LEGACY_OWN_CREATED_PUBLISHED_PENDING_KEY =
@@ -41,6 +68,7 @@ export type CreateFlowDraftActivity = {
   tags?: string[];
   images?: unknown[];
   additionalInfo?: { title: string; value: string }[];
+  sectionBody?: string;
 };
 
 const isHttpUrl = (v: unknown): v is string =>
@@ -49,45 +77,17 @@ const isHttpUrl = (v: unknown): v is string =>
 
 const isCloudinaryUrl = (u: string) => u.includes("res.cloudinary.com");
 
-function hasMeaningfulExtras(
-  additionalInfo: CreateFlowDraftActivity["additionalInfo"]
-): boolean {
-  if (!Array.isArray(additionalInfo)) return false;
-  return additionalInfo.some(
-    (x) =>
-      (x?.title ?? "").trim().length > 0 && (x?.value ?? "").trim().length > 0
-  );
-}
-
-function hasMeaningfulActivityAtIndex(
-  activity: CreateFlowDraftActivity,
-  index: number
-): boolean {
-  const images = cleanImagesForActivity(activity?.images);
-  if (images.length > 0) return true;
-
-  const title = (activity.title ?? "").trim();
-  if (title && !isDefaultStopTitle(title, index)) return true;
-
-  if ((activity.customActivity ?? "").trim()) return true;
-  if ((activity.activityType ?? "").trim()) return true;
-  if ((activity.locationDesc ?? "").trim()) return true;
-  if ((activity.location ?? "").trim()) return true;
-  if ((activity.locationNotes ?? "").trim()) return true;
-  if ((activity.locationUrl ?? "").trim()) return true;
-
-  const tags = Array.isArray(activity.tags)
-    ? activity.tags.map((t) => String(t).trim()).filter(Boolean)
-    : [];
-  if (tags.length > 0) return true;
-
-  if (hasMeaningfulExtras(activity.additionalInfo)) return true;
-
-  return false;
-}
-
 export function cleanImagesForActivity(arr: unknown): string[] {
-  const valid = Array.isArray(arr) ? arr.map(String).filter(isHttpUrl) : [];
+  const valid = Array.isArray(arr)
+    ? arr
+        .map(String)
+        .filter(
+          (u) =>
+            isHttpUrl(u) &&
+            !isLocalDraftImageUrl(u) &&
+            !u.startsWith("blob:"),
+        )
+    : [];
   const nonCloudinary = valid.filter((u) => !isCloudinaryUrl(u));
   const hadCloudinary = valid.some(isCloudinaryUrl);
   if (hadCloudinary && nonCloudinary.length === 0) {
@@ -107,18 +107,22 @@ function coerceStringArray(value: unknown): string[] {
 function mapActivitiesForDbInsert(
   activities: CreateFlowDraftActivity[]
 ): Array<Record<string, unknown>> {
-  return activities.map((a: CreateFlowDraftActivity, i: number) => ({
-    title: a.title || a.customActivity || a.activityType || `Stop ${i + 1}`,
-    activity_type: a.activityType ?? null,
-    custom_activity: a.customActivity ?? null,
-    location_name: a.location ?? null,
-    location_desc: a.locationDesc ?? null,
-    location_url: a.locationUrl ?? null,
-    location_notes: a.locationNotes ?? null,
-    additional_info: a.additionalInfo ?? null,
-    tags: a.tags ?? null,
-    images: cleanImagesForActivity(a.images),
-  }));
+  return activities.map((a: CreateFlowDraftActivity, i: number) => {
+    const sectionBody = sanitizeV4SectionBodyForCommit(a.sectionBody ?? "");
+    return {
+      title: a.title || a.customActivity || a.activityType || `Stop ${i + 1}`,
+      activity_type: a.activityType ?? null,
+      custom_activity: a.customActivity ?? null,
+      location_name: a.location ?? null,
+      location_desc: a.locationDesc ?? null,
+      location_url: a.locationUrl ?? null,
+      location_notes: a.locationNotes ?? null,
+      additional_info: a.additionalInfo ?? null,
+      tags: a.tags ?? null,
+      images: cleanImagesForActivity(a.images),
+      section_body: sectionBody || null,
+    };
+  });
 }
 
 /** Admin RPC payload: array-like JSON fields must be arrays, not null/scalars. */
@@ -141,11 +145,39 @@ function mapActivitiesForOwnerCreate(
   }));
 }
 
+function resolvePublishedMediaOrderForCreate(
+  input: ExecuteCreateFlowPublishInput,
+): PublishedMediaOrderItem[] | undefined {
+  if (!input.mediaOrder?.length) {
+    if (input.requireVideoInMediaOrder) {
+      throw new Error(PUBLISHED_VIDEO_ORDER_REQUIRED_MESSAGE);
+    }
+    return undefined;
+  }
+  const hasVideo = input.mediaOrder.some((item) => item.kind === "video");
+  if (input.requireVideoInMediaOrder && !hasVideo) {
+    throw new Error(PUBLISHED_VIDEO_ORDER_REQUIRED_MESSAGE);
+  }
+  const publishedVideoMediaId = isCanonicalPublishedVideoMediaId(
+    input.publishedVideoMediaId,
+  )
+    ? input.publishedVideoMediaId.trim()
+    : null;
+  if (hasVideo && !publishedVideoMediaId) {
+    throw new Error(PUBLISHED_VIDEO_MEDIA_ID_REQUIRED_MESSAGE);
+  }
+  return mapDraftMediaOrderToPublished(
+    input.mediaOrder,
+    publishedVideoMediaId,
+  );
+}
+
 function buildOwnerCreatePayload(
   input: ExecuteCreateFlowPublishInput,
   activitiesForDb: Array<Record<string, unknown>>
 ): Record<string, unknown> {
   const tags = sanitizeTagsForPublish(input.tags);
+  const mediaOrder = resolvePublishedMediaOrderForCreate(input);
   return {
     type: input.postType === "hangout" ? "hangout" : "experience",
     caption: input.caption,
@@ -157,6 +189,7 @@ function buildOwnerCreatePayload(
     recurrence_days: input.recurrenceDays,
     rating_enabled: input.ratingEnabled ?? false,
     activities: activitiesForDb,
+    ...(mediaOrder ? { media_order: mediaOrder } : {}),
   };
 }
 
@@ -165,7 +198,7 @@ function buildAdminRepublishPayload(
   activitiesForDb: Array<Record<string, unknown>>
 ): Record<string, unknown> {
   const tags = sanitizeTagsForPublish(input.tags);
-  return {
+  const payload: Record<string, unknown> = {
     type: input.postType === "hangout" ? "hangout" : "experience",
     caption: input.caption,
     visibility: input.visibility === "friends" ? "friends" : "public",
@@ -180,16 +213,54 @@ function buildAdminRepublishPayload(
     anonymous_avatar: input.anonymousAvatar ?? null,
     activities: activitiesForDb,
   };
+  // Owner + Admin Edit: fold optional video_edit / media_order into the same RPC.
+  applyEditMediaToRepublishPayload(payload, input);
+  return payload;
 }
 
-/** Owner republish: complete snapshot; RPC preserves existing DB type (omit type key). */
+/**
+ * Fold optional Edit media keys into owner_republish_post / admin_republish_post.
+ * Omitting videoEdit → no post_media video mutation. mediaOrder including [].
+ */
+function applyEditMediaToRepublishPayload(
+  payload: Record<string, unknown>,
+  input: ExecuteCreateFlowPublishInput,
+): void {
+  if (!input.commitOwnerMediaInRepublish) return;
+
+  if (input.videoEdit) {
+    payload.video_edit = input.videoEdit;
+  }
+  // Explicit media_order (including []) when draft order was provided.
+  if (input.mediaOrder !== undefined) {
+    if (input.mediaOrder.length === 0) {
+      payload.media_order = [];
+    } else {
+      try {
+        const publishedOrder = resolvePublishedMediaOrderForCreate(input);
+        if (publishedOrder) {
+          payload.media_order = publishedOrder;
+        }
+      } catch (err) {
+        throw err instanceof Error
+          ? err
+          : new Error("Could not build media_order for edit save");
+      }
+    }
+  }
+}
+
+/** Owner republish: omit type unless explicit confirmed conversion (D2B). */
 function buildOwnerRepublishPayload(
   input: ExecuteCreateFlowPublishInput,
   activitiesForDb: Array<Record<string, unknown>>
 ): Record<string, unknown> {
   const payload = buildAdminRepublishPayload(input, activitiesForDb);
-  delete payload.type;
-  return payload;
+
+  return withOwnerRepublishTypeKey(
+    payload,
+    input.confirmedOwnerTypeConversion ?? null,
+  );
 }
 
 function buildAdminEditVisiblePatch(
@@ -255,8 +326,13 @@ export type ExecuteCreateFlowPublishInput = {
   isAdminEdit?: boolean;
   /** Original owner auth user id for admin edit cache invalidation. */
   authorUserId?: string;
-  /** Locked post type from edit bootstrap (blocks type switching). */
+  /** Locked post type from edit bootstrap (admin type switch only when confirmed). */
   originalPostType?: "experience" | "hangout";
+  /**
+   * After published conversion confirm (owner or admin), include this `type` on
+   * republish. Omit for ordinary edits (historical / legacy safe).
+   */
+  confirmedOwnerTypeConversion?: "experience" | "hangout" | null;
   isAnonymous?: boolean | null;
   anonymousName?: string | null;
   anonymousAvatar?: string | null;
@@ -267,6 +343,46 @@ export type ExecuteCreateFlowPublishInput = {
    * Omit/false for legacy Preview insertPost path.
    */
   atomicPublish?: boolean;
+  /**
+   * Draft media order for new atomic publish. Mapped to posts.media_order via
+   * {@link mapDraftMediaOrderToPublished} when present.
+   * Owner/Admin Edit with {@link commitOwnerMediaInRepublish}: included on
+   * owner_republish_post / admin_republish_post (including empty array).
+   */
+  mediaOrder?: DraftMediaOrderItem[];
+  /**
+   * Canonical remote post_media.id for media_order video items.
+   * Must be passed from the current Publish transaction (upload return / draft
+   * remoteMediaId) — do not rely on React state flush timing.
+   * Edit retain: existing PublishedVideoReference.mediaId.
+   * Edit ADD/REPLACE: staged media id after upload.
+   */
+  publishedVideoMediaId?: string | null;
+  /**
+   * PV3.3: when true, final published media_order must include a video entry
+   * (active DraftVideo was present at Publish). Fail before owner_create_post.
+   */
+  requireVideoInMediaOrder?: boolean;
+  /**
+   * Owner/Admin Edit: optional video_edit folded into republish RPC.
+   * Omit / null → no post_media video mutation (UNCHANGED).
+   */
+  videoEdit?: VideoEditPayload | null;
+  /**
+   * Owner/Admin Edit: include media_order (+ video_edit) atomically on
+   * owner_republish_post / admin_republish_post and skip the legacy post-hoc
+   * updateOwnedPostMediaOrder write.
+   */
+  commitOwnerMediaInRepublish?: boolean;
+  /**
+   * PV3.4: creator-first published media seed (compact media_order + post_media).
+   * When set on new publish, seeds publishedMediaCache instead of only invalidating.
+   */
+  publishedMediaSeed?: {
+    mediaOrder: unknown;
+    postMedia: unknown;
+    imageUrls?: string[];
+  } | null;
 };
 
 export type ExecuteCreateFlowPublishResult = {
@@ -289,6 +405,14 @@ export type ExecuteCreateFlowPublishResult = {
 export async function executeCreateFlowPublish(
   input: ExecuteCreateFlowPublishInput
 ): Promise<ExecuteCreateFlowPublishResult> {
+  // NEW POST: always null. EXISTING EDIT: keep historical unless type conversion.
+  const resolvedRsvpCapacity = resolveCreateFlowPublishRsvpCapacity({
+    isEditMode: input.isEditMode,
+    existingCapacity: input.rsvpCapacity,
+    confirmedTypeConversion: input.confirmedOwnerTypeConversion ?? null,
+  });
+  input = { ...input, rsvpCapacity: resolvedRsvpCapacity };
+
   const {
     data: { session },
     error: sessErr,
@@ -313,7 +437,7 @@ export async function executeCreateFlowPublish(
   }));
 
   const activitiesToPersist = sanitizedActivities.filter((a, i) =>
-    hasMeaningfulActivityAtIndex(a, i)
+    shouldPersistActivityAtIndex(a, i)
   );
 
   let post: ExecuteCreateFlowPublishResult["post"];
@@ -321,16 +445,20 @@ export async function executeCreateFlowPublish(
   let publishCreated: boolean | undefined;
 
   if (input.isEditMode && input.editPostId && input.isAdminEdit) {
-    const lockedType = input.originalPostType ?? input.postType;
-    const nextType = input.postType === "hangout" ? "hangout" : "experience";
-    if (lockedType !== nextType) {
-      throw new Error("Post type cannot be changed");
-    }
+    const { nextType, confirmedSwitch } = resolveAdminRepublishTypeGate({
+      originalPostType: input.originalPostType,
+      postType: input.postType,
+      confirmedTypeConversion: input.confirmedOwnerTypeConversion,
+    });
 
     const payload = buildAdminRepublishPayload(
       input,
       mapActivitiesForAdminRepublish(activitiesToPersist)
     );
+    // Confirmed switch: payload.type must be the validated target only.
+    if (confirmedSwitch) {
+      payload.type = nextType;
+    }
 
     const result = await adminRepublishPost(input.editPostId, payload);
     if (!result.updated) {
@@ -343,6 +471,19 @@ export async function executeCreateFlowPublish(
     }
 
     await invalidateCachesAfterAdminPostEdit(result.postId, authorId);
+
+    // Atomic media_order via admin_republish_post when commitOwnerMediaInRepublish.
+    // Do NOT post-hoc updateOwnedPostMediaOrder (posts UPDATE RLS is owner-only).
+
+    // Type change: discovery eligibility is live from posts.type — incompatible
+    // Pair Up / Open Plan stop surfacing without soft-close (D3 product choice).
+    if (confirmedSwitch) {
+      invalidatePairUpForPost(result.postId);
+      invalidateOpenPlanOwnForPost(result.postId);
+      invalidateGroupUpOwnForPost(result.postId);
+      invalidateGroupUpSourceList(result.postId);
+    }
+
     const visiblePatch = buildAdminEditVisiblePatch(
       input,
       activitiesToPersist
@@ -352,7 +493,7 @@ export async function executeCreateFlowPublish(
 
     post = {
       id: result.postId,
-      type: lockedType,
+      type: nextType,
       caption: input.caption,
       author_id: authorId,
       tags: tags.length ? tags : null,
@@ -375,7 +516,75 @@ export async function executeCreateFlowPublish(
       throw new Error("Post was not updated");
     }
     post = rpcPost as ExecuteCreateFlowPublishResult["post"];
+
+    // Atomic media_order via owner_republish_post when commitOwnerMediaInRepublish.
+    // Legacy admin / older owner path: post-hoc RLS update.
+    if (
+      !input.commitOwnerMediaInRepublish &&
+      input.mediaOrder?.length
+    ) {
+      const { updateOwnedPostMediaOrder } = await import("./editPublishedMedia");
+      let publishedOrder: PublishedMediaOrderItem[] | undefined;
+      try {
+        publishedOrder = resolvePublishedMediaOrderForCreate(input);
+      } catch {
+        publishedOrder = undefined;
+      }
+      if (publishedOrder?.length) {
+        const orderResult = await updateOwnedPostMediaOrder({
+          postId: post.id,
+          mediaOrder: publishedOrder,
+        });
+        if (!orderResult.ok) {
+          console.warn(
+            "[createFlowPublish] media_order update after edit failed",
+            orderResult.error,
+          );
+        }
+      }
+    }
+
+    const convertedType = input.confirmedOwnerTypeConversion;
+    const originalType = input.originalPostType;
+    if (
+      convertedType &&
+      originalType &&
+      convertedType !== originalType
+    ) {
+      // Type change rebuckets Posts/Events feeds — admin-strength invalidation.
+      // Discovery eligibility is live from posts.type; Pair Up / Open Plan stop
+      // surfacing when incompatible without soft-closing opportunity rows (D3).
+      await invalidateCachesAfterAdminPostEdit(
+        post.id,
+        typeof post.author_id === "string" && post.author_id
+          ? post.author_id
+          : session.user.id,
+      );
+      invalidatePairUpForPost(post.id);
+      invalidateOpenPlanOwnForPost(post.id);
+      invalidateGroupUpOwnForPost(post.id);
+      invalidateGroupUpSourceList(post.id);
+    }
   } else {
+    // Defensive: remapped Create payload must never carry local sentinels/blobs.
+    try {
+      assertPublishImagePayloadHasNoLocalLeak(
+        input.activities.map((a) =>
+          Array.isArray(a.images) ? a.images.map(String) : [],
+        ),
+        input.mediaOrder ?? [],
+      );
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        (err.message === "PUBLISH_LOCAL_IMAGE_LEAK" ||
+          err.message === "UNRESOLVED_LOCAL_DRAFT_IMAGE")
+      ) {
+        throw new Error("Publish failed. Please try again.");
+      }
+      throw err;
+    }
+
     assertLocalCreateDraftOwnedBy(session.user.id);
 
     if (input.atomicPublish) {
@@ -499,6 +708,21 @@ export async function executeCreateFlowPublish(
   invalidatePostDetailCache(post.id);
 
   const isNewPublish = !input.isEditMode;
+  const seed = input.publishedMediaSeed;
+  // PV3.5: seed publishedMediaCache synchronously BEFORE prepend is exposed to UI.
+  if (isNewPublish && seed && (seed.mediaOrder != null || seed.postMedia != null)) {
+    seedPublishedMediaFromList({
+      postId: post.id,
+      viewerUserId: session.user.id,
+      mediaOrder: seed.mediaOrder,
+      postMedia: seed.postMedia,
+      imageUrls: seed.imageUrls,
+      source: "publish",
+    });
+  } else {
+    invalidatePublishedMedia(post.id);
+  }
+
   if (isNewPublish && session?.user?.id) {
     try {
       if (typeof sessionStorage !== "undefined") {
@@ -577,6 +801,8 @@ export async function executeCreateFlowPublish(
       visibility: row.visibility ?? null,
       activities: prependActivities,
       markerAt,
+      media_order: seed?.mediaOrder ?? undefined,
+      post_media: seed?.postMedia ?? undefined,
     });
   }
 

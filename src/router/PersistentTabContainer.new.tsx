@@ -31,13 +31,19 @@
 
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
 } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import {
+  useLocation,
+  useNavigate,
+  useNavigationType,
+} from "react-router-dom";
 import { logTabActive } from "../lib/tabVisibilityDebug";
+import { Paths } from "./Paths";
 import { RequireAuthRoute } from "./RequireAuthRoute";
 
 // Import core tab pages
@@ -45,6 +51,8 @@ import HomePage from "../pages/HomePage";
 import OwnProfilePage from "../pages/OwnProfilePage";
 import NotificationPage from "../pages/NotificationPage";
 import OtherProfilePage from "../pages/OtherProfilePage";
+import PeoplePage from "../pages/people/PeoplePage";
+import MessagesInboxPage from "../pages/messages/MessagesInboxPage";
 
 /**
  * Get tab ID from URL path - PURE FUNCTION
@@ -60,6 +68,18 @@ export function getTabFromPath(path: string): TabId {
   // Home tab - root path (includes /games redirect)
   if (path === "/" || path === "/games") {
     return "home";
+  }
+
+  if (path === "/people") {
+    return "people";
+  }
+
+  if (path === "/messages") {
+    return "messages";
+  }
+
+  if (path.startsWith("/messages/")) {
+    return "messages";
   }
 
   // Own profile tab - multiple aliases
@@ -82,14 +102,52 @@ export function getTabFromPath(path: string): TabId {
 }
 
 /** Tab identifiers for core persistent pages - exported for useTabActive */
-export type TabId = "home" | "profile" | "notifications" | "other-profile";
+export type TabId =
+  | "home"
+  | "people"
+  | "messages"
+  | "profile"
+  | "notifications"
+  | "other-profile";
 
-const TabVisibilityContext = createContext<TabId>("home");
+const TabVisibilityContext = createContext<{
+  activeTab: TabId;
+  /** Fullscreen Create covers tabs — no tab is "visible" for effects/scroll. */
+  covered: boolean;
+}>({ activeTab: "home", covered: false });
 
 /** Hook: returns true when the given tab is the active (visible) tab. Use for isVisible gating. */
 export function useTabActive(tab: TabId): boolean {
-  const activeTab = useContext(TabVisibilityContext);
+  const { activeTab, covered } = useContext(TabVisibilityContext);
+  if (covered) return false;
   return activeTab === tab;
+}
+
+/**
+ * Canonical path to reactivate after leaving People.
+ * Prefers persistent bottom tabs; keeps other-profile pathnames for return only.
+ */
+export function lastNonPeoplePathFrom(path: string): string {
+  const tab = getTabFromPath(path);
+  if (tab === "home") return Paths.home;
+  if (tab === "messages") return Paths.messages;
+  if (tab === "profile") return Paths.profileMe;
+  if (tab === "notifications") return Paths.notification;
+  if (tab === "other-profile") return path;
+  return Paths.home;
+}
+
+type PeopleExitApi = {
+  closePeople: () => void;
+};
+
+const PeopleExitContext = createContext<PeopleExitApi>({
+  closePeople: () => {},
+});
+
+/** Shared Close / Android-Back exit from immersive People. */
+export function useClosePeople(): PeopleExitApi {
+  return useContext(PeopleExitContext);
 }
 
 interface PersistentTabContainerProps {
@@ -97,6 +155,11 @@ interface PersistentTabContainerProps {
   backgroundPath?: string;
   /** When false, home feed is not mounted (e.g. startup splash). Default true. */
   mountHomeTab?: boolean;
+  /**
+   * Create (and similar) fullscreen flows: keep tabs mounted under the shell but
+   * treat none as visible — prevents Home refresh/scroll while covered.
+   */
+  tabsCovered?: boolean;
 }
 
 /**
@@ -118,9 +181,11 @@ interface PersistentTabContainerProps {
 export function PersistentTabContainer({
   backgroundPath,
   mountHomeTab = true,
+  tabsCovered = false,
 }: PersistentTabContainerProps = {}) {
   const location = useLocation();
-  const params = useParams<{ username?: string }>();
+  const navigate = useNavigate();
+  const navigationType = useNavigationType();
   const pathForTab = backgroundPath ?? location.pathname;
 
   // DERIVED STATE: Compute active tab from URL (single source of truth)
@@ -129,6 +194,48 @@ export function PersistentTabContainer({
     const tab = getTabFromPath(pathForTab);
     return tab;
   }, [pathForTab]);
+
+  const tabVisible = useCallback(
+    (tab: TabId) => !tabsCovered && activeTab === tab,
+    [tabsCovered, activeTab]
+  );
+
+  // Origin for immersive People Close/Back. Ref-only: does not drive candidate data.
+  // Skip updates while Create covers tabs so we don't rewrite origin mid-flow.
+  const lastNonPeoplePathRef = useRef<string>(Paths.home);
+  if (activeTab !== "people" && !tabsCovered) {
+    lastNonPeoplePathRef.current = lastNonPeoplePathFrom(pathForTab);
+  }
+
+  const peopleCanPopRef = useRef(false);
+  const closingPeopleRef = useRef(false);
+
+  useEffect(() => {
+    if (activeTab !== "people" || tabsCovered) {
+      peopleCanPopRef.current = false;
+      closingPeopleRef.current = false;
+      return;
+    }
+    peopleCanPopRef.current = navigationType === "PUSH";
+  }, [activeTab, navigationType, tabsCovered]);
+
+  const closePeople = useCallback(() => {
+    if (closingPeopleRef.current) return;
+    if (getTabFromPath(location.pathname) !== "people") return;
+    closingPeopleRef.current = true;
+    const origin = lastNonPeoplePathRef.current || Paths.home;
+    if (peopleCanPopRef.current) {
+      peopleCanPopRef.current = false;
+      navigate(-1);
+      return;
+    }
+    navigate(origin, { replace: true });
+  }, [location.pathname, navigate]);
+
+  const peopleExitApi = useMemo<PeopleExitApi>(
+    () => ({ closePeople }),
+    [closePeople]
+  );
 
   // [DEBUG] Log tab active/inactive for visibility gating verification
   const prevActiveTabRef = useRef<string | null>(null);
@@ -161,9 +268,15 @@ export function PersistentTabContainer({
     return null;
   }, [pathForTab]);
 
+  const visibilityValue = useMemo(
+    () => ({ activeTab, covered: tabsCovered }),
+    [activeTab, tabsCovered]
+  );
+
   return (
-    <TabVisibilityContext.Provider value={activeTab}>
-      <div
+    <TabVisibilityContext.Provider value={visibilityValue}>
+      <PeopleExitContext.Provider value={peopleExitApi}>
+        <div
         style={{
           position: "relative",
           width: "100%",
@@ -175,7 +288,7 @@ export function PersistentTabContainer({
         <div
           data-tab="home"
           style={{
-            display: activeTab === "home" ? "block" : "none",
+            display: tabVisible("home") ? "block" : "none",
             width: "100%",
             minHeight: "100vh",
           }}
@@ -183,32 +296,58 @@ export function PersistentTabContainer({
           {mountHomeTab ? <HomePage /> : null}
         </div>
 
-        {/* Own Profile Tab */}
+        {/* People Tab — stay mounted like Home after first authed render */}
         <div
-          data-tab="profile"
+          data-tab="people"
           style={{
-            display: activeTab === "profile" ? "block" : "none",
+            display: tabVisible("people") ? "block" : "none",
             width: "100%",
             minHeight: "100vh",
           }}
         >
-          {activeTab === "profile" ? (
-            <RequireAuthRoute>
-              <OwnProfilePage />
-            </RequireAuthRoute>
-          ) : null}
+          <RequireAuthRoute enforceRedirect={tabVisible("people")}>
+            <PeoplePage />
+          </RequireAuthRoute>
+        </div>
+
+        {/* Messages inbox Tab — stay mounted like People after first authed render */}
+        <div
+          data-tab="messages"
+          style={{
+            display: tabVisible("messages") ? "block" : "none",
+            width: "100%",
+            minHeight: "100vh",
+          }}
+        >
+          <RequireAuthRoute enforceRedirect={tabVisible("messages")}>
+            <MessagesInboxPage />
+          </RequireAuthRoute>
+        </div>
+
+        {/* Own Profile Tab — stay mounted like Home / People / Messages */}
+        <div
+          data-tab="profile"
+          style={{
+            display: tabVisible("profile") ? "block" : "none",
+            width: "100%",
+            minHeight: "100vh",
+          }}
+        >
+          <RequireAuthRoute enforceRedirect={tabVisible("profile")}>
+            <OwnProfilePage />
+          </RequireAuthRoute>
         </div>
 
         {/* Notifications Tab */}
         <div
           data-tab="notifications"
           style={{
-            display: activeTab === "notifications" ? "block" : "none",
+            display: tabVisible("notifications") ? "block" : "none",
             width: "100%",
             minHeight: "100vh",
           }}
         >
-          {activeTab === "notifications" ? (
+          {tabVisible("notifications") ? (
             <RequireAuthRoute>
               <NotificationPage />
             </RequireAuthRoute>
@@ -219,7 +358,7 @@ export function PersistentTabContainer({
         <div
           data-tab="other-profile"
           style={{
-            display: activeTab === "other-profile" ? "block" : "none",
+            display: tabVisible("other-profile") ? "block" : "none",
             width: "100%",
             minHeight: "100vh",
           }}
@@ -236,7 +375,8 @@ export function PersistentTabContainer({
             />
           )}
         </div>
-      </div>
+        </div>
+      </PeopleExitContext.Provider>
     </TabVisibilityContext.Provider>
   );
 }

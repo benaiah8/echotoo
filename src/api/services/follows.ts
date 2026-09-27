@@ -5,11 +5,27 @@ import { dataCache } from "../../lib/dataCache";
 import { clearAllMutualFriendsCache } from "../../lib/mutualFriendsCache";
 import {
   clearCachedProfile,
-  getCachedProfile,
+  getProfileCached,
+  inspectCachedProfile,
+  inspectCachedProfileByUserId,
+  peekCachedProfileByUserIdExpired,
+  profileCacheDevLog,
+  profileCacheHasUsableMemberNo,
   setCachedProfile,
 } from "../../lib/profileCache";
+import {
+  normalizeEchoPreset,
+  normalizeProfilePhotos,
+  PROFILE_PHOTOS_SELECT_FRAGMENT,
+} from "../../lib/profilePhotos";
 
 const PROFILE_CACHE_LS_KEY = "profile_cache";
+
+/** Full profile identity select used by getProfileByUserId (includes photo/Echo fields). */
+const PROFILE_BY_USER_ID_SELECT = `id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, p2p_discover_enabled, user_number, onboarding_completed, onboarding_step, ${PROFILE_PHOTOS_SELECT_FRAGMENT}`;
+
+/** Public profile lookup select (no p2p_discover_enabled). */
+const PROFILE_PUBLIC_LOOKUP_SELECT = `id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step, ${PROFILE_PHOTOS_SELECT_FRAGMENT}`;
 
 /** Remove legacy localStorage profile_cache rows for this auth user (keys are profile ids). */
 function clearLocalStorageProfileCacheRowsForAuthUserId(
@@ -52,6 +68,8 @@ type ProfileResult = {
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  profile_photos: string[];
+  echo_preset: string | null;
   bio: string | null;
   xp: number | null;
   member_no: number | null;
@@ -60,10 +78,55 @@ type ProfileResult = {
   telegram_url: string | null;
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  p2p_discover_enabled?: boolean | null;
   user_number?: number | null;
   onboarding_completed?: boolean | null;
   onboarding_step?: number | null;
 } | null;
+
+function mapProfileRow(row: {
+  id: string;
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  profile_photos?: string[] | null;
+  echo_preset?: string | null;
+  bio: string | null;
+  xp: number | null;
+  member_no: number | null;
+  instagram_url: string | null;
+  tiktok_url: string | null;
+  telegram_url: string | null;
+  is_private?: boolean | null;
+  social_media_public?: boolean | null;
+  p2p_discover_enabled?: boolean | null;
+  user_number?: number | null;
+  onboarding_completed?: boolean | null;
+  onboarding_step?: number | null;
+}): NonNullable<ProfileResult> {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    username: row.username,
+    display_name: row.display_name,
+    avatar_url: row.avatar_url,
+    profile_photos: normalizeProfilePhotos(row.profile_photos),
+    echo_preset: normalizeEchoPreset(row.echo_preset),
+    bio: row.bio,
+    xp: row.xp,
+    member_no: row.member_no,
+    instagram_url: row.instagram_url,
+    tiktok_url: row.tiktok_url,
+    telegram_url: row.telegram_url,
+    is_private: row.is_private,
+    social_media_public: row.social_media_public,
+    p2p_discover_enabled: row.p2p_discover_enabled,
+    user_number: row.user_number,
+    onboarding_completed: row.onboarding_completed,
+    onboarding_step: row.onboarding_step,
+  };
+}
 
 /**
  * Hide other user's profile when a block exists and the viewer did NOT initiate it.
@@ -606,8 +669,9 @@ export async function getViewerAuthUserId(): Promise<string | null> {
 /**
  * [PHASE 2.3 - OPTIMIZATION] Get profile by user_id with caching and deduplication
  *
- * Returns full profile data, cached for 5 minutes
- * Uses RequestManager to deduplicate simultaneous requests from multiple components
+ * Fresh (~30m, connection-scaled): return cache, no SELECT.
+ * Soft-stale (≤ ~24h): return cache + one background revalidate.
+ * Miss / expired: RequestManager network fetch; expired row as offline fallback.
  *
  * Why: Multiple components (OwnProfilePage, RSVPComponent, BottomTab, etc.) were
  * making separate profiles?select=id queries for the same user_id, causing 6+ duplicate requests.
@@ -618,12 +682,165 @@ export async function getViewerAuthUserId(): Promise<string | null> {
  */
 const AUTH_USER_ID_UUID_RE = /^[0-9a-f-]{36}$/i;
 
-export async function getProfileByUserId(userId: string): Promise<{
+export type GetProfileByUserIdOptions = {
+  /** Skip fresh/stale short-circuit and hit the network (e.g. after invalidate). */
+  force?: boolean;
+};
+
+/**
+ * Network fetch for a profile by auth user_id (RequestManager + in-flight dedupe).
+ * Always writes through {@link setCachedProfile} on success.
+ */
+async function fetchProfileByUserIdFromNetwork(
+  userId: string,
+): Promise<NonNullable<ProfileResult> | null> {
+  const existingDedupe = profileByUserIdDedupe.get(userId);
+  if (
+    existingDedupe &&
+    Date.now() - existingDedupe.ts < PROFILE_COOLDOWN_MS
+  ) {
+    if (DEBUG_PROFILE_FETCH)
+      console.debug(
+        "[getProfileByUserId] dedupe hit (in-flight/cooldown)",
+        userId,
+      );
+    return existingDedupe.promise;
+  }
+  if (existingDedupe) {
+    profileByUserIdDedupe.delete(userId);
+  }
+
+  const fetchPromise = (async (): Promise<ProfileResult> => {
+    const { requestManager } = await import("../../lib/requestManager");
+    const dedupeKey = `profile_by_user_id_${userId}`;
+
+    if (DEBUG_PROFILE_FETCH)
+      console.debug("[getProfileByUserId] requestManager execute", dedupeKey);
+
+    const result = await requestManager.execute(
+      dedupeKey,
+      async (signal) => {
+        if (signal.aborted) {
+          pfDbg(`[getProfileByUserId] Request aborted for userId: ${userId}`);
+          return null;
+        }
+
+        pfDbg(
+          `[getProfileByUserId] 🚀 Making actual DB call for userId: ${userId}`,
+        );
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const isSelf = session?.user?.id === userId;
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select(PROFILE_BY_USER_ID_SELECT)
+          .eq("user_id", userId)
+          .is("deleted_at", null)
+          .maybeSingle();
+
+        if (signal.aborted) {
+          pfDbg(
+            `[getProfileByUserId] Request aborted after DB call for userId: ${userId}`,
+          );
+          return null;
+        }
+
+        if (profileError) {
+          console.error(
+            "[getProfileByUserId] Error fetching profile:",
+            profileError,
+          );
+          return null;
+        }
+
+        if (!profile) {
+          pfDbg(
+            `[getProfileByUserId] No profile found in DB for userId: ${userId}`,
+          );
+          return null;
+        }
+
+        if (await profileHiddenByUserBlocksForSession(profile.user_id)) {
+          return null;
+        }
+
+        const mapped = mapProfileRow({
+          ...profile,
+          p2p_discover_enabled: isSelf
+            ? profile.p2p_discover_enabled
+            : undefined,
+        });
+
+        setCachedProfile(mapped);
+        pfDbg(`[getProfileByUserId] ✅ Profile cached for userId: ${userId}`);
+
+        return mapped;
+      },
+      "medium",
+    );
+
+    if (result.error && result.error.message !== "Aborted") {
+      throw result.error;
+    }
+
+    return result.data ?? null;
+  })();
+
+  profileByUserIdDedupe.set(userId, {
+    promise: fetchPromise,
+    ts: Date.now(),
+  });
+  fetchPromise.finally(() => {
+    setTimeout(() => {
+      profileByUserIdDedupe.delete(userId);
+    }, PROFILE_COOLDOWN_MS);
+  });
+
+  return fetchPromise;
+}
+
+/** Soft-stale: one shared background SELECT; publish via profile:updated when done. */
+function scheduleProfileRevalidateByUserId(userId: string): void {
+  profileCacheDevLog("revalidate", { userId });
+  void fetchProfileByUserIdFromNetwork(userId)
+    .then((profile) => {
+      if (!profile) return;
+      try {
+        window.dispatchEvent(
+          new CustomEvent("profile:updated", {
+            detail: { id: profile.id, profile },
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+    })
+    .catch(() => {
+      /* passive background refresh — keep showing cached Profile */
+    });
+}
+
+/**
+ * [PHASE 2.3 - OPTIMIZATION] Get full profile by user_id (auth user ID)
+ * Fresh cache → return immediately (no SELECT).
+ * Soft-stale → return immediately + one deduped background revalidate.
+ * Miss / expired → network via RequestManager; expired row may be offline fallback.
+ *
+ * @param userId - The auth user ID (not profile ID)
+ * @returns Full profile data or null if not found
+ */
+export async function getProfileByUserId(
+  userId: string,
+  options?: GetProfileByUserIdOptions,
+): Promise<{
   id: string;
   user_id: string;
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  profile_photos: string[];
+  echo_preset: string | null;
   bio: string | null;
   xp: number | null;
   member_no: number | null;
@@ -632,6 +849,7 @@ export async function getProfileByUserId(userId: string): Promise<{
   telegram_url: string | null;
   is_private?: boolean | null;
   social_media_public?: boolean | null;
+  p2p_discover_enabled?: boolean | null;
   // [PHASE 2.3 - OPTIMIZATION] Add onboarding fields so OnboardingWrapper can use this too
   user_number?: number | null;
   onboarding_completed?: boolean | null;
@@ -641,199 +859,66 @@ export async function getProfileByUserId(userId: string): Promise<{
   // profiles.user_id is uuid — avoid invalid REST calls (e.g. sentinel "me", typos)
   if (!AUTH_USER_ID_UUID_RE.test(userId)) return null;
 
+  const force = Boolean(options?.force);
+
   try {
-    // Helper function to search cache by user_id
-    // ProfileCache stores by profile ID, so we need to search through entries
-    const searchCacheByUserId = (searchUserId: string) => {
-      try {
-        const cacheStr = localStorage.getItem("profile_cache");
-        if (!cacheStr) return null;
-
-        const cache = JSON.parse(cacheStr);
-        for (const [profileId, entry] of Object.entries(cache)) {
-          const cachedEntry = entry as any;
-          // Check if cache is expired (5 minutes)
-          const cacheAge = Date.now() - (cachedEntry.timestamp || 0);
-          if (cacheAge > 5 * 60 * 1000) continue; // Skip expired entries
-
-          if (cachedEntry.user_id === searchUserId) {
-            return getCachedProfile(profileId);
-          }
+    if (!force) {
+      const hit = inspectCachedProfileByUserId(userId);
+      if (hit && !hit.expired) {
+        if (await profileHiddenByUserBlocksForSession(hit.data.user_id)) {
+          return null;
         }
-      } catch (error) {
-        // Ignore cache search errors
+        if (hit.fresh) {
+          profileCacheDevLog("fresh_hit", {
+            userId,
+            profileId: hit.data.id,
+            ageMs: hit.ageMs,
+          });
+          if (DEBUG_PROFILE_FETCH)
+            console.debug("[getProfileByUserId] fresh cache hit", userId);
+          return hit.data;
+        }
+        profileCacheDevLog("stale_hit", {
+          userId,
+          profileId: hit.data.id,
+          ageMs: hit.ageMs,
+        });
+        scheduleProfileRevalidateByUserId(userId);
+        return hit.data;
+      }
+    }
+
+    const expiredFallback = peekCachedProfileByUserIdExpired(userId);
+
+    try {
+      const fetched = await fetchProfileByUserIdFromNetwork(userId);
+      if (fetched) return fetched;
+
+      if (
+        expiredFallback &&
+        !(await profileHiddenByUserBlocksForSession(expiredFallback.user_id))
+      ) {
+        profileCacheDevLog("expired_fallback", {
+          userId,
+          profileId: expiredFallback.id,
+        });
+        return expiredFallback;
       }
       return null;
-    };
-
-    // Step 1: Check cache first (search by user_id)
-    const cachedProfile = searchCacheByUserId(userId);
-    if (cachedProfile) {
-      if (DEBUG_PROFILE_FETCH)
-        console.debug("[getProfileByUserId] cache hit", userId);
-      if (await profileHiddenByUserBlocksForSession(cachedProfile.user_id)) {
-        return null;
+    } catch (error) {
+      if (
+        expiredFallback &&
+        !(await profileHiddenByUserBlocksForSession(expiredFallback.user_id))
+      ) {
+        profileCacheDevLog("expired_fallback", {
+          userId,
+          profileId: expiredFallback.id,
+          reason: "fetch_error",
+        });
+        return expiredFallback;
       }
-      return cachedProfile;
+      throw error;
     }
-
-    // Step 1.5: [OPTIMIZATION] In-flight dedupe + 30s cooldown per userId
-    // Prevents burst calls from multiple components (BottomTab, FollowListDrawer, FollowButton, etc.)
-    const existingDedupe = profileByUserIdDedupe.get(userId);
-    if (
-      existingDedupe &&
-      Date.now() - existingDedupe.ts < PROFILE_COOLDOWN_MS
-    ) {
-      if (DEBUG_PROFILE_FETCH)
-        console.debug(
-          "[getProfileByUserId] dedupe hit (in-flight/cooldown)",
-          userId
-        );
-      return existingDedupe.promise;
-    }
-    if (existingDedupe) {
-      profileByUserIdDedupe.delete(userId); // cooldown expired
-    }
-
-    // Step 2: Use RequestManager for deduplication
-    // Multiple components calling this simultaneously will share the same request
-    const fetchPromise = (async (): Promise<ProfileResult> => {
-      const { requestManager } = await import("../../lib/requestManager");
-      const dedupeKey = `profile_by_user_id_${userId}`;
-
-      if (DEBUG_PROFILE_FETCH)
-        console.debug("[getProfileByUserId] requestManager execute", dedupeKey);
-
-      const result = await requestManager.execute(
-        dedupeKey,
-        async (signal) => {
-          // Check cache again inside RequestManager (another call might have populated it)
-          const cachedAgain = searchCacheByUserId(userId);
-          if (cachedAgain) {
-            pfDbg(
-              `[getProfileByUserId] ✅ Cache HIT (during RequestManager execution) for userId: ${userId}`
-            );
-            if (await profileHiddenByUserBlocksForSession(cachedAgain.user_id)) {
-              return null;
-            }
-            return cachedAgain;
-          }
-
-          // Check if aborted before making request
-          if (signal.aborted) {
-            pfDbg(
-              `[getProfileByUserId] Request aborted for userId: ${userId}`
-            );
-            return null;
-          }
-
-          // Step 3: Fetch full profile from database (including onboarding fields)
-          // [PHASE 2.3 - OPTIMIZATION] Fetch ALL fields so all components can reuse this function
-          // Strategy: One network request with all fields is better than 5 separate requests
-          pfDbg(
-            `[getProfileByUserId] 🚀 Making actual DB call for userId: ${userId}`
-          );
-          const { data: profile, error: profileError } = await supabase
-            .from("profiles")
-            .select(
-              "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
-            )
-            .eq("user_id", userId)
-            .is("deleted_at", null)
-            .maybeSingle();
-
-          // Check if aborted after async operation
-          if (signal.aborted) {
-            pfDbg(
-              `[getProfileByUserId] Request aborted after DB call for userId: ${userId}`
-            );
-            return null;
-          }
-
-          if (profileError) {
-            console.error(
-              "[getProfileByUserId] Error fetching profile:",
-              profileError
-            );
-            return null;
-          }
-
-          if (!profile) {
-            pfDbg(
-              `[getProfileByUserId] No profile found in DB for userId: ${userId}`
-            );
-            return null;
-          }
-
-          if (await profileHiddenByUserBlocksForSession(profile.user_id)) {
-            return null;
-          }
-
-          // Step 4: Cache result for future use (including onboarding fields)
-          setCachedProfile({
-            id: profile.id,
-            user_id: profile.user_id,
-            username: profile.username,
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
-            bio: profile.bio,
-            xp: profile.xp,
-            member_no: profile.member_no,
-            instagram_url: profile.instagram_url,
-            tiktok_url: profile.tiktok_url,
-            telegram_url: profile.telegram_url,
-            is_private: profile.is_private,
-            social_media_public: profile.social_media_public,
-            // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
-            user_number: profile.user_number,
-            onboarding_completed: profile.onboarding_completed,
-            onboarding_step: profile.onboarding_step,
-          });
-          pfDbg(
-            `[getProfileByUserId] ✅ Profile cached for userId: ${userId}`
-          );
-
-          return {
-            id: profile.id,
-            user_id: profile.user_id,
-            username: profile.username,
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
-            bio: profile.bio,
-            xp: profile.xp,
-            member_no: profile.member_no,
-            instagram_url: profile.instagram_url,
-            tiktok_url: profile.tiktok_url,
-            telegram_url: profile.telegram_url,
-            is_private: profile.is_private,
-            social_media_public: profile.social_media_public,
-            // [PHASE 2.3 - OPTIMIZATION] Include onboarding fields
-            user_number: profile.user_number,
-            onboarding_completed: profile.onboarding_completed,
-            onboarding_step: profile.onboarding_step,
-          };
-        },
-        "medium" // Medium priority - profile data is important but not critical
-      );
-
-      if (result.error && result.error.message !== "Aborted") {
-        throw result.error;
-      }
-
-      return result.data ?? null;
-    })();
-
-    profileByUserIdDedupe.set(userId, {
-      promise: fetchPromise,
-      ts: Date.now(),
-    });
-    fetchPromise.finally(() => {
-      setTimeout(() => {
-        profileByUserIdDedupe.delete(userId);
-      }, PROFILE_COOLDOWN_MS);
-    });
-
-    return fetchPromise;
   } catch (error) {
     console.error("[getProfileByUserId] Unexpected error:", error);
     return null;
@@ -883,15 +968,30 @@ export async function getProfileByIdOrUsername(
   // Step 1: Try cache by profile ID (if identifier is a UUID)
   const isUuid = /^[0-9a-f-]{36}$/i.test(identifier);
   if (isUuid) {
-    const cached = getCachedProfile(identifier);
-    if (cached && AUTH_USER_ID_UUID_RE.test(cached.user_id)) {
-      console.log(
-        `[getProfileByIdOrUsername] ✅ Cache HIT by profile ID: ${identifier}`
-      );
-      if (await profileHiddenByUserBlocksForSession(cached.user_id)) {
+    const hit = inspectCachedProfile(identifier);
+    if (hit && !hit.expired && AUTH_USER_ID_UUID_RE.test(hit.data.user_id)) {
+      if (await profileHiddenByUserBlocksForSession(hit.data.user_id)) {
         return null;
       }
-      return cached;
+      // Thin Feed primes lack usable member_no — do not fresh-short-circuit.
+      if (profileCacheHasUsableMemberNo(hit.data)) {
+        if (hit.fresh) {
+          profileCacheDevLog("fresh_hit", {
+            path: "id_or_username",
+            profileId: identifier,
+          });
+          return hit.data;
+        }
+        profileCacheDevLog("stale_hit", {
+          path: "id_or_username",
+          profileId: identifier,
+        });
+        scheduleProfileRevalidateByUserId(hit.data.user_id);
+        return hit.data;
+      }
+      // Incomplete cache: force full SELECT by auth user_id (page already showed shell).
+      const forced = await getProfileByUserId(hit.data.user_id, { force: true });
+      if (forced) return forced;
     }
 
     // Step 2: Try getProfileByUserId (if identifier is a UUID that might be a user_id)
@@ -904,6 +1004,37 @@ export async function getProfileByIdOrUsername(
         `[getProfileByIdOrUsername] ✅ Found via getProfileByUserId: ${identifier}`
       );
       return profileByUserId;
+    }
+  } else {
+    // Username path — soft-stale cache via username index
+    const byUsername = getProfileCached(identifier);
+    if (byUsername && AUTH_USER_ID_UUID_RE.test(byUsername.user_id)) {
+      const hit = inspectCachedProfile(byUsername.id);
+      if (hit && !hit.expired) {
+        if (await profileHiddenByUserBlocksForSession(hit.data.user_id)) {
+          return null;
+        }
+        if (profileCacheHasUsableMemberNo(hit.data)) {
+          if (hit.fresh) {
+            profileCacheDevLog("fresh_hit", {
+              path: "username",
+              username: identifier,
+            });
+            return hit.data;
+          }
+          profileCacheDevLog("stale_hit", {
+            path: "username",
+            username: identifier,
+          });
+          scheduleProfileRevalidateByUserId(hit.data.user_id);
+          return hit.data;
+        }
+        // Incomplete thin cache: force network; OtherProfile already showed cached shell.
+        const forced = await getProfileByUserId(hit.data.user_id, {
+          force: true,
+        });
+        if (forced) return forced;
+      }
     }
   }
 
@@ -934,9 +1065,7 @@ export async function getProfileByIdOrUsername(
 
     let query = supabase
       .from("profiles")
-      .select(
-        "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
-      )
+      .select(PROFILE_PUBLIC_LOOKUP_SELECT)
       .is("deleted_at", null);
 
     if (isUuid) {
@@ -963,8 +1092,9 @@ export async function getProfileByIdOrUsername(
       return null;
     }
 
-    setCachedProfile(data);
-    return data;
+    const mapped = mapProfileRow(data);
+    setCachedProfile(mapped);
+    return mapped;
   })();
 
   profileByIdOrUsernameDedupe.set(dedupeKey, {
@@ -1000,9 +1130,7 @@ export async function getProfilesByUserIds(
   try {
     const { data, error } = await supabase
       .from("profiles")
-      .select(
-        "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
-      )
+      .select(PROFILE_PUBLIC_LOOKUP_SELECT)
       .in("user_id", uniqueIds)
       .is("deleted_at", null);
 
@@ -1011,31 +1139,11 @@ export async function getProfilesByUserIds(
       return [];
     }
 
-    const profiles = (data || []) as ProfileResult[];
-    const validProfiles = profiles.filter(
-      (p): p is NonNullable<ProfileResult> => p != null
-    );
+    const validProfiles = (data || []).map((row) => mapProfileRow(row));
 
     // Write each to profile cache for reuse by getProfileByUserId / other components
     validProfiles.forEach((p) => {
-      setCachedProfile({
-        id: p.id,
-        user_id: p.user_id,
-        username: p.username,
-        display_name: p.display_name,
-        avatar_url: p.avatar_url,
-        bio: p.bio,
-        xp: p.xp,
-        member_no: p.member_no,
-        instagram_url: p.instagram_url,
-        tiktok_url: p.tiktok_url,
-        telegram_url: p.telegram_url,
-        is_private: p.is_private,
-        social_media_public: p.social_media_public,
-        user_number: p.user_number,
-        onboarding_completed: p.onboarding_completed,
-        onboarding_step: p.onboarding_step,
-      });
+      setCachedProfile(p);
     });
 
     return validProfiles;

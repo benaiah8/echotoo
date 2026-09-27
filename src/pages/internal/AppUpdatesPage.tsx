@@ -6,6 +6,7 @@ import { getCurrentUserIsReportReviewer } from "../../api/services/reportReview"
 import {
   listAppUpdateConfig,
   updateAppUpdateConfig,
+  validateAppUpdateConfigSave,
   type AppUpdateConfigSaveInput,
 } from "../../api/services/appUpdateConfig";
 import {
@@ -24,25 +25,33 @@ import {
 import SoftUpdateModal from "../../components/ui/SoftUpdateModal";
 import HardUpdateModal from "../../components/ui/HardUpdateModal";
 import { Paths } from "../../router/Paths";
+import { PiInfo } from "react-icons/pi";
+import AppUpdatesHelpModal from "./AppUpdatesHelpModal";
 
 const PLATFORMS: AppUpdatePlatform[] = ["android", "ios"];
 
 function rowToForm(row: AppUpdateConfigRow): AppUpdateConfigSaveInput {
   return {
     latest_version: row.latest_version ?? "",
+    latest_build: row.latest_build ?? "",
     minimum_supported_version: row.minimum_supported_version ?? "",
+    minimum_supported_build: row.minimum_supported_build ?? "",
     update_mode: coerceAppUpdateMode(String(row.update_mode ?? "off")),
     title: row.title ?? "",
     message: row.message ?? "",
     android_store_url: row.android_store_url ?? "",
     ios_store_url: row.ios_store_url ?? "",
     is_active: !!row.is_active,
+    store_release_ready: !!row.store_release_ready,
   };
 }
 
 function platformLabel(p: AppUpdatePlatform): string {
   return p === "android" ? "Android" : "iOS";
 }
+
+const inputClass =
+  "mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50";
 
 export default function AppUpdatesPage() {
   const navigate = useNavigate();
@@ -61,6 +70,7 @@ export default function AppUpdatesPage() {
   );
   const [previewSoftOpen, setPreviewSoftOpen] = useState(false);
   const [previewHardOpen, setPreviewHardOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -152,6 +162,11 @@ export default function AppUpdatesPage() {
   const handleSave = async (platform: AppUpdatePlatform) => {
     const f = forms[platform];
     if (!f) return;
+    const validationError = validateAppUpdateConfigSave(platform, f);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
     setSavingPlatform(platform);
     try {
       await updateAppUpdateConfig(platform, f);
@@ -196,9 +211,20 @@ export default function AppUpdatesPage() {
           >
             Back
           </button>
-          <h1 className="text-base font-semibold text-[var(--text)]">
-            App updates
-          </h1>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="text-base font-semibold text-[var(--text)]">
+              App updates
+            </h1>
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text)]/45 hover:text-[var(--text)]/85 hover:bg-[var(--surface-2)] active:opacity-80 touch-manipulation"
+              aria-label="How app updates work"
+              title="How app updates work"
+            >
+              <PiInfo className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
         </div>
         <p className="text-[11px] text-[var(--text)]/60 mb-4">
           Internal tool —{" "}
@@ -265,50 +291,95 @@ export default function AppUpdatesPage() {
               <span className="font-medium text-[var(--text)]/70">
                 {platformLabel(selectedPlatform)}
               </span>{" "}
-              configuration
+              — targeting uses native build numbers (versionCode / CFBundleVersion).
             </p>
 
             <section className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 p-4 text-[var(--text)] space-y-5">
               <div className="space-y-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
-                  Versions
+                  Versions & builds
                 </p>
-                <label className="block">
-                  <span className="text-[11px] font-medium text-[var(--text)]/70">
-                    Latest version
-                  </span>
-                  <input
-                    type="text"
-                    value={f.latest_version}
-                    onChange={(e) =>
-                      patchForm(selectedPlatform, {
-                        latest_version: e.target.value,
-                      })
-                    }
-                    disabled={busy}
-                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
-                    autoComplete="off"
-                    inputMode="text"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] font-medium text-[var(--text)]/70">
-                    Minimum supported version
-                  </span>
-                  <input
-                    type="text"
-                    value={f.minimum_supported_version}
-                    onChange={(e) =>
-                      patchForm(selectedPlatform, {
-                        minimum_supported_version: e.target.value,
-                      })
-                    }
-                    disabled={busy}
-                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
-                    autoComplete="off"
-                    inputMode="text"
-                  />
-                </label>
+                <p className="text-[10px] text-[var(--text)]/50 leading-snug">
+                  Latest build = who should be offered the update. Minimum build =
+                  who must update. Leave build blank only for legacy version-string
+                  fallback.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]/70">
+                      Latest version
+                    </span>
+                    <input
+                      type="text"
+                      value={f.latest_version}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          latest_version: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="2.0"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]/70">
+                      Latest build
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={f.latest_build}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          latest_build: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="11"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]/70">
+                      Minimum supported version
+                    </span>
+                    <input
+                      type="text"
+                      value={f.minimum_supported_version}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          minimum_supported_version: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="1.0"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]/70">
+                      Minimum supported build
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={f.minimum_supported_build}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          minimum_supported_build: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="10"
+                    />
+                  </label>
+                </div>
               </div>
 
               <div className="space-y-3 pt-1 border-t border-[var(--border)]/60">
@@ -328,7 +399,7 @@ export default function AppUpdatesPage() {
                           .value as AppUpdateConfigSaveInput["update_mode"],
                       })
                     }
-                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
+                    className={inputClass}
                   >
                     {APP_UPDATE_MODES.map((m) => (
                       <option key={m} value={m}>
@@ -337,7 +408,8 @@ export default function AppUpdatesPage() {
                     ))}
                   </select>
                   <span className="mt-1 block text-[10px] text-[var(--text)]/45 leading-snug">
-                    off: no prompt · soft: skippable · hard: must update
+                    off: no enforcement · soft: optional latest (min still forces
+                    hard) · hard: latest itself is mandatory
                   </span>
                 </label>
                 <label className="block">
@@ -351,7 +423,7 @@ export default function AppUpdatesPage() {
                       patchForm(selectedPlatform, { title: e.target.value })
                     }
                     disabled={busy}
-                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
+                    className={inputClass}
                     autoComplete="off"
                   />
                 </label>
@@ -366,110 +438,74 @@ export default function AppUpdatesPage() {
                     }
                     disabled={busy}
                     rows={4}
-                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50 resize-y min-h-[5rem]"
+                    className={`${inputClass} resize-y min-h-[5rem]`}
                   />
                 </label>
               </div>
 
               <div className="space-y-3 pt-1 border-t border-[var(--border)]/60">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text)]/45">
-                  Store URLs
+                  Store
                 </p>
                 {selectedPlatform === "android" ? (
-                  <>
-                    <label className="block">
-                      <span className="text-[11px] font-medium text-[var(--text)]">
-                        Google Play
-                      </span>
-                      <span className="block text-[10px] text-[var(--text)]/45 mb-1">
-                        Primary link for this row (Android builds)
-                      </span>
-                      <input
-                        type="url"
-                        value={f.android_store_url}
-                        onChange={(e) =>
-                          patchForm(selectedPlatform, {
-                            android_store_url: e.target.value,
-                          })
-                        }
-                        disabled={busy}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
-                        autoComplete="off"
-                        placeholder="https://play.google.com/..."
-                      />
-                    </label>
-                    <div className="rounded-lg border border-dashed border-[var(--border)]/70 bg-[var(--bg)]/40 app-light:bg-white/40 px-3 py-2.5">
-                      <label className="block">
-                        <span className="text-[10px] font-medium text-[var(--text)]/55 uppercase tracking-wide">
-                          App Store (other platform)
-                        </span>
-                        <span className="block text-[10px] text-[var(--text)]/40 mb-1.5">
-                          Shared config field — usually for cross-links or parity
-                        </span>
-                        <input
-                          type="url"
-                          value={f.ios_store_url}
-                          onChange={(e) =>
-                            patchForm(selectedPlatform, {
-                              ios_store_url: e.target.value,
-                            })
-                          }
-                          disabled={busy}
-                          className="w-full rounded-md border border-[var(--border)]/80 bg-[var(--bg)] app-light:bg-white px-2.5 py-1.5 text-xs text-[var(--text)]/90 placeholder:text-[var(--text)]/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/30 disabled:opacity-50"
-                          autoComplete="off"
-                          placeholder="https://apps.apple.com/..."
-                        />
-                      </label>
-                    </div>
-                  </>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]">
+                      Google Play URL
+                    </span>
+                    <input
+                      type="url"
+                      value={f.android_store_url}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          android_store_url: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="https://play.google.com/..."
+                    />
+                  </label>
                 ) : (
-                  <>
-                    <label className="block">
-                      <span className="text-[11px] font-medium text-[var(--text)]">
-                        App Store
-                      </span>
-                      <span className="block text-[10px] text-[var(--text)]/45 mb-1">
-                        Primary link for this row (iOS builds)
-                      </span>
-                      <input
-                        type="url"
-                        value={f.ios_store_url}
-                        onChange={(e) =>
-                          patchForm(selectedPlatform, {
-                            ios_store_url: e.target.value,
-                          })
-                        }
-                        disabled={busy}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40 disabled:opacity-50"
-                        autoComplete="off"
-                        placeholder="https://apps.apple.com/..."
-                      />
-                    </label>
-                    <div className="rounded-lg border border-dashed border-[var(--border)]/70 bg-[var(--bg)]/40 app-light:bg-white/40 px-3 py-2.5">
-                      <label className="block">
-                        <span className="text-[10px] font-medium text-[var(--text)]/55 uppercase tracking-wide">
-                          Google Play (other platform)
-                        </span>
-                        <span className="block text-[10px] text-[var(--text)]/40 mb-1.5">
-                          Shared config field — usually for cross-links or parity
-                        </span>
-                        <input
-                          type="url"
-                          value={f.android_store_url}
-                          onChange={(e) =>
-                            patchForm(selectedPlatform, {
-                              android_store_url: e.target.value,
-                            })
-                          }
-                          disabled={busy}
-                          className="w-full rounded-md border border-[var(--border)]/80 bg-[var(--bg)] app-light:bg-white px-2.5 py-1.5 text-xs text-[var(--text)]/90 placeholder:text-[var(--text)]/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/30 disabled:opacity-50"
-                          autoComplete="off"
-                          placeholder="https://play.google.com/..."
-                        />
-                      </label>
-                    </div>
-                  </>
+                  <label className="block">
+                    <span className="text-[11px] font-medium text-[var(--text)]">
+                      App Store URL
+                    </span>
+                    <input
+                      type="url"
+                      value={f.ios_store_url}
+                      onChange={(e) =>
+                        patchForm(selectedPlatform, {
+                          ios_store_url: e.target.value,
+                        })
+                      }
+                      disabled={busy}
+                      className={inputClass}
+                      autoComplete="off"
+                      placeholder="https://apps.apple.com/..."
+                    />
+                  </label>
                 )}
+                <label className="inline-flex items-start gap-2.5 cursor-pointer select-none touch-manipulation">
+                  <input
+                    type="checkbox"
+                    checked={f.store_release_ready}
+                    disabled={busy}
+                    onChange={(e) =>
+                      patchForm(selectedPlatform, {
+                        store_release_ready: e.target.checked,
+                      })
+                    }
+                    className="mt-0.5 h-4 w-4 rounded border-[var(--border)] text-[var(--brand)] focus:ring-[var(--brand)]/40 disabled:opacity-50"
+                  />
+                  <span className="text-sm text-[var(--text)]/85 leading-snug">
+                    Store release ready
+                    <span className="block text-[10px] text-[var(--text)]/50 font-normal">
+                      Do not enable until this build is actually downloadable.
+                      Hard prompts never lock users without a store URL.
+                    </span>
+                  </span>
+                </label>
               </div>
 
               <div className="space-y-2 pt-1 border-t border-[var(--border)]/60">
@@ -492,8 +528,8 @@ export default function AppUpdatesPage() {
 
                 {f.update_mode === "off" ? (
                   <p className="text-[10px] text-[var(--text)]/50 leading-snug">
-                    No in-app update prompt when mode is off — Preview is
-                    disabled.
+                    Mode off disables all update enforcement (including minimum).
+                    Preview is disabled.
                   </p>
                 ) : null}
 
@@ -549,6 +585,7 @@ export default function AppUpdatesPage() {
           </div>
         ) : null}
       </div>
+      <AppUpdatesHelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </PrimaryPageContainer>
   );
 }

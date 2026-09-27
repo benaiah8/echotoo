@@ -9,13 +9,13 @@ export default function ReportingPage() {
         intro="How to report content or behavior that violates our community standards."
       >
         {/* POLICY CONTENT START */}
-        <p>Last updated: March 13, 2026</p>
+        <p>Last updated: September 27, 2026</p>
 
         <p>
-          EchoToo allows users to report posts and user accounts that violate
-          our rules or create safety concerns. This Reporting and Moderation
-          Policy explains how reporting works and how the platform may respond
-          to violations.
+          EchoToo allows users to report posts, user accounts, media, messaging
+          concerns, and other behavior that violates our rules or creates safety
+          concerns. This Reporting and Moderation Policy explains how reporting
+          works and how the platform may respond to violations.
         </p>
         <p>
           EchoToo has zero tolerance for objectionable content, abusive behavior,
@@ -29,8 +29,8 @@ export default function ReportingPage() {
 
         <h3>1. Reporting Content</h3>
         <p>
-          Users can report posts that they believe violate EchoToo’s policies or
-          create safety concerns.
+          Users can report posts, media, and other content that they believe
+          violate EchoToo’s policies or create safety concerns.
         </p>
         <p>Examples of reportable content may include:</p>
         <ul>
@@ -43,10 +43,11 @@ export default function ReportingPage() {
           <li>illegal activity</li>
         </ul>
 
-        <h3>2. Reporting Users</h3>
+        <h3>2. Reporting Users and Meetup or Messaging Behavior</h3>
         <p>
           Users may also report accounts that engage in abusive, harmful, or
-          deceptive behavior.
+          deceptive behavior, including pressure around Duo or Group Up
+          requests, unwanted contact after a decline, or unsafe messaging.
         </p>
         <p>
           Reporting a user helps EchoToo review behavior that may violate the
@@ -55,10 +56,11 @@ export default function ReportingPage() {
 
         <h3>3. How Reporting Works</h3>
         <p>
-          When you report a post or user within the app, the report information
-          is sent to the EchoToo support team for review. Reports may include
-          identifying information about the reported content or account to help
-          us investigate the issue.
+          When you report a post, user, or other concern within the app, the
+          report information is sent to the EchoToo support team for review.
+          Reports may include identifying information about the reported content
+          or account to help us investigate the issue. You can also email{" "}
+          <a href="mailto:support@echotoo.com">support@echotoo.com</a>.
         </p>
 
         <h3>4. Review Process</h3>

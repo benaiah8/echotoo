@@ -179,26 +179,37 @@ export function isServerError(error: any): boolean {
 
 /**
  * Get user-friendly error message from an error
+ *
+ * Prefer explicit HTTP status copy and non-empty `error.message` (including
+ * Supabase/PostgREST RPC errors like P0001) before the network-error fallback.
+ * Do not use isNetworkError first: those errors often lack Axios `status`/`response`.
  */
 export function getErrorMessage(error: any): string {
-  if (isNetworkError(error)) {
-    return "Network error. Please check your connection and try again.";
+  if (typeof error === "string") {
+    const trimmed = error.trim();
+    return trimmed || "Something went wrong. Please try again.";
   }
 
-  if (error.status === 429) {
+  if (error?.status === 429) {
     return "Too many requests. Please wait a moment and try again.";
   }
 
-  if (error.status === 408) {
+  if (error?.status === 408) {
     return "Request timed out. Please try again.";
   }
 
-  if (isServerError(error)) {
+  if (error != null && isServerError(error)) {
     return "Server error. Please try again later.";
   }
 
-  if (error.message) {
-    return error.message;
+  const message =
+    typeof error?.message === "string" ? error.message.trim() : "";
+  if (message) {
+    return message;
+  }
+
+  if (isNetworkError(error)) {
+    return "Network error. Please check your connection and try again.";
   }
 
   return "Something went wrong. Please try again.";

@@ -1,5 +1,17 @@
 import { clearCreateFlowResumedLocalDraft } from "./draftEntryGate";
+import { clearFreshCreateLeaveBaseline } from "./createFlowFreshLeaveBaseline";
+import { dispatchCreateFlowDraftContentChanged } from "./createFlowLeaveRequest";
 import { EDIT_POST_DATA_KEY } from "./editPostBootstrap";
+import type { DraftVideo } from "./createDraftVideo/types";
+import type { DraftImage } from "./createDraftImage/types";
+import { readDraftVideoMeta } from "./createDraftVideo/draftVideoMeta";
+import { scheduleDraftVideoDiscardCleanup } from "./createDraftVideo/discardCleanup";
+import { readDraftImagesMeta } from "./createDraftImage/draftImageMeta";
+import { scheduleDraftImageDiscardCleanup } from "./createDraftImage/discardCleanup";
+import type {
+  DraftImageClientIdMap,
+  DraftMediaOrderItem,
+} from "./createDraftMediaOrder";
 
 export const DRAFT_META_KEY = "draftMeta";
 
@@ -15,6 +27,8 @@ export type DraftMeta = {
   selectedDates?: string[];
   isRecurring?: boolean;
   recurrenceDays?: string[];
+  /** Pending Start Time when no concrete dates are selected yet (V4 schedule sheet). */
+  pendingStartTime?: { hours: number; minutes: number } | null;
   ratingEnabled?: boolean;
   /** Legacy title step fields */
   duration?: string;
@@ -27,8 +41,21 @@ export type DraftMeta = {
   anonymousAvatar?: string;
   /** Stable client id for Phase 3 owner_create_post idempotency */
   publishPostId?: string;
+  /** V3G0 local-first draft video metadata (bytes in IDB / native FS). */
+  draftVideo?: DraftVideo;
+  /**
+   * LI1A local-first draft images (bytes in IDB / native FS).
+   * Optional — legacy drafts without this field remain valid.
+   */
+  draftImages?: DraftImage[];
   /** Auth user id (`session.user.id`) that owns this local create draft */
   ownerUserId?: string;
+  /** V4 create flow: persisted Place/Event choice (survives Place→Event conversion). */
+  createPostType?: "hangout" | "experience";
+  /** PASS C1: stable local media order (images + at most one video). */
+  mediaOrder?: DraftMediaOrderItem[];
+  /** PASS C1: storage URL → stable image clientId map. */
+  imageMediaClientIds?: DraftImageClientIdMap;
 };
 
 const UUID_V4ISH =
@@ -47,6 +74,22 @@ function readDraftMetaRecord(): DraftMeta {
   } catch {
     return {};
   }
+}
+
+/** Stored create type when user converted Place→Event or resumed a typed draft. */
+export function readDraftCreatePostType(): "hangout" | "experience" | null {
+  const t = readDraftMetaRecord().createPostType;
+  return t === "hangout" || t === "experience" ? t : null;
+}
+
+/** Persist canonical create type into draftMeta (new create only). */
+export function persistDraftCreatePostType(
+  type: "hangout" | "experience",
+): void {
+  if (isEditModeActive()) return;
+  const prev = readDraftMetaRecord();
+  writeDraftMetaRecord({ ...prev, createPostType: type });
+  notifyLocalDraftPersisted();
 }
 
 function writeDraftMetaRecord(meta: DraftMeta): void {
@@ -99,9 +142,46 @@ function isEditModeActive(): boolean {
   }
 }
 
+/** True when owner/admin Edit draft (`editPostData`) is active — not NEW Create. */
+export function isCreateEditModeActive(): boolean {
+  return isEditModeActive();
+}
+
+/**
+ * Owner Edit: existing `editPostData.postId` is the draft/upload scope id
+ * (durable local video + bunny-upload-init edit_staging). Never mint a new UUID.
+ */
+function resolveOwnerEditPublishPostId(
+  ownerUserId?: string,
+): string | null {
+  try {
+    const raw = localStorage.getItem(EDIT_POST_DATA_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { postId?: unknown };
+    const postId =
+      typeof parsed?.postId === "string" ? parsed.postId.trim() : "";
+    if (!isPublishPostIdShape(postId)) return null;
+
+    const prev = readDraftMetaRecord();
+    const next: DraftMeta = { ...prev, publishPostId: postId };
+    if (ownerUserId) {
+      next.ownerUserId = ownerUserId;
+    }
+    if (
+      prev.publishPostId !== postId ||
+      (ownerUserId && prev.ownerUserId !== ownerUserId)
+    ) {
+      writeDraftMetaRecord(next);
+    }
+    return postId;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Ensures a stable publish UUID for the current local create draft.
- * Never used in owner/admin edit mode ({@link EDIT_POST_DATA_KEY} present).
+ * Owner Edit: returns existing {@link EDIT_POST_DATA_KEY} postId (synced into draftMeta).
  */
 export function ensureDraftPublishPostId(options?: {
   fresh?: boolean;
@@ -109,7 +189,8 @@ export function ensureDraftPublishPostId(options?: {
   ownerUserId?: string;
 }): string | null {
   if (isEditModeActive()) {
-    return null;
+    // Never invent a second post id for Edit — use the published post id.
+    return resolveOwnerEditPublishPostId(options?.ownerUserId);
   }
 
   try {
@@ -135,18 +216,31 @@ export function ensureDraftPublishPostId(options?: {
 /**
  * Discards any existing local create draft and initializes a fresh owned draft with a new publishPostId.
  */
-export function prepareFreshOwnedCreateDraft(ownerUserId: string): string | null {
+export function prepareFreshOwnedCreateDraft(
+  ownerUserId: string,
+  createPostType?: "hangout" | "experience",
+): string | null {
   if (!ownerUserId) return null;
   discardAllDrafts();
-  return ensureDraftPublishPostId({ fresh: true, ownerUserId });
+  const publishPostId = ensureDraftPublishPostId({
+    fresh: true,
+    ownerUserId,
+  });
+  if (createPostType) {
+    const prev = readDraftMetaRecord();
+    writeDraftMetaRecord({ ...prev, createPostType, ownerUserId });
+    touchDraftSavedAt();
+  }
+  return publishPostId;
 }
 
 /**
  * Returns draftMeta.publishPostId when valid, else null (legacy paths without Phase 2 id).
+ * Owner Edit: returns the published post id from edit bootstrap (same as upload scope).
  */
 export function readDraftPublishPostId(): string | null {
   if (isEditModeActive()) {
-    return null;
+    return resolveOwnerEditPublishPostId();
   }
   try {
     const prev = readDraftMetaRecord();
@@ -216,14 +310,97 @@ export const LOCAL_DRAFT_DISCARDED_EVENT = "local-draft:discarded";
 
 export function discardAllDrafts() {
   try {
+    const publishPostId = readDraftPublishPostId();
+    const draftVideo = readDraftVideoMeta();
+    const draftImages = readDraftImagesMeta();
+    let userId: string | null = null;
+    try {
+      const meta = readDraftMetaRecord();
+      if (typeof meta.ownerUserId === "string" && meta.ownerUserId.trim()) {
+        userId = meta.ownerUserId.trim();
+      } else {
+        userId = localStorage.getItem("my_user_id");
+      }
+    } catch {
+      userId = null;
+    }
+    scheduleDraftVideoDiscardCleanup({ publishPostId, draftVideo });
+    scheduleDraftImageDiscardCleanup({ publishPostId, draftImages, userId });
     DRAFT_KEYS.forEach((k) => localStorage.removeItem(k));
     localStorage.removeItem(DRAFT_SAVED_AT_KEY);
     clearDraftDirty();
     clearCreateFlowResumedLocalDraft();
+    clearFreshCreateLeaveBaseline();
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(LOCAL_DRAFT_DISCARDED_EVENT));
     }
   } catch {}
+}
+
+/**
+ * Owner Edit Exit/Discard: clear local Edit DraftVideo + edit bootstrap.
+ * Never detaches/deletes attached published post_media.
+ * Local bytes only — unattached remote staging GC is a separate backend concern.
+ */
+export function discardOwnerPublishedEditLocalState(): void {
+  try {
+    let publishPostId: string | null = null;
+    try {
+      const raw = localStorage.getItem(EDIT_POST_DATA_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { postId?: unknown };
+        const id =
+          typeof parsed?.postId === "string" ? parsed.postId.trim() : "";
+        publishPostId = id || null;
+      }
+    } catch {
+      publishPostId = null;
+    }
+
+    const draftVideo = readDraftVideoMeta();
+    const localDraft =
+      draftVideo &&
+      typeof draftVideo.localId === "string" &&
+      !draftVideo.localId.startsWith("published-ref:")
+        ? draftVideo
+        : null;
+
+    void (async () => {
+      try {
+        const { cancelActiveDraftVideoPreparation } = await import(
+          "./createDraftVideo/draftVideoPreparationController"
+        );
+        await cancelActiveDraftVideoPreparation("discard");
+      } catch {
+        /* best-effort */
+      }
+      try {
+        const { cleanupDraftVideoAssets } = await import("./createDraftVideo");
+        await cleanupDraftVideoAssets({
+          publishPostId,
+          draftVideo: localDraft,
+        });
+      } catch (err) {
+        console.warn("[drafts] edit discard local video cleanup failed", err);
+      }
+    })();
+
+    DRAFT_KEYS.forEach((k) => localStorage.removeItem(k));
+    localStorage.removeItem(DRAFT_SAVED_AT_KEY);
+    clearDraftDirty();
+    clearCreateFlowResumedLocalDraft();
+    clearFreshCreateLeaveBaseline();
+    localStorage.removeItem(EDIT_POST_DATA_KEY);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(LOCAL_DRAFT_DISCARDED_EVENT));
+    }
+  } catch {
+    try {
+      localStorage.removeItem(EDIT_POST_DATA_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /** If draft data exists but no timestamp (legacy), stamp now so users are not expired on first gate. */
@@ -273,6 +450,7 @@ export function touchDraftSavedAt(): void {
 export function notifyLocalDraftPersisted(): void {
   markDraftDirty();
   touchDraftSavedAt();
+  dispatchCreateFlowDraftContentChanged();
 }
 
 /**

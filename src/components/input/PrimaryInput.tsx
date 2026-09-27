@@ -59,11 +59,11 @@ const PrimaryInput = React.forwardRef<
 
   /** `placeholder:` so per-field overrides (e.g. `!placeholder:text-white`) win over element `color`. */
   const sharedStyles =
-    "w-full text-xs bg-transparent text-[var(--text)] placeholder:text-neutral-400/55 border-b border-gray-700 transition-all font-normal";
+    "w-full text-[16px] bg-transparent text-[var(--text)] placeholder:text-neutral-400/55 border-b border-gray-700 transition-all font-normal";
 
   /** Editor panels: no bottom rule; inset edge + placeholders tuned for light/dark. */
   const editorChromeStyles =
-    "w-full resize-none overflow-hidden rounded-lg border-0 bg-[color-mix(in_oklab,var(--surface)_42%,transparent)] px-2.5 py-2 text-xs font-normal text-[var(--text)] outline-none transition " +
+    "w-full resize-none overflow-hidden rounded-lg border-0 bg-[color-mix(in_oklab,var(--surface)_42%,transparent)] px-2.5 py-2 text-[16px] font-normal text-[var(--text)] outline-none transition " +
     "shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--text)_8%,transparent)] placeholder:text-[var(--text)]/42 " +
     "focus-visible:ring-2 focus-visible:ring-[color-mix(in_oklab,var(--brand)_38%,transparent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)] " +
     "app-dark:bg-[color-mix(in_oklab,var(--surface)_24%,transparent)] app-dark:shadow-[inset_0_0_0_1px_color-mix(in_oklab,white_11%,transparent)] app-dark:placeholder:text-[var(--text)]/38";

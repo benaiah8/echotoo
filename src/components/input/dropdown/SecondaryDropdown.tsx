@@ -92,8 +92,8 @@ const SecondaryDropdown: React.FC<Props> = ({
     : "flex w-fit max-w-[320px] flex-col text-[var(--text)]";
 
   const searchClass = createFlowMenu
-    ? "w-full border-b border-[var(--create-border-panel-line-soft)]/80 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] px-3 py-2.5 text-xs text-[var(--text)] placeholder:text-[var(--text)]/38 outline-none transition focus-visible:bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--brand)]/25"
-    : "border-b border-gray-500 bg-transparent px-3 py-2 text-sm outline-none";
+    ? "w-full border-b border-[var(--create-border-panel-line-soft)]/80 bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] px-3 py-2.5 text-[16px] text-[var(--text)] placeholder:text-[var(--text)]/38 outline-none transition focus-visible:bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--brand)]/25"
+    : "border-b border-gray-500 bg-transparent px-3 py-2 text-[16px] outline-none";
 
   const optionBtnClass = (isSelected: boolean) =>
     createFlowMenu

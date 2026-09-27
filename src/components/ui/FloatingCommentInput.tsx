@@ -768,7 +768,7 @@ export default function FloatingCommentInput({
               onFocus={() => handleComposerFocus(false)}
               onBlur={() => setComposerSurfaceFocused(false)}
               placeholder={placeholder}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[16px] text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               maxLength={1000}
               disabled={isSubmitting}
             />

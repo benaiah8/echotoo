@@ -1,4 +1,14 @@
 import { visibleActivityTagLines } from "./createFlowLimitUtils";
+import {
+  extractV4KeyInfoValues,
+  hasLegacyAdditionalInfoContent,
+} from "./createFlowV4KeyInfo";
+import {
+  hasV4Slot0CarrierContent,
+  isV4Section,
+  isV4SectionMeaningful,
+  sanitizeV4SectionBodyForCommit,
+} from "./createFlowV4Section";
 
 /**
  * Detects whether create-flow draft activities contain real user content vs an untouched
@@ -18,6 +28,7 @@ export type MeaningfulActivityInput = {
   /** Already cleaned the same way as finalize / publish (http URLs, Cloudinary rules). */
   images?: string[];
   additionalInfo?: { title: string; value: string }[];
+  sectionBody?: string;
 };
 
 /** True when title is empty or matches the auto-generated "Stop n" for this index (seed / Next stop). */
@@ -75,11 +86,7 @@ export function getTimelineStopHeadingText(
 function hasMeaningfulExtras(
   additionalInfo: MeaningfulActivityInput["additionalInfo"]
 ): boolean {
-  if (!Array.isArray(additionalInfo)) return false;
-  return additionalInfo.some(
-    (x) =>
-      (x?.title ?? "").trim().length > 0 && (x?.value ?? "").trim().length > 0
-  );
+  return hasLegacyAdditionalInfoContent(additionalInfo);
 }
 
 /**
@@ -90,29 +97,45 @@ export function hasMeaningfulActivityContent(
   activities: MeaningfulActivityInput[]
 ): boolean {
   if (!activities.length) return false;
-  if (activities.length > 1) return true;
 
-  const a = activities[0];
-  if ((a.images?.length ?? 0) > 0) return true;
+  return activities.some((a, i) => {
+    if (isV4Section(a)) return false;
+    if (i === 0) {
+      return (
+        hasV4LegacyStopIdentity(a, 0) || hasV4Slot0CarrierContent(a)
+      );
+    }
+    return isMeaningfulActivityAtIndex(a, i);
+  });
+}
 
-  const title = (a.title ?? "").trim();
-  if (title && !isDefaultStopTitle(title, 0)) return true;
-
-  if ((a.customActivity ?? "").trim()) return true;
-  if ((a.activityType ?? "").trim()) return true;
-  if ((a.locationDesc ?? "").trim()) return true;
-  if ((a.location ?? "").trim()) return true;
-  if ((a.locationNotes ?? "").trim()) return true;
-  if ((a.locationUrl ?? "").trim()) return true;
-
-  const tags = Array.isArray(a.tags)
-    ? a.tags.map((t) => String(t).trim()).filter(Boolean)
+/**
+ * User-authored Activity/Stop identity (not post-level media or location carriers).
+ * Hidden legacy location notes/desc do not count.
+ */
+export function hasV4LegacyStopIdentity(
+  activity: MeaningfulActivityInput,
+  index: number
+): boolean {
+  if (isV4Section(activity)) return false;
+  const title = (activity.title ?? "").trim();
+  if (title && !isDefaultStopTitle(title, index)) return true;
+  if ((activity.customActivity ?? "").trim()) return true;
+  if ((activity.activityType ?? "").trim()) return true;
+  const tags = Array.isArray(activity.tags)
+    ? activity.tags.map((t) => String(t).trim()).filter(Boolean)
     : [];
   if (tags.length > 0) return true;
-
-  if (hasMeaningfulExtras(a.additionalInfo)) return true;
-
+  if (hasMeaningfulExtras(activity.additionalInfo)) return true;
   return false;
+}
+
+/** Slot 0 (or any stop) with only media and/or location fields — no Activity/Stop content. */
+export function isV4FinalizeCarrierOnlyStop(
+  activity: MeaningfulActivityInput,
+  index: number
+): boolean {
+  return !hasV4LegacyStopIdentity(activity, index);
 }
 
 /** True when any draft activity has place, maps link, notes, or legacy desc. */
@@ -138,6 +161,9 @@ export type DetailTimelineActivity = {
   location_notes?: string | null;
   tags?: string[] | null;
   additional_info?: { title: string; value: string }[] | null;
+  activity_type?: string | null;
+  section_body?: string | null;
+  custom_activity?: string | null;
 };
 
 export function toMeaningfulActivityInputFromDetail(
@@ -145,6 +171,9 @@ export function toMeaningfulActivityInputFromDetail(
 ): MeaningfulActivityInput {
   return {
     title: a.title ?? undefined,
+    activityType: a.activity_type ?? undefined,
+    customActivity: a.custom_activity ?? undefined,
+    sectionBody: a.section_body ?? undefined,
     images: Array.isArray(a.images) ? a.images : [],
     location: a.location_name ?? undefined,
     locationDesc: a.location_desc ?? undefined,
@@ -155,18 +184,55 @@ export function toMeaningfulActivityInputFromDetail(
   };
 }
 
+/** Slot 0 used only as a V4 Key Details carrier — not a timeline stop. */
+export function isV4Slot0KeyDetailsOnlyCarrier(
+  activity: MeaningfulActivityInput,
+  index: number
+): boolean {
+  if (index !== 0) return false;
+  if (extractV4KeyInfoValues(activity.additionalInfo).length === 0) return false;
+  if (hasV4LegacyStopIdentity(activity, 0)) return false;
+  if ((activity.images?.length ?? 0) > 0) return false;
+  if (hasLocationContent(activity)) return false;
+  return true;
+}
+
+/** V4 Section bodies in activity-array order (published read-only rendering). */
+export function listPublishedV4SectionBodies(
+  activities: DetailTimelineActivity[] | null | undefined
+): string[] {
+  if (!activities?.length) return [];
+  const out: string[] = [];
+  for (const row of activities) {
+    const input = toMeaningfulActivityInputFromDetail(row);
+    if (!isV4Section(input)) continue;
+    const body = sanitizeV4SectionBodyForCommit(input.sectionBody ?? "");
+    if (body) out.push(body);
+  }
+  return out;
+}
+
 /** Per-index meaningful check (matches publish filtering; display-only). */
 export function isMeaningfulActivityAtIndex(
   activity: MeaningfulActivityInput,
   index: number
 ): boolean {
+  if (isV4Section(activity)) {
+    return isV4SectionMeaningful(activity);
+  }
+
+  if (index === 0 && hasV4Slot0CarrierContent(activity)) {
+    return true;
+  }
+
   if ((activity.images?.length ?? 0) > 0) return true;
 
   const title = (activity.title ?? "").trim();
   if (title && !isDefaultStopTitle(title, index)) return true;
 
   if ((activity.customActivity ?? "").trim()) return true;
-  if ((activity.activityType ?? "").trim()) return true;
+  const activityType = (activity.activityType ?? "").trim();
+  if (activityType && !isV4Section(activity)) return true;
   if ((activity.locationDesc ?? "").trim()) return true;
   if ((activity.location ?? "").trim()) return true;
   if ((activity.locationNotes ?? "").trim()) return true;
@@ -180,6 +246,17 @@ export function isMeaningfulActivityAtIndex(
   if (hasMeaningfulExtras(activity.additionalInfo)) return true;
 
   return false;
+}
+
+/** Finalize timeline: genuine stop content, or later activities with any meaning including location. */
+export function hasV4FinalizeLegacyTimeline(
+  activities: MeaningfulActivityInput[]
+): boolean {
+  return activities.some((a, i) => {
+    if (isV4Section(a)) return false;
+    if (i === 0) return hasV4LegacyStopIdentity(a, 0);
+    return isMeaningfulActivityAtIndex(a, i);
+  });
 }
 
 function hasLocationContent(activity: MeaningfulActivityInput): boolean {
@@ -257,6 +334,34 @@ export function getTimelineSectionLabel(
   return "Activities";
 }
 
+/** Slot-0 location fields for published posts when slot 0 is a carrier (not a legacy stop). */
+export type PublishedCarrierSlot0Location = {
+  locationName: string;
+  locationUrl: string;
+  locationDesc: string;
+  locationNotes: string;
+};
+
+/**
+ * Published detail: location stored on V4 slot-0 carrier — not the legacy timeline.
+ * Returns null when slot 0 is a genuine legacy stop (location stays on the timeline).
+ */
+export function getPublishedCarrierSlot0Location(
+  activities: DetailTimelineActivity[] | null | undefined
+): PublishedCarrierSlot0Location | null {
+  const row = activities?.[0];
+  if (!row) return null;
+  const input = toMeaningfulActivityInputFromDetail(row);
+  if (!isV4FinalizeCarrierOnlyStop(input, 0)) return null;
+  if (!hasLocationContent(input)) return null;
+  return {
+    locationName: (input.location ?? "").trim(),
+    locationUrl: (input.locationUrl ?? "").trim(),
+    locationDesc: (input.locationDesc ?? "").trim(),
+    locationNotes: (input.locationNotes ?? "").trim(),
+  };
+}
+
 export function buildTimelineDisplayItems(
   activities: DetailTimelineActivity[]
 ): {
@@ -273,5 +378,10 @@ export function buildTimelineDisplayItems(
       ).length;
       return { activity, index, input, visibleTagLineCount };
     })
-    .filter(({ input, index }) => isMeaningfulActivityAtIndex(input, index));
+    .filter(({ input, index }) => {
+      if (isV4Section(input)) return false;
+      if (isV4Slot0KeyDetailsOnlyCarrier(input, index)) return false;
+      if (index === 0 && isV4FinalizeCarrierOnlyStop(input, index)) return false;
+      return isMeaningfulActivityAtIndex(input, index);
+    });
 }

@@ -10,12 +10,7 @@ import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreatedOptimized } from "../../api/queries/getUserPostsCreated";
 import {
   getSavedPostsOptimized,
-  SavedPostWithDetails,
 } from "../../api/services/savedPosts";
-import {
-  getLikedPostsWithDetailsForUserOptimized,
-  LikedPostWithDetails,
-} from "../../api/services/likes";
 import Post from "../../components/Post";
 import PostSkeleton from "../../components/skeletons/PostSkeleton";
 import ProgressiveFeed from "../../components/ProgressiveFeed";
@@ -23,7 +18,6 @@ import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { dataCache } from "../../lib/dataCache";
 import { cancelContextRequests } from "../../lib/requestManager";
 import {
-  convertLikedToFeedItem,
   convertSavedToFeedItem,
 } from "../../lib/profilePostsConverters";
 import { LOCAL_DRAFT_DISCARDED_EVENT, isLocalCreateDraftOwnedBy } from "../../lib/drafts";
@@ -36,7 +30,22 @@ import {
   readPersistedProfilePosts,
   writePersistedProfilePosts,
 } from "../../lib/profilePostListCache";
-import { onPostOwnershipChanged } from "../../lib/postEvents";
+import { seedPublishedMediaFromFeedItems } from "../../lib/publishedMedia";
+import {
+  onPostDeleted,
+  onPostOwnershipChanged,
+} from "../../lib/postEvents";
+import {
+  filterProfileCreatedWarmItems,
+  guardProfileCreatedCacheWrite,
+  noteProfileCreatedExclusion,
+  readProfileCreatedWarmInitialItems,
+} from "../../lib/profileCreatedWarmSeed";
+import {
+  PROFILE_OVERVIEW_POSTS_FEED_CLASS,
+  PROFILE_OVERVIEW_POSTS_TAB_BAND_CLASS,
+} from "../../lib/profileOverviewPresentation";
+import { SocialShelfSurfaceProvider } from "../../lib/social/socialShelfSurfaceContext";
 // [PHASE 4.1.3] Complete refactor: Single ProgressiveFeed pattern for all tabs
 
 /**
@@ -63,7 +72,7 @@ export default function OwnProfilePostsSection({
   focusCreatedTabEpoch = 0,
 }: OwnProfilePostsSectionProps = {}) {
   const { profile } = useProfile();
-  const [tab, setTab] = useState<"created" | "interacted" | "saved">("created");
+  const [tab, setTab] = useState<"created" | "saved">("created");
   /** Bumps when local draft keys are cleared so the Created feed drops the draft card without a full refresh. */
   const [localDraftEpoch, setLocalDraftEpoch] = useState(0);
 
@@ -75,6 +84,12 @@ export default function OwnProfilePostsSection({
     useState<string | null>(null);
   const [createdOwnershipSoftRefreshEpoch, setCreatedOwnershipSoftRefreshEpoch] =
     useState(0);
+  /** Forces Created ProgressiveFeed remount after admin ownership transfer (Capacitor / hidden tabs). */
+  const [ownershipFeedRemountEpoch, setOwnershipFeedRemountEpoch] =
+    useState(0);
+  /** Posts removed from this Created list (ownership / delete) — block warm-seed restore. */
+  const createdExcludedPostIdsRef = useRef<Set<string>>(new Set());
+  const [createdWarmSeedEpoch, setCreatedWarmSeedEpoch] = useState(0);
 
   // React 19: useTransition for non-urgent tab switching
   const [isPending, startTransition] = useTransition();
@@ -103,13 +118,11 @@ export default function OwnProfilePostsSection({
   // [PHASE B.3] Track which tabs have been initialized (visited for first time)
   // [FIX] Use refs to track initialization to prevent infinite loops from dependency changes
   const createdInitializedRef = useRef(false);
-  const interactedInitializedRef = useRef(false);
   const savedInitializedRef = useRef(false);
 
   // [FIX] Use state only for rendering, refs for logic to prevent infinite loops
   const [tabsInitialized, setTabsInitialized] = useState({
     created: false,
-    interacted: false,
     saved: false,
   });
 
@@ -139,11 +152,11 @@ export default function OwnProfilePostsSection({
     if (prevUserIdRef.current && prevUserIdRef.current !== userId) {
       // Profile changed - reset all refs and state
       createdInitializedRef.current = false;
-      interactedInitializedRef.current = false;
       savedInitializedRef.current = false;
+      createdExcludedPostIdsRef.current = new Set();
+      setCreatedWarmSeedEpoch(0);
       setTabsInitialized({
         created: false,
-        interacted: false,
         saved: false,
       });
     }
@@ -166,10 +179,6 @@ export default function OwnProfilePostsSection({
   useEffect(() => {
     if (!userId) return;
 
-    if (tab === "interacted" && !interactedInitializedRef.current) {
-      interactedInitializedRef.current = true;
-      setTabsInitialized((prev) => ({ ...prev, interacted: true }));
-    }
     if (tab === "saved" && !savedInitializedRef.current) {
       savedInitializedRef.current = true;
       setTabsInitialized((prev) => ({ ...prev, saved: true }));
@@ -270,13 +279,25 @@ export default function OwnProfilePostsSection({
   // [FIX] Only depend on primitives, not entire profile object - prevents infinite loops
   const getCachedCreated = useCallback(() => {
     let cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
+    let source: "warm" | "persist" = "warm";
+    let snapshotTs: number | undefined;
     if (!cached?.length) {
       const persisted = readPersistedProfilePosts("created", userId);
       cached = persisted?.items?.length ? persisted.items : null;
+      if (cached?.length) {
+        source = "persist";
+        snapshotTs = persisted?.ts;
+      }
     }
 
     // Only add drafts for Created tab
     if (cached) {
+      seedPublishedMediaFromFeedItems({
+        items: cached,
+        viewerUserId: userId,
+        source,
+        snapshotTs,
+      });
       try {
         if (!userId || !isLocalCreateDraftOwnedBy(userId)) {
           return cached || null;
@@ -350,6 +371,16 @@ export default function OwnProfilePostsSection({
     [profileCreatedDataCacheKey, userId]
   );
 
+  /** Local: strip ownership/delete exclusions so remount bootstrap cannot re-poison cache. */
+  const setCachedCreatedGuarded = useCallback(
+    (items: FeedItem[]) => {
+      setCachedCreated(
+        guardProfileCreatedCacheWrite(items, createdExcludedPostIdsRef.current)
+      );
+    },
+    [setCachedCreated]
+  );
+
   const removePostFromCreatedCache = useCallback(
     (postId: string) => {
       if (!userId || !postId) return;
@@ -370,6 +401,8 @@ export default function OwnProfilePostsSection({
     return onPostOwnershipChanged(
       ({ postId, oldAuthorId, newAuthorId }) => {
         if (oldAuthorId === userId) {
+          noteProfileCreatedExclusion(createdExcludedPostIdsRef.current, postId);
+          setCreatedWarmSeedEpoch((n) => n + 1);
           setCreatedOwnershipRemovePostId(postId);
           setCreatedOwnershipRemoveRevision((n) => n + 1);
           removePostFromCreatedCache(postId);
@@ -377,18 +410,52 @@ export default function OwnProfilePostsSection({
         if (newAuthorId === userId && oldAuthorId !== newAuthorId) {
           setCreatedOwnershipSoftRefreshEpoch((n) => n + 1);
         }
+        if (userId === oldAuthorId || userId === newAuthorId) {
+          setOwnershipFeedRemountEpoch((n) => n + 1);
+        }
       }
     );
   }, [userId, removePostFromCreatedCache]);
 
+  // Keep Created warm seed / cache aligned with delete invalidation (no redesign).
+  useEffect(() => {
+    if (!userId) return;
+    return onPostDeleted((postId) => {
+      noteProfileCreatedExclusion(createdExcludedPostIdsRef.current, postId);
+      setCreatedWarmSeedEpoch((n) => n + 1);
+      removePostFromCreatedCache(postId);
+    });
+  }, [userId, removePostFromCreatedCache]);
+
   /** Memory + persisted first page — sync read for cold offline open. */
   const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    // ownershipFeedRemountEpoch / createdWarmSeedEpoch / feedRefreshEpoch force
+    // a fresh cache read after invalidation so remount cannot reuse a stale snapshot.
+    void ownershipFeedRemountEpoch;
+    void createdWarmSeedEpoch;
+    void feedRefreshEpoch;
+    void localDraftEpoch;
     if (!userId) return undefined;
-    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
-    const persisted = readPersistedProfilePosts("created", userId);
-    return persisted?.items?.length ? persisted.items : undefined;
-  }, [userId, profileCreatedDataCacheKey]);
+    const warm = readProfileCreatedWarmInitialItems({
+      dataCacheKey: profileCreatedDataCacheKey,
+      userId,
+      excludePostIds: createdExcludedPostIdsRef.current,
+    });
+    if (!warm?.length) return undefined;
+    seedPublishedMediaFromFeedItems({
+      items: warm,
+      viewerUserId: userId,
+      source: "warm",
+    });
+    return warm;
+  }, [
+    userId,
+    profileCreatedDataCacheKey,
+    ownershipFeedRemountEpoch,
+    createdWarmSeedEpoch,
+    feedRefreshEpoch,
+    localDraftEpoch,
+  ]);
 
   /**
    * First paint merge: prepend marker (peek-only) + `profile_created_${userId}` + drafts parity with load offset 0.
@@ -402,6 +469,12 @@ export default function OwnProfilePostsSection({
     if (peek.kind !== "pending") return null;
 
     const localItem = buildLocalPrependedFeedItem(profile, peek.payload);
+    // Sync-seed from prepend so Post cache hit is available on first paint.
+    seedPublishedMediaFromFeedItems({
+      items: [localItem],
+      viewerUserId: profile.user_id,
+      source: "publish",
+    });
     const cachedBare =
       dataCache.get<FeedItem[]>(profileCreatedDataCacheKey) ??
       readPersistedProfilePosts("created", userId)?.items ??
@@ -409,7 +482,12 @@ export default function OwnProfilePostsSection({
 
     const drafts = getDraftsFromStorage();
 
-    const tail = cachedBare.filter((r) => r.id !== localItem.id);
+    const safeCached =
+      filterProfileCreatedWarmItems(
+        cachedBare,
+        createdExcludedPostIdsRef.current
+      ) ?? [];
+    const tail = safeCached.filter((r) => r.id !== localItem.id);
 
     const merged = [...drafts, localItem, ...tail];
 
@@ -448,43 +526,15 @@ export default function OwnProfilePostsSection({
     const r = consumeOwnCreatedPrependPending(profile.user_id);
     if (r.kind !== "consumed") return;
 
-    setCachedCreated(publishHydratedCreatedRows);
+    setCachedCreatedGuarded(publishHydratedCreatedRows);
 
     setPrependHydrateNonce((n) => n + 1);
   }, [
     visible,
     profile?.user_id,
     publishHydratedCreatedRows,
-    setCachedCreated,
+    setCachedCreatedGuarded,
   ]);
-
-  // Interacted tab cache
-  const getCachedInteracted = useCallback(() => {
-    const cacheKey = `profile_interacted_${userId}`;
-    const cached = dataCache.get<FeedItem[]>(cacheKey);
-    if (cached?.length) return cached;
-    const persisted = readPersistedProfilePosts("interacted", userId);
-    return persisted?.items?.length ? persisted.items : null;
-  }, [userId]);
-
-  const setCachedInteracted = useCallback(
-    (items: FeedItem[]) => {
-      const cacheKey = `profile_interacted_${userId}`;
-      const persisted = items.slice(0, 20);
-      dataCache.set(cacheKey, persisted, 30 * 60 * 1000); // 30min TTL, cache 20 items
-      writePersistedProfilePosts("interacted", userId, persisted);
-    },
-    [userId]
-  );
-
-  const profileInteractedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
-    if (!userId) return undefined;
-    const cacheKey = `profile_interacted_${userId}`;
-    const cached = dataCache.get<FeedItem[]>(cacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
-    const persisted = readPersistedProfilePosts("interacted", userId);
-    return persisted?.items?.length ? persisted.items : undefined;
-  }, [userId]);
 
   // Saved tab cache
   const getCachedSaved = useCallback(() => {
@@ -537,23 +587,6 @@ export default function OwnProfilePostsSection({
         onLocalDraftDiscarded
       );
   }, [userId, profileCreatedDataCacheKey]);
-
-  // [PHASE 4.1.3] Listen for invite accepted events to clear cache
-  useEffect(() => {
-    const handleInviteAccepted = () => {
-      if (tab === "interacted" && userId) {
-        // Clear cache to force reload
-        const cacheKey = `profile_interacted_${userId}`;
-        dataCache.delete(cacheKey);
-        cancelContextRequests(`profile-${userId}-interacted`);
-      }
-    };
-
-    window.addEventListener("invite:accepted", handleInviteAccepted);
-    return () => {
-      window.removeEventListener("invite:accepted", handleInviteAccepted);
-    };
-  }, [tab, userId]);
 
   // [PHASE B.2] Separate loadItems functions for each tab (preparation for multi-ProgressiveFeed pattern)
 
@@ -641,61 +674,6 @@ export default function OwnProfilePostsSection({
     },
     [userId, getDraftsFromStorage, profileCreatedDataCacheKey]
   ); // [FIX] Only depend on userId and getDraftsFromStorage
-
-  // Interacted tab loadItems
-  // [FIX] Only depend on userId, not entire profile object - prevents infinite loops
-  const loadInteractedItems = useCallback(
-    async (offset: number, limit: number): Promise<FeedItem[]> => {
-      if (DEBUG_OWN_PROFILE) {
-        console.log("[OwnProfilePostsSection] loadInteractedItems called", {
-          userId,
-          offset,
-          limit,
-        });
-      }
-      const currentUserId = userId; // Use userId from closure, not profile?.user_id
-      if (!currentUserId) return [];
-
-      const { getViewerAuthUserId } = await import(
-        "../../api/services/follows"
-      );
-      const viewerUserId = await getViewerAuthUserId();
-      const validViewerUserId =
-        viewerUserId && viewerUserId !== "" ? viewerUserId : null;
-
-      const result = await getLikedPostsWithDetailsForUserOptimized(
-        currentUserId,
-        validViewerUserId,
-        limit,
-        offset
-      );
-
-      if (result.error) {
-        if (offset === 0) {
-          const cached = getCachedInteracted();
-          if (cached?.length) return cached;
-        }
-        return [];
-      }
-
-      // Convert to FeedItem format (RPC now carries canonical engagement counts).
-      if (result.data) {
-        const mapped = result.data.map(convertLikedToFeedItem);
-        if (DEBUG_OWN_PROFILE) {
-          console.log("[OwnProfilePostsSection] loadInteractedItems response", {
-            userId,
-            offset,
-            limit,
-            received: mapped.length,
-          });
-        }
-        return mapped;
-      }
-
-      return [];
-    },
-    [userId, getCachedInteracted]
-  ); // [FIX] Only depend on userId
 
   // Saved tab loadItems
   // [FIX] Only depend on userId, not entire profile object - prevents infinite loops
@@ -843,36 +821,7 @@ export default function OwnProfilePostsSection({
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
         slideshowHostVisible={visible && tab === "created"}
-      />
-    ),
-    [visible, tab, authorForProfilePostCard]
-  );
-
-  const renderInteractedItem = useCallback(
-    (post: FeedItem) => (
-      <Post
-        key={post.id}
-        postId={post.id}
-        caption={post.caption}
-        createdAt={post.created_at}
-        authorId={post.author_id}
-        author={authorForProfilePostCard(post)}
-        type={post.type}
-        isOwner={false} // Not owner for interacted tab
-        status="published"
-        isDraft={false}
-        isAnonymous={post.is_anonymous || false}
-        anonymousName={post.anonymous_name || null}
-        anonymousAvatar={post.anonymous_avatar || null}
-        selectedDates={post.selected_dates || null}
-        tags={post.tags || null}
-        post={post} // Pass entire FeedItem for optimal loading
-        followStatus={post.follow_status}
-        isLiked={post.is_liked}
-        isSaved={post.is_saved}
-        commentCount={post.comment_count}
-        rsvpData={post.rsvp_data}
-        slideshowHostVisible={visible && tab === "interacted"}
+        publishedListOrigin="profile"
       />
     ),
     [visible, tab, authorForProfilePostCard]
@@ -903,6 +852,7 @@ export default function OwnProfilePostsSection({
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
         slideshowHostVisible={visible && tab === "saved"}
+        publishedListOrigin="profile"
       />
     ),
     [visible, tab, authorForProfilePostCard]
@@ -910,46 +860,41 @@ export default function OwnProfilePostsSection({
 
   // Theme-aware tab styling
   const base =
-    "px-2 py-1 rounded-full text-xs border transition-all duration-200 flex items-center justify-center";
+    "px-2 py-0.5 rounded-full text-xs border transition-all duration-200 flex items-center justify-center";
   const active = "bg-[var(--text)] text-[var(--bg)] border-[var(--text)]";
   const inactive =
     "bg-transparent text-[var(--text)]/80 border-[var(--border)] hover:border-[var(--text)]/40";
 
   return (
+    <SocialShelfSurfaceProvider surface="profile-own">
     <section className="w-full max-w-[640px] mx-auto px-1.5">
       {/* Tab Navigation - Always visible (static) */}
-      <div className="flex items-center justify-center gap-2 pt-4">
-        <button
-          className={`${base} ${tab === "created" ? active : inactive} ${
-            isPending ? "opacity-70" : ""
-          }`}
-          onClick={() => startTransition(() => setTab("created"))}
-          disabled={isPending}
-        >
-          Created
-        </button>
-        <button
-          className={`${base} ${tab === "interacted" ? active : inactive} ${
-            isPending ? "opacity-70" : ""
-          }`}
-          onClick={() => startTransition(() => setTab("interacted"))}
-          disabled={isPending}
-        >
-          Interacted
-        </button>
-        <button
-          className={`${base} ${tab === "saved" ? active : inactive} ${
-            isPending ? "opacity-70" : ""
-          }`}
-          onClick={() => startTransition(() => setTab("saved"))}
-          disabled={isPending}
-        >
-          Saved
-        </button>
+      <div className={PROFILE_OVERVIEW_POSTS_TAB_BAND_CLASS}>
+        <div className="flex items-center justify-center gap-2 py-1.5">
+          <button
+            className={`${base} ${tab === "created" ? active : inactive} ${
+              isPending ? "opacity-70" : ""
+            }`}
+            onClick={() => startTransition(() => setTab("created"))}
+            disabled={isPending}
+          >
+            Created
+          </button>
+          <button
+            className={`${base} ${tab === "saved" ? active : inactive} ${
+              isPending ? "opacity-70" : ""
+            }`}
+            onClick={() => startTransition(() => setTab("saved"))}
+            disabled={isPending}
+          >
+            Saved
+          </button>
+        </div>
+        <div className="h-px w-full bg-[var(--border)]" aria-hidden />
       </div>
 
-      {/* Content - Three ProgressiveFeeds (always mounted, CSS controls visibility) */}
-      <div className="py-4">
+      {/* Content - ProgressiveFeeds (always mounted, CSS controls visibility) */}
+      <div className={PROFILE_OVERVIEW_POSTS_FEED_CLASS}>
         {/* [PHASE B.4] Multi-ProgressiveFeed pattern - Instagram-like tab behavior */}
         {/* [PHASE B.5] Lazy initialization - only mount tabs when first visited */}
 
@@ -957,13 +902,13 @@ export default function OwnProfilePostsSection({
         {tabsInitialized.created && (
           <div style={{ display: tab === "created" ? "block" : "none" }}>
             <ProgressiveFeed
-              key={`created-${userId}-r${feedRefreshEpoch}-ld${localDraftEpoch}`}
+              key={`created-${userId}-r${feedRefreshEpoch}-ld${localDraftEpoch}-own${ownershipFeedRemountEpoch}`}
               isVisible={visible && tab === "created"}
               tabId="profile"
               loadItems={loadCreatedItems}
               renderItem={renderCreatedItem} // [FIX] Use memoized function
               getCachedItems={getCachedCreated}
-              setCachedItems={setCachedCreated}
+              setCachedItems={setCachedCreatedGuarded}
               initialItems={profileCreatedWarmInitialItems}
               authoritativeHydratedSeed={
                 publishHydratedCreatedRows ?? undefined
@@ -978,28 +923,6 @@ export default function OwnProfilePostsSection({
               externalRemoveRevision={createdOwnershipRemoveRevision}
               externalRemovePostId={createdOwnershipRemovePostId}
               softRefreshEpoch={createdOwnershipSoftRefreshEpoch}
-            />
-          </div>
-        )}
-
-        {/* Interacted Tab - Batch loading (simpler) */}
-        {tabsInitialized.interacted && (
-          <div style={{ display: tab === "interacted" ? "block" : "none" }}>
-            <ProgressiveFeed
-              key={`interacted-${userId}`} // Stable key
-              isVisible={visible && tab === "interacted"}
-              tabId="profile"
-              loadItems={loadInteractedItems}
-              renderItem={renderInteractedItem} // [FIX] Use memoized function
-              getCachedItems={getCachedInteracted}
-              setCachedItems={setCachedInteracted}
-              initialItems={profileInteractedWarmInitialItems}
-              pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
-              enableScrollStopDetection={true}
-              enableLazyLoading={true}
-              loading={false}
-              loadingComponent={<PostSkeleton />}
-              emptyMessage="No liked posts yet."
             />
           </div>
         )}
@@ -1027,5 +950,6 @@ export default function OwnProfilePostsSection({
         )}
       </div>
     </section>
+    </SocialShelfSurfaceProvider>
   );
 }

@@ -259,11 +259,11 @@ Deno.serve(async (req) => {
     else if (un) displayName = un;
   }
 
-  const title = entityType === "hangout" ? "New hangout" : "New experience";
-  const bodyText =
-    entityType === "hangout"
-      ? `${displayName} posted a new hangout.`
-      : `${displayName} posted a new experience.`;
+  const title =
+    displayName === "Someone"
+      ? "Someone shared something new"
+      : `${displayName} shared something new`;
+  const bodyText = "Tap to view";
 
   const fcmDataPayload = {
     type: "followed_post" as const,

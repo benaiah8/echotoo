@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import { useCreateKeyboardInset } from "../../../hooks/useCreateKeyboardInset";
 import { isIOS } from "../../../lib/storage/utils/capacitorDetection";
 
@@ -21,7 +28,7 @@ const IOS_COMPOSER_KEYBOARD_FLOOR_PX = 6;
 const IOS_SAFE_AREA_CAP_PX = 24;
 
 /** Auto-scroll when within this distance of the bottom (px). */
-const NEAR_BOTTOM_THRESHOLD_PX = 100;
+export const NEAR_BOTTOM_THRESHOLD_PX = 100;
 
 function readLayoutSafeBottomPx(): number {
   if (typeof document === "undefined") return 0;
@@ -68,12 +75,29 @@ export type UseInviteThreadKeyboardLayoutOptions = {
   /** When false, skip measuring bottom chrome (overlay not showing composer stack). */
   measureChrome: boolean;
   remeasureDeps: readonly unknown[];
+  /**
+   * Extra px added to scrollPadTop (e.g. pinned source-context bar below header).
+   */
+  scrollPadTopExtraPx?: number;
+  /**
+   * Defaults to {@link INVITE_THREAD_SCROLL_PAD_BOTTOM_FALLBACK_PX} (148) for Invite.
+   * Thin composers (e.g. persistent DM) may pass a lower value.
+   */
+  scrollPadBottomFallbackPx?: number;
+  /**
+   * When true (e.g. DM pin_bottom), chrome/pad height changes re-pin even if
+   * composer is unfocused and keyboard is closed (M3B).
+   */
+  shouldPinBottomRef?: MutableRefObject<boolean>;
 };
 
 export function useInviteThreadKeyboardLayout({
   open,
   measureChrome,
   remeasureDeps,
+  scrollPadBottomFallbackPx = INVITE_THREAD_SCROLL_PAD_BOTTOM_FALLBACK_PX,
+  scrollPadTopExtraPx = 0,
+  shouldPinBottomRef,
 }: UseInviteThreadKeyboardLayoutOptions) {
   const { keyboardInsetPx, keyboardOpen } = useCreateKeyboardInset();
 
@@ -82,7 +106,7 @@ export function useInviteThreadKeyboardLayout({
   const bottomChromeContentRef = useRef<HTMLDivElement>(null);
 
   const [bottomChromeContentHeightPx, setBottomChromeContentHeightPx] =
-    useState(INVITE_THREAD_SCROLL_PAD_BOTTOM_FALLBACK_PX);
+    useState(scrollPadBottomFallbackPx);
   const [composerFocused, setComposerFocused] = useState(false);
 
   const prevKeyboardOpenRef = useRef(false);
@@ -98,7 +122,7 @@ export function useInviteThreadKeyboardLayout({
       ? `calc(${keyboardInsetRoundedPx}px + 0.375rem)`
       : "max(0.5rem, var(--safe-area-bottom-layout))";
 
-  const scrollPadTop = `calc(env(safe-area-inset-top, 0px) + ${INVITE_THREAD_SCROLL_PAD_TOP_PX}px)`;
+  const scrollPadTop = `calc(env(safe-area-inset-top, 0px) + ${INVITE_THREAD_SCROLL_PAD_TOP_PX + Math.max(0, scrollPadTopExtraPx)}px)`;
 
   const keyboardLiftPx =
     keyboardOpen && keyboardInsetRoundedPx > 0
@@ -106,7 +130,7 @@ export function useInviteThreadKeyboardLayout({
       : 0;
 
   const scrollPadBottomPx = Math.max(
-    INVITE_THREAD_SCROLL_PAD_BOTTOM_FALLBACK_PX,
+    scrollPadBottomFallbackPx,
     bottomChromeContentHeightPx +
       (keyboardLiftPx > 0 ? keyboardLiftPx : 0) +
       SCROLL_BOTTOM_EXTRA_PX,
@@ -156,7 +180,7 @@ export function useInviteThreadKeyboardLayout({
 
   useEffect(() => {
     if (!open) {
-      setBottomChromeContentHeightPx(INVITE_THREAD_SCROLL_PAD_BOTTOM_FALLBACK_PX);
+      setBottomChromeContentHeightPx(scrollPadBottomFallbackPx);
       setComposerFocused(false);
       prevKeyboardOpenRef.current = false;
       return;
@@ -197,7 +221,7 @@ export function useInviteThreadKeyboardLayout({
     }
   }, [keyboardOpen, open, composerFocused, isNearBottom, scrollToBottom]);
 
-  /** Scroll after scrollPadBottom includes keyboard lift (focus + keyboard open). */
+  /** Scroll after scrollPadBottom includes keyboard lift (focus + keyboard open + pin_bottom). */
   useLayoutEffect(() => {
     if (!open) return;
 
@@ -207,6 +231,13 @@ export function useInviteThreadKeyboardLayout({
           force: true,
           behavior: keyboardOpen ? "smooth" : "auto",
         });
+      });
+      return;
+    }
+
+    if (shouldPinBottomRef?.current) {
+      runAfterLayoutSettled(() => {
+        scrollToBottom({ force: true, behavior: "auto" });
       });
       return;
     }
@@ -225,6 +256,7 @@ export function useInviteThreadKeyboardLayout({
     bottomChromeContentHeightPx,
     isNearBottom,
     scrollToBottom,
+    shouldPinBottomRef,
   ]);
 
   return {
@@ -233,6 +265,8 @@ export function useInviteThreadKeyboardLayout({
     bottomChromeContentRef,
     scrollPadTop,
     scrollPadBottom,
+    scrollPadBottomPx,
+    bottomChromeContentHeightPx,
     composerBottomGap,
     keyboardInsetPx: keyboardInsetRoundedPx,
     keyboardOpen,
@@ -240,5 +274,6 @@ export function useInviteThreadKeyboardLayout({
     onComposerFocus,
     onComposerBlur,
     scrollToBottomAfterSend,
+    isNearBottom,
   };
 }

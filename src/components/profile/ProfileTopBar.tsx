@@ -1,6 +1,14 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { deriveProfileActionSheetScrollEdges } from "../../lib/profileActionSheetScrollEdges";
 import {
   PiArrowCounterClockwise,
   PiBell,
@@ -38,6 +46,7 @@ import { App } from "@capacitor/app";
 import type { Profile } from "../../contexts/ProfileContext";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
 import { useOverlayContentSwipeDismiss } from "../../hooks/useOverlayContentSwipeDismiss";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 /** Own-profile action sheet: wider-than-default edge band, strip stacked under sheet (CreateChooser lesson). */
 const OWN_PROFILE_ACTION_SHEET_EDGE_MAX_WIDTH_VW = 0.32;
@@ -122,6 +131,9 @@ export default function ProfileTopBar({
   const profileMenuDropdownRef = useRef<HTMLDivElement>(null);
   /** Own-profile sheet portal root (backdrop + sheet + edge strip) — used for outside-dismiss hit-testing. */
   const ownProfileActionPortalRef = useRef<HTMLDivElement>(null);
+  const ownProfileActionScrollRef = useRef<HTMLDivElement>(null);
+  const [ownSheetCanScrollUp, setOwnSheetCanScrollUp] = useState(false);
+  const [ownSheetCanScrollDown, setOwnSheetCanScrollDown] = useState(false);
   const playAnimatedDismissRef = useRef<() => void>(() => {});
 
   const showReport = Boolean(reportUserId && onRequestReport);
@@ -158,6 +170,42 @@ export default function ProfileTopBar({
   }, []);
 
   const ownProfileActionSheetOpen = profileMenuOpen && useOwnProfileActionSheet;
+
+  const updateOwnSheetScrollEdges = useCallback(() => {
+    const el = ownProfileActionScrollRef.current;
+    if (!el) {
+      setOwnSheetCanScrollUp(false);
+      setOwnSheetCanScrollDown(false);
+      return;
+    }
+    const next = deriveProfileActionSheetScrollEdges(
+      el.scrollTop,
+      el.scrollHeight,
+      el.clientHeight,
+    );
+    setOwnSheetCanScrollUp(next.canScrollUp);
+    setOwnSheetCanScrollDown(next.canScrollDown);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!ownProfileActionSheetOpen) {
+      setOwnSheetCanScrollUp(false);
+      setOwnSheetCanScrollDown(false);
+      return;
+    }
+    updateOwnSheetScrollEdges();
+  }, [
+    ownProfileActionSheetOpen,
+    updateOwnSheetScrollEdges,
+    showHangoutReminderMenuItem,
+    nativePushSubline,
+    nativePushMenuLabel,
+    showShare,
+    showBlockList,
+  ]);
+
+  /** Own-profile action sheet: canonical P3 background scroll lock (nested-safe). */
+  useOverlayBackgroundScrollLock(ownProfileActionSheetOpen);
 
   const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
     useOverlayEdgeSwipeDismiss({
@@ -252,21 +300,6 @@ export default function ProfileTopBar({
     useOwnProfileActionSheet,
     ownProfileActionSheetOpen,
   ]);
-
-  /** Own-profile sheet: lock document scroll (same pattern as ReportModal). */
-  useEffect(() => {
-    if (!profileMenuOpen || !useOwnProfileActionSheet) return;
-    const scrollbarWidth =
-      window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    document.body.style.paddingRight = `${scrollbarWidth}px`;
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
-    };
-  }, [profileMenuOpen, useOwnProfileActionSheet]);
 
   const notifyRegistrationOutcome = useCallback(
     (result: Awaited<
@@ -408,15 +441,15 @@ export default function ProfileTopBar({
           )
         ) : (
           <>
-            {/* middle: search users */}
-            <div className="relative flex items-center h-9 flex-1 rounded-full px-3 bg-transparent border border-[var(--border)] focus-within:border-[color-mix(in_oklab,var(--text)_40%,transparent)] min-w-0">
+            {/* middle: search users — text-base (≥16px) avoids iOS input auto-zoom; h-9 + leading-none keep bar compact */}
+            <div className="relative flex items-center h-9 flex-1 rounded-full px-2.5 bg-transparent border border-[var(--border)] focus-within:border-[color-mix(in_oklab,var(--text)_40%,transparent)] min-w-0">
               <PiMagnifyingGlass size={18} className="shrink-0" />
               <input
                 type="text"
                 autoComplete="off"
                 enterKeyHint="search"
                 placeholder="Search users"
-                className="w-full pl-2 pr-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0"
+                className="w-full min-w-0 border-none bg-transparent pl-1.5 pr-1 text-base font-normal leading-none text-[var(--text)] outline-none"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => onSearchFocusChange?.(true)}
@@ -477,11 +510,17 @@ export default function ProfileTopBar({
               role="dialog"
               aria-modal="true"
               aria-labelledby="own-profile-actions-title"
-              className="relative z-10 flex max-h-[min(85dvh,calc(100vh-48px))] w-[min(280px,calc(100vw-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5 pointer-events-auto"
-              style={{ touchAction: "pan-y" }}
+              className="relative z-10 flex max-h-[min(85dvh,calc(100vh-48px))] w-[min(280px,calc(100vw-48px))] flex-col overflow-hidden pointer-events-auto"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
+              <div
+                ref={ownProfileActionScrollRef}
+                className="flex min-h-0 max-h-[min(85dvh,calc(100vh-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5"
+                style={{ touchAction: "pan-y" }}
+                onScroll={updateOwnSheetScrollEdges}
+                data-profile-action-sheet-scroll="true"
+              >
               <div className="flex w-full shrink-0 items-center justify-between gap-2">
                 <span
                   id="own-profile-actions-title"
@@ -699,6 +738,28 @@ export default function ProfileTopBar({
                   </span>
                 </button>
               </div>
+              </div>
+
+              <div
+                aria-hidden
+                data-profile-action-sheet-fade="top"
+                className={[
+                  "pointer-events-none absolute inset-x-0 top-0 z-[2] h-8",
+                  "bg-gradient-to-b from-black/45 via-black/20 to-transparent",
+                  "transition-opacity duration-150 ease-out",
+                  ownSheetCanScrollUp ? "opacity-100" : "opacity-0",
+                ].join(" ")}
+              />
+              <div
+                aria-hidden
+                data-profile-action-sheet-fade="bottom"
+                className={[
+                  "pointer-events-none absolute inset-x-0 bottom-0 z-[2] h-8",
+                  "bg-gradient-to-b from-transparent via-black/20 to-black/45",
+                  "transition-opacity duration-150 ease-out",
+                  ownSheetCanScrollDown ? "opacity-100" : "opacity-0",
+                ].join(" ")}
+              />
             </div>
             <div {...edgeStripProps} />
           </div>,

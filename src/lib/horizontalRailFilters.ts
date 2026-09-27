@@ -178,6 +178,72 @@ export function mixHangoutsAndExperiences(
 }
 
 /**
+ * Home social discovery rail: Events/Hangouts only.
+ * Preserves input order, does not mutate `items`, caps at maxItems.
+ * Call after filterRailsItems so scheduled/eligibility rules already applied.
+ */
+export function takeDiscoveryHangouts(
+  items: FeedItemWithDates[],
+  maxItems: number = 8
+): FeedItemWithDates[] {
+  if (!Array.isArray(items) || maxItems <= 0) return [];
+  const out: FeedItemWithDates[] = [];
+  for (const item of items) {
+    if (item?.type !== "hangout") continue;
+    out.push(item);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function discoverySocialSignalCount(item: FeedItemWithDates): number {
+  const groupRaw = item.discoverable_group_count;
+  const pairRaw = item.discoverable_pair_count;
+  const group =
+    typeof groupRaw === "number" && Number.isFinite(groupRaw)
+      ? Math.max(0, Math.floor(groupRaw))
+      : 0;
+  const pair =
+    typeof pairRaw === "number" && Number.isFinite(pairRaw)
+      ? Math.max(0, Math.floor(pairRaw))
+      : 0;
+  return group + pair;
+}
+
+function discoveryAdminBoosted(item: FeedItemWithDates): boolean {
+  const raw = item.social_discovery_boosted_at;
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
+/**
+ * Home Event-rail priority (horizontal discovery only):
+ * 1) admin social_discovery_boosted_at present
+ * 2) discoverable_pair_count + discoverable_group_count DESC
+ * 3) original feed order (stable)
+ * Missing/null counts = 0. Does not mutate `items`.
+ */
+export function sortDiscoveryHangoutsBySocialSignal(
+  items: FeedItemWithDates[]
+): FeedItemWithDates[] {
+  if (!Array.isArray(items) || items.length <= 1) {
+    return Array.isArray(items) ? items.slice() : [];
+  }
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const boostDiff =
+        Number(discoveryAdminBoosted(b.item)) -
+        Number(discoveryAdminBoosted(a.item));
+      if (boostDiff !== 0) return boostDiff;
+      const countDiff =
+        discoverySocialSignalCount(b.item) - discoverySocialSignalCount(a.item);
+      if (countDiff !== 0) return countDiff;
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
+
+/**
  * Result object returned by applyFiltersWithFallback
  */
 export interface FilteredItemsResult {

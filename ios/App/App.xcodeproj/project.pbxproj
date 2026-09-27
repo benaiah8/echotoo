@@ -1,4 +1,4 @@
-// !$*UTF8*$!
+﻿// !$*UTF8*$!
 {
 	archiveVersion = 1;
 	classes = {
@@ -16,6 +16,18 @@
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		A1E7B3C62DB0900100F1A001 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A1E7B3C52DB0900100F1A001 /* GoogleService-Info.plist */; };
+		A10100011FE0000100000001 /* MyViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000001 /* MyViewController.swift */; };
+		A10100011FE0000100000002 /* EchoVideoPreparePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000002 /* EchoVideoPreparePlugin.swift */; };
+		A10100011FE0000100000003 /* EchoVideoPrepareEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000003 /* EchoVideoPrepareEngine.swift */; };
+		A10100011FE0000100000004 /* EchoVideoPreparePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000004 /* EchoVideoPreparePaths.swift */; };
+		A10100011FE0000100000005 /* EchoVideoPreparePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000005 /* EchoVideoPreparePreflight.swift */; };
+		A10100011FE0000100000006 /* EchoVideoPrepareErrorCodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000006 /* EchoVideoPrepareErrorCodes.swift */; };
+		A10100011FE0000100000007 /* EchoVideoUploadPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000007 /* EchoVideoUploadPlugin.swift */; };
+		A10100011FE0000100000008 /* EchoVideoUploadEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000008 /* EchoVideoUploadEngine.swift */; };
+		A10100011FE0000100000009 /* EchoVideoUploadPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE0000200000009 /* EchoVideoUploadPaths.swift */; };
+		A10100011FE000010000000A /* EchoVideoUploadRetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE000020000000A /* EchoVideoUploadRetry.swift */; };
+		A10100011FE000010000000B /* EchoVideoUploadTusMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE000020000000B /* EchoVideoUploadTusMetadata.swift */; };
+		A10100011FE000010000000C /* EchoVideoUploadErrorCodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10100011FE000020000000C /* EchoVideoUploadErrorCodes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +43,18 @@
 		A1E7B3C52DB0900100F1A001 /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		A10100011FE0000200000001 /* MyViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyViewController.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000002 /* EchoVideoPreparePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoPreparePlugin.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000003 /* EchoVideoPrepareEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoPrepareEngine.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000004 /* EchoVideoPreparePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoPreparePaths.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000005 /* EchoVideoPreparePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoPreparePreflight.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000006 /* EchoVideoPrepareErrorCodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoPrepareErrorCodes.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000007 /* EchoVideoUploadPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadPlugin.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000008 /* EchoVideoUploadEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadEngine.swift; sourceTree = "<group>"; };
+		A10100011FE0000200000009 /* EchoVideoUploadPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadPaths.swift; sourceTree = "<group>"; };
+		A10100011FE000020000000A /* EchoVideoUploadRetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadRetry.swift; sourceTree = "<group>"; };
+		A10100011FE000020000000B /* EchoVideoUploadTusMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadTusMetadata.swift; sourceTree = "<group>"; };
+		A10100011FE000020000000C /* EchoVideoUploadErrorCodes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoVideoUploadErrorCodes.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,6 +91,8 @@
 			children = (
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				A10100011FE0000200000001 /* MyViewController.swift */,
+				A10100011FE0000300000001 /* plugins */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -77,6 +103,40 @@
 				50B271D01FEDC1A000F3C39B /* public */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A10100011FE0000300000001 /* plugins */ = {
+			isa = PBXGroup;
+			children = (
+				A10100011FE0000300000002 /* EchoVideoPrepare */,
+				A10100011FE0000300000003 /* EchoVideoUpload */,
+			);
+			path = plugins;
+			sourceTree = "<group>";
+		};
+		A10100011FE0000300000002 /* EchoVideoPrepare */ = {
+			isa = PBXGroup;
+			children = (
+				A10100011FE0000200000002 /* EchoVideoPreparePlugin.swift */,
+				A10100011FE0000200000003 /* EchoVideoPrepareEngine.swift */,
+				A10100011FE0000200000004 /* EchoVideoPreparePaths.swift */,
+				A10100011FE0000200000005 /* EchoVideoPreparePreflight.swift */,
+				A10100011FE0000200000006 /* EchoVideoPrepareErrorCodes.swift */,
+			);
+			path = EchoVideoPrepare;
+			sourceTree = "<group>";
+		};
+		A10100011FE0000300000003 /* EchoVideoUpload */ = {
+			isa = PBXGroup;
+			children = (
+				A10100011FE0000200000007 /* EchoVideoUploadPlugin.swift */,
+				A10100011FE0000200000008 /* EchoVideoUploadEngine.swift */,
+				A10100011FE0000200000009 /* EchoVideoUploadPaths.swift */,
+				A10100011FE000020000000A /* EchoVideoUploadRetry.swift */,
+				A10100011FE000020000000B /* EchoVideoUploadTusMetadata.swift */,
+				A10100011FE000020000000C /* EchoVideoUploadErrorCodes.swift */,
+			);
+			path = EchoVideoUpload;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -167,6 +227,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				A10100011FE0000100000001 /* MyViewController.swift in Sources */,
+				A10100011FE0000100000002 /* EchoVideoPreparePlugin.swift in Sources */,
+				A10100011FE0000100000003 /* EchoVideoPrepareEngine.swift in Sources */,
+				A10100011FE0000100000004 /* EchoVideoPreparePaths.swift in Sources */,
+				A10100011FE0000100000005 /* EchoVideoPreparePreflight.swift in Sources */,
+				A10100011FE0000100000006 /* EchoVideoPrepareErrorCodes.swift in Sources */,
+				A10100011FE0000100000007 /* EchoVideoUploadPlugin.swift in Sources */,
+				A10100011FE0000100000008 /* EchoVideoUploadEngine.swift in Sources */,
+				A10100011FE0000100000009 /* EchoVideoUploadPaths.swift in Sources */,
+				A10100011FE000010000000A /* EchoVideoUploadRetry.swift in Sources */,
+				A10100011FE000010000000B /* EchoVideoUploadTusMetadata.swift in Sources */,
+				A10100011FE000010000000C /* EchoVideoUploadErrorCodes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

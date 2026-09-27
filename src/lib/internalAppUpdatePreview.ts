@@ -7,13 +7,16 @@ import type {
 /** In-memory editor fields (matches {@link AppUpdateConfigSaveInput}). */
 export type AppUpdateFormLike = {
   latest_version: string;
+  latest_build: string;
   minimum_supported_version: string;
+  minimum_supported_build: string;
   update_mode: AppUpdateMode;
   title: string;
   message: string;
   android_store_url: string;
   ios_store_url: string;
   is_active: boolean;
+  store_release_ready: boolean;
 };
 
 /** Build a row-shaped object from the App Updates form for preview helpers. */
@@ -24,13 +27,16 @@ export function configFormToPreviewRow(
   return {
     platform,
     latest_version: form.latest_version,
+    latest_build: form.latest_build,
     minimum_supported_version: form.minimum_supported_version,
+    minimum_supported_build: form.minimum_supported_build,
     update_mode: form.update_mode,
     title: form.title,
     message: form.message,
     android_store_url: form.android_store_url,
     ios_store_url: form.ios_store_url,
     is_active: form.is_active,
+    store_release_ready: form.store_release_ready,
     updated_at: "",
     updated_by_user_id: null,
   };

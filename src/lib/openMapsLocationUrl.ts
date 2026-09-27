@@ -8,7 +8,7 @@ import { openExternalUrl } from "./openExternalUrl";
 /**
  * If the stored value is a pasted Maps embed snippet, return the iframe src URL.
  */
-function resolveStoredMapsHref(raw: string): string {
+export function extractStoredMapsHref(raw: string): string {
   const t = raw.trim();
   if (!t) return "";
   if (t.includes("<iframe") && t.includes("src=")) {
@@ -21,7 +21,7 @@ function resolveStoredMapsHref(raw: string): string {
 }
 
 /** True for typical Google / Apple Maps web links and geo URIs used in this app. */
-function isProbablyMapsLocationUrl(url: string): boolean {
+export function isProbablyMapsLocationUrl(url: string): boolean {
   const t = url.trim();
   if (!t) return false;
   const lower = t.toLowerCase();
@@ -163,14 +163,14 @@ function buildIOSComGoogleMapsUrl(href: string): string | null {
 }
 
 /**
- * @deprecated kept for JSDoc search — opens map links.
+ * Opens map links.
  * - Native + Google: Android intent → Maps app; iOS `comgooglemaps://` when derivable; else InApp “external” browser.
  * - Native + Apple map web: unchanged (external browser / system).
  * - Web: `window.open` to `https` maps links.
  * Non-map-looking URLs: {@link openExternalUrl}.
  */
 export async function openMapsLocationUrl(raw: string): Promise<void> {
-  const resolved = resolveStoredMapsHref(raw);
+  const resolved = extractStoredMapsHref(raw);
   const trimmed = resolved.trim();
   if (!trimmed) return;
 

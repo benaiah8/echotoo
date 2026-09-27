@@ -24,6 +24,20 @@ interface SaveButtonProps {
   compactCount?: boolean;
   showCount?: boolean;
   saveCount?: number;
+  /**
+   * Icon→count gap. `tight` = gap-0.5 (feed PostActions); default gap-1.
+   * Does not change count typography or save behavior.
+   */
+  countGap?: "default" | "tight";
+  /**
+   * When true with `showCount`, omit the numeral if count is 0 (icon only).
+   * Feed PostActions; other surfaces keep showing 0 unless set.
+   */
+  hideZeroCount?: boolean;
+  /**
+   * Count typography override. `xs` = text-xs (feed list). Default follows compactCount.
+   */
+  countSize?: "default" | "xs";
   // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded save status from batch loader
   isSaved?: boolean;
   // [PHASE 3] Optional post data for personalization
@@ -39,6 +53,9 @@ export default function SaveButton({
   compactCount = false,
   showCount = false,
   saveCount = 0,
+  countGap = "default",
+  hideZeroCount = false,
+  countSize = "default",
   isSaved: initialIsSaved, // [OPTIMIZATION: Phase 1 - Batch] Pre-loaded status
   post, // [PHASE 3] Optional post data for personalization
   explainerPostType,
@@ -124,6 +141,9 @@ export default function SaveButton({
     return () => {
       observer.disconnect();
     };
+    // authState?.user is read inside the lazy IntersectionObserver callback;
+    // authLoading already gates when this effect may attach the observer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: avoid re-attach churn on auth object identity
   }, [postId, authLoading, initialIsSaved]); // [OPTIMIZATION: Phase 1 - Batch] Re-run if batched data changes
 
   // Reconcile with canonical saveCount when not toggling (optimistic count preserved mid-toggle).
@@ -176,7 +196,7 @@ export default function SaveButton({
           // [PHASE 1] Update XP (unsave = -2)
           try {
             await incrementMyXp(-2);
-          } catch (err) {
+          } catch {
             // Fail silently - don't break unsave action if XP fails
           }
           // [PHASE 3] Unsave doesn't record a signal - preferences only grow from positive actions
@@ -194,14 +214,14 @@ export default function SaveButton({
           // [PHASE 1] Update XP (save = +2)
           try {
             await incrementMyXp(2);
-          } catch (err) {
+          } catch {
             // Fail silently - don't break save action if XP fails
           }
           // [PHASE 3] Record signal for personalization
           if (post) {
             try {
               recordSignal(post, "save");
-            } catch (err) {
+            } catch {
               // Fail silently - don't break save action if personalization fails
             }
           }
@@ -241,7 +261,9 @@ export default function SaveButton({
       ref={buttonRef}
       onClick={handleToggleSave}
       disabled={isToggling}
-      className={`flex items-center gap-1 transition-all duration-200 ${
+      className={`flex items-center ${
+        countGap === "tight" ? "gap-0.5" : "gap-1"
+      } transition-all duration-200 ${
         isToggling ? "opacity-50" : isLoading ? "opacity-70" : ""
       } ${className}`}
       aria-label={displaySaved ? "Unsave post" : "Save post"}
@@ -261,17 +283,19 @@ export default function SaveButton({
           }`}
         />
       )}
-      {showCount && (
+      {showCount && (!hideZeroCount || currentCount > 0) ? (
         <span
           className={
-            compactCount
-              ? "text-[10px] font-medium tabular-nums text-[var(--text)]/90"
-              : "text-sm text-[var(--text)]/80"
+            countSize === "xs"
+              ? "text-xs font-medium tabular-nums leading-none text-[var(--text)]/80"
+              : compactCount
+                ? "text-[10px] font-medium tabular-nums text-[var(--text)]/90"
+                : "text-sm text-[var(--text)]/80"
           }
         >
           {currentCount}
         </span>
-      )}
+      ) : null}
     </button>
     </>
   );

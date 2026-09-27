@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityType } from "../types/post";
+import {
+  ensureV4SectionClientId,
+} from "../lib/createFlowV4Section";
 import { notifyLocalDraftPersisted } from "../lib/drafts";
 import {
   CREATE_FLOW_POST_IMAGE_MERGED_EVENT,
   type CreateFlowPostImageMergedDetail,
 } from "../lib/createFlowDraftStorage";
+import { dispatchSlot0ImagesPersisted } from "../lib/createDraftMediaOrder";
+import { isLocalDraftImageUrl } from "../lib/createDraftImage/localDraftImageUrl";
 
 const DRAFT_ACTIVITIES_KEY = "draftActivities";
 const EDIT_POST_DATA_KEY = "editPostData";
@@ -27,7 +32,10 @@ function cleanImages(arr: unknown): string[] {
     ? arr
         .map(String)
         .filter(
-          (u) => /^https?:\/\//.test(u) || (u.includes("/") && u.includes("."))
+          (u) =>
+            isLocalDraftImageUrl(u) ||
+            /^https?:\/\//.test(u) ||
+            (u.includes("/") && u.includes(".")),
         )
     : [];
 }
@@ -35,7 +43,7 @@ function cleanImages(arr: unknown): string[] {
 function normalizeActivity(a: any, index: number): ActivityType {
   const tags = Array.isArray(a?.tags) ? a.tags.map(String) : [];
   const title = String(a?.title ?? "").trim();
-  return {
+  const activity: ActivityType = {
     title: title || `Stop ${index + 1}`,
     activityType: String(a?.activityType ?? ""),
     customActivity: String(a?.customActivity ?? ""),
@@ -46,7 +54,16 @@ function normalizeActivity(a: any, index: number): ActivityType {
     locationUrl: String(a?.locationUrl ?? ""),
     images: cleanImages(a?.images),
     additionalInfo: Array.isArray(a?.additionalInfo) ? a.additionalInfo : [],
+    sectionBody: String(
+      a?.sectionBody ?? (a as { section_body?: string })?.section_body ?? ""
+    ),
+    v4SectionClientId: String(
+      a?.v4SectionClientId ??
+        (a as { v4_section_client_id?: string })?.v4_section_client_id ??
+        ""
+    ),
   };
+  return ensureV4SectionClientId(activity);
 }
 
 function readInitialActivities(isEditMode: boolean): ActivityType[] {
@@ -113,10 +130,13 @@ export function useCreateDraftActivitiesState(isEditMode: boolean) {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         parsed.activities = activities;
         localStorage.setItem(EDIT_POST_DATA_KEY, JSON.stringify(parsed));
+        // Keep Create mediaOrder / tray in sync with edit slot-0 images (PV4).
+        dispatchSlot0ImagesPersisted(cleanImages(activities[0]?.images));
         return;
       }
       localStorage.setItem(DRAFT_ACTIVITIES_KEY, JSON.stringify(activities));
       notifyLocalDraftPersisted();
+      dispatchSlot0ImagesPersisted(cleanImages(activities[0]?.images));
     } catch {
       /* ignore persistence errors */
     }

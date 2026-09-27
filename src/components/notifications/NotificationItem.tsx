@@ -8,6 +8,10 @@ import { Paths, profileByUsername } from "../../router/Paths";
 import InviteNotificationItem from "./InviteNotificationItem";
 import FollowRequestNotificationItem from "./FollowRequestNotificationItem";
 import { postTypeNotificationPhrase } from "../../lib/postTypeLabels";
+import {
+  notificationNavigateState,
+  resolveCommentNotificationPostPath,
+} from "../../lib/notifications/commentNotificationRoute";
 
 interface Props {
   notification: NotificationWithActor;
@@ -83,9 +87,13 @@ const getNotificationLink = (notification: NotificationWithActor): string => {
 
   // For likes, comments, saved, RSVP - link to the post
   if (notification.additional_data?.post_id) {
-    return notification.type === "comment"
-      ? `${Paths.experience}/${notification.additional_data.post_id}#comments`
-      : `${Paths.experience}/${notification.additional_data.post_id}`;
+    if (notification.type === "comment") {
+      return resolveCommentNotificationPostPath(
+        notification.additional_data.post_id,
+        notification.additional_data.post_type
+      );
+    }
+    return `${Paths.experience}/${notification.additional_data.post_id}`;
   }
 
   // Fallback to the entity ID if available
@@ -154,6 +162,7 @@ export default function NotificationItem({
   };
 
   const linkTo = getNotificationLink(notification);
+  const linkState = notificationNavigateState(notification.type, location);
   const notificationText = getNotificationText(notification);
   const timeAgo = formatDistanceToNow(new Date(notification.created_at), {
     addSuffix: true,
@@ -220,7 +229,7 @@ export default function NotificationItem({
     return (
       <Link
         to={linkTo}
-        state={{ backgroundLocation: location }}
+        state={linkState}
         onClick={handleClick}
         className="flex w-full items-start gap-2.5 py-2.5 pl-0.5 pr-0 transition-colors text-left bg-transparent hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)]"
       >
@@ -262,7 +271,7 @@ export default function NotificationItem({
                   e.stopPropagation();
                   handleClick();
                   navigate(linkTo, {
-                    state: { backgroundLocation: location },
+                    state: linkState,
                   });
                 }}
                 className="px-2 py-0.5 text-[11px] rounded-full border border-[var(--border)]/70 text-[var(--text)]/80 hover:bg-[var(--text)]/5"
@@ -309,7 +318,7 @@ export default function NotificationItem({
           {showGoToPostButton && (
             <Link
               to={linkTo}
-              state={{ backgroundLocation: location }}
+              state={linkState}
               onClick={handleClick}
               className={`px-2 py-1 text-xs rounded-full transition-colors border ${getSubtleButtonColor()}`}
             >
@@ -324,7 +333,7 @@ export default function NotificationItem({
   return (
     <Link
       to={linkTo}
-      state={{ backgroundLocation: location }}
+      state={linkState}
       onClick={handleClick}
       className={`w-full rounded-lg p-2 gap-2 flex transition-colors bg-[var(--surface-2)] hover:bg-[var(--surface-2)]/80 border-l-2 ${getBorderColor()}`}
     >
@@ -366,7 +375,7 @@ export default function NotificationItem({
                 e.preventDefault();
                 e.stopPropagation();
                 handleClick();
-                navigate(linkTo, { state: { backgroundLocation: location } });
+                navigate(linkTo, { state: linkState });
               }}
               className={`px-2 py-1 text-xs rounded-full transition-colors border ${getSubtleButtonColor()}`}
             >

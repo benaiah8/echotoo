@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PiShareFat, PiUserPlus } from "react-icons/pi";
+import { PiChatCircle, PiShareFat, PiUserPlus } from "react-icons/pi";
 import InstagramStoryGenerator from "./InstagramStoryGenerator";
 import BottomDrawer from "./BottomDrawer";
 import toast from "react-hot-toast";
@@ -12,6 +12,7 @@ import {
   frostedModalPanelClassName,
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
+import ShareToMessagesDrawer from "../messages/ShareToMessagesDrawer";
 
 interface ShareDrawerProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ interface ShareDrawerProps {
  * Bottom sheet on `BottomDrawer`; actions sit in an inner panel matching
  * `FrostedCenterModal` / ConfirmDialog (`frostedModalPanelStyle` — --glass-bg, blur, border).
  * Invite is primary when `onInvite` is set; Share and Instagram Stories are secondary.
+ * Share in EchoToo opens the persistent messaging Share picker (S2A).
  */
 export default function ShareDrawer({
   isOpen,
@@ -51,6 +53,7 @@ export default function ShareDrawer({
   recurrenceDays,
 }: ShareDrawerProps) {
   const [showStoryGenerator, setShowStoryGenerator] = useState(false);
+  const [showShareToMessages, setShowShareToMessages] = useState(false);
 
   const publicPostUrl = `${getPublicShareBaseUrl()}${postDetailPath(
     postType,
@@ -62,6 +65,11 @@ export default function ShareDrawer({
       onInvite();
       onClose();
     }
+  };
+
+  const handleShareInEchoToo = () => {
+    onClose();
+    setShowShareToMessages(true);
   };
 
   const handleCopyLink = async () => {
@@ -133,6 +141,19 @@ export default function ShareDrawer({
               </button>
             ) : null}
 
+            <button
+              type="button"
+              onClick={handleShareInEchoToo}
+              className="flex w-full min-h-11 items-center justify-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-2)]/70 px-4 py-2.5 text-sm font-semibold text-[var(--text)]/90 transition hover:bg-[var(--text)]/8"
+            >
+              <PiChatCircle
+                size={20}
+                className="shrink-0 text-[var(--text)]/75"
+                aria-hidden
+              />
+              Share in EchoToo
+            </button>
+
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -168,6 +189,13 @@ export default function ShareDrawer({
           </div>
         </div>
       </BottomDrawer>
+
+      <ShareToMessagesDrawer
+        open={showShareToMessages}
+        onClose={() => setShowShareToMessages(false)}
+        postId={postId}
+        postType={postType}
+      />
 
       {/* Instagram Story Generator - Renders outside BottomDrawer so it can appear on top if needed */}
       {showStoryGenerator && (

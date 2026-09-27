@@ -1,6 +1,7 @@
 // Image optimization utilities for better performance
 
 import { imgUrlPublic } from "./img";
+import { isLocalPreviewUrl } from "./localPreviewUrl";
 
 export interface ImageSize {
   width: number;
@@ -79,6 +80,11 @@ export function getBestImageUrl(
   viewportWidth?: number
 ): string {
   if (!path) return "";
+
+  // LI1D.1: never append transform query params to session/local previews.
+  if (isLocalPreviewUrl(path)) {
+    return path;
+  }
 
   // [CLOUDINARY GATE] When Cloudinary disallowed, return "" so callers fall back to placeholder
   if (/^https?:\/\//i.test(path) && !imgUrlPublic(path)) {

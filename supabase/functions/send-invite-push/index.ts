@@ -89,11 +89,8 @@ function trimAndCapCaptionPreview(caption: string | null | undefined): string {
 }
 
 /**
- * DM-style notification body:
- * - note first when present
- * - blank line + "Post: {caption}" in expanded text when both note and caption exist
- * - caption only when note is absent
- * - fallback when both missing
+ * DM-style notification body for native tray (note + optional caption preview).
+ * In-app banner uses {@link buildInviteInAppDataBody} via FCM `data.body` instead.
  */
 function buildInvitePushBody(noteLine: string, captionPreview: string): string {
   const hasNote = noteLine.length > 0;
@@ -104,6 +101,18 @@ function buildInvitePushBody(noteLine: string, captionPreview: string): string {
   if (hasNote) return noteLine;
   if (hasCaption) return captionPreview;
   return "Tap to view invite";
+}
+
+/** Short copy for FCM `data.body` (foreground in-app banner; no event caption). */
+function buildInviteInAppDataBody(
+  noteLine: string,
+  postType: string,
+  threadKind: string
+): string {
+  if (noteLine.length > 0) return noteLine;
+  if (threadKind === "group") return "Invited you to a group";
+  if (postType === "experience") return "Invited you to a place";
+  return "Invited you to an event";
 }
 
 /**
@@ -420,6 +429,11 @@ Deno.serve(async (req) => {
 
   const captionPreview = trimAndCapCaptionPreview(pr?.caption ?? null);
   const bodyText = buildInvitePushBody(noteLine, captionPreview);
+  const inAppDataBody = buildInviteInAppDataBody(
+    noteLine,
+    postType,
+    threadKind
+  );
 
   const title =
     threadKind === "group"
@@ -441,7 +455,7 @@ Deno.serve(async (req) => {
   } = {
     type: "invite",
     title,
-    body: bodyText,
+    body: inAppDataBody,
     postId,
     postType,
     actorId,
@@ -466,6 +480,10 @@ Deno.serve(async (req) => {
     targets: deviceLoad.targets,
     data: fcmDataPayload,
     logPrefix: LOG_PREFIX,
+    fcmSendOptions: {
+      androidDelivery: "notification_and_data",
+      defaultNotification: { title, body: bodyText },
+    },
   });
 
   return jsonResponse(

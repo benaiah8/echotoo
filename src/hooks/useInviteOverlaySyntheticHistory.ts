@@ -11,7 +11,8 @@ import type { InviteOverlayHistoryMarker } from "../lib/inviteOverlayHistory";
  */
 export function useInviteOverlaySyntheticHistory(options: {
   engage: boolean;
-  marker: InviteOverlayHistoryMarker;
+  /** Invite markers or other overlay markers (e.g. Mine profile). */
+  marker: InviteOverlayHistoryMarker | string;
   onDismiss: () => void;
 }): void {
   const { engage, marker, onDismiss } = options;
@@ -44,6 +45,8 @@ export function useInviteOverlaySyntheticHistory(options: {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Nested lightboxes/drawers use capture + stopPropagation first.
+        e.stopPropagation();
         onDismissRef.current();
       }
     };

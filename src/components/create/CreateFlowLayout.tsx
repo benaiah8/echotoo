@@ -1,4 +1,5 @@
 import { Outlet } from "react-router-dom";
+import { useCreateFlowExitHistoryGuard } from "../../hooks/useCreateFlowExitHistoryGuard";
 import { CreateFlowNoticeProvider } from "./CreateFlowNoticeContext";
 import CreateFlowNoticeStack from "./CreateFlowNoticeStack";
 import { CreatePostMediaProvider } from "./CreatePostMediaProvider";
@@ -9,6 +10,8 @@ import CreateFlowUploadNoticeBridge from "./CreateFlowUploadNoticeBridge";
  * Keeps {@link CreatePostMediaProvider} mounted across step navigation (Phase 1: provider is inert).
  */
 export default function CreateFlowLayout() {
+  useCreateFlowExitHistoryGuard();
+
   return (
     <CreatePostMediaProvider>
       <CreateFlowNoticeProvider>

@@ -265,7 +265,7 @@ export default function OnboardingInterests({
               showError && !selectedSource
                 ? "border-red-500"
                 : "border-[var(--border)]"
-            } bg-[var(--surface)] text-[var(--text)] text-[12px] focus:outline-none focus:border-[var(--brand)] appearance-none`}
+            } bg-[var(--surface)] text-[var(--text)] text-[16px] focus:outline-none focus:border-[var(--brand)] appearance-none`}
             style={{
               backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e")`,
               backgroundPosition: "right 12px center",
@@ -299,7 +299,7 @@ export default function OnboardingInterests({
                 showError && selectedSource === "other" && !customSource.trim()
                   ? "border-red-500"
                   : "border-[var(--border)]"
-              } bg-[var(--surface-2)] text-[var(--text)] text-[12px] focus:outline-none focus:border-[var(--brand)]`}
+              } bg-[var(--surface-2)] text-[var(--text)] text-[16px] focus:outline-none focus:border-[var(--brand)]`}
               maxLength={100}
             />
           )}

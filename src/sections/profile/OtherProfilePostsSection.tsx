@@ -1,27 +1,36 @@
 import {
   useEffect,
   useState,
-  useTransition,
   useCallback,
   useMemo,
   useRef,
 } from "react";
 import { useProfile } from "../../contexts/ProfileContext";
 import { getUserPostsCreatedOptimized } from "../../api/queries/getUserPostsCreated";
-import { getLikedPostsWithDetailsForUserOptimized } from "../../api/services/likes";
 import PostSkeleton from "../../components/skeletons/PostSkeleton";
 import ProgressiveFeed from "../../components/ProgressiveFeed";
 import Post from "../../components/Post";
-import { convertLikedToFeedItem } from "../../lib/profilePostsConverters";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { dataCache } from "../../lib/dataCache";
 import { cancelContextRequests } from "../../lib/requestManager";
-import { getViewerId } from "../../api/services/follows";
 import {
   readPersistedProfilePosts,
   writePersistedProfilePosts,
 } from "../../lib/profilePostListCache";
-import { onPostOwnershipChanged } from "../../lib/postEvents";
+import { seedPublishedMediaFromFeedItems } from "../../lib/publishedMedia";
+import {
+  onPostDeleted,
+  onPostOwnershipChanged,
+} from "../../lib/postEvents";
+import {
+  guardProfileCreatedCacheWrite,
+  noteProfileCreatedExclusion,
+  readProfileCreatedWarmInitialItems,
+} from "../../lib/profileCreatedWarmSeed";
+import { useSelector } from "react-redux";
+import type { RootState } from "../../app/store";
+import { PROFILE_OVERVIEW_OTHER_POSTS_FEED_CLASS } from "../../lib/profileOverviewPresentation";
+import { SocialShelfSurfaceProvider } from "../../lib/social/socialShelfSurfaceContext";
 
 /**
  * OtherProfilePostsSection - Posts section for OTHER profiles
@@ -29,7 +38,7 @@ import { onPostOwnershipChanged } from "../../lib/postEvents";
  * - Implements stale-while-revalidate (show cache immediately, fetch fresh in background)
  * - Only caches first 5 posts
  * - Prepped for lazy loading (structure ready, implementation later)
- * - No Saved tab (only Created and Interacted)
+ * - No Saved tab (Created feed only)
  * - Checks access for private accounts
  */
 interface OtherProfilePostsSectionProps {
@@ -47,30 +56,27 @@ export default function OtherProfilePostsSection({
   feedRefreshEpoch = 0,
 }: OtherProfilePostsSectionProps) {
   const { profile } = useProfile();
-  const [tab, setTab] = useState<"created" | "interacted">("created");
+  const viewerUserId = useSelector(
+    (state: RootState) => state.auth?.user?.id ?? null,
+  );
   const [createdOwnershipRemoveRevision, setCreatedOwnershipRemoveRevision] =
     useState(0);
   const [createdOwnershipRemovePostId, setCreatedOwnershipRemovePostId] =
     useState<string | null>(null);
   const [createdOwnershipSoftRefreshEpoch, setCreatedOwnershipSoftRefreshEpoch] =
     useState(0);
+  /** Forces Created ProgressiveFeed remount after admin ownership transfer (Capacitor / hidden tabs). */
+  const [ownershipFeedRemountEpoch, setOwnershipFeedRemountEpoch] =
+    useState(0);
+  /** Posts removed from this Created list (ownership / delete) — block warm-seed restore. */
+  const createdExcludedPostIdsRef = useRef<Set<string>>(new Set());
+  const [createdWarmSeedEpoch, setCreatedWarmSeedEpoch] = useState(0);
 
   // Use profile.user_id consistently (not profile.id)
   const userId = profile?.user_id || "";
 
-  // React 19: useTransition for non-urgent tab switching
-  const [isPending, startTransition] = useTransition();
-
-  // [PHASE C.2] Tab initialization tracking (lazy loading)
-  // [FIX] Use refs to track initialization to prevent infinite loops from dependency changes
   const createdInitializedRef = useRef(false);
-  const interactedInitializedRef = useRef(false);
-
-  // [FIX] Use state only for rendering, refs for logic to prevent infinite loops
-  const [tabsInitialized, setTabsInitialized] = useState({
-    created: false,
-    interacted: false,
-  });
+  const [createdInitialized, setCreatedInitialized] = useState(false);
 
   // [DEBUG] Track userId changes
   const prevUserIdLogRef = useRef<string | null>(null);
@@ -139,11 +145,9 @@ export default function OtherProfilePostsSection({
     if (prevUserIdRef.current && prevUserIdRef.current !== userId) {
       // Profile changed - reset all refs and state
       createdInitializedRef.current = false;
-      interactedInitializedRef.current = false;
-      setTabsInitialized({
-        created: false,
-        interacted: false,
-      });
+      setCreatedInitialized(false);
+      createdExcludedPostIdsRef.current = new Set();
+      setCreatedWarmSeedEpoch(0);
     }
 
     // Update previous userId
@@ -155,28 +159,10 @@ export default function OtherProfilePostsSection({
   useEffect(() => {
     if (userId && !createdInitializedRef.current) {
       createdInitializedRef.current = true;
-      setTabsInitialized((prev) => ({ ...prev, created: true }));
+      setCreatedInitialized(true);
     }
-  }, [userId]); // Only depend on userId - ref prevents re-running
+  }, [userId]);
 
-  // [PHASE C.2] Initialize Interacted tab when first visited (lazy loading)
-  // [FIX] Use ref to track initialization - prevents infinite loops
-  useEffect(() => {
-    if (!userId) return;
-    if (tab === "interacted" && !interactedInitializedRef.current) {
-      interactedInitializedRef.current = true;
-      setTabsInitialized((prev) => ({ ...prev, interacted: true }));
-    }
-  }, [tab, userId]); // Only depend on tab and userId - ref prevents re-running
-
-  // [DEBUG] Track tab changes
-  useEffect(() => {
-    if (DEBUG_OTHER_PROFILE) {
-      console.log("[OtherProfilePostsSection] tab change", { tab, userId });
-    }
-  }, [tab, userId]);
-
-  // [PHASE C.1] Cache callbacks for Created tab using dataCache (migrating from profilePostsCache)
   /** Single Created-tab key — bare store; shared by warm initialItems (no drift from get/set). */
   const profileCreatedDataCacheKey = useMemo(
     () => `profile_created_${userId}`,
@@ -186,10 +172,24 @@ export default function OtherProfilePostsSection({
   const getCachedCreated = useCallback(() => {
     if (!viewerHasAccess) return null;
     const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
-    if (cached?.length) return cached;
+    if (cached?.length) {
+      seedPublishedMediaFromFeedItems({
+        items: cached,
+        viewerUserId,
+        source: "warm",
+      });
+      return cached;
+    }
     const persisted = readPersistedProfilePosts("created", userId);
-    return persisted?.items?.length ? persisted.items : null;
-  }, [profileCreatedDataCacheKey, userId, viewerHasAccess]);
+    if (!persisted?.items?.length) return null;
+    seedPublishedMediaFromFeedItems({
+      items: persisted.items,
+      viewerUserId,
+      source: "persist",
+      snapshotTs: persisted.ts,
+    });
+    return persisted.items;
+  }, [profileCreatedDataCacheKey, userId, viewerHasAccess, viewerUserId]);
 
   const setCachedCreated = useCallback(
     (items: FeedItem[]) => {
@@ -202,6 +202,16 @@ export default function OtherProfilePostsSection({
       writePersistedProfilePosts("created", userId, persisted);
     },
     [profileCreatedDataCacheKey, userId]
+  );
+
+  /** Local: strip ownership/delete exclusions so remount bootstrap cannot re-poison cache. */
+  const setCachedCreatedGuarded = useCallback(
+    (items: FeedItem[]) => {
+      setCachedCreated(
+        guardProfileCreatedCacheWrite(items, createdExcludedPostIdsRef.current)
+      );
+    },
+    [setCachedCreated]
   );
 
   const removePostFromCreatedCache = useCallback(
@@ -224,6 +234,8 @@ export default function OtherProfilePostsSection({
     return onPostOwnershipChanged(
       ({ postId, oldAuthorId, newAuthorId }) => {
         if (oldAuthorId === userId) {
+          noteProfileCreatedExclusion(createdExcludedPostIdsRef.current, postId);
+          setCreatedWarmSeedEpoch((n) => n + 1);
           setCreatedOwnershipRemovePostId(postId);
           setCreatedOwnershipRemoveRevision((n) => n + 1);
           removePostFromCreatedCache(postId);
@@ -231,51 +243,55 @@ export default function OtherProfilePostsSection({
         if (newAuthorId === userId && oldAuthorId !== newAuthorId) {
           setCreatedOwnershipSoftRefreshEpoch((n) => n + 1);
         }
+        if (userId === oldAuthorId || userId === newAuthorId) {
+          setOwnershipFeedRemountEpoch((n) => n + 1);
+        }
       }
     );
   }, [userId, removePostFromCreatedCache]);
 
+  // Keep Created warm seed / cache aligned with delete invalidation (no redesign).
+  useEffect(() => {
+    if (!userId) return;
+    return onPostDeleted((postId) => {
+      noteProfileCreatedExclusion(createdExcludedPostIdsRef.current, postId);
+      setCreatedWarmSeedEpoch((n) => n + 1);
+      removePostFromCreatedCache(postId);
+    });
+  }, [userId, removePostFromCreatedCache]);
+
   /** Memory + persisted first page — only when viewer can see Created. */
   const profileCreatedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
+    // ownershipFeedRemountEpoch / createdWarmSeedEpoch / feedRefreshEpoch force
+    // a fresh cache read after invalidation so remount cannot reuse a stale snapshot.
+    void ownershipFeedRemountEpoch;
+    void createdWarmSeedEpoch;
+    void feedRefreshEpoch;
     if (!viewerHasAccess) return undefined;
     if (!userId) return undefined;
-    const cached = dataCache.get<FeedItem[]>(profileCreatedDataCacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
-    const persisted = readPersistedProfilePosts("created", userId);
-    return persisted?.items?.length ? persisted.items : undefined;
-  }, [viewerHasAccess, userId, profileCreatedDataCacheKey]);
+    const warm = readProfileCreatedWarmInitialItems({
+      dataCacheKey: profileCreatedDataCacheKey,
+      userId,
+      excludePostIds: createdExcludedPostIdsRef.current,
+    });
+    if (!warm?.length) return undefined;
+    seedPublishedMediaFromFeedItems({
+      items: warm,
+      viewerUserId,
+      source: "warm",
+    });
+    return warm;
+  }, [
+    viewerHasAccess,
+    userId,
+    profileCreatedDataCacheKey,
+    viewerUserId,
+    ownershipFeedRemountEpoch,
+    createdWarmSeedEpoch,
+    feedRefreshEpoch,
+  ]);
 
-  // [PHASE C.2] Cache callbacks for Interacted tab using dataCache (migrating from profilePostsCache)
-  const getCachedInteracted = useCallback(() => {
-    if (!viewerHasAccess) return null;
-    const cacheKey = `profile_interacted_${userId}`;
-    const cached = dataCache.get<FeedItem[]>(cacheKey);
-    if (cached?.length) return cached;
-    const persisted = readPersistedProfilePosts("interacted", userId);
-    return persisted?.items?.length ? persisted.items : null;
-  }, [userId, viewerHasAccess]);
-
-  const setCachedInteracted = useCallback(
-    (items: FeedItem[]) => {
-      const cacheKey = `profile_interacted_${userId}`;
-      const persisted = items.slice(0, 20);
-      dataCache.set(cacheKey, persisted, 30 * 60 * 1000); // 30min TTL, cache 20 items
-      writePersistedProfilePosts("interacted", userId, persisted);
-    },
-    [userId]
-  );
-
-  const profileInteractedWarmInitialItems = useMemo((): FeedItem[] | undefined => {
-    if (!viewerHasAccess) return undefined;
-    if (!userId) return undefined;
-    const cacheKey = `profile_interacted_${userId}`;
-    const cached = dataCache.get<FeedItem[]>(cacheKey);
-    if (Array.isArray(cached) && cached.length > 0) return cached;
-    const persisted = readPersistedProfilePosts("interacted", userId);
-    return persisted?.items?.length ? persisted.items : undefined;
-  }, [viewerHasAccess, userId]);
-
-  // [PHASE C.1] LoadItems function for Created tab
+  // LoadItems function for Created feed
   const loadCreatedItems = useCallback(
     async (offset: number, limit: number): Promise<FeedItem[]> => {
       if (DEBUG_OTHER_PROFILE) {
@@ -372,130 +388,7 @@ export default function OtherProfilePostsSection({
       return [];
     },
     [userId, viewerHasAccess, getCachedCreated]
-  ); // [FIX] Remove profile dependency - use userId instead
-
-  // [PHASE C.2] Interacted tab loadItems
-  const loadInteractedItems = useCallback(
-    async (offset: number, limit: number): Promise<FeedItem[]> => {
-      if (DEBUG_OTHER_PROFILE) {
-        console.log("[OtherProfilePostsSection] loadInteractedItems called:", {
-          userId,
-          offset,
-          limit,
-          hasProfile: !!userId, // [FIX] Use userId instead of profile
-          viewerHasAccess,
-          hasAccess,
-          profileIsPrivate,
-        });
-      }
-
-      if (!userId) {
-        if (DEBUG_OTHER_PROFILE) {
-          console.log(
-            "[OtherProfilePostsSection] loadInteractedItems: Profile not loaded yet (userId:",
-            userId,
-            "), returning empty"
-          );
-        }
-        return [];
-      }
-
-      if (!viewerHasAccess) {
-        if (DEBUG_OTHER_PROFILE) {
-          console.log(
-            "[OtherProfilePostsSection] loadInteractedItems: User doesn't have access, returning empty"
-          );
-        }
-        return [];
-      }
-
-      try {
-        // Get viewer user ID for PostgreSQL function
-        const { getViewerAuthUserId } = await import(
-          "../../api/services/follows"
-        );
-        const viewerUserId = await getViewerAuthUserId();
-        const validViewerUserId =
-          viewerUserId && viewerUserId !== "" ? viewerUserId : null;
-
-        if (DEBUG_OTHER_PROFILE) {
-          console.log(
-            "[OtherProfilePostsSection] loadInteractedItems: Fetching liked posts for userId:",
-            userId
-          );
-        }
-
-        // Call optimized PostgreSQL function
-        const result = await getLikedPostsWithDetailsForUserOptimized(
-          userId,
-          validViewerUserId,
-          limit,
-          offset
-        );
-
-        // Edge Case 3: Handle errors
-        if (result.error) {
-          console.error(
-            "[OtherProfilePostsSection] loadInteractedItems: Error:",
-            result.error
-          );
-          if (offset === 0) {
-            const cached = getCachedInteracted();
-            if (cached?.length) return cached;
-          }
-          return [];
-        }
-
-        // Edge Case 4: Handle null/empty data
-        if (!result.data || result.data.length === 0) {
-          if (DEBUG_OTHER_PROFILE) {
-            console.log(
-              "[OtherProfilePostsSection] loadInteractedItems: No liked posts found"
-            );
-          }
-          return [];
-        }
-
-        // Edge Case 5: Privacy filtering (might be redundant if RPC handles it, but keep for safety)
-        let filteredPosts = result.data;
-        if (filteredPosts.length > 0) {
-          const viewerProfileId = await getViewerId();
-          const { filterPostsByPrivacy } = await import(
-            "../../lib/postPrivacyFilter"
-          );
-          filteredPosts = await filterPostsByPrivacy(
-            filteredPosts as any,
-            viewerProfileId
-          );
-        }
-
-        // Convert LikedPostWithDetails[] to FeedItem[] (RPC now carries canonical engagement counts).
-        const feedItems: FeedItem[] = filteredPosts.map(convertLikedToFeedItem);
-
-        if (DEBUG_OTHER_PROFILE) {
-          console.log(
-            "[OtherProfilePostsSection] loadInteractedItems: Received",
-            feedItems.length,
-            "posts after filtering"
-          );
-        }
-
-        return feedItems;
-      } catch (error: any) {
-        // Edge Case 6: Handle exceptions
-        console.error(
-          "[OtherProfilePostsSection] loadInteractedItems: Exception:",
-          error
-        );
-        if (offset === 0) {
-          const cached = getCachedInteracted();
-          if (cached?.length) return cached;
-        }
-        return [];
-      }
-    },
-    [userId, viewerHasAccess, getCachedInteracted]
-  ); // [FIX] Remove profile and hasAccess dependencies - viewerHasAccess already includes hasAccess
+  );
 
   // Cleanup when profile changes to prevent data overlap
   useEffect(() => {
@@ -503,22 +396,11 @@ export default function OtherProfilePostsSection({
 
     // Cancel all requests when profile changes
     cancelContextRequests(`profile-${userId}`);
-    // [PHASE C.1] Created tab request cancellation removed - ProgressiveFeed manages its own
-    // [PHASE C.2] Interacted tab request cancellation removed - ProgressiveFeed manages its own
 
     return () => {
-      // Additional cleanup on unmount
-      // [PHASE C.1] Created tab cleanup removed - ProgressiveFeed manages its own
-      // [PHASE C.2] Interacted tab cleanup removed - ProgressiveFeed manages its own
       cancelContextRequests(`profile-${userId}`);
     };
   }, [userId]);
-
-  // [PHASE C.1] Created tab cache loading and useEffect removed - ProgressiveFeed handles it
-  // Created tab now uses ProgressiveFeed with dataCache (via getCachedCreated/setCachedCreated)
-
-  // [PHASE C.2] Interacted tab cache loading and useEffect removed - ProgressiveFeed handles it
-  // Interacted tab now uses ProgressiveFeed with dataCache (via getCachedInteracted/setCachedInteracted)
 
   const authorForProfilePostCard = useCallback(
     (post: FeedItem) => {
@@ -568,50 +450,17 @@ export default function OtherProfilePostsSection({
         isSaved={post.is_saved}
         commentCount={post.comment_count}
         rsvpData={post.rsvp_data}
-        slideshowHostVisible={visible && tab === "created"}
+        slideshowHostVisible={visible}
+        publishedListOrigin="profile"
       />
     ),
-    [visible, tab, authorForProfilePostCard]
+    [visible, authorForProfilePostCard]
   );
-
-  const renderInteractedItem = useCallback(
-    (post: FeedItem) => (
-      <Post
-        key={post.id}
-        postId={post.id}
-        caption={post.caption}
-        createdAt={post.created_at}
-        authorId={post.author_id}
-        author={authorForProfilePostCard(post)}
-        type={post.type}
-        isOwner={false} // Other profile, not owner
-        isAnonymous={post.is_anonymous || false}
-        anonymousName={post.anonymous_name || null}
-        anonymousAvatar={post.anonymous_avatar || null}
-        selectedDates={post.selected_dates || null}
-        tags={post.tags || null}
-        post={post} // Pass entire FeedItem for optimal loading
-        followStatus={post.follow_status}
-        isLiked={post.is_liked}
-        isSaved={post.is_saved}
-        commentCount={post.comment_count}
-        rsvpData={post.rsvp_data}
-        slideshowHostVisible={visible && tab === "interacted"}
-      />
-    ),
-    [visible, tab, authorForProfilePostCard]
-  );
-
-  // Theme-aware tab styling
-  const base =
-    "px-2 py-1 rounded-full text-xs border transition-all duration-200 flex items-center justify-center";
-  const active = "bg-[var(--text)] text-[var(--bg)] border-[var(--text)]";
-  const inactive =
-    "bg-transparent text-[var(--text)]/80 border-[var(--border)] hover:border-[var(--text)]/40";
 
   // If account is private and viewer doesn't have access, show message
   if (profile?.is_private && hasAccess === false) {
     return (
+      <SocialShelfSurfaceProvider surface="profile-other">
       <section className="w-full max-w-[640px] mx-auto px-1.5">
         <div className="py-8 text-center">
           <div className="text-lg font-semibold text-[var(--text)] mb-2">
@@ -622,99 +471,40 @@ export default function OtherProfilePostsSection({
           </div>
         </div>
       </section>
+      </SocialShelfSurfaceProvider>
     );
   }
 
   return (
+    <SocialShelfSurfaceProvider surface="profile-other">
     <section className="w-full max-w-[640px] mx-auto px-1.5">
-      {/* Tab Navigation */}
-      <div className="flex items-center justify-center gap-2 pt-4">
-        <button
-          className={`${base} ${tab === "created" ? active : inactive} ${
-            isPending ? "opacity-70" : ""
-          }`}
-          onClick={() => startTransition(() => setTab("created"))}
-          disabled={isPending}
-        >
-          Created
-        </button>
-        <button
-          className={`${base} ${tab === "interacted" ? active : inactive} ${
-            isPending ? "opacity-70" : ""
-          }`}
-          onClick={() => startTransition(() => setTab("interacted"))}
-          disabled={isPending}
-        >
-          Interacted
-        </button>
-        {/* No Saved tab for other profiles */}
-      </div>
-
-      {/* Content */}
-      <div className="py-4">
-        {/* [PHASE C.1] Created Tab - ProgressiveFeed (always mounted, CSS controls visibility) */}
-        {tabsInitialized.created && (
-          <div style={{ display: tab === "created" ? "block" : "none" }}>
-            <ProgressiveFeed
-              key={`created-${userId}-r${feedRefreshEpoch}`}
-              isVisible={visible && tab === "created"}
-              tabId="other-profile"
-              loadItems={loadCreatedItems}
-              renderItem={renderCreatedItem} // [FIX] Use memoized function
-              getCachedItems={getCachedCreated}
-              setCachedItems={setCachedCreated}
-              initialItems={profileCreatedWarmInitialItems}
-              pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
-              enableScrollStopDetection={true}
-              enableLazyLoading={true}
-              loading={false}
-              loadingComponent={<PostSkeleton />}
-              emptyMessage={`${
-                profile?.display_name || profile?.username || "This user"
-              } hasn't posted yet.`}
-              backgroundRevalidateOnMount
-              externalRemoveRevision={createdOwnershipRemoveRevision}
-              externalRemovePostId={createdOwnershipRemovePostId}
-              softRefreshEpoch={createdOwnershipSoftRefreshEpoch}
-            />
-          </div>
+      <div className={PROFILE_OVERVIEW_OTHER_POSTS_FEED_CLASS}>
+        {createdInitialized && (
+          <ProgressiveFeed
+            key={`created-${userId}-r${feedRefreshEpoch}-own${ownershipFeedRemountEpoch}`}
+            isVisible={visible}
+            tabId="other-profile"
+            loadItems={loadCreatedItems}
+            renderItem={renderCreatedItem}
+            getCachedItems={getCachedCreated}
+            setCachedItems={setCachedCreatedGuarded}
+            initialItems={profileCreatedWarmInitialItems}
+            pageSize={15}
+            enableScrollStopDetection={true}
+            enableLazyLoading={true}
+            loading={false}
+            loadingComponent={<PostSkeleton />}
+            emptyMessage={`${
+              profile?.display_name || profile?.username || "This user"
+            } hasn't posted yet.`}
+            backgroundRevalidateOnMount
+            externalRemoveRevision={createdOwnershipRemoveRevision}
+            externalRemovePostId={createdOwnershipRemovePostId}
+            softRefreshEpoch={createdOwnershipSoftRefreshEpoch}
+          />
         )}
 
-        {/* [PHASE C.1] Created Tab - Show loading when profile exists but not initialized yet */}
-        {tab === "created" && profile && !tabsInitialized.created && (
-          <div className="flex flex-col gap-2">
-            {[...Array(3)].map((_, i) => (
-              <PostSkeleton key={i} />
-            ))}
-          </div>
-        )}
-
-        {/* [PHASE C.2] Interacted Tab - ProgressiveFeed (always mounted, CSS controls visibility) */}
-        {tabsInitialized.interacted && (
-          <div style={{ display: tab === "interacted" ? "block" : "none" }}>
-            <ProgressiveFeed
-              key={`interacted-${userId}-r${feedRefreshEpoch}`}
-              isVisible={visible && tab === "interacted"}
-              tabId="other-profile"
-              loadItems={loadInteractedItems}
-              renderItem={renderInteractedItem} // [FIX] Use memoized function
-              getCachedItems={getCachedInteracted}
-              setCachedItems={setCachedInteracted}
-              initialItems={profileInteractedWarmInitialItems}
-              pageSize={15} // Batch size for egress reduction (connection-aware clamp applies)
-              enableScrollStopDetection={true}
-              enableLazyLoading={true}
-              loading={false}
-              loadingComponent={<PostSkeleton />}
-              emptyMessage={`${
-                profile?.display_name || profile?.username || "This user"
-              } hasn't liked any posts yet.`}
-            />
-          </div>
-        )}
-
-        {/* [PHASE C.2] Interacted Tab - Show loading when tab is active but not initialized yet */}
-        {tab === "interacted" && profile && !tabsInitialized.interacted && (
+        {profile && !createdInitialized && (
           <div className="flex flex-col gap-2">
             {[...Array(3)].map((_, i) => (
               <PostSkeleton key={i} />
@@ -723,5 +513,6 @@ export default function OtherProfilePostsSection({
         )}
       </div>
     </section>
+    </SocialShelfSurfaceProvider>
   );
 }

@@ -1,8 +1,13 @@
 import { PiCalendarBlank, PiMapPin, PiPath } from "react-icons/pi";
 import { postTypeCompactLabel } from "../../lib/postTypeLabels";
+import type { PostScheduleLabelKind } from "../../lib/postScheduleLabel";
+import {
+  feedScheduleLabelUsesPill,
+  getPostScheduleLabelClasses,
+} from "../../lib/postScheduleLabelStyles";
 
 /**
- * Inline post-type metadata (Event vs Place). Compact; not a button.
+ * Inline post-type metadata (Event vs Post). Compact; not a button.
  * Hangout: calendar + soft green tint. Experience: path/route + soft orange tint.
  */
 export function PostTypeMetaChip({
@@ -40,47 +45,88 @@ export function PostTypeMetaChip({
 }
 
 /**
- * Feed-only hint row: “View details” first, then static location + date icons.
+ * Compact location square — soft neutral wash (secondary to date chip).
+ * Dark: white ~15% fill. Light: soft dark wash. No yellow/brand fill.
  */
-export function PostFeedDetailsHintRow({
-  onOpenDetails,
+const LOCATION_SQUARE_CLASS = [
+  "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md",
+  "border border-black/12 bg-black/[0.06] text-[var(--text)]/80",
+  "app-dark:border-white/18 app-dark:bg-white/15 app-dark:text-white/85",
+  "hover:bg-black/[0.1] hover:text-[var(--text)]/95",
+  "app-dark:hover:bg-white/20 app-dark:hover:text-white/95",
+  "active:bg-black/[0.12] app-dark:active:bg-white/25",
+  "touch-manipulation",
+].join(" ");
+
+/** Standalone header location square. Tap opens Detail → scroll to Location. */
+export function PostFeedLocationPin({
   className = "",
+  onOpen,
 }: {
-  onOpenDetails: () => void;
   className?: string;
+  onOpen: () => void;
 }) {
   return (
     <button
       type="button"
+      className={[LOCATION_SQUARE_CLASS, className].join(" ")}
+      aria-label="View location"
+      title="View location"
       onClick={(e) => {
         e.stopPropagation();
-        onOpenDetails();
+        onOpen();
       }}
+    >
+      <PiMapPin className="h-3.5 w-3.5" aria-hidden />
+    </button>
+  );
+}
+
+/**
+ * Shared Post header metadata: separate date chip + soft location square
+ * (+ optional plain relative timestamp). Never merges date into the location control.
+ */
+export function PostFeedHeaderMeta({
+  scheduleKind,
+  scheduleLabel,
+  hasLocation,
+  onOpenLocation,
+  className = "",
+}: {
+  scheduleKind: PostScheduleLabelKind;
+  scheduleLabel: string;
+  hasLocation: boolean;
+  onOpenLocation: () => void;
+  className?: string;
+}) {
+  const label = scheduleLabel.trim();
+  const showEventDate = Boolean(label) && feedScheduleLabelUsesPill(scheduleKind);
+  const relativeOutside =
+    Boolean(label) && scheduleKind === "posted_ago" ? label : null;
+
+  if (!showEventDate && !hasLocation && !relativeOutside) return null;
+
+  const dateChipClass = showEventDate
+    ? [
+        "inline-flex h-5 shrink-0 items-center justify-center text-[10px] leading-none",
+        getPostScheduleLabelClasses(scheduleKind, "feed"),
+      ].join(" ")
+    : "";
+
+  return (
+    <div
       className={[
-        "group flex w-full min-w-0 items-center gap-1.5 rounded-md text-left leading-none",
-        "text-[var(--text)]/50 transition-colors hover:text-[var(--text)]/70",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/35",
+        "inline-flex shrink-0 items-center gap-1",
         className,
       ].join(" ")}
-      aria-label="View full post details"
     >
-      <span
-        className={[
-          "inline-flex shrink-0 items-center rounded-full border border-[var(--border)]/50",
-          "bg-[color-mix(in_oklab,var(--surface)_28%,transparent)] px-1.5 py-[3px] text-[10px] font-medium leading-none",
-          "text-[var(--text)]/78 group-hover:border-[var(--border)]/65 group-hover:bg-[color-mix(in_oklab,var(--surface)_40%,transparent)]",
-          "app-dark:border-white/14 app-dark:bg-white/[0.05] app-dark:text-white/75",
-        ].join(" ")}
-      >
-        View details
-      </span>
-      <span
-        className="inline-flex shrink-0 items-center gap-1 text-[var(--text)]/38 group-hover:text-[var(--text)]/48"
-        aria-hidden
-      >
-        <PiMapPin className="h-3 w-3" strokeWidth={1.35} />
-        <PiCalendarBlank className="h-3 w-3" strokeWidth={1.35} />
-      </span>
-    </button>
+      {showEventDate ? <span className={dateChipClass}>{label}</span> : null}
+      {hasLocation ? <PostFeedLocationPin onOpen={onOpenLocation} /> : null}
+      {relativeOutside ? (
+        <span className="shrink-0 whitespace-nowrap text-[10px] font-normal leading-none text-[var(--text)]/45">
+          {relativeOutside}
+        </span>
+      ) : null}
+    </div>
   );
 }

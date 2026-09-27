@@ -1,106 +1,130 @@
 // src/lib/feedExpiryFilters.ts
-// Feed correctness filters for expired and unscheduled hangouts
-// [PHASE 1] Expired hangout filtering + unscheduled handling
-// [Option A] Keep UNSCHEDULED in Home feed; drop only PAST scheduled non-recurring
+// Discovery feed eligibility for hangouts (calendar-day + recurrence semantics).
 
 import { FeedItemWithDates } from "./feedSorting";
+import {
+  daysUntilNextRecurrence,
+  normalizeRecurrenceCodes,
+  resolveViewerTimeZone,
+  upcomingSelectedDateKeys,
+} from "./postScheduleLabel";
+
+function hasAnyValidSelectedDate(
+  selectedDates: string[] | null | undefined
+): boolean {
+  if (!selectedDates?.length) return false;
+  return selectedDates.some((raw) => {
+    const t = new Date(String(raw).trim());
+    return !Number.isNaN(t.getTime());
+  });
+}
+
+function hasValidRecurrenceDays(
+  recurrenceDays: string[] | null | undefined
+): boolean {
+  return normalizeRecurrenceCodes(recurrenceDays).length > 0;
+}
 
 /**
- * Check if hangout has ANY upcoming date (not just earliest)
- * Recurring hangouts (is_recurring=true) are always considered upcoming
- * Used by filterRailsItems (rails stay UPCOMING/RECURRING only)
- *
- * @param item - Feed item to check
- * @param now - Current date (defaults to new Date())
- * @returns true if hangout has any upcoming date or is recurring, false otherwise
+ * True when a hangout should remain in main discovery surfaces (vertical feed).
+ * Uses viewer-local calendar days — same-day timed events stay eligible through
+ * the occurrence's local calendar day (not instant >= now).
+ */
+export function isHangoutDiscoveryEligible(
+  item: FeedItemWithDates,
+  now: Date = new Date(),
+  timeZone?: string
+): boolean {
+  if (item.type !== "hangout") {
+    return true;
+  }
+
+  const tz = resolveViewerTimeZone(timeZone);
+  const selectedDates = item.selected_dates ?? [];
+  const hasSchedule = hasAnyValidSelectedDate(selectedDates);
+  const recurrenceDays = normalizeRecurrenceCodes(item.recurrence_days);
+  const hasRecurrence = hasValidRecurrenceDays(recurrenceDays);
+
+  // Option A: no schedule and no usable recurrence — keep (vertical feed only).
+  if (!hasSchedule && !hasRecurrence) {
+    return true;
+  }
+
+  if (hasSchedule) {
+    const upcoming = upcomingSelectedDateKeys(selectedDates, now, tz);
+    if (upcoming.length > 0) return true;
+  }
+
+  if (hasRecurrence) {
+    if (daysUntilNextRecurrence(recurrenceDays, now, tz) >= 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Hangout with a meaningful upcoming schedule/recurrence for soft refresh nudges.
+ * Excludes Places and unscheduled hangouts that discovery still keeps.
+ */
+export function isUpcomingEligibleHangout(
+  item: FeedItemWithDates,
+  now: Date = new Date(),
+  timeZone?: string
+): boolean {
+  if (item.type !== "hangout") return false;
+
+  const selectedDates = item.selected_dates ?? [];
+  const hasSchedule = hasAnyValidSelectedDate(selectedDates);
+  const hasRecurrence = hasValidRecurrenceDays(item.recurrence_days);
+  if (!hasSchedule && !hasRecurrence) return false;
+
+  return isHangoutDiscoveryEligible(item, now, timeZone);
+}
+
+/**
+ * Calendar-day upcoming check for hangouts with selected_dates.
+ * Used by Pair Up / Group Up eligibility (non-recurring path) with
+ * HOME_EVENT_TIMEZONE (Africa/Addis_Ababa). Does not keep unscheduled rows.
  */
 export function hasAnyUpcomingDate(
   item: FeedItemWithDates,
-  now: Date = new Date()
-): boolean {
-  // Recurring hangouts are always upcoming
-  if (item.type === "hangout" && item.is_recurring) {
-    return true;
-  }
-
-  // If no dates, cannot be upcoming (unscheduled - handled by caller)
-  if (!item.selected_dates || item.selected_dates.length === 0) {
-    return false;
-  }
-
-  const nowTime = now.getTime();
-
-  // Check if ANY date is in the future (not just earliest)
-  return item.selected_dates.some((dateStr) => {
-    const date = new Date(dateStr);
-    return !isNaN(date.getTime()) && date.getTime() >= nowTime;
-  });
-}
-
-/**
- * Check if hangout is past scheduled (has dates, all past, not recurring)
- * Only these are dropped by filterExpiredHangouts (Option A)
- */
-function isPastScheduledHangout(
-  item: FeedItemWithDates,
-  now: Date = new Date()
+  now: Date = new Date(),
+  timeZone?: string
 ): boolean {
   if (item.type !== "hangout") return false;
-  if (item.is_recurring) return false;
-  if (!item.selected_dates || item.selected_dates.length === 0) return false;
-  const nowTime = now.getTime();
-  return !item.selected_dates.some((dateStr) => {
-    const date = new Date(dateStr);
-    return !isNaN(date.getTime()) && date.getTime() >= nowTime;
-  });
+  if (!item.selected_dates?.length) return false;
+
+  const tz = resolveViewerTimeZone(timeZone);
+  return (
+    upcomingSelectedDateKeys(item.selected_dates, now, tz).length > 0
+  );
 }
 
 /**
- * Filter out only PAST scheduled non-recurring hangouts (Option A)
- * Keeps: experiences, recurring hangouts, unscheduled hangouts, upcoming hangouts
- * Drops: hangouts with selected_dates where ALL dates are past AND not recurring
- *
- * @param items - Feed items to filter
- * @returns Filtered items (past scheduled hangouts removed)
+ * Remove expired hangouts from discovery feed batches.
+ * Places (`experience`) are always kept.
  */
 export function filterExpiredHangouts(
-  items: FeedItemWithDates[]
+  items: FeedItemWithDates[],
+  now: Date = new Date(),
+  timeZone?: string
 ): FeedItemWithDates[] {
-  const now = new Date();
-
   const filtered = items.filter((item) => {
-    // Experiences never expire
-    if (item.type === "experience") {
-      return true;
-    }
-
-    // For hangouts: keep recurring, unscheduled, and upcoming; drop only past scheduled
+    if (item.type === "experience") return true;
     if (item.type === "hangout") {
-      if (item.is_recurring) return true;
-      if (!item.selected_dates || item.selected_dates.length === 0) return true; // unscheduled: keep
-      return hasAnyUpcomingDate(item, now); // has dates: keep if any upcoming
+      return isHangoutDiscoveryEligible(item, now, timeZone);
     }
-
-    // Unknown type - keep it (safety default)
     return true;
   });
 
-  // Log only when something was removed, or when explicitly in debug mode
   const DEBUG_FILTER_EXPIRED = false;
-  const filteredIds = new Set(filtered.map((i) => i.id));
-  const pastScheduledRemoved = items.filter(
-    (i) =>
-      i.type === "hangout" &&
-      !filteredIds.has(i.id) &&
-      isPastScheduledHangout(i, now)
-  ).length;
-  const unscheduledKept = filtered.filter((i) =>
-    isUnscheduledHangout(i)
-  ).length;
-  if (pastScheduledRemoved > 0 || DEBUG_FILTER_EXPIRED) {
+  const removed = items.length - filtered.length;
+  if (removed > 0 || DEBUG_FILTER_EXPIRED) {
     console.log("[FeedPipeline] filterExpiredHangouts", {
-      pastScheduledRemoved,
-      unscheduledKept,
+      removed,
+      unscheduledKept: filtered.filter((i) => isUnscheduledHangout(i)).length,
     });
   }
 
@@ -108,11 +132,8 @@ export function filterExpiredHangouts(
 }
 
 /**
- * Check if hangout is unscheduled (no dates AND not recurring)
- * Unscheduled hangouts will be capped in personalization phase
- *
- * @param item - Feed item to check
- * @returns true if hangout is unscheduled, false otherwise
+ * Check if hangout is unscheduled (no dates AND not recurring flag).
+ * Unscheduled hangouts will be capped in personalization phase.
  */
 export function isUnscheduledHangout(item: FeedItemWithDates): boolean {
   return (
@@ -123,36 +144,21 @@ export function isUnscheduledHangout(item: FeedItemWithDates): boolean {
 }
 
 /**
- * Filter rails items: exclude unscheduled hangouts (even via fallback)
- * Also excludes expired hangouts (should already be filtered, but double-check)
- * Rails should only show scheduled, non-expired hangouts
- *
- * @param items - Feed items to filter
- * @returns Filtered items suitable for horizontal rails
+ * Horizontal rails: scheduled + discovery-eligible hangouts only.
  */
 export function filterRailsItems(
-  items: FeedItemWithDates[]
+  items: FeedItemWithDates[],
+  now: Date = new Date(),
+  timeZone?: string
 ): FeedItemWithDates[] {
-  const now = new Date();
-
   return items.filter((item) => {
-    // Experiences are always allowed in rails
-    if (item.type === "experience") {
-      return true;
-    }
+    if (item.type === "experience") return true;
 
-    // For hangouts, apply strict filtering
     if (item.type === "hangout") {
-      // Exclude unscheduled hangouts (no dates AND not recurring)
-      if (isUnscheduledHangout(item)) {
-        return false;
-      }
-
-      // Exclude expired hangouts (all dates past AND not recurring)
-      return hasAnyUpcomingDate(item, now);
+      if (isUnscheduledHangout(item)) return false;
+      return isHangoutDiscoveryEligible(item, now, timeZone);
     }
 
-    // Unknown type - keep it (safety default)
     return true;
   });
 }

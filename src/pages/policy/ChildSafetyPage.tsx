@@ -9,7 +9,7 @@ export default function ChildSafetyPage() {
         intro="EchoToo is committed to protecting children and young people on our platform."
       >
         {/* POLICY CONTENT START */}
-        <p>Last updated: March 17, 2026</p>
+        <p>Last updated: September 27, 2026</p>
 
         <p>
           EchoToo is committed to maintaining a safe environment for all users.
@@ -22,7 +22,8 @@ export default function ChildSafetyPage() {
         <p>
           EchoToo is intended for users who are at least 13 years old.
           Individuals under the age of 13 are not permitted to create accounts
-          or use the platform.
+          or use the platform, including messaging, Duo, Group Up, or other
+          connection features.
         </p>
         <p>
           If we become aware that an account belongs to a child under 13, we may
@@ -50,13 +51,14 @@ export default function ChildSafetyPage() {
             encouraging harmful or exploitative interactions involving minors
           </li>
           <li>
-            using the platform to contact minors for inappropriate purposes
+            using the platform, including direct messages or meetup features, to
+            contact minors for inappropriate purposes
           </li>
         </ul>
 
         <h3>4. Reporting Safety Concerns</h3>
         <p>
-          Users may report posts or accounts that appear to involve
+          Users may report posts, messages, or accounts that appear to involve
           exploitation, grooming, or other safety risks involving minors.
         </p>
         <p>

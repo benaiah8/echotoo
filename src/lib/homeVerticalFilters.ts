@@ -1,12 +1,13 @@
 /**
- * Home vertical filter kernel — shared builders and derived state for HomePage.
- * Phase 1: extraction only; no new date chips or RPC changes.
+ * Home vertical filter kernel — shared builders, Addis calendar helpers,
+ * RPC option construction, and explicit-filter state transitions.
  */
 
 import type { FeedOptions } from "../api/queries/getPublicFeed";
 import { dataCache } from "./dataCache";
 import type { FilterType } from "./horizontalRailFilters";
-import { HOME_FEED_FIRST_PAGE } from "./homeFeedConstants";
+import { HOME_EVENT_TIMEZONE, HOME_FEED_FIRST_PAGE } from "./homeFeedConstants";
+import { isTrueDefaultAllFeed } from "./homeMatchedOccurrence";
 import type { TodaySpotlightBaseOptions } from "./homeTodaySpotlight";
 
 export type HomeDateFilter =
@@ -22,8 +23,27 @@ export type HomeTypeFilter = "all" | "hangouts" | "experiences";
 /** Alias for vertical segment / viewMode. */
 export type HomeViewMode = HomeTypeFilter;
 
+/** Drawer / toggle target — all mutually exclusive date chips except none. */
+export type HomeDateFilterChip = Exclude<HomeDateFilter, "none">;
+
 export const INITIAL_HOME_DATE_FILTER: HomeDateFilter = "none";
 export const INITIAL_HOME_TYPE_FILTER: HomeTypeFilter = "all";
+
+export type HomeFilterState = {
+  dateFilter: HomeDateFilter;
+  viewMode: HomeViewMode;
+  friendsFilter: boolean;
+};
+
+export type HomeFilterAction =
+  | { type: "toggleDate"; target: HomeDateFilterChip }
+  | { type: "selectDate"; target: HomeDateFilterChip }
+  | { type: "toggleEvents" }
+  | { type: "togglePlaces" }
+  | { type: "selectEvents" }
+  | { type: "selectPlaces" }
+  | { type: "toggleFriends" }
+  | { type: "clearAll" };
 
 export type ViewerLocalOccurrence = {
   occursOn: string;
@@ -35,9 +55,6 @@ export type ViewerLocalDateRange = {
   occursTo: string;
   occursTz: string;
 };
-
-/** Drawer / toggle target — all mutually exclusive date chips except none. */
-export type HomeDateFilterChip = Exclude<HomeDateFilter, "none">;
 
 /** Inputs shared by vertical feed, cache keys, and Today spotlight. */
 export type HomeVerticalFilterContext = {
@@ -193,13 +210,14 @@ export function getDateSpotlightFallbackSectionTitle(
 
 /** Spotlight RPC occurrence params for any active date filter. */
 export function getDateSpotlightOccurrenceParams(
-  dateFilter: HomeDateFilter
+  dateFilter: HomeDateFilter,
+  now: Date = new Date()
 ): DateSpotlightOccurrenceParams | null {
   if (!isDateSpotlightFilter(dateFilter)) return null;
 
   const dayOffset = getDateSpotlightDayOffset(dateFilter);
   if (dayOffset !== null) {
-    const occurrence = viewerLocalOccurrence(dayOffset);
+    const occurrence = viewerLocalOccurrence(dayOffset, now);
     if (!occurrence) return null;
     return {
       mode: "day",
@@ -208,7 +226,7 @@ export function getDateSpotlightOccurrenceParams(
     };
   }
 
-  const range = getDateRangeForFilter(dateFilter);
+  const range = getDateRangeForFilter(dateFilter, now);
   if (!range) return null;
   return {
     mode: "range",
@@ -218,52 +236,96 @@ export function getDateSpotlightOccurrenceParams(
   };
 }
 
-function viewerLocalTimeZone(): string | null {
+type AddisYmd = { year: number; month: number; day: number };
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function ymdToString(ymd: AddisYmd): string {
+  return `${ymd.year}-${pad2(ymd.month)}-${pad2(ymd.day)}`;
+}
+
+function ymdCompare(a: AddisYmd, b: AddisYmd): number {
+  if (a.year !== b.year) return a.year - b.year;
+  if (a.month !== b.month) return a.month - b.month;
+  return a.day - b.day;
+}
+
+function addisCalendarParts(now: Date = new Date()): AddisYmd | null {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: HOME_EVENT_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const year = Number(parts.find((p) => p.type === "year")?.value);
+    const month = Number(parts.find((p) => p.type === "month")?.value);
+    const day = Number(parts.find((p) => p.type === "day")?.value);
+    if (!year || !month || !day) return null;
+    return { year, month, day };
   } catch {
     return null;
   }
 }
 
-function viewerLocalDateString(dayOffsetFromToday = 0): string | null {
-  return viewerLocalOccurrence(dayOffsetFromToday)?.occursOn ?? null;
+function addCalendarDays(ymd: AddisYmd, dayOffset: number): AddisYmd {
+  const utc = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day + dayOffset));
+  return {
+    year: utc.getUTCFullYear(),
+    month: utc.getUTCMonth() + 1,
+    day: utc.getUTCDate(),
+  };
 }
 
-/** Postgres ISODOW in viewer TZ: Mon=1 … Sun=7. */
-function viewerLocalIsodow(dayOffsetFromToday = 0): number | null {
-  try {
-    const timeZone = viewerLocalTimeZone();
-    if (!timeZone) return null;
-    const anchor = new Date();
-    if (dayOffsetFromToday !== 0) {
-      anchor.setDate(anchor.getDate() + dayOffsetFromToday);
-    }
-    const dayName = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      weekday: "short",
-    }).format(anchor);
-    const isodowByName: Record<string, number> = {
-      Mon: 1,
-      Tue: 2,
-      Wed: 3,
-      Thu: 4,
-      Fri: 5,
-      Sat: 6,
-      Sun: 7,
-    };
-    return isodowByName[dayName] ?? null;
-  } catch {
-    return null;
-  }
+/** Postgres ISODOW for an Addis calendar date: Mon=1 … Sun=7. */
+function isodowForYmd(ymd: AddisYmd): number {
+  const utc = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day));
+  const jsDay = utc.getUTCDay();
+  return jsDay === 0 ? 7 : jsDay;
+}
+
+function viewerLocalDateString(
+  dayOffsetFromToday = 0,
+  now: Date = new Date()
+): string | null {
+  return viewerLocalOccurrence(dayOffsetFromToday, now)?.occursOn ?? null;
+}
+
+/** Postgres ISODOW in Addis: Mon=1 … Sun=7. */
+function viewerLocalIsodow(
+  dayOffsetFromToday = 0,
+  now: Date = new Date()
+): number | null {
+  const today = addisCalendarParts(now);
+  if (!today) return null;
+  return isodowForYmd(addCalendarDays(today, dayOffsetFromToday));
 }
 
 /**
- * Viewer-local inclusive date range for week spotlight filters.
- * Returns null for single-day/none filters or when TZ/date parts are unavailable.
+ * Tomorrow's next-window CTA: This Weekend when that Saturday is still after
+ * tomorrow (Addis); otherwise Next Week.
+ */
+export function tomorrowSecondaryDateFilter(
+  now: Date = new Date()
+): "this_weekend" | "next_week" {
+  const today = addisCalendarParts(now);
+  if (!today) return "next_week";
+  const tomorrow = addCalendarDays(today, 1);
+  const weekendSaturday = addCalendarDays(today, 6 - isodowForYmd(today));
+  return ymdCompare(weekendSaturday, tomorrow) > 0
+    ? "this_weekend"
+    : "next_week";
+}
+
+/**
+ * Addis-local inclusive date range for week filters.
+ * Returns null for single-day/none filters or when date parts are unavailable.
  */
 export function getDateRangeForFilter(
-  dateFilter: HomeDateFilter
+  dateFilter: HomeDateFilter,
+  now: Date = new Date()
 ): ViewerLocalDateRange | null {
   if (
     dateFilter !== "this_week" &&
@@ -273,75 +335,56 @@ export function getDateRangeForFilter(
     return null;
   }
 
-  const occursTz = viewerLocalTimeZone();
-  if (!occursTz) return null;
-
-  const isodow = viewerLocalIsodow(0);
+  const occursTz = HOME_EVENT_TIMEZONE;
+  const isodow = viewerLocalIsodow(0, now);
   if (isodow === null) return null;
 
   if (dateFilter === "this_week") {
-    const occursFrom = viewerLocalDateString(0);
-    const occursTo = viewerLocalDateString(7 - isodow);
+    const occursFrom = viewerLocalDateString(0, now);
+    const occursTo = viewerLocalDateString(7 - isodow, now);
     if (!occursFrom || !occursTo) return null;
     return { occursFrom, occursTo, occursTz };
   }
 
   if (dateFilter === "this_weekend") {
     if (isodow <= 5) {
-      const occursFrom = viewerLocalDateString(6 - isodow);
-      const occursTo = viewerLocalDateString(7 - isodow);
+      const occursFrom = viewerLocalDateString(6 - isodow, now);
+      const occursTo = viewerLocalDateString(7 - isodow, now);
       if (!occursFrom || !occursTo) return null;
       return { occursFrom, occursTo, occursTz };
     }
     if (isodow === 6) {
-      const occursFrom = viewerLocalDateString(0);
-      const occursTo = viewerLocalDateString(1);
+      const occursFrom = viewerLocalDateString(0, now);
+      const occursTo = viewerLocalDateString(1, now);
       if (!occursFrom || !occursTo) return null;
       return { occursFrom, occursTo, occursTz };
     }
-    const occursFrom = viewerLocalDateString(0);
+    const occursFrom = viewerLocalDateString(0, now);
     if (!occursFrom) return null;
     return { occursFrom, occursTo: occursFrom, occursTz };
   }
 
   const nextMondayOffset = 7 - isodow + 1;
   const nextSundayOffset = nextMondayOffset + 6;
-  const occursFrom = viewerLocalDateString(nextMondayOffset);
-  const occursTo = viewerLocalDateString(nextSundayOffset);
+  const occursFrom = viewerLocalDateString(nextMondayOffset, now);
+  const occursTo = viewerLocalDateString(nextSundayOffset, now);
   if (!occursFrom || !occursTo) return null;
   return { occursFrom, occursTo, occursTz };
 }
 
 /**
- * Viewer-local occurrence for a calendar day offset from today (0 = today).
+ * Addis calendar occurrence for a day offset from today (0 = today).
  */
 export function viewerLocalOccurrence(
-  dayOffsetFromToday = 0
+  dayOffsetFromToday = 0,
+  now: Date = new Date()
 ): ViewerLocalOccurrence | null {
-  try {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (!timeZone) return null;
-    const anchor = new Date();
-    if (dayOffsetFromToday !== 0) {
-      anchor.setDate(anchor.getDate() + dayOffsetFromToday);
-    }
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(anchor);
-    const year = parts.find((p) => p.type === "year")?.value;
-    const month = parts.find((p) => p.type === "month")?.value;
-    const day = parts.find((p) => p.type === "day")?.value;
-    if (!year || !month || !day) return null;
-    return {
-      occursOn: `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`,
-      occursTz: timeZone,
-    };
-  } catch {
-    return null;
-  }
+  const today = addisCalendarParts(now);
+  if (!today) return null;
+  return {
+    occursOn: ymdToString(addCalendarDays(today, dayOffsetFromToday)),
+    occursTz: HOME_EVENT_TIMEZONE,
+  };
 }
 
 export function isTodayChipActive(dateFilter: HomeDateFilter): boolean {
@@ -399,6 +442,116 @@ export function getVerticalSegmentType(
   return undefined;
 }
 
+/**
+ * RPC `p_type` for Home vertical feed. Date and Events modes always request hangout
+ * so leftover experience dates cannot leak into those filters.
+ */
+export function getHomeFeedRpcType(
+  ctx: Pick<HomeVerticalFilterContext, "viewMode" | "dateFilter">
+): FeedOptions["type"] {
+  if (ctx.dateFilter !== "none") return "hangout";
+  return getVerticalSegmentType(ctx.viewMode);
+}
+
+export type HomeOccurrenceFields = {
+  occursOn: string | null;
+  occursTz: string | null;
+  occursFrom: string | null;
+  occursTo: string | null;
+};
+
+export function buildHomeOccurrenceFields(
+  dateFilter: HomeDateFilter,
+  now: Date = new Date()
+): HomeOccurrenceFields {
+  const empty: HomeOccurrenceFields = {
+    occursOn: null,
+    occursTz: null,
+    occursFrom: null,
+    occursTo: null,
+  };
+  if (dateFilter === "none") return empty;
+  const params = getDateSpotlightOccurrenceParams(dateFilter, now);
+  if (!params) return { ...empty, occursTz: HOME_EVENT_TIMEZONE };
+  if (params.mode === "day") {
+    return {
+      occursOn: params.occursOn,
+      occursTz: params.occursTz,
+      occursFrom: null,
+      occursTo: null,
+    };
+  }
+  return {
+    occursOn: null,
+    occursTz: params.occursTz,
+    occursFrom: params.occursFrom,
+    occursTo: params.occursTo,
+  };
+}
+
+/** Discovery rails/spotlight only on unfiltered All Home. */
+export function shouldShowHomeDiscoveryRails(params: {
+  dateFilter: HomeDateFilter;
+  viewMode: HomeViewMode;
+  friendsFilter: boolean;
+}): boolean {
+  return (
+    params.dateFilter === "none" &&
+    params.viewMode === "all" &&
+    !params.friendsFilter
+  );
+}
+
+export function hasExplicitHomeContentFilters(params: {
+  dateFilter: HomeDateFilter;
+  viewMode: HomeViewMode;
+  friendsFilter: boolean;
+}): boolean {
+  return !shouldShowHomeDiscoveryRails(params);
+}
+
+export function applyHomeFilterTransition(
+  current: HomeFilterState,
+  action: HomeFilterAction
+): HomeFilterState {
+  switch (action.type) {
+    case "toggleDate": {
+      if (current.dateFilter === action.target) {
+        return { ...current, dateFilter: "none", viewMode: "all" };
+      }
+      return { ...current, dateFilter: action.target, viewMode: "hangouts" };
+    }
+    case "selectDate":
+      return { ...current, dateFilter: action.target, viewMode: "hangouts" };
+    case "toggleEvents": {
+      if (current.viewMode === "hangouts" && current.dateFilter === "none") {
+        return { ...current, viewMode: "all" };
+      }
+      return { ...current, viewMode: "hangouts", dateFilter: "none" };
+    }
+    case "selectEvents":
+      return { ...current, viewMode: "hangouts", dateFilter: "none" };
+    case "togglePlaces": {
+      if (current.viewMode === "experiences") {
+        return { ...current, viewMode: "all", dateFilter: "none" };
+      }
+      return { ...current, viewMode: "experiences", dateFilter: "none" };
+    }
+    case "selectPlaces":
+      return { ...current, viewMode: "experiences", dateFilter: "none" };
+    case "toggleFriends":
+      return { ...current, friendsFilter: !current.friendsFilter };
+    case "clearAll":
+      return {
+        dateFilter: INITIAL_HOME_DATE_FILTER,
+        viewMode: INITIAL_HOME_TYPE_FILTER,
+        friendsFilter: false,
+      };
+    default:
+      return current;
+  }
+}
+
 /** Social filters for rails (Friends only today; date filters are vertical-only). */
 export function getRailAppliedFilters(friendsFilter: boolean): FilterType[] {
   return friendsFilter ? ["friends"] : [];
@@ -450,6 +603,23 @@ export function hasActiveHomeFilters(params: HasActiveHomeFiltersInput): boolean
 }
 
 /**
+ * True when an active filter is not fully communicated by the visible
+ * Today / Events / Places shortcut chips (drawer dates, Friends, search, tags).
+ * Shortcut-only Today / Events / Places do not light this indicator.
+ */
+export function hasNonShortcutHomeFilters(
+  params: HasActiveHomeFiltersInput
+): boolean {
+  if (params.friendsFilter) return true;
+  if (params.search.trim() !== "") return true;
+  if (params.selectedTags.length > 0) return true;
+  if (params.dateFilter !== "none" && params.dateFilter !== "today") {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Legacy funnel-dot indicator: type, search, and tags only (excludes date/friends).
  * Preserves pre-drawer-upgrade visible behavior until drawer UI adopts full clear-all.
  */
@@ -465,19 +635,35 @@ export function hasActiveHomeFiltersFunnelDot(params: {
   );
 }
 
-/** Personalization applies only on the default vertical segment with no search/tags/friends. */
-export function shouldPersonalizeHomeVerticalFeed(params: {
+/**
+ * Personalization is off for Phase 2B.1: true default All uses server all_score.
+ * Search/tags never used this path. Keep the helper and call sites for future For You.
+ */
+export function shouldPersonalizeHomeVerticalFeed(_params: {
   feedSearchQ?: string;
   selectedTags: readonly string[];
   viewMode: HomeViewMode;
   friendsFilter?: boolean;
+  dateFilter?: HomeDateFilter;
 }): boolean {
-  return (
-    !params.feedSearchQ &&
-    params.selectedTags.length === 0 &&
-    params.viewMode === "all" &&
-    !params.friendsFilter
-  );
+  return false;
+}
+
+/** True default All vertical Home: no type, friends, occurrence, search, or tags. */
+export function isTrueDefaultAllVerticalFeed(
+  ctx: HomeVerticalFilterContext,
+  now: Date = new Date()
+): boolean {
+  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
+  return isTrueDefaultAllFeed({
+    type: getHomeFeedRpcType(ctx),
+    friendsOnly: ctx.friendsFilter,
+    q: ctx.feedSearchQ,
+    tags: ctx.selectedTags,
+    occursOn: occurs.occursOn,
+    occursFrom: occurs.occursFrom,
+    occursTo: occurs.occursTo,
+  });
 }
 
 /** Cache key `filters` segment when Friends is active on vertical feed. */
@@ -487,22 +673,24 @@ export function verticalFriendsCacheFilters(
   return friendsFilter ? ["friends"] : undefined;
 }
 
-/** First-page vertical cache key options (date filters use spotlight only — no occurrence params). */
+/** First-page vertical cache key options (includes type, occurs, friends). */
 export function buildHomeVerticalFirstPageFeedKeyOptions(
-  ctx: HomeVerticalFilterContext
+  ctx: HomeVerticalFilterContext,
+  now: Date = new Date()
 ): Parameters<typeof dataCache.generateFeedKey>[0] {
+  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
   return {
-    type: getVerticalSegmentType(ctx.viewMode),
+    type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     filters: verticalFriendsCacheFilters(ctx.friendsFilter),
     limit: HOME_FEED_FIRST_PAGE,
     offset: 0,
     viewerProfileId: ctx.viewerProfileId,
-    occursOn: null,
-    occursTz: null,
-    occursFrom: null,
-    occursTo: null,
+    occursOn: occurs.occursOn,
+    occursTz: occurs.occursTz,
+    occursFrom: occurs.occursFrom,
+    occursTo: occurs.occursTo,
   };
 }
 
@@ -511,7 +699,7 @@ export function buildDateSpotlightBaseOptions(
   ctx: HomeVerticalFilterContext
 ): TodaySpotlightBaseOptions {
   return {
-    type: getVerticalSegmentType(ctx.viewMode),
+    type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     viewerProfileId: ctx.viewerProfileId || undefined,
@@ -522,43 +710,53 @@ export function buildDateSpotlightBaseOptions(
 /** @deprecated Use buildDateSpotlightBaseOptions */
 export const buildTodaySpotlightBaseOptions = buildDateSpotlightBaseOptions;
 
-/** ProgressiveFeed vertical loader RPC options (no date occurrence params). */
+/** ProgressiveFeed vertical loader RPC options (type + occurs + friends). */
 export function buildVerticalLoadFeedOptions(
   ctx: HomeVerticalFilterContext,
-  page: { offset: number; limit: number }
+  page: { offset: number; limit: number },
+  now: Date = new Date()
 ): FeedOptions {
+  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
   return {
-    type: getVerticalSegmentType(ctx.viewMode),
+    type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     limit: page.limit,
     offset: page.offset,
     viewerProfileId: ctx.viewerProfileId || undefined,
     friendsOnly: ctx.friendsFilter || undefined,
+    occursOn: occurs.occursOn,
+    occursTz: occurs.occursTz,
+    occursFrom: occurs.occursFrom,
+    occursTo: occurs.occursTo,
   };
 }
 
-/** `feedOptions` prop for HomePostsSection / ProgressiveFeed feedKey (no date occurrence params). */
-export function buildVerticalFeedOptionsProp(ctx: HomeVerticalFilterContext): {
+/** `feedOptions` prop for HomePostsSection / ProgressiveFeed feedKey. */
+export function buildVerticalFeedOptionsProp(
+  ctx: HomeVerticalFilterContext,
+  now: Date = new Date()
+): {
   type?: FeedOptions["type"];
   q?: string;
   tags?: string[];
   currentUserId: string | null;
-  occursOn: null;
-  occursTz: null;
-  occursFrom: null;
-  occursTo: null;
+  occursOn: string | null;
+  occursTz: string | null;
+  occursFrom: string | null;
+  occursTo: string | null;
   friendsFilter: boolean;
 } {
+  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
   return {
-    type: getVerticalSegmentType(ctx.viewMode),
+    type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
     tags: tagsForFeedOptions(ctx.selectedTags),
     currentUserId: ctx.viewerProfileId,
-    occursOn: null,
-    occursTz: null,
-    occursFrom: null,
-    occursTo: null,
+    occursOn: occurs.occursOn,
+    occursTz: occurs.occursTz,
+    occursFrom: occurs.occursFrom,
+    occursTo: occurs.occursTo,
     friendsFilter: ctx.friendsFilter,
   };
 }

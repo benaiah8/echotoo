@@ -13,6 +13,7 @@ import useScrollDirection, {
 } from "../hooks/useScrollDirection";
 import PrimaryPageContainer from "../components/container/PrimaryPageContainer";
 import HomeTopBar from "../components/HomeTopBar";
+import { HomeSearchLayer } from "../components/home/HomeSearchDock";
 import ProfileSearchResults from "../components/profile/ProfileSearchResults";
 import HomeHangoutSection from "../sections/home/HomeHangoutSection";
 import HomePostsSection from "../sections/home/HomePostsSection";
@@ -27,14 +28,35 @@ import { getViewerId } from "../api/services/follows";
 import { Paths } from "../router/Paths";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import WelcomeModal from "../components/ui/WelcomeModal";
+import HomeTour from "../components/homeTour/HomeTour";
 import { dataCache } from "../lib/dataCache";
 import {
-  readPersistedHomeFeed,
-  writePersistedHomeFeed,
+  readHomeFeedHydrationSnapshot,
+  writeHomeFeedDisplaySnapshot,
 } from "../lib/homeFeedListCache";
+import { seedSocialActionsFromFeedItems } from "../lib/seedSocialActionsFromFeed";
+import { seedPublishedMediaFromFeedItems } from "../lib/publishedMedia";
 import { applyPendingPostPatchesToItems } from "../lib/pendingPostPatches";
-import { mixHangoutsAndExperiences } from "../lib/horizontalRailFilters";
-import { filterRailsItems } from "../lib/feedExpiryFilters";
+import {
+  sortDiscoveryHangoutsBySocialSignal,
+  takeDiscoveryHangouts,
+} from "../lib/horizontalRailFilters";
+import { filterRailsItems, filterExpiredHangouts } from "../lib/feedExpiryFilters";
+import { HOME_EVENT_TIMEZONE, HOME_FEED_FIRST_PAGE } from "../lib/homeFeedConstants";
+import {
+  applyHomeFeedCycleState,
+  buildUnseenHomeReplacementPage,
+  filterUnseenCycleItems,
+  getHomeFeedCycle,
+  homeFeedCycleViewerKey,
+  isHomeFeedCycleExhausted,
+  applyRefreshEventNudge,
+  recordHomeFeedCycleDelivery,
+  resetHomeFeedCycle,
+  stampHomeFeedPresentationKeys,
+  startNextHomeFeedCycle,
+} from "../lib/homeFeedCycle";
+import type { FeedItemWithDates } from "../lib/feedSorting";
 import { preloadImages } from "../lib/imageOptimization";
 import { personalizeFeedBatch } from "../lib/feedPersonalization";
 import { RootState } from "../app/store";
@@ -47,16 +69,15 @@ import {
   type HomeTabRefreshDetail,
 } from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
+import { useOverlayBackgroundScrollLock } from "../hooks/useOverlayBackgroundScrollLock";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
+import { setHomeSearchTabChromeHidden } from "../lib/homeSearchTabChrome";
+import { moveFocusOutOfHomeSearchHiddenTrees } from "../lib/moveFocusOutOfHomeSearchHiddenTrees";
 import { subscribeAndroidHardwareBack } from "../lib/androidPostDetailModalBack";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { isPostDetailRoutePath } from "../lib/inviteOverlayHistory";
 import {
-  logTodaySpotlight,
-  resolveDateSpotlightWithFallback,
-} from "../lib/homeTodaySpotlight";
-import {
-  buildDateSpotlightBaseOptions,
+  applyHomeFilterTransition,
   buildHomeVerticalFilterContext,
   buildHomeVerticalFirstPageFeedKeyOptions,
   buildRailDiscoveryCacheKeyOptions,
@@ -64,19 +85,18 @@ import {
   buildVerticalFeedOptionsProp,
   buildVerticalLoadFeedOptions,
   getFeedSearchQ,
-  getVerticalSegmentType,
   hasActiveHomeFilters,
+  hasExplicitHomeContentFilters,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
-  isDateSpotlightFilter,
+  isTrueDefaultAllVerticalFeed,
   shouldPersonalizeHomeVerticalFeed,
-  toggleHomeDateFilter,
+  shouldShowHomeDiscoveryRails,
   type HomeDateFilter,
   type HomeDateFilterChip,
+  type HomeFilterAction,
+  type HomeVerticalFilterContext,
 } from "../lib/homeVerticalFilters";
-
-/** After Friends-empty preflight: hide inline banner (client-side slice only; not DB-wide). */
-const NO_FRIENDS_BANNER_DISMISS_MS = 2600;
 
 /** Synthetic history marker while Home search shell is open (browser / iOS swipe back). */
 const HOME_SEARCH_HISTORY_MARKER = "homeSearchShell";
@@ -140,13 +160,17 @@ export default function HomePage() {
   const [searchMode, setSearchMode] = useState<"posts" | "users">("posts");
   const [debouncedUserSearchQuery, setDebouncedUserSearchQuery] =
     useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  /** Settled zero posts in search overlay — drives Search users ripple. */
+  const [searchPostsEmptyActive, setSearchPostsEmptyActive] = useState(false);
+  const [selectedTags] = useState<string[]>([]);
   const [dateFilter, setDateFilter] = useState<HomeDateFilter>(
     INITIAL_HOME_DATE_FILTER
   );
   const [friendsFilter, setFriendsFilter] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const homeTopBarRef = useRef<HTMLDivElement>(null);
+  /** Browse feed shell — gets aria-hidden/inert while Home search is active. */
+  const homeBrowseRef = useRef<HTMLDivElement>(null);
   const scheduleScrollHomeFeedToTopRef = useRef<() => void>(() => {});
   const [forceRevealHeader, setForceRevealHeader] = useState(false);
   /** Input focus (keyboard) only — blur must not exit search shell. */
@@ -155,6 +179,10 @@ export default function HomePage() {
   const [homeSearchShellOpen, setHomeSearchShellOpen] = useState(false);
   const homeSearchHistoryPushedRef = useRef(false);
   const homeSearchSkipPopstateRef = useRef(false);
+  /** Ignore WebView/history focus restoration so exit cannot immediately reopen search. */
+  const homeSearchIgnoreFocusRef = useRef(false);
+  /** Browse window Y captured once when search activates. */
+  const preSearchScrollYRef = useRef(0);
   /** Search-only inner scroll layer (keyboard open — avoids window scroll + fixed header drift). */
   const homeSearchScrollRef = useRef<HTMLDivElement>(null);
 
@@ -175,14 +203,6 @@ export default function HomePage() {
   const [tagFallbackLoading, setTagFallbackLoading] = useState(false);
   const [showTagFallback, setShowTagFallback] = useState(false);
 
-  /** Inline banner when Friends preflight finds zero matches (client-side slice; not DB-wide). */
-  const [noFriendsInlineBannerVisible, setNoFriendsInlineBannerVisible] =
-    useState(false);
-  const noFriendsBannerTimerRef = useRef<number | null>(null);
-  const friendsPreflightInFlightRef = useRef(false);
-  const [friendsPreflightPending, setFriendsPreflightPending] = useState(false);
-  const hadFriendsInFiltersRef = useRef(false);
-
   /** Post feed `q` only in posts mode; users mode does not send text as post `q`. */
   const feedSearchQ = useMemo(
     () => getFeedSearchQ(searchMode, search),
@@ -197,6 +217,11 @@ export default function HomePage() {
   useLayoutEffect(() => {
     if (homePostSearchActive && !prevHomePostSearchActiveRef.current) {
       setSearchMode("posts");
+      // Safety net: if focus was left in browse/tab when search activated, park it on the field.
+      moveFocusOutOfHomeSearchHiddenTrees({
+        browseRoot: homeBrowseRef.current,
+        searchInputHost: homeTopBarRef.current,
+      });
     }
     prevHomePostSearchActiveRef.current = homePostSearchActive;
   }, [homePostSearchActive]);
@@ -204,7 +229,9 @@ export default function HomePage() {
   const handleHomeSearchModeChange = useCallback((mode: "posts" | "users") => {
     if (mode === "users") setFiltersOpen(false);
     setSearchMode(mode);
-    scheduleScrollHomeFeedToTopRef.current();
+    if (homeSearchScrollRef.current) {
+      homeSearchScrollRef.current.scrollTop = 0;
+    }
   }, []);
 
   useEffect(() => {
@@ -218,27 +245,6 @@ export default function HomePage() {
     return () => window.clearTimeout(id);
   }, [search, searchMode, homePostSearchActive]);
 
-  const showHomePostsFeed =
-    !homePostSearchActive || searchMode === "posts";
-  const suppressBrowseRails =
-    homePostSearchActive && searchMode === "posts";
-
-  const dateSpotlightActive = isDateSpotlightFilter(dateFilter);
-
-  const [dateSpotlightItems, setDateSpotlightItems] = useState<FeedItem[]>([]);
-  const [dateSpotlightFallbackFilter, setDateSpotlightFallbackFilter] =
-    useState<HomeDateFilterChip | null>(null);
-  const [dateSpotlightFallbackItems, setDateSpotlightFallbackItems] = useState<
-    FeedItem[]
-  >([]);
-  const [dateSpotlightLoading, setDateSpotlightLoading] = useState(false);
-  const [dateSpotlightResolved, setDateSpotlightResolved] = useState(false);
-
-  const verticalSegmentType = useMemo(
-    () => getVerticalSegmentType(viewMode),
-    [viewMode]
-  );
-
   const blurHomeSearchInput = useCallback(() => {
     const input = homeTopBarRef.current?.querySelector<HTMLInputElement>(
       "[data-home-search-input]"
@@ -247,19 +253,27 @@ export default function HomePage() {
   }, []);
 
   const handleHomeSearchFocusChange = useCallback((focused: boolean) => {
+    if (focused && homeSearchIgnoreFocusRef.current) {
+      blurHomeSearchInput();
+      return;
+    }
     setHomeSearchFocused(focused);
     if (focused) setHomeSearchShellOpen(true);
+  }, [blurHomeSearchInput]);
+
+  const handleHomeSearchInputPointerDown = useCallback(() => {
+    homeSearchIgnoreFocusRef.current = false;
   }, []);
 
   /** Exit Home search shell — clears query, posts mode, closes filters, blurs field. */
   const exitHomePostSearchMode = useCallback(() => {
+    homeSearchIgnoreFocusRef.current = true;
     blurHomeSearchInput();
     setHomeSearchShellOpen(false);
     setSearch("");
     setSearchMode("posts");
     setFiltersOpen(false);
     setHomeSearchFocused(false);
-    scheduleScrollHomeFeedToTopRef.current();
   }, [blurHomeSearchInput]);
 
   const exitHomePostSearchModeRef = useRef(exitHomePostSearchMode);
@@ -281,13 +295,21 @@ export default function HomePage() {
     homeSearchShellOpen &&
     !isPostDetailRoutePath(location.pathname);
 
-  /** Browser / iOS swipe / Android back: close filters first, then search; X cleanup via effect teardown. */
+  /** One synthetic history entry while search is open. Listeners removed before any cleanup pop. */
   useEffect(() => {
     if (!engageHomeSearchBack) {
+      if (homeSearchHistoryPushedRef.current) {
+        const st = window.history.state as Record<string, boolean> | null;
+        if (st && st[HOME_SEARCH_HISTORY_MARKER] === true) {
+          window.history.back();
+        }
+        homeSearchHistoryPushedRef.current = false;
+      }
+      homeSearchSkipPopstateRef.current = false;
       return;
     }
 
-    if (typeof window !== "undefined" && !homeSearchHistoryPushedRef.current) {
+    if (!homeSearchHistoryPushedRef.current) {
       window.history.pushState(
         { [HOME_SEARCH_HISTORY_MARKER]: true } as Record<string, boolean>,
         "",
@@ -299,15 +321,6 @@ export default function HomePage() {
     const onPopState = () => {
       if (homeSearchSkipPopstateRef.current) {
         homeSearchSkipPopstateRef.current = false;
-        return;
-      }
-      if (filtersOpenRef.current) {
-        setFiltersOpen(false);
-        window.history.pushState(
-          { [HOME_SEARCH_HISTORY_MARKER]: true } as Record<string, boolean>,
-          "",
-          window.location.href
-        );
         return;
       }
       exitHomePostSearchModeRef.current();
@@ -329,19 +342,6 @@ export default function HomePage() {
       window.removeEventListener("popstate", onPopState);
       window.removeEventListener("keydown", onKeyDown);
       unsubAndroid();
-
-      if (typeof window === "undefined") {
-        homeSearchHistoryPushedRef.current = false;
-        return;
-      }
-      if (homeSearchHistoryPushedRef.current) {
-        const st = window.history.state as Record<string, boolean> | null;
-        if (st && st[HOME_SEARCH_HISTORY_MARKER] === true) {
-          homeSearchSkipPopstateRef.current = true;
-          window.history.back();
-        }
-        homeSearchHistoryPushedRef.current = false;
-      }
     };
   }, [engageHomeSearchBack, handleHomeSearchBackAction]);
 
@@ -350,8 +350,7 @@ export default function HomePage() {
 
   const pinHomeTopBar =
     homePostSearchActive ||
-    filtersOpen ||
-    noFriendsInlineBannerVisible;
+    filtersOpen;
   /** Never slide chrome off-screen while the Home search shell is open (focused or typed query), even if scroll/pin state ever diverges. */
   const effectiveHomeTopHidden =
     !homePostSearchActive && isHidden && !pinHomeTopBar;
@@ -366,6 +365,22 @@ export default function HomePage() {
     if (!isHomeTabActive) return;
     dispatchBottomTabPeek("home", effectiveHomeTopHidden);
   }, [effectiveHomeTopHidden, isHomeTabActive]);
+
+  useEffect(() => {
+    const hide = isHomeTabActive && homePostSearchActive;
+    if (hide) {
+      // BottomTab applies aria-hidden on the next paint after this store write —
+      // clear tab focus first so the tab chrome hide does not warn.
+      moveFocusOutOfHomeSearchHiddenTrees({
+        browseRoot: homeBrowseRef.current,
+        searchInputHost: homeTopBarRef.current,
+      });
+    }
+    setHomeSearchTabChromeHidden(hide);
+    return () => {
+      setHomeSearchTabChromeHidden(false);
+    };
+  }, [isHomeTabActive, homePostSearchActive]);
 
   // auth state for feed personalization
   const dispatch = useDispatch();
@@ -408,7 +423,19 @@ export default function HomePage() {
     };
   }, [isHomeVisible]);
 
-  const verticalFilterCtx = useMemo(
+  const browseFilterCtx = useMemo(
+    () =>
+      buildHomeVerticalFilterContext({
+        viewMode,
+        dateFilter,
+        selectedTags,
+        viewerProfileId,
+        friendsFilter,
+      }),
+    [viewMode, dateFilter, selectedTags, viewerProfileId, friendsFilter]
+  );
+
+  const searchFilterCtx = useMemo(
     () =>
       buildHomeVerticalFilterContext({
         viewMode,
@@ -421,97 +448,34 @@ export default function HomePage() {
     [viewMode, dateFilter, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
   );
 
-  /** Vertical-shaped probe: current type/search/tags + server-side friends-only. */
-  const runFriendsPreflight = useCallback(async (): Promise<boolean> => {
-    if (!viewerProfileId) return false;
-
-    const probeCtx = buildHomeVerticalFilterContext({
-      viewMode,
-      dateFilter: "none",
-      feedSearchQ,
-      selectedTags,
-      viewerProfileId,
-      friendsFilter: true,
-    });
-    const feedOptions = buildVerticalLoadFeedOptions(probeCtx, {
-      offset: 0,
-      limit: 1,
-    });
-
-    if (USE_OPTIMIZED_FEED) {
-      const { items } = await getPublicFeedOptimizedWithCount(feedOptions);
-      return items.length > 0;
-    }
-
-    const items = await getPublicFeed(feedOptions);
-    return items.length > 0;
-  }, [viewMode, feedSearchQ, selectedTags, viewerProfileId]);
-
-  const handleFriendsChipClick = useCallback(async () => {
-    if (friendsPreflightInFlightRef.current) return;
-    friendsPreflightInFlightRef.current = true;
-    setFriendsPreflightPending(true);
-    try {
-      const hasMatches = await runFriendsPreflight();
-      if (hasMatches) {
-        setFriendsFilter(true);
-        scheduleScrollHomeFeedToTopRef.current();
-      } else {
-        setNoFriendsInlineBannerVisible(true);
-        if (noFriendsBannerTimerRef.current !== null) {
-          clearTimeout(noFriendsBannerTimerRef.current);
-          noFriendsBannerTimerRef.current = null;
-        }
-        noFriendsBannerTimerRef.current = window.setTimeout(() => {
-          noFriendsBannerTimerRef.current = null;
-          setNoFriendsInlineBannerVisible(false);
-        }, NO_FRIENDS_BANNER_DISMISS_MS);
-      }
-    } finally {
-      friendsPreflightInFlightRef.current = false;
-      setFriendsPreflightPending(false);
-    }
-  }, [runFriendsPreflight]);
-
-  useEffect(() => {
-    if (hadFriendsInFiltersRef.current && !friendsFilter) {
-      setNoFriendsInlineBannerVisible(false);
-      if (noFriendsBannerTimerRef.current !== null) {
-        clearTimeout(noFriendsBannerTimerRef.current);
-        noFriendsBannerTimerRef.current = null;
-      }
-    }
-    hadFriendsInFiltersRef.current = friendsFilter;
-  }, [friendsFilter]);
-
-  useEffect(() => {
-    return () => {
-      if (noFriendsBannerTimerRef.current !== null) {
-        clearTimeout(noFriendsBannerTimerRef.current);
-      }
-    };
-  }, []);
-
   // tweak these if your actual header/footer heights differ (floating top bar + quick chips + gradient)
   const HEADER_HEIGHT = 96;
   const FOOTER_HEIGHT = 80;
-  /** Inner search scroll shell inset — matches prior search-mode content paddingTop. */
-  const HOME_SEARCH_SCROLL_TOP = "calc(86px + var(--safe-area-top-layout))";
+  /** Inner search scroll shell — header row only (tabs live in the bottom dock). */
+  const HOME_SEARCH_SCROLL_TOP = "calc(58px + var(--safe-area-top-layout))";
 
   // Track and persist scroll position per feed key to restore when navigating back
   const latestScrollRef = useRef(0);
 
-  /** Single options object for Home vertical first-page cache key — shared by scroll purge, sync initialItems, get/set callbacks. */
-  const homeVerticalFirstPageFeedKeyOptions = useMemo(
-    () => buildHomeVerticalFirstPageFeedKeyOptions(verticalFilterCtx),
-    [verticalFilterCtx]
+  /** Browse first-page cache key — never includes search `q`. */
+  const browseVerticalFirstPageFeedKeyOptions = useMemo(
+    () => buildHomeVerticalFirstPageFeedKeyOptions(browseFilterCtx),
+    [browseFilterCtx]
   );
 
-  // [FIX] Cache key must include viewerProfileId in dependencies to recompute when it changes
-  // This ensures cache hits after profile ID resolves
-  const feedCacheKey = useMemo(
-    () => dataCache.generateFeedKey(homeVerticalFirstPageFeedKeyOptions),
-    [homeVerticalFirstPageFeedKeyOptions]
+  const browseFeedCacheKey = useMemo(
+    () => dataCache.generateFeedKey(browseVerticalFirstPageFeedKeyOptions),
+    [browseVerticalFirstPageFeedKeyOptions]
+  );
+
+  const searchVerticalFirstPageFeedKeyOptions = useMemo(
+    () => buildHomeVerticalFirstPageFeedKeyOptions(searchFilterCtx),
+    [searchFilterCtx]
+  );
+
+  const searchFeedCacheKey = useMemo(
+    () => dataCache.generateFeedKey(searchVerticalFirstPageFeedKeyOptions),
+    [searchVerticalFirstPageFeedKeyOptions]
   );
 
   const saveScrollPosition = useCallback((key: string, value: number) => {
@@ -545,8 +509,8 @@ export default function HomePage() {
     }
     window.scrollTo({ top: 0, behavior: "auto" });
     latestScrollRef.current = 0;
-    saveScrollPosition(feedCacheKey, 0);
-  }, [feedCacheKey, saveScrollPosition]);
+    saveScrollPosition(browseFeedCacheKey, 0);
+  }, [browseFeedCacheKey, saveScrollPosition]);
 
   const scheduleScrollHomeFeedToTop = useCallback(() => {
     requestAnimationFrame(scrollHomeFeedToTop);
@@ -556,135 +520,81 @@ export default function HomePage() {
     scheduleScrollHomeFeedToTopRef.current = scheduleScrollHomeFeedToTop;
   }, [scheduleScrollHomeFeedToTop]);
 
-  /** Search mode: inner scroll shell — lock document scroll so fixed header stays put with IME open. */
-  useEffect(() => {
-    if (!homePostSearchActive || !isHomeTabActive) return;
-
-    saveScrollPosition(feedCacheKey, latestScrollRef.current);
-
-    const prevBodyOverflow = document.body.style.overflow;
-    const prevHtmlOverflow = document.documentElement.style.overflow;
-    const lockedScrollY = window.scrollY;
-
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-    window.scrollTo(0, 0);
-
-    return () => {
-      document.body.style.overflow = prevBodyOverflow;
-      document.documentElement.style.overflow = prevHtmlOverflow;
-      window.scrollTo(0, lockedScrollY);
-    };
-  }, [
-    homePostSearchActive,
-    isHomeTabActive,
-    feedCacheKey,
-    saveScrollPosition,
-  ]);
-
-  /** Memory + persisted first-page snapshot — sync read for cold offline open before dataCache.ready. */
-  const homeVerticalWarmInitialItems = useMemo((): FeedItem[] | undefined => {
-    const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-    let items: FeedItem[] | undefined;
-    if (Array.isArray(cached) && cached.length > 0) {
-      items = cached;
-    } else {
-      const persisted = readPersistedHomeFeed(feedCacheKey);
-      if (persisted?.items?.length) items = persisted.items;
+  const prevSearchActiveForScrollRef = useRef(false);
+  useLayoutEffect(() => {
+    if (homePostSearchActive && !prevSearchActiveForScrollRef.current) {
+      const y = window.scrollY;
+      preSearchScrollYRef.current = y;
+      saveScrollPosition(browseFeedCacheKey, y);
     }
-    if (!items?.length) return undefined;
-    return applyPendingPostPatchesToItems(items);
-  }, [feedCacheKey]);
+    prevSearchActiveForScrollRef.current = homePostSearchActive;
+  }, [homePostSearchActive, browseFeedCacheKey, saveScrollPosition]);
 
-  /** Date spotlight fetch — independent of ProgressiveFeed; all date filters use spotlight. */
-  useEffect(() => {
-    if (!dateSpotlightActive) {
-      setDateSpotlightItems([]);
-      setDateSpotlightFallbackFilter(null);
-      setDateSpotlightFallbackItems([]);
-      setDateSpotlightLoading(false);
-      setDateSpotlightResolved(false);
-      logTodaySpotlight({
-        dateSpotlightActive: false,
-        dateFilter,
-        spotlightCount: 0,
-        spotlightLoading: false,
-        spotlightResolved: false,
-      });
-      return;
-    }
+  /**
+   * Search mode: nested-safe document freeze. Browse Y is captured in the
+   * layout effect above (and persisted for feed restore); the canonical lock
+   * snapshots/restores window scroll itself — no second HomePage scrollTo.
+   */
+  useOverlayBackgroundScrollLock(homePostSearchActive && isHomeTabActive);
 
-    let cancelled = false;
-    setDateSpotlightLoading(true);
-    setDateSpotlightResolved(false);
-    setDateSpotlightFallbackFilter(null);
-    setDateSpotlightFallbackItems([]);
+  const readWarmFeedItems = useCallback((cacheKey: string): FeedItem[] | undefined => {
+    const snapshot = readHomeFeedHydrationSnapshot(cacheKey, (key) =>
+      dataCache.get<FeedItem[]>(key)
+    );
+    if (!snapshot?.items?.length) return undefined;
+    const patched = applyPendingPostPatchesToItems(snapshot.items);
+    seedPublishedMediaFromFeedItems({
+      items: patched,
+      viewerUserId: currentUserId ?? null,
+      source: snapshot.source === "persist" ? "persist" : "warm",
+      snapshotTs: snapshot.snapshotTs,
+    });
+    return patched;
+  }, [currentUserId]);
 
-    void (async () => {
-      try {
-        const result = await resolveDateSpotlightWithFallback(
-          dateFilter,
-          buildDateSpotlightBaseOptions(verticalFilterCtx),
-          USE_OPTIMIZED_FEED
-        );
-        if (cancelled) return;
-        setDateSpotlightItems(result.primaryItems);
-        setDateSpotlightFallbackFilter(result.fallback?.filter ?? null);
-        setDateSpotlightFallbackItems(result.fallback?.items ?? []);
-        logTodaySpotlight({
-          dateSpotlightActive: true,
-          dateFilter,
-          verticalSegment: viewMode,
-          verticalType: verticalSegmentType ?? "all",
-          primaryCount: result.primaryItems.length,
-          fallbackFilter: result.fallback?.filter ?? null,
-          fallbackCount: result.fallback?.items.length ?? 0,
-          spotlightLoading: false,
-          spotlightResolved: true,
-        });
-      } catch (err) {
-        if (cancelled) return;
-        console.error("[HomePage] Date spotlight fetch failed:", err);
-        setDateSpotlightItems([]);
-        setDateSpotlightFallbackFilter(null);
-        setDateSpotlightFallbackItems([]);
-        logTodaySpotlight({
-          dateSpotlightActive: true,
-          dateFilter,
-          verticalSegment: viewMode,
-          primaryCount: 0,
-          fallbackCount: 0,
-          error: true,
-          spotlightResolved: true,
-        });
-      } finally {
-        if (!cancelled) {
-          setDateSpotlightLoading(false);
-          setDateSpotlightResolved(true);
-        }
-      }
-    })();
+  const browseVerticalWarmInitialItems = useMemo(
+    (): FeedItem[] | undefined => readWarmFeedItems(browseFeedCacheKey),
+    [browseFeedCacheKey, readWarmFeedItems]
+  );
 
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    dateSpotlightActive,
+  const searchVerticalWarmInitialItems = useMemo(
+    (): FeedItem[] | undefined => readWarmFeedItems(searchFeedCacheKey),
+    [searchFeedCacheKey, readWarmFeedItems]
+  );
+
+  useLayoutEffect(() => {
+    seedSocialActionsFromFeedItems(browseVerticalWarmInitialItems);
+    seedSocialActionsFromFeedItems(searchVerticalWarmInitialItems);
+  }, [browseVerticalWarmInitialItems, searchVerticalWarmInitialItems]);
+
+  const homeFilterStateRef = useRef({
     dateFilter,
     viewMode,
-    verticalSegmentType,
-    feedSearchQ,
-    selectedTags,
-    viewerProfileId,
     friendsFilter,
-    verticalFilterCtx,
-  ]);
+  });
+  homeFilterStateRef.current = { dateFilter, viewMode, friendsFilter };
+
+  const applyHomeFilterAction = useCallback(
+    (action: HomeFilterAction) => {
+      const next = applyHomeFilterTransition(homeFilterStateRef.current, action);
+      setDateFilter(next.dateFilter);
+      setViewMode(next.viewMode);
+      setFriendsFilter(next.friendsFilter);
+      setFiltersOpen(false);
+      scheduleScrollHomeFeedToTop();
+    },
+    [scheduleScrollHomeFeedToTop]
+  );
 
   const clearAllHomeFilters = useCallback(() => {
-    setDateFilter(INITIAL_HOME_DATE_FILTER);
-    setViewMode(INITIAL_HOME_TYPE_FILTER);
-    setFriendsFilter(false);
-    setSelectedTags([]);
+    homeSearchIgnoreFocusRef.current = true;
+    const cleared = applyHomeFilterTransition(
+      homeFilterStateRef.current,
+      { type: "clearAll" }
+    );
+    setDateFilter(cleared.dateFilter);
+    setViewMode(cleared.viewMode);
+    setFriendsFilter(cleared.friendsFilter);
     setHomeSearchShellOpen(false);
     setSearch("");
     setSearchMode("posts");
@@ -696,50 +606,192 @@ export default function HomePage() {
 
   const handleToggleDateFilter = useCallback(
     (target: HomeDateFilterChip) => {
-      setDateFilter((current) => toggleHomeDateFilter(current, target));
-      scheduleScrollHomeFeedToTop();
+      applyHomeFilterAction({ type: "toggleDate", target });
     },
-    [scheduleScrollHomeFeedToTop]
+    [applyHomeFilterAction]
   );
 
-  const handleFriendsFilterDeactivate = useCallback(() => {
-    setFriendsFilter(false);
-    scheduleScrollHomeFeedToTop();
-  }, [scheduleScrollHomeFeedToTop]);
-
-  const handleViewModeChange = useCallback(
-    (mode: "all" | "hangouts" | "experiences") => {
-      setViewMode(mode);
-      scheduleScrollHomeFeedToTop();
+  const handleToggleTypeFilter = useCallback(
+    (target: "hangouts" | "experiences") => {
+      applyHomeFilterAction(
+        target === "hangouts" ? { type: "toggleEvents" } : { type: "togglePlaces" }
+      );
     },
-    [scheduleScrollHomeFeedToTop]
+    [applyHomeFilterAction]
   );
 
-  const handleTagsChange = useCallback(
-    (tags: string[]) => {
-      setSelectedTags(tags);
-      scheduleScrollHomeFeedToTop();
-    },
-    [scheduleScrollHomeFeedToTop]
-  );
+  const handleToggleFriends = useCallback(() => {
+    applyHomeFilterAction({ type: "toggleFriends" });
+  }, [applyHomeFilterAction]);
 
   const handleSearchChange = useCallback(
     (q: string) => {
-      if (q.trim().length > 0) setHomeSearchShellOpen(true);
+      const trimmed = q.trim();
+      // Before browse/tab get aria-hidden, move focus out of those trees.
+      if (!homePostSearchActive && trimmed.length > 0) {
+        moveFocusOutOfHomeSearchHiddenTrees({
+          browseRoot: homeBrowseRef.current,
+          searchInputHost: homeTopBarRef.current,
+        });
+      }
+      if (trimmed.length > 0) setHomeSearchShellOpen(true);
       setSearch(q);
-      if (q === "") {
-        scheduleScrollHomeFeedToTop();
+      if (q === "" && homeSearchScrollRef.current) {
+        homeSearchScrollRef.current.scrollTop = 0;
       }
     },
-    [scheduleScrollHomeFeedToTop]
+    [homePostSearchActive]
   );
 
-  /** Bumps when user taps Home while already on home — remounts feed + rail only on this page */
+  /** Bumps when user taps Home while already on home — remounts rail; default-All posts replace in place */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
   /** In-place Home feed soft refresh (native resume) without remounting ProgressiveFeed */
   const [homeFeedSoftRefreshEpoch, setHomeFeedSoftRefreshEpoch] = useState(1);
+  const [homeListReplaceRevision, setHomeListReplaceRevision] = useState(0);
+  const [homeListReplaceItems, setHomeListReplaceItems] = useState<
+    FeedItem[] | null
+  >(null);
+  const [homeListReplaceBackendOffset, setHomeListReplaceBackendOffset] =
+    useState<number | undefined>(undefined);
+  const [homeListReplaceCount, setHomeListReplaceCount] = useState<
+    number | undefined
+  >(undefined);
+  const [homeListReplaceCountIsAuthoritative, setHomeListReplaceCountIsAuthoritative] =
+    useState<boolean | undefined>(undefined);
+  const [homeCycleTick, setHomeCycleTick] = useState(0);
+  const homeReplaceInFlightRef = useRef(false);
+  const prevCycleViewerKeyRef = useRef<string | null>(null);
   const isHomeTabActiveRef = useRef(isHomeTabActive);
   isHomeTabActiveRef.current = isHomeTabActive;
+
+  const browseIsTrueDefaultAll = isTrueDefaultAllVerticalFeed(browseFilterCtx);
+  const cycleViewerKey = homeFeedCycleViewerKey(viewerProfileId);
+  const homeCycleReplacedThisCycle = useMemo(
+    () => getHomeFeedCycle(cycleViewerKey).replacedThisCycle,
+    [cycleViewerKey, homeCycleTick]
+  );
+
+  const browseVerticalWarmInitialItemsStamped = useMemo(():
+    | FeedItem[]
+    | undefined => {
+    if (!browseVerticalWarmInitialItems?.length) {
+      return browseVerticalWarmInitialItems;
+    }
+    if (!browseIsTrueDefaultAll) return browseVerticalWarmInitialItems;
+    const cycleId = getHomeFeedCycle(cycleViewerKey).cycleId;
+    return stampHomeFeedPresentationKeys(
+      browseVerticalWarmInitialItems,
+      cycleId
+    );
+  }, [
+    browseVerticalWarmInitialItems,
+    browseIsTrueDefaultAll,
+    cycleViewerKey,
+    homeCycleTick,
+  ]);
+
+  useEffect(() => {
+    if (
+      prevCycleViewerKeyRef.current &&
+      prevCycleViewerKeyRef.current !== cycleViewerKey
+    ) {
+      resetHomeFeedCycle(prevCycleViewerKeyRef.current);
+    }
+    prevCycleViewerKeyRef.current = cycleViewerKey;
+  }, [cycleViewerKey]);
+
+  useEffect(() => {
+    if (!browseIsTrueDefaultAll) return;
+    const seeded = browseVerticalWarmInitialItems;
+    if (!seeded?.length) return;
+    const viewerKey = homeFeedCycleViewerKey(viewerProfileId);
+    const cycle = getHomeFeedCycle(viewerKey);
+    applyHomeFeedCycleState(
+      viewerKey,
+      recordHomeFeedCycleDelivery(cycle, {
+        deliveredItems: seeded,
+        requestOffset: cycle.cursorOffset,
+        consumedOffset: 0,
+      })
+    );
+  }, [
+    browseIsTrueDefaultAll,
+    browseVerticalWarmInitialItems,
+    viewerProfileId,
+  ]);
+
+  const runUnseenHomeReplacement = useCallback(async () => {
+    if (homeReplaceInFlightRef.current) return;
+    homeReplaceInFlightRef.current = true;
+    try {
+      const viewerKey = homeFeedCycleViewerKey(viewerProfileIdRef.current);
+      const state = getHomeFeedCycle(viewerKey);
+      const defaultAllCtx = buildHomeVerticalFilterContext({
+        viewMode: "all",
+        dateFilter: "none",
+        selectedTags: [],
+        viewerProfileId: viewerProfileIdRef.current,
+        friendsFilter: false,
+      });
+      const result = await buildUnseenHomeReplacementPage({
+        pageSize: HOME_FEED_FIRST_PAGE,
+        state,
+        peekOffset0: async () => {
+          const page = await getPublicFeedOptimizedWithCount({
+            ...buildVerticalLoadFeedOptions(defaultAllCtx, {
+              offset: 0,
+              limit: HOME_FEED_FIRST_PAGE,
+            }),
+            skipMemoryCache: true,
+          });
+          return {
+            items: page.items,
+            consumedOffset: page.consumedOffset ?? page.items.length,
+            count: page.count,
+            countIsAuthoritative: page.countIsAuthoritative,
+          };
+        },
+        fetchAtOffset: async (offset, limit) => {
+          const page = await getPublicFeedOptimizedWithCount(
+            buildVerticalLoadFeedOptions(defaultAllCtx, { offset, limit })
+          );
+          return {
+            items: page.items,
+            consumedOffset: page.consumedOffset ?? page.items.length,
+            count: page.count,
+            countIsAuthoritative: page.countIsAuthoritative,
+          };
+        },
+      });
+      if (!result.ok) return;
+      applyHomeFeedCycleState(viewerKey, result.nextState);
+      // Phase 2B.2C: soft Event front-nudge on explicit refresh page only.
+      const refreshedItems = applyRefreshEventNudge(result.items, {
+        frontWindow: 6,
+        desiredUpcomingEvents: 2,
+        maxPromotions: 2,
+        timeZone: HOME_EVENT_TIMEZONE,
+      });
+      seedSocialActionsFromFeedItems(refreshedItems);
+      seedPublishedMediaFromFeedItems({
+        items: refreshedItems,
+        viewerUserId: currentUserId ?? null,
+        source: "feed",
+      });
+      setHomeListReplaceItems(refreshedItems);
+      setHomeListReplaceBackendOffset(result.nextState.cursorOffset);
+      setHomeListReplaceCount(
+        result.nextState.authoritativeCount ?? undefined
+      );
+      setHomeListReplaceCountIsAuthoritative(
+        result.nextState.authoritativeCount != null
+      );
+      setHomeListReplaceRevision((n) => n + 1);
+      setHomeCycleTick((n) => n + 1);
+    } finally {
+      homeReplaceInFlightRef.current = false;
+    }
+  }, [currentUserId]);
 
   useEffect(() => {
     const onRefreshRequest = (e: Event) => {
@@ -752,22 +804,39 @@ export default function HomePage() {
         return;
       }
       const detail = (e as CustomEvent<HomeTabRefreshDetail>).detail;
+      const currentlyDefaultAll = isTrueDefaultAllVerticalFeed(
+        browseFilterCtx
+      );
       if (detail?.source === "home-tab") {
         clearAllHomeFilters();
       }
+      const rotateUnseen =
+        detail?.source === "home-tab" || currentlyDefaultAll;
       if (import.meta.env.DEV) {
         console.debug(
-          `[${HOME_TAB_REFRESH_EVENT}] remount (keeping feed/rail caches until fresh load)`
+          `[${HOME_TAB_REFRESH_EVENT}] ${
+            rotateUnseen
+              ? "unseen-first replacement"
+              : "remount (keeping feed/rail caches until fresh load)"
+          }`
         );
       }
       /** Do not purge in-memory caches here — remount uses initialItems/getCachedItems; ProgressiveFeed/setCachedItems + RPC cache overwrite after success */
       setHomeRefreshEpoch((n) => n + 1);
+      if (rotateUnseen) {
+        void runUnseenHomeReplacement();
+      }
     };
     window.addEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     return () => {
       window.removeEventListener(HOME_TAB_REFRESH_EVENT, onRefreshRequest);
     };
-  }, [isHomeTabActive, clearAllHomeFilters]);
+  }, [
+    isHomeTabActive,
+    clearAllHomeFilters,
+    browseFilterCtx,
+    runUnseenHomeReplacement,
+  ]);
 
   useEffect(() => {
     if (!isNativeApp()) return;
@@ -805,7 +874,11 @@ export default function HomePage() {
     pullProgress,
     isRefreshing: ptrRefreshing,
   } = useHomePullToRefresh({
-    enabled: isHomeTabActive && !homePostSearchActive,
+    enabled:
+      isHomeTabActive &&
+      !homePostSearchActive &&
+      !isPostDetailRoutePath(location.pathname) &&
+      !showInfoModal,
     onCommit: () => {
       window.dispatchEvent(
         new CustomEvent(HOME_TAB_REFRESH_EVENT, {
@@ -816,29 +889,30 @@ export default function HomePage() {
     refreshEpoch: homeRefreshEpoch,
   });
 
-  // Restore scroll on mount if we have a saved position for this feed key
+  // Restore scroll on mount / browse-key change — never while search overlay is open.
   useEffect(() => {
-    const savedY = getSavedScrollPosition(feedCacheKey);
-    // console.log('[HomePage] 📜 Restoring scroll position:', savedY, 'for key:', feedCacheKey);
+    if (homePostSearchActive) return;
+    const savedY = getSavedScrollPosition(browseFeedCacheKey);
     if (savedY > 0) {
       requestAnimationFrame(() => {
         window.scrollTo({ top: savedY, behavior: "auto" });
       });
     }
-  }, [feedCacheKey, getSavedScrollPosition]);
+  }, [browseFeedCacheKey, getSavedScrollPosition, homePostSearchActive]);
 
-  // Track scroll and persist on unmount
+  // Track scroll and persist on unmount using the browse key only.
   useEffect(() => {
     const onScroll = () => {
       latestScrollRef.current = window.scrollY;
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      // console.log('[HomePage] 💾 Saving scroll position:', latestScrollRef.current, 'for key:', feedCacheKey);
       window.removeEventListener("scroll", onScroll);
-      saveScrollPosition(feedCacheKey, latestScrollRef.current);
+      if (!homePostSearchActive) {
+        saveScrollPosition(browseFeedCacheKey, latestScrollRef.current);
+      }
     };
-  }, [feedCacheKey, saveScrollPosition]);
+  }, [browseFeedCacheKey, saveScrollPosition, homePostSearchActive]);
 
   // [REFACTOR] Removed hydrate/SWR/trim functions - ProgressiveFeed handles all loading
   // This eliminates race conditions and duplicate API calls
@@ -864,6 +938,8 @@ export default function HomePage() {
     if (!filtersOpen) return;
 
     const handleOutsidePress = (event: PointerEvent) => {
+      // Home Tour owns the screen while open — don't fight Date/Time spotlight.
+      if (document.querySelector("[data-home-tour-overlay]")) return;
       const root = homeTopBarRef.current;
       if (!root) return;
       const target = event.target as Node | null;
@@ -894,14 +970,22 @@ export default function HomePage() {
     }
   }, [effectiveHomeTopHidden, homePostSearchActive, searchMode]);
 
-  /** Popular-tags Clear All: tags + search only (legacy drawer behavior). */
-  const handleClearFilters = useCallback(() => {
-    setSelectedTags([]);
-    setSearch("");
-    blurHomeSearchInput();
-    setHomeSearchFocused(false);
-    scheduleScrollHomeFeedToTop();
-  }, [scheduleScrollHomeFeedToTop, blurHomeSearchInput]);
+  /** Home Tour: open filter UI only — never toggle chips / search / viewMode. */
+  const onOpenTourFilters = useCallback(() => {
+    if (homePostSearchActive && searchMode === "users") return;
+    setForceRevealHeader(true);
+    setFiltersOpen(true);
+  }, [homePostSearchActive, searchMode]);
+
+  const onCloseTourFilters = useCallback(() => {
+    setFiltersOpen(false);
+  }, []);
+
+  /** One-shot Home top + chrome reveal before tour scroll lock. */
+  const onPrepareTourStart = useCallback(() => {
+    setForceRevealHeader(true);
+    scrollHomeFeedToTop();
+  }, [scrollHomeFeedToTop]);
 
   // Logo opens brand/about info; logged-out X close may open auth (see handleWelcomeClose)
   const handleLogoClick = useCallback(() => {
@@ -940,6 +1024,38 @@ export default function HomePage() {
     [dateFilter, viewMode, friendsFilter, search, selectedTags]
   );
 
+  const browseHasActiveFilters = useMemo(
+    () =>
+      hasActiveHomeFilters({
+        dateFilter,
+        typeFilter: viewMode,
+        friendsFilter,
+        search: "",
+        selectedTags,
+      }),
+    [dateFilter, viewMode, friendsFilter, selectedTags]
+  );
+
+  const explicitContentFilters = useMemo(
+    () =>
+      hasExplicitHomeContentFilters({
+        dateFilter,
+        viewMode,
+        friendsFilter,
+      }),
+    [dateFilter, viewMode, friendsFilter]
+  );
+
+  const showHomeDiscoveryRails = useMemo(
+    () =>
+      shouldShowHomeDiscoveryRails({
+        dateFilter,
+        viewMode,
+        friendsFilter,
+      }),
+    [dateFilter, viewMode, friendsFilter]
+  );
+
   // [FIX: Phase 1.2 - Horizontal Rail] Fixed discovery fetch for injected rails
   const railLoadItems = useCallback(
     async (offset: number, limit: number) => {
@@ -953,8 +1069,17 @@ export default function HomePage() {
         ? await getPublicFeedOptimized(feedOptions)
         : await getPublicFeed(feedOptions);
 
-      const railsFilteredItems = filterRailsItems(fetchedItems);
-      return mixHangoutsAndExperiences(railsFilteredItems, limit);
+      const railsFilteredItems = filterRailsItems(
+        fetchedItems,
+        new Date(),
+        HOME_EVENT_TIMEZONE
+      );
+      // All hangouts from this page, social-signal sort, then cap for the rail window.
+      const events = takeDiscoveryHangouts(
+        railsFilteredItems,
+        railsFilteredItems.length
+      );
+      return sortDiscoveryHangoutsBySocialSignal(events).slice(0, limit);
     },
     [viewerProfileId]
   );
@@ -969,7 +1094,12 @@ export default function HomePage() {
         })
       );
       const cached = dataCache.get<FeedItem[]>(cacheKey);
-      return Array.isArray(cached) ? cached : null;
+      if (!Array.isArray(cached)) return null;
+      // Harden against pre–Event-only mixed cache; re-apply social sort.
+      const eventsOnly = sortDiscoveryHangoutsBySocialSignal(
+        takeDiscoveryHangouts(cached, cached.length)
+      );
+      return eventsOnly.length > 0 ? eventsOnly : null;
     },
     [viewerProfileId]
   );
@@ -1001,8 +1131,16 @@ export default function HomePage() {
         ? await getPublicFeedOptimized(feedOptions)
         : await getPublicFeed(feedOptions);
 
-      const railsFilteredItems = filterRailsItems(fetchedItems);
-      return mixHangoutsAndExperiences(railsFilteredItems, limit);
+      const railsFilteredItems = filterRailsItems(
+        fetchedItems,
+        new Date(),
+        HOME_EVENT_TIMEZONE
+      );
+      const events = takeDiscoveryHangouts(
+        railsFilteredItems,
+        railsFilteredItems.length
+      );
+      return sortDiscoveryHangoutsBySocialSignal(events).slice(0, limit);
     },
     [viewerProfileId]
   );
@@ -1016,7 +1154,11 @@ export default function HomePage() {
       })
     );
     const cached = dataCache.get<FeedItem[]>(cacheKey);
-    return Array.isArray(cached) ? cached : null;
+    if (!Array.isArray(cached)) return null;
+    const eventsOnly = sortDiscoveryHangoutsBySocialSignal(
+      takeDiscoveryHangouts(cached, cached.length)
+    );
+    return eventsOnly.length > 0 ? eventsOnly : null;
   }, [viewerProfileId]);
 
   const topRailSetCachedItems = useCallback(
@@ -1039,21 +1181,32 @@ export default function HomePage() {
       : "Search posts"
     : "Where To?";
 
-  const homePostsLoadItems = useCallback(
-    async (offset: number, limit: number) => {
-      const feedOptions = buildVerticalLoadFeedOptions(verticalFilterCtx, {
+  const loadVerticalHomePosts = useCallback(
+    async (
+      ctx: HomeVerticalFilterContext,
+      personalizeQ: string | undefined,
+      offset: number,
+      limit: number
+    ) => {
+      const feedOptions = buildVerticalLoadFeedOptions(ctx, {
         offset,
         limit,
       });
       if (USE_OPTIMIZED_FEED) {
-        const { items, consumedOffset, count } =
-          await getPublicFeedOptimizedWithCount(feedOptions);
+        const {
+          items,
+          consumedOffset,
+          count,
+          countIsAuthoritative,
+          __feedDiag,
+        } = await getPublicFeedOptimizedWithCount(feedOptions);
 
         const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
-          feedSearchQ,
+          feedSearchQ: personalizeQ,
           selectedTags,
           viewMode,
           friendsFilter,
+          dateFilter,
         });
 
         const personalizedItemsRaw = shouldPersonalize
@@ -1066,31 +1219,65 @@ export default function HomePage() {
             ? items
             : personalizedItemsRaw;
 
+        let deliveredItems = personalizedItems;
+        const rawConsumed = consumedOffset ?? items.length;
+        if (isTrueDefaultAllVerticalFeed(ctx)) {
+          const viewerKey = homeFeedCycleViewerKey(ctx.viewerProfileId);
+          const cycle = getHomeFeedCycle(viewerKey);
+          deliveredItems = filterUnseenCycleItems(
+            personalizedItems,
+            cycle.cycleSeenIds
+          );
+          const next = recordHomeFeedCycleDelivery(cycle, {
+            deliveredItems,
+            requestOffset: offset,
+            consumedOffset: rawConsumed,
+            count,
+            countIsAuthoritative,
+          });
+          applyHomeFeedCycleState(viewerKey, next);
+          deliveredItems = stampHomeFeedPresentationKeys(
+            deliveredItems,
+            next.cycleId
+          );
+        }
+
         if (import.meta.env.DEV) {
           console.log("[FeedPipeline] HomePage loadItems", {
             offset,
             limit,
             itemsFromRpc: items.length,
             afterPersonalization: personalizedItems.length,
-            consumedOffset: consumedOffset ?? items.length,
+            deliveredItems: deliveredItems.length,
+            consumedOffset: rawConsumed,
             count,
+            countIsAuthoritative: countIsAuthoritative ?? true,
+            responseSource: __feedDiag?.responseSource ?? "unknown",
+            elapsedMs: __feedDiag?.elapsedMs ?? null,
             friendsFilter,
           });
         }
 
         return {
-          items: personalizedItems,
-          consumedOffset: consumedOffset ?? personalizedItems.length,
+          items: deliveredItems,
+          consumedOffset: rawConsumed,
           count,
+          countIsAuthoritative,
+          __feedDiag: {
+            ...(__feedDiag ?? {}),
+            personalizationInputCount: items.length,
+            personalizationOutputCount: personalizedItems.length,
+          },
         };
       }
 
       const items = await getPublicFeed(feedOptions);
       const shouldPersonalize = shouldPersonalizeHomeVerticalFeed({
-        feedSearchQ,
+        feedSearchQ: personalizeQ,
         selectedTags,
         viewMode,
         friendsFilter,
+        dateFilter,
       });
 
       const personalizedItemsRaw = shouldPersonalize
@@ -1103,40 +1290,208 @@ export default function HomePage() {
           ? items
           : personalizedItemsRaw;
 
+      let deliveredItems = personalizedItems;
+      if (isTrueDefaultAllVerticalFeed(ctx)) {
+        const viewerKey = homeFeedCycleViewerKey(ctx.viewerProfileId);
+        const cycle = getHomeFeedCycle(viewerKey);
+        deliveredItems = filterUnseenCycleItems(
+          personalizedItems,
+          cycle.cycleSeenIds
+        );
+        const next = recordHomeFeedCycleDelivery(cycle, {
+          deliveredItems,
+          requestOffset: offset,
+          consumedOffset: personalizedItems.length,
+          count: personalizedItems.length,
+          countIsAuthoritative: false,
+        });
+        applyHomeFeedCycleState(viewerKey, next);
+        deliveredItems = stampHomeFeedPresentationKeys(
+          deliveredItems,
+          next.cycleId
+        );
+      }
+
       return {
-        items: personalizedItems,
+        items: deliveredItems,
         consumedOffset: personalizedItems.length,
         count: personalizedItems.length,
       };
     },
-    [verticalFilterCtx, feedSearchQ, selectedTags, viewMode, friendsFilter]
+    [selectedTags, viewMode, friendsFilter, dateFilter]
   );
 
-  const homePostsGetCachedItems = useCallback(() => {
-    const cached = dataCache.get<FeedItem[]>(feedCacheKey);
-    if (Array.isArray(cached) && cached.length > 0) {
-      return applyPendingPostPatchesToItems(cached);
-    }
-    const persisted = readPersistedHomeFeed(feedCacheKey);
-    if (persisted?.items?.length) {
-      return applyPendingPostPatchesToItems(persisted.items);
-    }
-    return null;
-  }, [feedCacheKey]);
+  const browsePostsLoadItems = useCallback(
+    (offset: number, limit: number) =>
+      loadVerticalHomePosts(browseFilterCtx, undefined, offset, limit),
+    [loadVerticalHomePosts, browseFilterCtx]
+  );
 
-  const homePostsSetCachedItems = useCallback(
-    (items: FeedItem[]) => {
-      if (!Array.isArray(items) || items.length === 0) return;
-      dataCache.set(feedCacheKey, items, 10 * 60 * 1000);
-      writePersistedHomeFeed(feedCacheKey, items);
+  const wrapTrueDefaultAllCycle = useCallback(
+    async (limit: number) => {
+      if (!isTrueDefaultAllVerticalFeed(browseFilterCtx)) return null;
+      const viewerKey = homeFeedCycleViewerKey(viewerProfileIdRef.current);
+      const cycle = getHomeFeedCycle(viewerKey);
+      if (!isHomeFeedCycleExhausted(cycle, { exhaustedByPage: true })) {
+        // ProgressiveFeed only calls this after inferHasMore=false; still wrap.
+      }
+      const nextCycle = startNextHomeFeedCycle(cycle);
+      applyHomeFeedCycleState(viewerKey, nextCycle);
+      setHomeCycleTick((n) => n + 1);
+
+      const defaultAllCtx = buildHomeVerticalFilterContext({
+        viewMode: "all",
+        dateFilter: "none",
+        selectedTags: [],
+        viewerProfileId: viewerProfileIdRef.current,
+        friendsFilter: false,
+      });
+
+      try {
+        const page = await getPublicFeedOptimizedWithCount(
+          buildVerticalLoadFeedOptions(defaultAllCtx, {
+            offset: 0,
+            limit,
+          })
+        );
+        const rawConsumed = page.consumedOffset ?? page.items.length;
+        let delivered = filterUnseenCycleItems(
+          page.items,
+          getHomeFeedCycle(viewerKey).cycleSeenIds
+        );
+        const recorded = recordHomeFeedCycleDelivery(
+          getHomeFeedCycle(viewerKey),
+          {
+            deliveredItems: delivered,
+            requestOffset: 0,
+            consumedOffset: rawConsumed,
+            count: page.count,
+            countIsAuthoritative: page.countIsAuthoritative,
+          }
+        );
+        applyHomeFeedCycleState(viewerKey, recorded);
+        delivered = stampHomeFeedPresentationKeys(
+          delivered,
+          recorded.cycleId
+        );
+        if (delivered.length === 0) {
+          return {
+            items: [],
+            consumedOffset: rawConsumed,
+            count: page.count,
+            countIsAuthoritative: page.countIsAuthoritative,
+          };
+        }
+        seedSocialActionsFromFeedItems(delivered);
+        seedPublishedMediaFromFeedItems({
+          items: delivered,
+          viewerUserId: currentUserId ?? null,
+          source: "feed",
+        });
+        return {
+          items: delivered,
+          consumedOffset: rawConsumed,
+          count: page.count,
+          countIsAuthoritative: page.countIsAuthoritative,
+        };
+      } catch {
+        // Restore prior cycle on failure so we do not clear seen incorrectly.
+        applyHomeFeedCycleState(viewerKey, cycle);
+        setHomeCycleTick((n) => n + 1);
+        return null;
+      }
     },
-    [feedCacheKey]
+    [browseFilterCtx, currentUserId]
   );
+
+  const searchPostsLoadItems = useCallback(
+    (offset: number, limit: number) =>
+      loadVerticalHomePosts(searchFilterCtx, feedSearchQ, offset, limit),
+    [loadVerticalHomePosts, searchFilterCtx, feedSearchQ]
+  );
+
+  const getCachedHomePosts = useCallback((cacheKey: string) => {
+    const sanitize = (items: FeedItem[]) =>
+      filterExpiredHangouts(
+        items as FeedItemWithDates[],
+        new Date(),
+        HOME_EVENT_TIMEZONE
+      ) as FeedItem[];
+
+    const snapshot = readHomeFeedHydrationSnapshot(cacheKey, (key) =>
+      dataCache.get<FeedItem[]>(key)
+    );
+    if (!snapshot?.items?.length) return null;
+    const items = sanitize(applyPendingPostPatchesToItems(snapshot.items));
+    seedPublishedMediaFromFeedItems({
+      items,
+      viewerUserId: currentUserId ?? null,
+      source: snapshot.source === "persist" ? "persist" : "warm",
+      snapshotTs: snapshot.snapshotTs,
+    });
+    return items;
+  }, [currentUserId]);
+
+  const browsePostsGetCachedItems = useCallback(() => {
+    const items = getCachedHomePosts(browseFeedCacheKey);
+    if (!items?.length || !browseIsTrueDefaultAll) return items;
+    return stampHomeFeedPresentationKeys(
+      items,
+      getHomeFeedCycle(cycleViewerKey).cycleId
+    );
+  }, [
+    getCachedHomePosts,
+    browseFeedCacheKey,
+    browseIsTrueDefaultAll,
+    cycleViewerKey,
+    homeCycleTick,
+  ]);
+
+  const searchPostsGetCachedItems = useCallback(
+    () => getCachedHomePosts(searchFeedCacheKey),
+    [getCachedHomePosts, searchFeedCacheKey]
+  );
+
+  const setCachedHomePosts = useCallback((cacheKey: string, items: FeedItem[]) => {
+    writeHomeFeedDisplaySnapshot(cacheKey, items, (key, value, ttlMs) => {
+      dataCache.set(key, value, ttlMs);
+    });
+  }, []);
+
+  const browsePostsSetCachedItems = useCallback(
+    (items: FeedItem[]) => setCachedHomePosts(browseFeedCacheKey, items),
+    [setCachedHomePosts, browseFeedCacheKey]
+  );
+
+  const searchPostsSetCachedItems = useCallback(
+    (items: FeedItem[]) => setCachedHomePosts(searchFeedCacheKey, items),
+    [setCachedHomePosts, searchFeedCacheKey]
+  );
+
+  const handleSearchPostsEmptyActiveChange = useCallback((active: boolean) => {
+    setSearchPostsEmptyActive(active);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !homePostSearchActive ||
+      searchMode !== "posts" ||
+      search.trim().length === 0
+    ) {
+      setSearchPostsEmptyActive(false);
+    }
+  }, [homePostSearchActive, searchMode, search]);
+
+  const hintUsersSearch =
+    homePostSearchActive &&
+    searchMode === "posts" &&
+    search.trim().length > 0 &&
+    searchPostsEmptyActive;
 
   const homeSearchResultsContent = (
     <>
       {searchMode === "users" ? (
-        <div className="w-full max-w-[640px] mx-auto px-1.5 pt-1 pb-1">
+        <div className="w-full max-w-[640px] mx-auto px-[var(--gutter)] pt-1 pb-1">
           {debouncedUserSearchQuery.trim().length < 2 ? (
             <p className="text-[11px] text-[var(--text)]/75 px-2 py-2 leading-snug">
               Type at least 2 characters to search users.
@@ -1153,11 +1508,11 @@ export default function HomePage() {
         </div>
       ) : null}
 
-      {showHomePostsFeed ? (
-        <div className="w-full max-w-[640px] mx-auto px-0 [&>div]:!mt-0">
+      {searchMode === "posts" ? (
+        <div className="w-full max-w-[640px] mx-auto px-[var(--gutter)] [&>div]:!mt-0">
           <HomePostsSection
-            key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
-            suppressBrowseRails={suppressBrowseRails}
+            key={`home-posts-search-${searchFeedCacheKey}-e${homeRefreshEpoch}`}
+            suppressBrowseRails
             viewMode={viewMode}
             hasActiveFilters={hasActiveFilters}
             tagFallbackItems={tagFallbackItems}
@@ -1167,20 +1522,19 @@ export default function HomePage() {
             isVisible={isHomeVisible}
             tabId="home"
             useProgressiveFeed={true}
-            loadItems={homePostsLoadItems}
-            initialItems={homeVerticalWarmInitialItems}
-            getCachedItems={homePostsGetCachedItems}
-            setCachedItems={homePostsSetCachedItems}
-            feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
+            loadItems={searchPostsLoadItems}
+            initialItems={searchVerticalWarmInitialItems}
+            getCachedItems={searchPostsGetCachedItems}
+            setCachedItems={searchPostsSetCachedItems}
+            feedOptions={buildVerticalFeedOptionsProp(searchFilterCtx)}
             backgroundRevalidateOnMount
             softRefreshEpoch={homeFeedSoftRefreshEpoch}
-            dateSpotlightActive={dateSpotlightActive}
             dateFilter={dateFilter}
-            dateSpotlightItems={dateSpotlightItems}
-            dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
-            dateSpotlightFallbackItems={dateSpotlightFallbackItems}
-            dateSpotlightLoading={dateSpotlightLoading}
-            dateSpotlightResolved={dateSpotlightResolved}
+            explicitContentFilters={explicitContentFilters}
+            onHomeFilterAction={applyHomeFilterAction}
+            onBackToFeed={clearAllHomeFilters}
+            searchQuery={search}
+            onSearchPostsEmptyActiveChange={handleSearchPostsEmptyActiveChange}
             railLoadItems={railLoadItems}
             railGetCachedItems={railGetCachedItems}
             railSetCachedItems={railSetCachedItems}
@@ -1232,101 +1586,135 @@ export default function HomePage() {
           onSearchModeChange={handleHomeSearchModeChange}
           showSearchKindToggle={false}
           homePostSearchActive={homePostSearchActive}
-          onExitPostSearch={exitHomePostSearchMode}
           searchFieldPlaceholder={searchFieldPlaceholder}
           onSearchFocusChange={handleHomeSearchFocusChange}
+          onSearchInputPointerDown={handleHomeSearchInputPointerDown}
           hasActiveFilters={hasActiveFilters}
           filtersOpen={filtersOpen}
-          selectedTags={selectedTags}
-          onTagsChange={handleTagsChange}
-          onClearFilters={handleClearFilters}
           viewMode={viewMode}
-          setViewMode={handleViewModeChange}
           dateFilter={dateFilter}
           onToggleDateFilter={handleToggleDateFilter}
+          onToggleTypeFilter={handleToggleTypeFilter}
           friendsFilter={friendsFilter}
-          onFriendsFilterDeactivate={handleFriendsFilterDeactivate}
-          onFriendsChipClick={handleFriendsChipClick}
-          friendsPreflightPending={friendsPreflightPending}
-          noFriendsInlineBannerVisible={noFriendsInlineBannerVisible}
+          onToggleFriends={handleToggleFriends}
           onClearAllFilters={clearAllHomeFilters}
         />
 
-        {/* Browse: window scroll (unchanged). Search: fixed inner scroll shell below header. */}
-        {!homePostSearchActive ? (
-          <div
-            style={{
-              paddingTop: "calc(90px + var(--safe-area-top-layout))",
-              paddingBottom: FOOTER_HEIGHT,
-            }}
-          >
-            <div className="w-full max-w-[640px] mx-auto px-0">
-              <HomeHangoutSection
-                key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
-                items={[]}
-                loading={false}
-                batchedData={null}
-                useProgressiveLoading={true}
-                isVisible={isHomeVisible}
-                tabId="home"
-                hasActiveFilters={false}
-                loadItems={topRailLoadItems}
-                getCachedItems={topRailGetCachedItems}
-                setCachedItems={topRailSetCachedItems}
-              />
-            </div>
-
-            <div className="w-full max-w-[640px] mx-auto px-0">
-              <HomePostsSection
-                key={`home-posts-${feedCacheKey}-e${homeRefreshEpoch}`}
-                suppressBrowseRails={false}
-                viewMode={viewMode}
-                hasActiveFilters={hasActiveFilters}
-                tagFallbackItems={tagFallbackItems}
-                tagFallbackLoading={tagFallbackLoading}
-                showTagFallback={showTagFallback}
-                selectedTags={selectedTags}
-                isVisible={isHomeVisible}
-                tabId="home"
-                useProgressiveFeed={true}
-                loadItems={homePostsLoadItems}
-                initialItems={homeVerticalWarmInitialItems}
-                getCachedItems={homePostsGetCachedItems}
-                setCachedItems={homePostsSetCachedItems}
-                feedOptions={buildVerticalFeedOptionsProp(verticalFilterCtx)}
-                backgroundRevalidateOnMount
-                softRefreshEpoch={homeFeedSoftRefreshEpoch}
-                dateSpotlightActive={dateSpotlightActive}
-                dateFilter={dateFilter}
-                dateSpotlightItems={dateSpotlightItems}
-                dateSpotlightFallbackFilter={dateSpotlightFallbackFilter}
-                dateSpotlightFallbackItems={dateSpotlightFallbackItems}
-                dateSpotlightLoading={dateSpotlightLoading}
-                dateSpotlightResolved={dateSpotlightResolved}
-                railLoadItems={railLoadItems}
-                railGetCachedItems={railGetCachedItems}
-                railSetCachedItems={railSetCachedItems}
-              />
-            </div>
+        {/* Browse stays mounted; search is an opaque overlay. */}
+        <div
+          ref={homeBrowseRef}
+          aria-hidden={homePostSearchActive || undefined}
+          inert={homePostSearchActive ? true : undefined}
+          className={homePostSearchActive ? "pointer-events-none" : undefined}
+          style={{
+            paddingTop: "calc(90px + var(--safe-area-top-layout))",
+            paddingBottom: FOOTER_HEIGHT,
+          }}
+        >
+          {showHomeDiscoveryRails ? (
+          <div className="w-full max-w-[640px] mx-auto px-0">
+            <HomeHangoutSection
+              key={`rail-top-${viewerProfileId ?? "guest"}-e${homeRefreshEpoch}`}
+              items={[]}
+              loading={false}
+              batchedData={null}
+              useProgressiveLoading={true}
+              isVisible={isHomeVisible}
+              tabId="home"
+              hasActiveFilters={false}
+              loadItems={topRailLoadItems}
+              getCachedItems={topRailGetCachedItems}
+              setCachedItems={topRailSetCachedItems}
+            />
           </div>
-        ) : (
-          <div
-            ref={homeSearchScrollRef}
-            className="fixed left-0 right-0 z-[25] overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
-            style={{
-              top: HOME_SEARCH_SCROLL_TOP,
-              bottom: 0,
-              paddingBottom: FOOTER_HEIGHT,
-            }}
+          ) : null}
+
+          <div className="w-full max-w-[640px] mx-auto px-0">
+            <HomePostsSection
+              key={
+                browseIsTrueDefaultAll
+                  ? `home-posts-${browseFeedCacheKey}`
+                  : `home-posts-${browseFeedCacheKey}-e${homeRefreshEpoch}`
+              }
+              suppressBrowseRails={explicitContentFilters}
+              viewMode={viewMode}
+              hasActiveFilters={browseHasActiveFilters}
+              tagFallbackItems={tagFallbackItems}
+              tagFallbackLoading={tagFallbackLoading}
+              showTagFallback={showTagFallback}
+              selectedTags={selectedTags}
+              isVisible={isHomeVisible && !homePostSearchActive}
+              tabId="home"
+              useProgressiveFeed={true}
+              loadItems={browsePostsLoadItems}
+              initialItems={browseVerticalWarmInitialItemsStamped}
+              getCachedItems={browsePostsGetCachedItems}
+              setCachedItems={browsePostsSetCachedItems}
+              feedOptions={buildVerticalFeedOptionsProp(browseFilterCtx)}
+              backgroundRevalidateOnMount={!browseIsTrueDefaultAll}
+              skipOffsetZeroHeadReplace={browseIsTrueDefaultAll}
+              continuousCycling={browseIsTrueDefaultAll}
+              onCycleWrap={
+                browseIsTrueDefaultAll ? wrapTrueDefaultAllCycle : undefined
+              }
+              listReplaceRevision={
+                browseIsTrueDefaultAll ? homeListReplaceRevision : 0
+              }
+              listReplaceItems={
+                browseIsTrueDefaultAll
+                  ? homeListReplaceItems ?? undefined
+                  : undefined
+              }
+              listReplaceBackendOffset={
+                browseIsTrueDefaultAll
+                  ? homeListReplaceBackendOffset
+                  : undefined
+              }
+              listReplaceCount={
+                browseIsTrueDefaultAll ? homeListReplaceCount : undefined
+              }
+              listReplaceCountIsAuthoritative={
+                browseIsTrueDefaultAll
+                  ? homeListReplaceCountIsAuthoritative
+                  : undefined
+              }
+              softRefreshEpoch={homeFeedSoftRefreshEpoch}
+              dateFilter={dateFilter}
+              explicitContentFilters={explicitContentFilters}
+              onHomeFilterAction={applyHomeFilterAction}
+              onBackToFeed={clearAllHomeFilters}
+              railLoadItems={railLoadItems}
+              railGetCachedItems={railGetCachedItems}
+              railSetCachedItems={railSetCachedItems}
+            />
+          </div>
+        </div>
+
+        {homePostSearchActive ? (
+          <HomeSearchLayer
+            scrollRef={homeSearchScrollRef}
+            scrollTop={HOME_SEARCH_SCROLL_TOP}
+            searchMode={searchMode}
+            onSearchModeChange={handleHomeSearchModeChange}
+            onBack={exitHomePostSearchMode}
+            hintUsersSearch={hintUsersSearch}
           >
             {homeSearchResultsContent}
-          </div>
-        )}
+          </HomeSearchLayer>
+        ) : null}
       </PrimaryPageContainer>
 
       <WelcomeModal
         isOpen={showInfoModal}
         onClose={handleWelcomeClose}
+      />
+      <HomeTour
+        isHomeVisible={isHomeVisible}
+        homePostSearchActive={homePostSearchActive}
+        welcomeModalOpen={showInfoModal}
+        onOpenTourFilters={onOpenTourFilters}
+        onCloseTourFilters={onCloseTourFilters}
+        onPrepareTourStart={onPrepareTourStart}
       />
     </>
   );

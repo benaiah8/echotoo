@@ -11,6 +11,7 @@ import {
   setCachedNotificationCount,
   clearCachedNotificationCount,
 } from "../../lib/notificationCountCache";
+import { ACTIVITIES_EXCLUDE_OBSOLETE_GOING_RSVP_OR } from "../../lib/activitiesNotificationEligibility";
 
 // [OPTIMIZATION: StrictMode] Short TTL response cache to prevent duplicate requests
 // when React 18 StrictMode remounts (mount→unmount→mount). RequestManager only
@@ -21,13 +22,6 @@ const notificationsResponseCache = new Map<
 >();
 const NOTIFICATIONS_TTL_MS = 4000;
 
-/** Verbose create-post push notification path ([CPN]). Off by default. */
-const DEBUG_CPN = false;
-const cpnDbg = (...a: Parameters<typeof console.log>) => {
-  if (!DEBUG_CPN) return;
-  console.log(...a);
-};
-
 export type NotificationBadgeData = {
   total: number;
   inviteUnread: number;
@@ -35,7 +29,9 @@ export type NotificationBadgeData = {
 };
 
 /**
- * Unread head counts: total, invite-only, non-invite. Cached together for bottom-tab badge.
+ * Unread head counts: total, invite-only, activities-surface
+ * (excludes invite, saved, and obsolete Going RSVP).
+ * Cached together for bottom-tab / Messages Activities badge.
  */
 async function loadNotificationBadgeDataFromNetwork(
   userId: string,
@@ -60,12 +56,14 @@ async function loadNotificationBadgeDataFromNetwork(
       .eq("user_id", userId)
       .eq("is_read", false)
       .eq("type", "invite"),
+    // M3C: match Activities surface — exclude invite, saved, and obsolete Going RSVP.
     supabase
       .from("notifications")
       .select("*", { count: "exact", head: true })
       .eq("user_id", userId)
       .eq("is_read", false)
-      .neq("type", "invite"),
+      .not("type", "in", "(invite,saved)")
+      .or(ACTIVITIES_EXCLUDE_OBSOLETE_GOING_RSVP_OR),
   ]);
 
   if (signal?.aborted) {
@@ -126,47 +124,40 @@ export async function getNotificationBadgeData(): Promise<NotificationBadgeData>
 }
 
 /**
- * Best-effort remote push for new post (Edge Function). Must not throw — publishing must succeed even if push fails.
+ * M3D.1c — Newest eligible Activities-surface notification `created_at` (epoch ms).
+ * Excludes invite, saved, and obsolete Going RSVP. Bounded limit-1; not unread-based.
+ * Returns null when none exist or on abort; throws on query error.
  */
-async function invokeSendPostPush(params: {
-  postId: string;
-  entityType: "hangout" | "experience";
-  actorId: string;
-  recipientUserIds: string[];
-}): Promise<void> {
-  if (import.meta.env.DEV) {
-    console.log("[SPP] invoke", {
-      postId: params.postId,
-      entityType: params.entityType,
-      recipientCount: params.recipientUserIds.length,
-    });
-  }
-  if (params.recipientUserIds.length === 0) return;
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
+export async function getLatestEligibleActivityCreatedAt(): Promise<number | null> {
+  const userId = await getViewerAuthUserId();
+  if (!userId) return null;
 
-    const { error } = await supabase.functions.invoke("send-post-push", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: {
-        post_id: params.postId,
-        entity_type: params.entityType,
-        actor_id: params.actorId,
-        recipient_user_ids: params.recipientUserIds,
-      },
-    });
+  const { requestManager } = await import("../../lib/requestManager");
+  const dedupeKey = `latest_eligible_activity_created_at_${userId}`;
 
-    if (error) {
-      console.warn("[send-post-push]", error.message);
-    }
-  } catch (e) {
-    console.warn("[send-post-push]", e instanceof Error ? e.message : e);
-  }
+  const result = await requestManager.execute(
+    dedupeKey,
+    async (signal) => {
+      if (signal.aborted) return null;
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("created_at")
+        .eq("user_id", userId)
+        .not("type", "in", "(invite,saved)")
+        .or(ACTIVITIES_EXCLUDE_OBSOLETE_GOING_RSVP_OR)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (signal.aborted) return null;
+      if (error) throw error;
+      if (!data?.created_at) return null;
+      const ms = Date.parse(data.created_at);
+      return Number.isFinite(ms) ? ms : null;
+    },
+    "high"
+  );
+
+  return result.data ?? null;
 }
 
 /**
@@ -222,7 +213,9 @@ export async function getNotifications(
       if (tg === "invite") {
         q = q.eq("type", "invite");
       } else if (tg === "activity") {
-        q = q.neq("type", "invite");
+        q = q
+          .neq("type", "invite")
+          .or(ACTIVITIES_EXCLUDE_OBSOLETE_GOING_RSVP_OR);
       }
       const { data, error } = await q.range(offset, offset + limit - 1);
 
@@ -489,224 +482,4 @@ export async function deleteNotification(
   clearNotificationsResponseCache();
 
   window.dispatchEvent(new CustomEvent("notifications:updated"));
-}
-
-/**
- * Create notifications for followers when a user posts
- */
-export async function createPostNotifications(
-  postId: string,
-  postType: "hangout" | "experience",
-  authorId: string
-): Promise<void> {
-  try {
-    cpnDbg("[CPN] entry", { postId, postType, authorId });
-
-    // follows.following_id and notification_settings.target_user_id use profile id, not auth user id
-    const { data: authorProfile, error: authorProfileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", authorId)
-      .maybeSingle();
-
-    cpnDbg("[CPN] authorProfile", {
-      authorProfileId: authorProfile?.id ?? "missing",
-    });
-
-    if (authorProfileError) {
-      console.warn(
-        "[createPostNotifications] Could not resolve author profile:",
-        authorProfileError.message
-      );
-      return;
-    }
-    if (!authorProfile?.id) {
-      console.warn(
-        "[createPostNotifications] No profile for author user_id; skipping post notifications"
-      );
-      return;
-    }
-
-    const authorProfileId = authorProfile.id;
-
-    // Get all followers of the author
-    const { data: followers, error: followersError } = await supabase
-      .from("follows")
-      .select("follower_id")
-      .eq("following_id", authorProfileId);
-
-    if (followersError) {
-      console.error("Error fetching followers:", followersError);
-      cpnDbg("[CPN] followers", {
-        count: 0,
-        followerIds: [] as string[],
-        err: followersError.message,
-      });
-      return;
-    }
-
-    const followerRows = followers ?? [];
-    const followerIds = followerRows.map((f) => f.follower_id);
-    cpnDbg("[CPN] followers", {
-      count: followerIds.length,
-      followerIds,
-    });
-
-    if (followerRows.length === 0) {
-      cpnDbg("[CPN] skip_no_followers");
-      return; // No followers to notify
-    }
-
-    // follows.follower_id is profile id; notifications + notification_settings use auth user id
-    const { data: followerProfiles, error: followerProfilesError } =
-      await supabase
-        .from("profiles")
-        .select("id, user_id")
-        .in("id", followerIds);
-
-    if (followerProfilesError) {
-      console.warn(
-        "[createPostNotifications] Could not load follower profiles:",
-        followerProfilesError.message
-      );
-      return;
-    }
-
-    const followerProfileIdToAuthUserId = new Map<string, string>();
-    for (const row of followerProfiles ?? []) {
-      if (row?.id && row?.user_id) {
-        followerProfileIdToAuthUserId.set(row.id, row.user_id);
-      }
-    }
-
-    const followerAuthUserIds = [
-      ...new Set(
-        followerIds
-          .map((pid) => followerProfileIdToAuthUserId.get(pid))
-          .filter((uid): uid is string => uid !== undefined)
-      ),
-    ];
-
-    cpnDbg("[CPN] follower_auth_map", {
-      followerProfileCount: followerIds.length,
-      resolvedAuthCount: followerAuthUserIds.length,
-    });
-
-    if (followerAuthUserIds.length === 0) {
-      cpnDbg("[CPN] skip_no_follower_auth_resolved");
-      return;
-    }
-
-    // Get notification settings for these followers (receiver keys are auth user ids)
-    const { data: notificationSettings, error: settingsError } = await supabase
-      .from("notification_settings")
-      .select("user_id")
-      .eq("target_user_id", authorProfileId)
-      .in("user_id", followerAuthUserIds)
-      .eq("enabled", true);
-
-    cpnDbg("[CPN] settings", {
-      count: notificationSettings?.length ?? 0,
-      enabledFollowerIds: notificationSettings?.map((s) => s.user_id) ?? [],
-      settingsError: settingsError?.message ?? null,
-    });
-
-    if (settingsError) {
-      console.error("Error fetching notification settings:", settingsError);
-      // Fallback: notify all followers with resolvable auth ids if settings query fails
-      const notifications = followerRows
-        .map((follow) => {
-          const user_id = followerProfileIdToAuthUserId.get(follow.follower_id);
-          if (!user_id) return null;
-          return {
-            user_id,
-            actor_id: authorId,
-            type: "post" as const,
-            entity_type: postType,
-            entity_id: postId,
-            additional_data: {},
-          };
-        })
-        .filter((n): n is NonNullable<typeof n> => n !== null);
-
-      cpnDbg("[CPN] insert_attempt", {
-        count: notifications.length,
-      });
-
-      const { error: insertError } = await supabase
-        .from("notifications")
-        .insert(notifications);
-
-      if (insertError) {
-        console.error("Error creating post notifications:", insertError);
-      } else {
-        cpnDbg("[CPN] insert_success");
-        const recipientUserIds = notifications.map((n) => n.user_id);
-        cpnDbg("[CPN] push_invoke", {
-          recipientCount: recipientUserIds.length,
-          postId,
-        });
-        void invokeSendPostPush({
-          postId,
-          entityType: postType,
-          actorId: authorId,
-          recipientUserIds,
-        });
-      }
-      return;
-    }
-
-    // Only notify followers who have notifications enabled (settings.user_id is auth)
-    const enabledFollowerIds = new Set(
-      notificationSettings?.map((s) => s.user_id) || []
-    );
-    const notificationsToCreate = followerRows
-      .filter((follow) => {
-        const authId = followerProfileIdToAuthUserId.get(follow.follower_id);
-        return authId !== undefined && enabledFollowerIds.has(authId);
-      })
-      .map((follow) => {
-        const user_id = followerProfileIdToAuthUserId.get(follow.follower_id)!;
-        return {
-          user_id,
-          actor_id: authorId,
-          type: "post" as const,
-          entity_type: postType,
-          entity_id: postId,
-          additional_data: {},
-        };
-      });
-
-    if (notificationsToCreate.length === 0) {
-      cpnDbg("[CPN] skip_no_notifications_to_create");
-      return; // No enabled notifications to send
-    }
-
-    // Insert notifications
-    cpnDbg("[CPN] insert_attempt", {
-      count: notificationsToCreate.length,
-    });
-
-    const { error: insertError } = await supabase
-      .from("notifications")
-      .insert(notificationsToCreate);
-
-    if (insertError) {
-      console.error("Error creating post notifications:", insertError);
-    } else {
-      cpnDbg("[CPN] insert_success");
-      cpnDbg("[CPN] push_invoke", {
-        recipientCount: notificationsToCreate.length,
-        postId,
-      });
-      void invokeSendPostPush({
-        postId,
-        entityType: postType,
-        actorId: authorId,
-        recipientUserIds: notificationsToCreate.map((n) => n.user_id),
-      });
-    }
-  } catch (error) {
-    console.error("Error in createPostNotifications:", error);
-  }
 }

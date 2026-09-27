@@ -3,7 +3,6 @@ import { type NotificationType } from "../../types/notification";
 import {
   PiArticle,
   PiBookmarkSimple,
-  PiCalendar,
   PiChatCircle,
   PiDotsNine,
   PiEnvelopeSimpleOpen,
@@ -28,12 +27,6 @@ const FILTER_OPTIONS = [
     label: "Invites",
     icon: PiEnvelopeSimpleOpen,
     color: "text-blue-500",
-  },
-  {
-    key: "rsvp" as const,
-    label: "RSVP",
-    icon: PiCalendar,
-    color: "text-indigo-500",
   },
   {
     key: "follow" as const,

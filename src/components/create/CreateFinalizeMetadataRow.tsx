@@ -1,218 +1,254 @@
 /**
- * Create finalize: Date / Location|Places / View / More pills + single shared panel.
- * Pill chrome uses `create-meta-pill` + --create-meta-pill-* (see index.css).
+ * Create finalize: bottom keyboard-aware composer toolbar.
+ * In-flow at the bottom of CreateFinalizeComposerShell (not document-fixed).
+ * Footer keyboard/safe-area padding is owned by the Finalize page footer wrapper.
+ *
+ * Controls: Undo | Redo | Tags | Settings in one compact measured group.
+ * Optional page-owned trailing slot (e.g. empty-composer exit) sits outside the
+ * measured pill — does not affect ResizeObserver / CSS var ownership.
+ * Structural chrome (pillRef / CSS vars / composer-chrome) must stay intact.
  */
-import { useState, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import {
-  PiCalendar,
-  PiEye,
-  PiMapPin,
-  PiSlidersHorizontal,
+  PiArrowClockwiseBold,
+  PiArrowCounterClockwiseBold,
+  PiGear,
+  PiHash,
 } from "react-icons/pi";
 
 import { CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS } from "../../lib/createFlowAdvisoryHighlight";
+import { FINALIZE_COMPOSER_COLUMN_CLASS } from "../../lib/createFlowChrome";
+import { APP_SAFE_BOTTOM_SYNC_EVENT } from "../../lib/appSafeAreaBottom";
 
-export type FinalizeMetaPanelKey =
-  | "date"
-  | "location"
-  | "visibility"
-  | "more";
+const PANEL_TOOLBAR_GAP_PX = 8;
+const TOOLBAR_HEIGHT_FALLBACK_PX = 48;
+const KEYBOARD_OPEN_INSET_PX = 48;
 
-/** ~8% shorter than h-8 / h-9; extra horizontal inset so labels/endcaps aren’t flush to the rim. */
-const META_TAB_LAYOUT =
-  "create-meta-pill relative flex h-[29px] min-h-[29px] min-w-0 items-center rounded-full px-2 py-0.5 text-left sm:h-[33px] sm:min-h-[33px] sm:px-2.5 sm:py-1";
+/**
+ * Inner footer wells: short horizontal pills (same height as before, slightly wider).
+ * Outer GROUP_PILL_CLASS container is the measured keyboard-aware chrome — do not remove.
+ */
+const ICON_PILL_BASE =
+  "relative flex h-10 min-h-10 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full border-0 px-3 transition-colors " +
+  "[&_svg]:h-[19px] [&_svg]:w-[19px] [&_svg]:shrink-0";
+const GROUP_PILL_CLASS = [
+  "pointer-events-auto inline-flex items-center gap-1 rounded-full p-1.5",
+  "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
+  "[-webkit-backdrop-filter:blur(var(--glass-blur))]",
+  "border border-transparent",
+  "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
+].join(" ");
 
-const PILL_LABEL_CLUSTER =
-  "flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden pr-4 sm:gap-1 sm:pr-5";
+const CHIP_ACTIVE =
+  "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] text-[var(--text)]";
+const CHIP_SUBTLE =
+  "bg-[color-mix(in_oklab,var(--text)_14%,transparent)] text-[var(--text)]";
+const CHIP_IDLE =
+  "bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-[var(--text)]/88";
 
-const PILL_ENDCAP_SLOT =
-  "pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center sm:right-1.5";
+const HISTORY_IDLE = CHIP_IDLE;
+const HISTORY_DISABLED =
+  "cursor-not-allowed bg-transparent text-[var(--text)]/28";
 
-/** Shared open panel — matches caption/hashtag composer shell (soft border, no bold outline). */
-const PANEL_CLASS =
-  "rounded-[var(--create-radius-panel)] border border-[var(--create-border-composer-shell)] p-3 " +
-  "bg-[color-mix(in_oklab,white_94%,var(--surface))] " +
-  "shadow-[0_0_0_1px_var(--create-border-composer-shell-ring),0_2px_14px_rgba(0,0,0,0.05)] " +
-  "app-dark:border-[var(--create-border-composer-shell)] " +
-  "app-dark:bg-[color-mix(in_oklab,var(--surface)_18%,transparent)] " +
-  "app-dark:shadow-[0_4px_24px_rgba(0,0,0,0.32)]";
-
-const ICON_LABEL = "text-[var(--create-meta-pill-fg)]";
-
-const PILL_LABEL_CLASS =
-  "min-w-0 truncate text-[9px] font-semibold leading-none sm:text-[10px] " +
-  ICON_LABEL;
-
-const ICON_CLASS = `h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5 ${ICON_LABEL}`;
+function readKeyboardInsetPx(): number {
+  try {
+    const raw = getComputedStyle(document.documentElement)
+      .getPropertyValue("--create-keyboard-inset")
+      .trim();
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export type CreateFinalizeMetadataRowProps = {
-  /** User-facing label for the location pill: "Location" (Event) or "Places" (Experience). */
-  locationPillLabel: string;
-  hasSchedule: boolean;
-  /** Short visibility endcap, e.g. Pu / Fr */
-  visibilityPillEnd: ReactNode;
-  locationPillEnd: ReactNode;
-  morePillEnd: ReactNode;
-  /** When true, emphasize the More pill when optional controls are enabled */
-  moreOptionsActive?: boolean;
-  /** When true, emphasize the Rate pill styling on More when ratings are enabled */
-  rateEnabled?: boolean;
-  /** Controlled open panel; omit for uncontrolled local state */
-  openPanel?: FinalizeMetaPanelKey | null;
-  onOpenPanelChange?: (panel: FinalizeMetaPanelKey | null) => void;
-  datePanel: ReactNode;
-  locationPanel: ReactNode;
-  visibilityPanel: ReactNode;
-  morePanel: ReactNode;
-  /** Temporary nudge after publish-warning modal Back */
-  highlightDatePill?: boolean;
-  highlightLocationPill?: boolean;
+  hasTags?: boolean;
+  onTagsClick?: () => void;
+  tagsSheetOpen?: boolean;
+  onSettingsClick?: () => void;
+  settingsSheetOpen?: boolean;
+  highlightTagsPill?: boolean;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  /** Page-owned control (e.g. empty-composer exit); not part of measured toolbar pill. */
+  trailingAction?: ReactNode;
 };
 
 export default function CreateFinalizeMetadataRow({
-  locationPillLabel,
-  hasSchedule,
-  visibilityPillEnd,
-  locationPillEnd,
-  morePillEnd,
-  moreOptionsActive = false,
-  rateEnabled = false,
-  openPanel: openPanelProp,
-  onOpenPanelChange,
-  datePanel,
-  locationPanel,
-  visibilityPanel,
-  morePanel,
-  highlightDatePill = false,
-  highlightLocationPill = false,
+  hasTags = false,
+  onTagsClick,
+  tagsSheetOpen = false,
+  onSettingsClick,
+  settingsSheetOpen = false,
+  highlightTagsPill = false,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  trailingAction,
 }: CreateFinalizeMetadataRowProps) {
-  const [internalPanel, setInternalPanel] =
-    useState<FinalizeMetaPanelKey | null>(null);
-  const panel =
-    openPanelProp !== undefined ? openPanelProp : internalPanel;
-  const setPanel = onOpenPanelChange ?? setInternalPanel;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const closedChromePxRef = useRef(TOOLBAR_HEIGHT_FALLBACK_PX + 16);
 
-  const toggle = (key: FinalizeMetaPanelKey) => {
+  const blurThen = (fn: () => void) => {
     const ae = document.activeElement;
     if (ae instanceof HTMLElement) ae.blur();
-    setPanel(panel === key ? null : key);
+    fn();
   };
 
-  const finalizeTabClass = (key: FinalizeMetaPanelKey) => {
-    const selected = panel === key;
-    const anyOpen = panel !== null;
-    const scale =
-      selected && anyOpen
-        ? "z-10 scale-[1.06] shadow-md shadow-black/45"
-        : anyOpen
-        ? "scale-[0.96] opacity-[0.88]"
-        : "";
-    const moreOnRing =
-      key === "more" && moreOptionsActive
-        ? "ring-2 ring-[var(--create-meta-pill-rsvp-ring)] ring-offset-1 ring-offset-[var(--bg)] sm:ring-offset-2"
-        : "";
-    const advisoryHighlight =
-      (key === "date" && highlightDatePill) ||
-      (key === "location" && highlightLocationPill)
-        ? CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS
-        : "";
-    return [META_TAB_LAYOUT, scale, moreOnRing, advisoryHighlight]
-      .filter(Boolean)
-      .join(" ");
-  };
+  const publishToolbarChrome = useCallback(() => {
+    const pill = pillRef.current;
+    if (!pill) return;
+    const height = Math.max(
+      TOOLBAR_HEIGHT_FALLBACK_PX,
+      Math.round(pill.getBoundingClientRect().height),
+    );
+    document.documentElement.style.setProperty(
+      "--create-finalize-toolbar-height",
+      `${height}px`,
+    );
+
+    const inset = readKeyboardInsetPx();
+    if (inset <= KEYBOARD_OPEN_INSET_PX) {
+      const rect = pill.getBoundingClientRect();
+      const clearance = Math.max(
+        TOOLBAR_HEIGHT_FALLBACK_PX,
+        Math.round(window.innerHeight - rect.top),
+      );
+      closedChromePxRef.current = clearance;
+    }
+
+    document.documentElement.style.setProperty(
+      "--create-actions-total-bottom",
+      `${closedChromePxRef.current}px`,
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    publishToolbarChrome();
+    const pill = pillRef.current;
+    const ro = new ResizeObserver(() => publishToolbarChrome());
+    if (pill) ro.observe(pill);
+
+    const vv = window.visualViewport;
+    window.addEventListener("resize", publishToolbarChrome);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, publishToolbarChrome);
+    vv?.addEventListener("resize", publishToolbarChrome);
+    vv?.addEventListener("scroll", publishToolbarChrome);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", publishToolbarChrome);
+      window.removeEventListener(
+        APP_SAFE_BOTTOM_SYNC_EVENT,
+        publishToolbarChrome,
+      );
+      vv?.removeEventListener("resize", publishToolbarChrome);
+      vv?.removeEventListener("scroll", publishToolbarChrome);
+    };
+  }, [publishToolbarChrome]);
+
+  const tagsClass = [
+    ICON_PILL_BASE,
+    tagsSheetOpen ? CHIP_ACTIVE : hasTags ? CHIP_SUBTLE : CHIP_IDLE,
+    highlightTagsPill ? CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const settingsClass = [
+    ICON_PILL_BASE,
+    settingsSheetOpen ? CHIP_ACTIVE : CHIP_IDLE,
+  ].join(" ");
 
   return (
-    <div className="w-full">
-      <div
-        className="grid grid-cols-4 gap-1 sm:gap-1.5"
-        role="tablist"
-        aria-label="Post metadata"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={panel === "date"}
-          className={finalizeTabClass("date")}
-          onClick={() => toggle("date")}
+    <div
+      ref={rootRef}
+      data-create-finalize-composer-chrome
+      className={`pointer-events-none relative z-[39] mx-auto flex shrink-0 flex-col-reverse items-stretch ${FINALIZE_COMPOSER_COLUMN_CLASS}`}
+      style={{
+        gap: PANEL_TOOLBAR_GAP_PX,
+      }}
+    >
+      <div className="relative isolate z-[1] flex w-full items-center justify-between gap-2">
+        <div
+          ref={pillRef}
+          className="flex min-w-0 items-center justify-start"
+          role="toolbar"
+          aria-label="Post composer"
         >
-          <span className={PILL_LABEL_CLUSTER}>
-            <PiCalendar className={ICON_CLASS} aria-hidden />
-            <span className={PILL_LABEL_CLASS}>Date</span>
-          </span>
-          <span className={PILL_ENDCAP_SLOT}>
-            {hasSchedule ? (
-              <span
-                className="inline-flex h-3 w-3 shrink-0 items-center justify-center sm:h-3.5 sm:w-3.5"
-                role="img"
-                aria-label="Schedule set"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--create-meta-pill-schedule-dot-bg)] ring-1 ring-[var(--create-meta-pill-schedule-dot-ring)]" />
-              </span>
-            ) : (
-              <span className="inline-flex h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden />
-            )}
-          </span>
-        </button>
+          <div className={GROUP_PILL_CLASS}>
+            <button
+              type="button"
+              className={`${ICON_PILL_BASE} ${
+                canUndo ? HISTORY_IDLE : HISTORY_DISABLED
+              }`}
+              aria-label="Undo last structural change"
+              aria-disabled={!canUndo}
+              disabled={!canUndo}
+              onClick={() => {
+                if (!canUndo) return;
+                onUndo?.();
+              }}
+            >
+              <PiArrowCounterClockwiseBold aria-hidden />
+            </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={panel === "location"}
-          aria-label={locationPillLabel}
-          className={finalizeTabClass("location")}
-          onClick={() => toggle("location")}
-        >
-          <span className={PILL_LABEL_CLUSTER}>
-            <PiMapPin className={ICON_CLASS} aria-hidden />
-            <span className={PILL_LABEL_CLASS}>{locationPillLabel}</span>
-          </span>
-          <span className={PILL_ENDCAP_SLOT}>{locationPillEnd}</span>
-        </button>
+            <button
+              type="button"
+              className={`${ICON_PILL_BASE} ${
+                canRedo ? HISTORY_IDLE : HISTORY_DISABLED
+              }`}
+              aria-label="Redo last structural change"
+              aria-disabled={!canRedo}
+              disabled={!canRedo}
+              onClick={() => {
+                if (!canRedo) return;
+                onRedo?.();
+              }}
+            >
+              <PiArrowClockwiseBold aria-hidden />
+            </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={panel === "visibility"}
-          aria-label="View"
-          className={finalizeTabClass("visibility")}
-          onClick={() => toggle("visibility")}
-        >
-          <span className={PILL_LABEL_CLUSTER}>
-            <PiEye className={ICON_CLASS} aria-hidden />
-            <span className={PILL_LABEL_CLASS}>View</span>
-          </span>
-          <span className={PILL_ENDCAP_SLOT}>{visibilityPillEnd}</span>
-        </button>
+            <button
+              type="button"
+              aria-pressed={tagsSheetOpen}
+              aria-label="Tags"
+              title="Tags"
+              className={tagsClass}
+              onClick={() => {
+                blurThen(() => {
+                  onTagsClick?.();
+                });
+              }}
+            >
+              <PiHash aria-hidden />
+            </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={panel === "more"}
-          className={[
-            finalizeTabClass("more"),
-            rateEnabled ? "create-meta-pill-rate--on" : "create-meta-pill-rate--off",
-          ].join(" ")}
-          onClick={() => toggle("more")}
-        >
-          <span className={PILL_LABEL_CLUSTER}>
-            <PiSlidersHorizontal
-              className={`${ICON_CLASS} opacity-95`}
-              aria-hidden
-            />
-            <span className={PILL_LABEL_CLASS}>More</span>
-          </span>
-          <span className={PILL_ENDCAP_SLOT}>{morePillEnd}</span>
-        </button>
-      </div>
-
-      {panel !== null && (
-        <div className={`mt-2 w-full ${PANEL_CLASS}`}>
-          {panel === "date" && datePanel}
-          {panel === "location" && locationPanel}
-          {panel === "visibility" && visibilityPanel}
-          {panel === "more" && morePanel}
+            <button
+              type="button"
+              className={settingsClass}
+              aria-expanded={settingsSheetOpen}
+              aria-label="Post settings"
+              title="Settings"
+              onClick={() => {
+                blurThen(() => {
+                  onSettingsClick?.();
+                });
+              }}
+            >
+              <PiGear aria-hidden />
+            </button>
+          </div>
         </div>
-      )}
+        {trailingAction ? (
+          <div className="pointer-events-auto shrink-0">{trailingAction}</div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -672,9 +672,6 @@ export default function InviteNotificationItem({
           rowInteractive
             ? "cursor-pointer hover:bg-[color-mix(in_oklab,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
             : "",
-          highlighted
-            ? "rounded-xl border border-amber-400/18 app-dark:border-amber-400/22 bg-amber-400/[0.06] app-dark:bg-amber-400/[0.08] shadow-[0_2px_20px_rgba(251,191,36,0.14),0_0_1px_rgba(251,191,36,0.12)] app-dark:shadow-[0_2px_24px_rgba(251,191,36,0.12),0_0_1px_rgba(251,191,36,0.1)] transition-[box-shadow,background-color,border-color] duration-300"
-            : "",
         ]
           .filter(Boolean)
           .join(" ")}

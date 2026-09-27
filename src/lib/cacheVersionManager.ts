@@ -39,6 +39,7 @@ const FEED_CACHE_SCHEMA_VERSION_KEY = 'echotoo_feed_cache_schema_version';
 
 const LEGACY_FEED_LOCAL_STORAGE_PREFIXES = [
   'home_feed_v1:',
+  'home_display_v1:',
   'storage:feed:',
   'feed:',
 ] as const;
@@ -178,6 +179,14 @@ export async function checkAndClearAllCaches(): Promise<void> {
     clearAllNotificationSettingsCache();
     clearAllInviteStatusCache();
     clearAllFollowCache(); // Still uses localStorage only
+
+    // PV2A published media manifest cache
+    try {
+      const { clearPublishedMediaCache } = await import("./publishedMedia");
+      clearPublishedMediaCache();
+    } catch {
+      /* optional during early boot */
+    }
 
     // Clear dataCache (feed data)
     // dataCache has its own clearFeedCache method

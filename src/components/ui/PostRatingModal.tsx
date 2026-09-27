@@ -1,12 +1,11 @@
 import { PiStar, PiStarFill } from "react-icons/pi";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import FrostedCenterModal, {
   frostedModalPanelClassName,
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
 import toast from "react-hot-toast";
 import {
-  deletePostRating,
   upsertPostRating,
 } from "../../api/services/postRatings";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
@@ -39,15 +38,15 @@ function roundedViewerStars(v: number | null | undefined): number {
 }
 
 function StarRow({
-  viewerRating,
+  selectedRating,
   onSelectStar,
-  submitting,
+  disabled,
 }: {
-  viewerRating?: number | null;
+  selectedRating: number;
   onSelectStar?: (stars: number) => void;
-  submitting?: boolean;
+  disabled?: boolean;
 }) {
-  const filled = roundedViewerStars(viewerRating);
+  const filled = selectedRating;
 
   return (
     <div
@@ -65,25 +64,22 @@ function StarRow({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (submitting) return;
+              if (disabled) return;
               onSelectStar?.(n);
             }}
             className={[
               "rounded-lg p-1 transition-[opacity,transform,background-color,color] active:scale-[0.95]",
               "hover:bg-black/[0.05] app-dark:hover:bg-white/[0.1]",
-              submitting ? "cursor-wait" : "",
+              disabled ? "cursor-not-allowed opacity-60" : "",
               isFilled
                 ? "opacity-100"
                 : filled > 0
                   ? "opacity-[0.38] hover:opacity-85"
                   : "opacity-[0.82] hover:opacity-100 app-dark:opacity-[0.88]",
             ].join(" ")}
-            aria-label={
-              isFilled && filled === n
-                ? `Clear ${n}-star rating`
-                : `Rate ${n} star${n > 1 ? "s" : ""}`
-            }
-            aria-pressed={isFilled && n <= filled}
+            aria-label={`Rate ${n} star${n > 1 ? "s" : ""}`}
+            aria-pressed={isFilled}
+            disabled={disabled}
           >
             {isFilled ? (
               <PiStarFill
@@ -121,13 +117,18 @@ export default function PostRatingModal({
   const [currentViewerRating, setCurrentViewerRating] = useState<number | null>(
     typeof viewerRating === "number" ? viewerRating : null
   );
+  /** Pending selection only — not persisted until Rate is pressed. */
+  const [selectedRating, setSelectedRating] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+
+  const savedRounded = roundedViewerStars(currentViewerRating);
 
   useEffect(() => {
     if (!open) return;
     setCurrentAverage(typeof ratingAverage === "number" ? ratingAverage : null);
     setCurrentCount(typeof ratingCount === "number" ? ratingCount : null);
     setCurrentViewerRating(typeof viewerRating === "number" ? viewerRating : null);
+    setSelectedRating(roundedViewerStars(viewerRating));
     setSubmitting(false);
   }, [open, ratingAverage, ratingCount, viewerRating]);
 
@@ -141,11 +142,26 @@ export default function PostRatingModal({
   const avgStr = avgNum.toFixed(1);
   const ratedByLabel = formatRatedByCount(count);
 
-  const handleSelectStar = async (stars: number) => {
+  const submitLabel = useMemo(() => {
+    if (savedRounded > 0) return "Update rating";
+    return "Rate";
+  }, [savedRounded]);
+
+  const canSubmit = useMemo(() => {
+    if (submitting) return false;
+    if (selectedRating < 1) return false;
+    if (savedRounded > 0 && selectedRating === savedRounded) return false;
+    return true;
+  }, [savedRounded, selectedRating, submitting]);
+
+  const handleSelectStar = (stars: number) => {
     if (submitting) return;
+    setSelectedRating(stars);
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit || submitting) return;
     if (!ensureAuthed()) return;
-    const prevRounded = roundedViewerStars(currentViewerRating);
-    const clearing = prevRounded > 0 && prevRounded === stars;
 
     setSubmitting(true);
     const previous = {
@@ -154,36 +170,18 @@ export default function PostRatingModal({
       viewer: currentViewerRating,
     };
 
-    if (clearing) {
-      setCurrentViewerRating(null);
-    } else {
-      setCurrentViewerRating(stars);
-    }
-
     try {
-      const { data, error } = clearing
-        ? await deletePostRating(postId)
-        : await upsertPostRating(postId, stars);
+      const { data, error } = await upsertPostRating(postId, selectedRating);
       if (error || !data) {
-        setCurrentAverage(previous.avg);
-        setCurrentCount(previous.count);
-        setCurrentViewerRating(previous.viewer);
-        toast.error(
-          clearing ? "Failed to remove rating" : "Failed to submit rating"
-        );
+        toast.error("Failed to submit rating");
         return;
       }
       setCurrentAverage(data.ratingAverage ?? previous.avg);
       setCurrentCount(data.ratingCount ?? previous.count);
-      setCurrentViewerRating(data.viewerRating ?? (clearing ? null : stars));
+      setCurrentViewerRating(data.viewerRating ?? selectedRating);
       onClose();
     } catch {
-      setCurrentAverage(previous.avg);
-      setCurrentCount(previous.count);
-      setCurrentViewerRating(previous.viewer);
-      toast.error(
-        clearing ? "Failed to remove rating" : "Failed to submit rating"
-      );
+      toast.error("Failed to submit rating");
     } finally {
       setSubmitting(false);
     }
@@ -216,19 +214,35 @@ export default function PostRatingModal({
         </p>
 
         <StarRow
-          viewerRating={currentViewerRating}
+          selectedRating={selectedRating}
           onSelectStar={handleSelectStar}
-          submitting={submitting}
+          disabled={submitting}
         />
 
-        <p className="mt-4 text-center text-[11px] text-[var(--text)]/45 app-dark:text-white/40">
-          Tap the same star again to remove your rating · Tap outside to close
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={!canSubmit}
+            className={[
+              "min-w-[7.5rem] rounded-full px-5 py-2 text-sm font-semibold transition-opacity",
+              "bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-90",
+              "disabled:cursor-not-allowed disabled:opacity-40",
+            ].join(" ")}
+          >
+            {submitting ? "Saving…" : submitLabel}
+          </button>
+        </div>
+
+        <p className="mt-3 text-center text-[11px] text-[var(--text)]/45 app-dark:text-white/40">
+          Tap outside to close
         </p>
-        <div className="mt-2 flex justify-center">
+        <div className="mt-1 flex justify-center">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--text)]/55 transition hover:text-[var(--text)]/80 app-dark:text-white/50 app-dark:hover:text-white/75"
+            disabled={submitting}
+            className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--text)]/55 transition hover:text-[var(--text)]/80 disabled:opacity-50 app-dark:text-white/50 app-dark:hover:text-white/75"
           >
             Close
           </button>

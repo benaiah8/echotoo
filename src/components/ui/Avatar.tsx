@@ -46,6 +46,8 @@ export default function Avatar({
       : (name || "").trim().charAt(0).toUpperCase() || " ";
   const s = `${size}px`;
   const [showAnonymousMessage, setShowAnonymousMessage] = useState(false);
+  /** Failed <img> loads fall back to initials — never leave a blank hole. */
+  const [imgFailed, setImgFailed] = useState(false);
 
   /**
    * Display precedence: anonymous → pass through; no userId → `url`; with userId →
@@ -72,6 +74,10 @@ export default function Avatar({
   }, [userId, variant, url]);
 
   const resolvedAvatarSrc = avatarDisplayUrl(displayUrl);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [resolvedAvatarSrc]);
 
   const handleClick = () => {
     if (variant === "anon") {
@@ -148,7 +154,7 @@ export default function Avatar({
                   : undefined,
               })}
         >
-          {resolvedAvatarSrc ? (
+          {resolvedAvatarSrc && !imgFailed ? (
             <img
               src={resolvedAvatarSrc}
               alt=""
@@ -160,6 +166,9 @@ export default function Avatar({
                 if (userId && variant !== "anon" && displayUrl) {
                   setCachedAvatar(userId, displayUrl);
                 }
+              }}
+              onError={() => {
+                setImgFailed(true);
               }}
             />
           ) : (

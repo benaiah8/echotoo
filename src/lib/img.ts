@@ -1,4 +1,6 @@
 import { supabase } from "../lib/supabaseClient";
+import { isLocalDraftImageUrl } from "./createDraftImage/localDraftImageUrl";
+import { isLocalPreviewUrl } from "./localPreviewUrl";
 
 /** Gate: allow Cloudinary URLs only when VITE_ALLOW_CLOUDINARY === "true" (default: disallow to prevent 401 spam) */
 const ALLOW_CLOUDINARY = import.meta.env.VITE_ALLOW_CLOUDINARY === "true";
@@ -8,12 +10,26 @@ const ALLOW_CLOUDINARY = import.meta.env.VITE_ALLOW_CLOUDINARY === "true";
  * - Works whether `path` is already a full URL or just a key.
  * - No image transformation params (so it works without the add-on).
  * - When VITE_ALLOW_CLOUDINARY is not "true", Cloudinary URLs return undefined (no 401 requests).
+ * - Session/local preview URLs (blob:, capacitor:, file:, Capacitor localhost file
+ *   hosts) pass through unchanged — never rewritten as Storage public URLs (LI1D.1).
+ * - Create local DraftImage sentinels (`draft-image/*`) are identity only and must
+ *   not become fake Storage URLs; resolve via DraftImage preview first.
  */
 export function imgUrlPublic(
   path?: string | null,
   bucket = "media"
 ): string | undefined {
   if (!path) return undefined;
+
+  // LI1D.1: never prepend Supabase Storage public URL to session/local previews.
+  if (isLocalPreviewUrl(path)) {
+    return path.trim();
+  }
+
+  // Identity sentinel — not a loadable <img> src.
+  if (isLocalDraftImageUrl(path)) {
+    return undefined;
+  }
 
   // [CLOUDINARY GATE] Block Cloudinary URLs unless explicitly allowed
   if (/^https?:\/\//i.test(path)) {
@@ -29,6 +45,7 @@ export function imgUrlPublic(
   }
 
   // Check if it's a valid base64 data URL (these are actually valid!)
+  // (Also covered by isLocalPreviewUrl; kept for clarity / older callers.)
   if (path.startsWith("data:image/")) {
     return path; // Return the data URL as-is
   }

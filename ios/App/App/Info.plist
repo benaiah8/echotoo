@@ -48,7 +48,9 @@
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Echo Too may use your camera so you can take photos for your profile or posts.</string>
+	<string>Echo Too may use your camera so you can take photos and videos for your profile or posts.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Echo Too may use your microphone when you record video with sound.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Echo Too may access your photo library so you can choose photos for your profile or posts.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

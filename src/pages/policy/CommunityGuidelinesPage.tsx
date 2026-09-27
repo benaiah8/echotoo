@@ -9,13 +9,15 @@ export default function CommunityGuidelinesPage() {
         intro="These guidelines help keep EchoToo a safe and welcoming space for everyone."
       >
         {/* POLICY CONTENT START */}
-        <p>Last updated: March 13, 2026</p>
+        <p>Last updated: September 27, 2026</p>
 
         <p>
           EchoToo is a platform for discovering and sharing real-world
           experiences, events, hangouts, and itineraries. These Community
           Guidelines explain what is and is not allowed on EchoToo so the
-          platform stays respectful, safe, and useful for everyone.
+          platform stays respectful, safe, and useful for everyone. The same
+          standards apply to posts, comments, media, Duo and Group Up activity,
+          and messages.
         </p>
 
         <h3>1. Zero tolerance for objectionable content and abuse</h3>
@@ -32,7 +34,8 @@ export default function CommunityGuidelinesPage() {
         <p>
           Treat other users with respect. Healthy disagreement is fine, but
           harassment, bullying, humiliation, intimidation, and repeated unwanted
-          behavior are not allowed.
+          behavior are not allowed — including in direct messages and group
+          chats.
         </p>
 
         <h3>3. No Hate Speech or Discrimination</h3>
@@ -51,7 +54,8 @@ export default function CommunityGuidelinesPage() {
         <h3>5. No Sexual Exploitation or Abuse</h3>
         <p>
           Explicit sexual exploitation, coercive sexual content, and abusive
-          sexual behavior are not allowed on EchoToo.
+          sexual behavior are not allowed on EchoToo. Non-consensual intimate
+          imagery is prohibited.
         </p>
 
         <h3>6. Zero Tolerance for Child Sexual Abuse Material</h3>
@@ -95,7 +99,7 @@ export default function CommunityGuidelinesPage() {
           Do not share other people&apos;s private or sensitive information
           without their permission. Avoid posting personal contact details,
           precise private information, or anything that could put someone at
-          risk.
+          risk. Doxxing through posts or chat is not allowed.
         </p>
 
         <h3>12. Use Care With Real-World Meetups</h3>
@@ -104,6 +108,11 @@ export default function CommunityGuidelinesPage() {
           not organize or guarantee the safety of user-posted gatherings or
           events. Use good judgment, verify details independently, and prefer
           public places when meeting others.
+        </p>
+        <p>
+          Do not use Duo, Group Up, or messaging to pressure people into meeting,
+          continue contacting someone after they decline, or otherwise make
+          others feel unsafe.
         </p>
 
         <h3>13. Reporting Violations</h3>

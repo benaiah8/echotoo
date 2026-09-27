@@ -1,6 +1,7 @@
 // PERF: Optimized post component with image optimization
 import React, {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useCallback,
@@ -11,26 +12,29 @@ import { useDispatch, useSelector } from "react-redux";
 import { Paths } from "../router/Paths";
 import { supabase } from "../lib/supabaseClient";
 import MediaCarousel from "./MediaCarousel";
+import PublishedMediaSurface from "./PublishedMediaSurface";
 import Avatar from "./ui/Avatar";
 import PostMenu from "./ui/PostMenu";
 import InviteDrawer from "./ui/InviteDrawer";
 import PostActions from "./ui/PostActions";
-import {
-  PostFeedDetailsHintRow,
-  PostTypeMetaChip,
-} from "./ui/PostFeedSurfaceMeta";
+import { PostFeedHeaderMeta } from "./ui/PostFeedSurfaceMeta";
 import { getPostForEdit } from "../api/services/posts";
 import {
   buildCanonicalEditPostData,
   createEditActivitiesHref,
-  persistCanonicalEditPostData,
 } from "../lib/editPostBootstrap";
+import { runOwnerPublishedEditOpen } from "../lib/openOwnerPublishedEdit";
 import toast from "react-hot-toast";
 
 import { imgUrlPublic } from "../lib/img";
 import { prefetchProfile } from "../lib/prefetch";
 import { preloadImages } from "../lib/imageOptimization";
 import { buildCarouselImages } from "../lib/carouselImages";
+import { extractV4KeyInfoValues } from "../lib/createFlowV4KeyInfo";
+import { getPublishedCarrierSlot0Location } from "../lib/createFlowMeaningfulActivity";
+import { hasV4VisibleLocation } from "../lib/createFlowLocation";
+import PostV4KeyDetailsFeed from "./PostV4KeyDetailsFeed";
+import PostCaptionText from "./PostCaptionText";
 import { getViewerId } from "../api/services/follows";
 import { getFollowStatus } from "../api/services/follows";
 import {
@@ -44,8 +48,9 @@ import {
 } from "../lib/activitiesCache";
 import { type BatchLoadResult } from "../types/legacy";
 import { type FeedItem } from "../api/queries/getPublicFeed";
+import { normalizeLatestCommentPreview } from "../lib/latestCommentPreview";
+import { HOME_EVENT_TIMEZONE } from "../lib/homeFeedConstants";
 import { getPostScheduleLabel } from "../lib/postScheduleLabel";
-import { getPostScheduleLabelClasses } from "../lib/postScheduleLabelStyles";
 import { requestManager } from "../lib/requestManager";
 import { RootState } from "../app/store";
 import { setAuthModal } from "../reducers/modalReducer";
@@ -54,6 +59,21 @@ import {
   buildPostReportDraftFromFeedItem,
   type ReportDraft,
 } from "../types/report";
+import {
+  getPublishedMediaCache,
+  publishedMediaViewerKey,
+  releaseAllPublishedListVideoOwnership,
+  resolvePublishedMediaCover,
+  ensurePublishedMediaCacheForDetailHandoff,
+  ensureLegacyGalleryHandoffFromUrls,
+  isPublishedMediaOrder,
+  isPublishedVideoOnly,
+  capturePublishedVideoListToDetailHandoff,
+  latchPublishedListHandoffOrigin,
+  type PublishedVideoListHandoffOrigin,
+} from "../lib/publishedMedia";
+import type { PublishedVideoPlaybackSnapshot } from "../lib/publishedMedia";
+import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 
 /** In-memory set of postIds we've attempted fallback for (avoids loops + repeat requests) */
 const fallbackAttemptedPostIds = new Set<string>();
@@ -66,6 +86,134 @@ const perPostFetchInFlight = new Map<
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
+
+function visibleListCaption(caption: string | null | undefined): string | null {
+  const raw = caption ?? "";
+  const t = raw.trim();
+  if (!t || t === "(no caption)") return null;
+  return raw;
+}
+
+/** Card caption preview: 3 full lines with media, 10 without. `… more` only when overflowing. */
+function PostCardCaption({
+  text,
+  hasMedia,
+  onOpen,
+  className = "mt-3",
+}: {
+  text: string;
+  hasMedia: boolean;
+  onOpen: () => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [overflows, setOverflows] = useState(false);
+  const lineClampClass = hasMedia ? "line-clamp-3" : "line-clamp-10";
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      setOverflows(false);
+      return;
+    }
+    const update = () => {
+      const next = el.scrollHeight > el.clientHeight + 1;
+      setOverflows((prev) => (prev === next ? prev : next));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, hasMedia]);
+
+  return (
+    <div
+      className={`relative cursor-pointer ${className}`.trim()}
+      onClick={() => onOpen()}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <p
+        ref={ref}
+        className={`${lineClampClass} whitespace-pre-wrap break-words text-left text-[13px] leading-snug text-[var(--text)]/90`}
+      >
+        <PostCaptionText text={text} stopLinkPropagation />
+      </p>
+      {overflows ? (
+        <span
+          className="pointer-events-none absolute bottom-0 right-0 bg-[var(--bg)] pl-1.5 text-[13px] leading-snug text-[var(--text)]/45"
+          aria-hidden
+        >
+          … more
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Compact latest-comment social proof under caption; `… more` opens Detail comments (no inline expand). */
+function PostCardCommentPreview({
+  authorLabel,
+  text,
+  onOpen,
+}: {
+  authorLabel: string;
+  text: string;
+  onOpen: () => void;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      setOverflows(false);
+      return;
+    }
+    const update = () => {
+      const next = el.scrollHeight > el.clientHeight + 1;
+      setOverflows((prev) => (prev === next ? prev : next));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [authorLabel, text]);
+
+  return (
+    <button
+      type="button"
+      className="relative w-full min-w-0 text-left touch-manipulation"
+      aria-label="View comments"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      <p
+        ref={ref}
+        className="line-clamp-2 min-w-0 break-words text-xs leading-snug text-[var(--text)]/70"
+      >
+        <span className="font-medium text-[var(--text)]/88">{authorLabel}</span>{" "}
+        <span className="font-normal text-[var(--text)]/62">{text}</span>
+      </p>
+      {overflows ? (
+        <span
+          className="pointer-events-none absolute bottom-0 right-0 bg-[var(--bg)] pl-1.5 text-xs leading-snug text-[var(--text)]/45"
+          aria-hidden
+        >
+          … more
+        </span>
+      ) : null}
+    </button>
+  );
+}
 
 type PostProps = {
   postId: string;
@@ -94,6 +242,13 @@ type PostProps = {
   rsvpData?: FeedItem["rsvp_data"];
   /** When false, multi-image feed carousel autoplay is paused (hidden tab / inactive profile sub-tab). */
   slideshowHostVisible?: boolean;
+  /** Home date-filter matched Addis YYYY-MM-DD for the schedule label. */
+  matchedScheduleDayKey?: string | null;
+  /**
+   * Pass 3F: stable list origin for video-only playback handoff.
+   * Home/Profile must pass this so overlay `/experience/:id` cannot flip the surface.
+   */
+  publishedListOrigin?: "feed" | "profile";
 
   authorId: string; // profile id (for FollowButton)
   author: {
@@ -122,6 +277,8 @@ function Post({
   post, // [OPTIMIZATION: Phase 1 - PostgreSQL] Full FeedItem with PostgreSQL data
   batchedData, // [OPTIMIZATION: Phase 1 - Batch] Fallback for backward compatibility
   slideshowHostVisible = true,
+  matchedScheduleDayKey = null,
+  publishedListOrigin,
 }: PostProps) {
   const navigate = useNavigate();
 
@@ -140,6 +297,10 @@ function Post({
   // [OPTIMIZATION: Phase 4 - Prefetch] Prefetch profiles and follow status for visible post authors
   // Why: Instant profile page loads, better perceived performance
   const postRef = useRef<HTMLDivElement>(null);
+  // Pass 3E: sync Feed video capture before Detail ownership release.
+  const feedPlaybackCaptureRef = useRef<
+    ((generation: number) => PublishedVideoPlaybackSnapshot | null) | null
+  >(null);
   // [OPTIMIZATION: Phase 2.2] Ref for IntersectionObserver (fallback query only)
   const rootRef = useRef<HTMLElement | null>(null);
   const lockedNonCloudinaryRef = useRef<Record<string, boolean>>({});
@@ -197,6 +358,7 @@ function Post({
 
               // Prefetch profile if not cached
               if (!cachedProfile && author) {
+                // Thin identity prime — omit member_no (unknown ≠ known-null).
                 setCachedProfile({
                   id: author.id,
                   user_id: authorId,
@@ -205,7 +367,6 @@ function Post({
                   avatar_url: author.avatar_url,
                   bio: null,
                   xp: null,
-                  member_no: null,
                   instagram_url: null,
                   tiktok_url: null,
                   telegram_url: null,
@@ -230,7 +391,7 @@ function Post({
           observer.disconnect();
         }
       },
-      { rootMargin: "100px" } // Start prefetching 100px before post is visible
+      { rootMargin: "100px" }, // Start prefetching 100px before post is visible
     );
 
     observer.observe(postRef.current);
@@ -248,7 +409,8 @@ function Post({
       : author?.display_name || author?.username || "User";
   }, [isAnonymous, anonymousName, author?.display_name, author?.username]);
 
-  const postType = (post?.type ?? type) === "experience" ? "experience" : "hangout";
+  const postType =
+    (post?.type ?? type) === "experience" ? "experience" : "hangout";
 
   const scheduleLabel = useMemo(
     () =>
@@ -258,6 +420,12 @@ function Post({
         selectedDates: post?.selected_dates ?? selectedDates,
         isRecurring: post?.is_recurring,
         recurrenceDays: post?.recurrence_days,
+        ...(matchedScheduleDayKey
+          ? {
+              matchedOccurrenceDayKey: matchedScheduleDayKey,
+              timeZone: HOME_EVENT_TIMEZONE,
+            }
+          : {}),
       }),
     [
       postType,
@@ -267,15 +435,30 @@ function Post({
       post?.recurrence_days,
       createdAt,
       selectedDates,
-    ]
+      matchedScheduleDayKey,
+    ],
   );
 
   const dateText = scheduleLabel.label;
 
-  const scheduleLabelClassName = useMemo(
-    () => getPostScheduleLabelClasses(scheduleLabel.kind, "feed"),
-    [scheduleLabel.kind]
+  const feedKeyDetailValues = useMemo(
+    () =>
+      extractV4KeyInfoValues(post?.activities?.[0]?.additional_info ?? null),
+    [post?.activities],
   );
+
+  const feedHasLocation = useMemo(() => {
+    const activities = post?.activities;
+    if (!activities?.length) return false;
+    const carrier = getPublishedCarrierSlot0Location(activities);
+    if (carrier) {
+      return hasV4VisibleLocation(carrier.locationName, carrier.locationUrl);
+    }
+    return hasV4VisibleLocation(
+      activities[0]?.location_name,
+      activities[0]?.location_url,
+    );
+  }, [post?.activities]);
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
@@ -330,7 +513,7 @@ function Post({
   // [FIX] undefined = unknown (Home feed RPC omits has_images); only true/false are explicit.
   const hasImages = post?.has_images;
   const [showImageSkeleton, setShowImageSkeleton] = useState(
-    hasImages === true
+    hasImages === true,
   );
 
   // [FIX] Move useState declarations before useCallback hooks that use them
@@ -358,51 +541,195 @@ function Post({
   // [OPTIMIZATION: Phase 6.2 - React] Memoize navigation handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
   const location = useLocation();
-  const goToDetails = useCallback(() => {
-    // Don't navigate if invite drawer is closing
-    if (isInviteDrawerClosing) {
-      console.log("Navigation prevented: invite drawer is closing");
-      return;
-    }
-
-    // Draft: go to create flow instead of detail
-    const isDraftPost =
-      status === "draft" || isDraft || postId.startsWith("draft-");
-    if (isDraftPost) {
-      navigate(`${Paths.createFinalize}?type=${type}`);
-      return;
-    }
-
-    // Prefetch hero image so modal renders instantly (guarded for real URLs only)
-    if (post?.activities?.length) {
-      const { images } = buildCarouselImages(post.activities, 400);
-      const heroUrl = images[0];
-      if (
-        heroUrl &&
-        (heroUrl.startsWith("http://") || heroUrl.startsWith("https://"))
-      ) {
-        const img = new Image();
-        img.src = heroUrl;
-      }
-    }
-
-    const detailPath =
-      type === "hangout"
-        ? Paths.hangoutDetail.replace(":id", postId)
-        : Paths.experienceDetail.replace(":id", postId);
-    navigate(detailPath, {
-      state: { backgroundLocation: location, initialPost: post ?? undefined },
-    });
-  }, [
-    isInviteDrawerClosing,
+  const publishedListOriginRef = useRef<PublishedVideoListHandoffOrigin | null>(
+    null,
+  );
+  publishedListOriginRef.current = latchPublishedListHandoffOrigin(
+    publishedListOriginRef.current,
+    publishedListOrigin,
+    location.pathname,
+  );
+  const publishedListMode = publishedListOriginRef.current;
+  const registerListPlaybackCapture = useCallback(
+    (
+      capture: ((generation: number) => PublishedVideoPlaybackSnapshot | null) | null,
+    ) => {
+      feedPlaybackCaptureRef.current = capture;
+    },
+    [],
+  );
+  const viewerUserId = authState?.user?.id ?? null;
+  const publishedViewerKey = publishedMediaViewerKey(viewerUserId);
+  const publishedMediaEntry = getPublishedMediaCache(
     postId,
-    type,
-    status,
-    isDraft,
-    navigate,
-    location,
-    post,
-  ]);
+    publishedViewerKey,
+  );
+  const publishedMediaItems = publishedMediaEntry?.items ?? null;
+  const localImageCount = images?.length ?? 0;
+  const publishedImageCount =
+    publishedMediaItems?.filter((i) => i.kind === "image").length ?? 0;
+  /** Partial legacy cache must not steal the renderer from a richer local gallery. */
+  const publishedIsPoorerPartialLegacy = Boolean(
+    publishedMediaEntry &&
+      publishedMediaEntry.provenance === "legacy-gallery" &&
+      publishedMediaEntry.legacyScope === "partial" &&
+      localImageCount > publishedImageCount,
+  );
+  const hasPublishedManifest = Boolean(
+    publishedMediaItems &&
+      publishedMediaItems.length > 0 &&
+      !publishedIsPoorerPartialLegacy,
+  );
+
+  const publishedCover = hasPublishedManifest
+    ? resolvePublishedMediaCover(publishedMediaItems!)
+    : null;
+  const shareImageUrl =
+    publishedCover?.kind === "image"
+      ? publishedCover.url
+      : publishedCover?.kind === "video-poster"
+      ? publishedCover.url
+      : images && images.length > 0
+      ? images[0]
+      : null;
+
+  const goToDetails = useCallback(
+    (
+      initialMediaKeyOrOpts?:
+        | string
+        | {
+            initialMediaKey?: string;
+            scrollToLocation?: boolean;
+            scrollToComments?: boolean;
+            openImmersiveFullscreen?: boolean;
+          },
+    ) => {
+      // Don't navigate if invite drawer is closing
+      if (isInviteDrawerClosing) {
+        console.log("Navigation prevented: invite drawer is closing");
+        return;
+      }
+
+      const opts =
+        typeof initialMediaKeyOrOpts === "string"
+          ? { initialMediaKey: initialMediaKeyOrOpts }
+          : initialMediaKeyOrOpts ?? {};
+      const initialMediaKey = opts.initialMediaKey;
+      const scrollToLocation = opts.scrollToLocation === true;
+      const scrollToComments = opts.scrollToComments === true;
+      const openImmersiveFullscreen = opts.openImmersiveFullscreen === true;
+
+      // Draft: go to create flow instead of detail
+      const isDraftPost =
+        status === "draft" || isDraft || postId.startsWith("draft-");
+      if (isDraftPost) {
+        navigate(`${Paths.createFinalize}?type=${type}`);
+        return;
+      }
+
+      // Pass 3E/3F: capture list video playback BEFORE ownership release / tearDown.
+      // Home Feed + Profile, video-only only (mixed unchanged).
+      // Only advertise a handoff session when a snapshot was actually written.
+      let listPlaybackOrigin: PublishedVideoListHandoffOrigin | undefined;
+      let listPlaybackHandoffSessionId: number | undefined;
+      if (
+        publishedMediaItems &&
+        isPublishedVideoOnly(publishedMediaItems) &&
+        !publishedIsPoorerPartialLegacy
+      ) {
+        const captured = capturePublishedVideoListToDetailHandoff({
+          postId,
+          origin: publishedListMode,
+          items: publishedMediaItems,
+          initialMediaKey,
+          capture: (generation) =>
+            feedPlaybackCaptureRef.current?.(generation) ?? null,
+        });
+        if (captured?.wrote === true) {
+          listPlaybackOrigin = publishedListMode;
+          listPlaybackHandoffSessionId = captured.sessionId;
+        }
+      }
+
+      // Stop list HLS immediately before Detail mounts.
+      releaseAllPublishedListVideoOwnership();
+
+      // Sync handoff: re-seed the same viewer cache Detail reads on mount.
+      // Prefer existing rendered published items — no new network, no router media payload.
+      // Legacy MediaCarousel: hand off local full gallery when published cache is empty/partial.
+      if (
+        publishedMediaItems &&
+        publishedMediaItems.length > 0 &&
+        !publishedIsPoorerPartialLegacy
+      ) {
+        ensurePublishedMediaCacheForDetailHandoff({
+          postId,
+          viewerUserId,
+          items: publishedMediaItems,
+          source: publishedListMode === "profile" ? "profile" : "feed",
+        });
+      } else if (images && images.length > 0) {
+        const mediaOrder = (post as { media_order?: unknown })?.media_order;
+        if (!isPublishedMediaOrder(mediaOrder)) {
+          ensureLegacyGalleryHandoffFromUrls({
+            postId,
+            viewerUserId,
+            imageUrls: images,
+            source: publishedListMode === "profile" ? "profile" : "feed",
+          });
+        }
+      }
+
+      // Prefetch hero image so modal renders instantly (guarded for real URLs only)
+      if (post?.activities?.length) {
+        const { images: heroImages } = buildCarouselImages(
+          post.activities,
+          400,
+        );
+        const heroUrl = heroImages[0];
+        if (
+          heroUrl &&
+          (heroUrl.startsWith("http://") || heroUrl.startsWith("https://"))
+        ) {
+          const img = new Image();
+          img.src = heroUrl;
+        }
+      }
+
+      const detailPath =
+        type === "hangout"
+          ? Paths.hangoutDetail.replace(":id", postId)
+          : Paths.experienceDetail.replace(":id", postId);
+      const state: PostDetailNavigateState = {
+        backgroundLocation: location,
+        initialPost: post ?? undefined,
+        ...(initialMediaKey ? { initialMediaKey } : {}),
+        ...(scrollToLocation ? { scrollToLocation: true } : {}),
+        ...(scrollToComments ? { scrollToComments: true } : {}),
+        ...(openImmersiveFullscreen ? { openImmersiveFullscreen: true } : {}),
+        ...(listPlaybackOrigin ? { listPlaybackOrigin } : {}),
+        ...(listPlaybackHandoffSessionId != null
+          ? { listPlaybackHandoffSessionId }
+          : {}),
+      };
+      navigate(detailPath, { state });
+    },
+    [
+      isInviteDrawerClosing,
+      postId,
+      type,
+      status,
+      isDraft,
+      navigate,
+      location,
+      post,
+      publishedMediaItems,
+      publishedIsPoorerPartialLegacy,
+      images,
+      viewerUserId,
+      publishedListMode,
+    ],
+  );
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize edit handler
   // Why: Prevents function recreation on every render, stable reference for React.memo
@@ -413,19 +740,22 @@ function Post({
       navigate(`${Paths.createFinalize}?type=${type}`);
       return;
     }
-    try {
-      const { post, activities } = await getPostForEdit(postId);
-
-      const editData = buildCanonicalEditPostData(post, activities, {
-        returnPath: window.location.pathname,
-      });
-      persistCanonicalEditPostData(editData);
-
-      navigate(createEditActivitiesHref(post.type));
-    } catch (error) {
-      console.error("Error loading post for edit:", error);
-      toast.error("Failed to load post for editing");
-    }
+    await runOwnerPublishedEditOpen({
+      startPathname: window.location.pathname,
+      navigate,
+      fetchAndBuild: async () => {
+        const { post, activities, mediaOrder, postMedia } =
+          await getPostForEdit(postId);
+        return {
+          editData: buildCanonicalEditPostData(post, activities, {
+            returnPath: window.location.pathname,
+            mediaOrder,
+            postMedia,
+          }),
+          href: createEditActivitiesHref(post.type),
+        };
+      },
+    });
   }, [postId, navigate, status, isDraft, type]);
 
   // [OPTIMIZATION: Phase 2.2] Use activities from PostgreSQL if available
@@ -519,7 +849,7 @@ function Post({
                     if (!showImageSkeleton) setImagesLoading(true);
                     setImagesWithReason(
                       result.images,
-                      "CACHE activities batch"
+                      "CACHE activities batch",
                     );
                     setShowImageSkeleton(false);
                     preloadImages(result.images).catch(() => {});
@@ -550,7 +880,7 @@ function Post({
                         if (!showImageSkeleton) setImagesLoading(true);
                         setImagesWithReason(
                           result.images,
-                          "CACHE activities batch"
+                          "CACHE activities batch",
                         );
                         setShowImageSkeleton(false);
                         preloadImages(result.images).catch(() => {});
@@ -573,7 +903,7 @@ function Post({
                 if (fromFeed.length > 0) {
                   const result = buildCarouselImages(
                     fromFeed.map((img) => ({ images: [img], order_idx: 0 })),
-                    400
+                    400,
                   );
                   setImagesWithReason(result.images, "FEED first_image_url");
                   preloadImages(result.images).catch(() => {});
@@ -606,11 +936,11 @@ function Post({
                     async () => {
                       const { data, error } = await supabase.rpc(
                         "get_activities_for_posts_sanitized",
-                        { p_post_ids: [postId] }
+                        { p_post_ids: [postId] },
                       );
                       if (error) throw error;
                       return data ?? [];
-                    }
+                    },
                   );
                   return (rows ?? []).map(
                     (r: {
@@ -621,7 +951,7 @@ function Post({
                       images: (r.images ?? []) as string[] | null,
                       order_idx:
                         typeof r.order_idx === "number" ? r.order_idx : 0,
-                    })
+                    }),
                   );
                 })();
                 perPostFetchInFlight.set(postId, fetchPromise);
@@ -649,7 +979,7 @@ function Post({
       },
       // [OPTIMIZATION: Phase 5 - Image] Optimized rootMargin for better prefetching
       // Why: 150px is optimal balance - prefetches early enough without wasting bandwidth
-      { root: null, rootMargin: "150px 0px", threshold: 0.01 }
+      { root: null, rootMargin: "150px 0px", threshold: 0.01 },
     );
     obs.observe(node);
     return () => obs.disconnect();
@@ -658,12 +988,143 @@ function Post({
   const isDraftPost = status === "draft" || isDraft;
   /** Synthetic id from profile Created tab — compose draft lives in localStorage only, not the server. */
   const isLocalComposeDraft = postId.startsWith("draft-");
+  const displayedCaption = visibleListCaption(caption);
+  const hasCardMedia =
+    hasPublishedManifest ||
+    Boolean(images && images.length > 0) ||
+    imagesLoading ||
+    showImageSkeleton;
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize invite handler
   // Why: Prevents function recreation on every render, stable reference
   const handleInvite = useCallback(() => {
     setShowInviteDrawer(true);
   }, []);
+
+  const nameButton = (
+    <button
+      className="min-w-0 shrink truncate text-left text-xs font-medium leading-none hover:underline"
+      onClick={isAnonymous ? undefined : goToProfile}
+      onMouseEnter={() =>
+        !isAnonymous && author?.username && prefetchProfile(author.username)
+      }
+      onTouchStart={() =>
+        !isAnonymous && author?.username && prefetchProfile(author.username)
+      }
+    >
+      {displayName}
+    </button>
+  );
+
+  const draftBadge = isDraftPost ? (
+    <span className="shrink-0 px-2 py-0.5 text-xs bg-yellow-500/20 text-yellow-600 rounded-full border border-yellow-500/30">
+      Draft
+    </span>
+  ) : null;
+
+  const continueEditingBlock =
+    isDraftPost && isOwner ? (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          navigate(`${Paths.createFinalize}?type=${type}`);
+        }}
+        className="mt-2 px-3 py-1.5 text-xs bg-yellow-500 text-black rounded-full hover:brightness-110 transition"
+      >
+        Continue Editing
+      </button>
+    ) : null;
+
+  const mediaBlock = (
+    <>
+      {/* Legacy image-only shell: no published manifest yet; waits for has_images / activity URLs before MediaCarousel. Not used for published video/mixed. */}
+      {!hasPublishedManifest && (imagesLoading || showImageSkeleton) && (
+        <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--border)]">
+          <div className="aspect-square w-full animate-pulse bg-[var(--text)]/5" />
+        </div>
+      )}
+      {hasPublishedManifest && publishedMediaItems ? (
+        <div className="mt-3">
+          <PublishedMediaSurface
+            mode={publishedListMode}
+            items={publishedMediaItems}
+            postId={postId}
+            viewerUserId={viewerUserId}
+            maxHeight="40vh"
+            hostVisible={slideshowHostVisible}
+            onOpenDetail={(mediaKeyOrOpts) => goToDetails(mediaKeyOrOpts)}
+            registerFeedPlaybackCapture={registerListPlaybackCapture}
+          />
+        </div>
+      ) : null}
+      {!hasPublishedManifest &&
+        !imagesLoading &&
+        !showImageSkeleton &&
+        images &&
+        images.length > 0 && (
+          <div className="mt-3" role="button" onClick={() => goToDetails()}>
+            <MediaCarousel
+              images={images}
+              maxHeight="40vh"
+              autoplay={images.length > 1}
+              hostVisible={slideshowHostVisible}
+              framePolicy="stable-list"
+              expectedMediaCount={
+                typeof (post as { image_count?: unknown })?.image_count ===
+                "number"
+                  ? (post as { image_count: number }).image_count
+                  : undefined
+              }
+            />
+          </div>
+        )}
+    </>
+  );
+
+  const actionsBlock = (
+    <div className="mt-2 text-[var(--text)]/85">
+      <PostActions
+        postId={postId}
+        authorId={isAnonymous ? undefined : authorId}
+        postType={type}
+        caption={caption}
+        postImageUrl={shareImageUrl}
+        postAuthor={
+          isAnonymous
+            ? undefined
+            : author
+            ? {
+                id: authorId,
+                username: author.username,
+                display_name: author.display_name,
+                avatar_url: author.avatar_url,
+                is_anonymous: false,
+              }
+            : undefined
+        }
+        post={post}
+        batchedData={batchedData}
+        onInvite={handleInvite}
+      />
+    </div>
+  );
+
+  const commentPreview = normalizeLatestCommentPreview(
+    post?.latest_comment_preview,
+  );
+  const commentPreviewBlock = commentPreview ? (
+    <div
+      className="mt-2 min-w-0 border-t border-[var(--border)] pt-2"
+      data-comment-preview
+    >
+      <PostCardCommentPreview
+        authorLabel={commentPreview.author_label}
+        text={commentPreview.text}
+        onOpen={() => goToDetails({ scrollToComments: true })}
+      />
+    </div>
+  ) : null;
 
   return (
     <article
@@ -704,36 +1165,16 @@ function Post({
         </div>
 
         {/* RIGHT: content column — everything on one vertical rail */}
-        <div className="flex-1 min-w-0 relative">
-          {/* header: name · date + draft badge + follow */}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <button
-              className="text-xs font-medium hover:underline"
-              onClick={isAnonymous ? undefined : goToProfile}
-              onMouseEnter={() =>
-                !isAnonymous &&
-                author?.username &&
-                prefetchProfile(author.username)
-              }
-              onTouchStart={() =>
-                !isAnonymous &&
-                author?.username &&
-                prefetchProfile(author.username)
-              }
-            >
-              {displayName}
-            </button>
-            <PostTypeMetaChip type={type} />
-            <span
-              className={`text-[10px] ${scheduleLabelClassName}`}
-            >
-              · {dateText}
-            </span>
-            {isDraftPost && (
-              <span className="px-2 py-0.5 text-xs bg-yellow-500/20 text-yellow-600 rounded-full border border-yellow-500/30">
-                Draft
-              </span>
-            )}
+        <div className="relative min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-x-1.5 pr-8">
+            {nameButton}
+            {draftBadge}
+            <PostFeedHeaderMeta
+              scheduleKind={scheduleLabel.kind}
+              scheduleLabel={dateText}
+              hasLocation={feedHasLocation}
+              onOpenLocation={() => goToDetails({ scrollToLocation: true })}
+            />
           </div>
           {isLocalComposeDraft && (
             <p className="mt-1 text-[10px] leading-snug text-[var(--text)]/50">
@@ -742,7 +1183,7 @@ function Post({
           )}
 
           {/* Three dots menu - Edit/Delete for owner, Report for non-owner */}
-          <div className="absolute top-0 right-0">
+          <div className="absolute right-0 top-0">
             <PostMenu
               postId={postId}
               currentAuthorId={authorId}
@@ -751,95 +1192,32 @@ function Post({
               onDelete={onDelete}
               isDraft={isDraftPost}
               onRequestReport={handleRequestPostReport}
-            />
-          </div>
-
-          {/* caption — clamp on feed/profile lists; full text on post detail */}
-          {caption && (
-            <p
-              className="mt-2 cursor-pointer whitespace-pre-wrap text-left text-[13px] leading-snug text-[var(--text)]/90 line-clamp-6 break-words"
-              onClick={goToDetails}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  goToDetails();
-                }
-              }}
-            >
-              {caption}
-            </p>
-          )}
-
-          {!isLocalComposeDraft && (
-            <PostFeedDetailsHintRow
-              onOpenDetails={goToDetails}
-              className="mt-2"
-            />
-          )}
-
-          {/* Continue Editing button for drafts */}
-          {isDraftPost && isOwner && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                navigate(`${Paths.createFinalize}?type=${type}`);
-              }}
-              className="mt-3 px-3 py-1.5 text-xs bg-yellow-500 text-black rounded-full hover:brightness-110 transition"
-            >
-              Continue Editing
-            </button>
-          )}
-
-          {/* media row — show placeholder while loading, nothing if no images */}
-          {/* [OPTIMIZATION: Phase 3.1] Show skeleton immediately if has_images is true */}
-          {(imagesLoading || showImageSkeleton) && (
-            <div className="mt-3 rounded-2xl border border-[var(--border)] overflow-hidden">
-              <div className="w-full aspect-video bg-[var(--text)]/5 animate-pulse" />
-            </div>
-          )}
-          {!imagesLoading &&
-            !showImageSkeleton &&
-            images &&
-            images.length > 0 && (
-              <div className="mt-3" role="button" onClick={goToDetails}>
-                <MediaCarousel
-                  images={images}
-                  maxHeight="40vh"
-                  autoplay={images.length > 1}
-                  hostVisible={slideshowHostVisible}
-                />
-              </div>
-            )}
-
-          {/* actions row */}
-          <div className="mt-4 text-[var(--text)]/85">
-            <PostActions
-              postId={postId}
-              authorId={isAnonymous ? undefined : authorId}
-              postType={type}
-              caption={caption}
-              postImageUrl={images && images.length > 0 ? images[0] : null}
-              postAuthor={
-                isAnonymous
-                  ? undefined
-                  : author
-                  ? {
-                      id: authorId,
-                      username: author.username,
-                      display_name: author.display_name,
-                      avatar_url: author.avatar_url,
-                      is_anonymous: false,
-                    }
-                  : undefined
+              postType={postType}
+              postCaption={caption}
+              socialDiscoveryBoostedAt={
+                post?.social_discovery_boosted_at ?? null
               }
-              post={post}
-              batchedData={batchedData}
-              onInvite={handleInvite}
             />
           </div>
+
+          {feedKeyDetailValues.length > 0 ? (
+            <PostV4KeyDetailsFeed
+              values={feedKeyDetailValues}
+              className="mt-1"
+            />
+          ) : null}
+          {mediaBlock}
+          {displayedCaption ? (
+            <PostCardCaption
+              text={displayedCaption}
+              hasMedia={hasCardMedia}
+              className="mt-3"
+              onOpen={() => goToDetails()}
+            />
+          ) : null}
+          {continueEditingBlock}
+          {commentPreviewBlock}
+          {actionsBlock}
         </div>
       </div>
 
@@ -860,6 +1238,32 @@ function Post({
       />
     </article>
   );
+}
+
+function feedV4KeyInfoSig(
+  activities: FeedItem["activities"] | undefined,
+): string {
+  return extractV4KeyInfoValues(activities?.[0]?.additional_info ?? null).join(
+    "\u001f",
+  );
+}
+
+function feedLocationSig(
+  activities: FeedItem["activities"] | undefined,
+): string {
+  if (!activities?.length) return "0";
+  const carrier = getPublishedCarrierSlot0Location(activities);
+  if (carrier) {
+    return hasV4VisibleLocation(carrier.locationName, carrier.locationUrl)
+      ? "1"
+      : "0";
+  }
+  return hasV4VisibleLocation(
+    activities[0]?.location_name,
+    activities[0]?.location_url,
+  )
+    ? "1"
+    : "0";
 }
 
 // [OPTIMIZATION: Phase 6.2 - React] Memoize Post component to prevent unnecessary re-renders
@@ -888,9 +1292,15 @@ export default React.memo(Post, (prevProps, nextProps) => {
     prevProps.anonymousName === nextProps.anonymousName &&
     prevProps.anonymousAvatar === nextProps.anonymousAvatar &&
     prevProps.post?.has_images === nextProps.post?.has_images &&
+    JSON.stringify(prevProps.post?.media_order ?? null) ===
+      JSON.stringify(nextProps.post?.media_order ?? null) &&
     (prevProps.post?.activities?.length ?? 0) ===
       (nextProps.post?.activities?.length ?? 0) &&
     prevSig === nextSig &&
+    feedV4KeyInfoSig(prevProps.post?.activities) ===
+      feedV4KeyInfoSig(nextProps.post?.activities) &&
+    feedLocationSig(prevProps.post?.activities) ===
+      feedLocationSig(nextProps.post?.activities) &&
     prevProps.post?.like_count === nextProps.post?.like_count &&
     prevProps.post?.effective_like_count ===
       nextProps.post?.effective_like_count &&
@@ -900,6 +1310,12 @@ export default React.memo(Post, (prevProps, nextProps) => {
     prevProps.post?.is_liked === nextProps.post?.is_liked &&
     prevProps.post?.is_saved === nextProps.post?.is_saved &&
     prevProps.post?.comment_count === nextProps.post?.comment_count &&
+    prevProps.post?.latest_comment_preview?.id ===
+      nextProps.post?.latest_comment_preview?.id &&
+    prevProps.post?.latest_comment_preview?.author_label ===
+      nextProps.post?.latest_comment_preview?.author_label &&
+    prevProps.post?.latest_comment_preview?.text ===
+      nextProps.post?.latest_comment_preview?.text &&
     prevProps.post?.follow_status === nextProps.post?.follow_status &&
     prevProps.post?.rating_enabled === nextProps.post?.rating_enabled &&
     prevProps.post?.rating_average === nextProps.post?.rating_average &&
@@ -909,6 +1325,8 @@ export default React.memo(Post, (prevProps, nextProps) => {
     prevProps.post?.effective_rating_count ===
       nextProps.post?.effective_rating_count &&
     prevProps.post?.viewer_rating === nextProps.post?.viewer_rating &&
+    prevProps.matchedScheduleDayKey === nextProps.matchedScheduleDayKey &&
+    prevProps.publishedListOrigin === nextProps.publishedListOrigin &&
     JSON.stringify(prevProps.selectedDates) ===
       JSON.stringify(nextProps.selectedDates);
 

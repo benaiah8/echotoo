@@ -74,7 +74,7 @@ const ActivitiesDropdown: React.FC<Props> = ({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search..."
-              className="px-3 py-2 text-sm border-b border-gray-400 outline-none"
+              className="px-3 py-2 text-[16px] border-b border-gray-400 outline-none"
             />
           )}
           <div className="max-h-48 overflow-y-auto scroll-hide">

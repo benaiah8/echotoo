@@ -9,13 +9,19 @@ import type { Location } from "react-router-dom";
 import owlSvg from "../assets/btmtabicon.svg";
 import {
   BOTTOM_TAB_PEEK_EVENT,
+  type BottomTabOwlSlot,
   type BottomTabPeekDetail,
   getBottomTabOwlSlot,
 } from "../lib/bottomTabPeek";
 import { getTabFromPath } from "../router/PersistentTabContainer.new";
 import { useOwlMessageModal } from "../context/OwlMessageModalContext";
+import {
+  openCompanyAnnouncementModal,
+  useCompanyAnnouncementsHaveUnread,
+} from "../lib/companyAnnouncementStore";
+import { PiMegaphone } from "react-icons/pi";
 
-/** Vertical clip band (scroll / tab hide). */
+/** Vertical clip band (scroll / tab hide). Extra headroom for right-side badge. */
 const CLIP_HEIGHT_PX = 56;
 /** Owl render size (SVG asset was made taller — keep room to tuck). */
 const OWL_DISPLAY_PX = 44;
@@ -25,6 +31,10 @@ const OWL_DISPLAY_PX = 44;
 const CLIP_OVERLAP_INTO_PILL_PX = 3;
 /** Extra horizontal room in the clip (no full-width strip — avoids edge hairlines). */
 const CLIP_PAD_X_PX = 12;
+/** Room for gap + separate megaphone control to the right of the owl. */
+const UNREAD_ICON_GAP_PX = 10;
+const UNREAD_ICON_SIZE_PX = 22;
+const UNREAD_BADGE_ROOM_PX = UNREAD_ICON_GAP_PX + UNREAD_ICON_SIZE_PX;
 
 const PEEK_TRANSITION_MS = 520;
 const TAB_TRANSITION_MS = 320;
@@ -45,6 +55,7 @@ export default function BottomTabPeekOwl({
   createChooserOpen: boolean;
 }) {
   const { openOwlMessage } = useOwlMessageModal();
+  const hasUnreadCompanyAnnouncement = useCompanyAnnouncementsHaveUnread();
   const [owlDip, setOwlDip] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const dipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,16 +79,16 @@ export default function BottomTabPeekOwl({
   );
   const pathname = location.pathname;
   const [peekHidden, setPeekHidden] = useState(false);
-  const [anchorSlot, setAnchorSlot] = useState<0 | 2 | 3 | null>(null);
+  const [anchorSlot, setAnchorSlot] = useState<BottomTabOwlSlot | null>(null);
   const [tabAnim, setTabAnim] = useState<TabAnim>("idle");
   const [pillGeom, setPillGeom] = useState<{
     clipBottomPx: number;
-    centers: Partial<Record<0 | 1 | 2 | 3, number>>;
+    centers: Partial<Record<0 | 1 | 2 | 3 | 4, number>>;
   } | null>(null);
 
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevTargetSlotRef = useRef<0 | 2 | 3 | null>(null);
+  const prevTargetSlotRef = useRef<BottomTabOwlSlot | null>(null);
   const [enterSlide, setEnterSlide] = useState(0);
 
   const targetSlot = getBottomTabOwlSlot({
@@ -194,11 +205,11 @@ export default function BottomTabPeekOwl({
       Math.round(h - rect.top) - CLIP_OVERLAP_INTO_PILL_PX,
     );
     const buttons = pill.querySelectorAll("button[aria-label^='tab-']");
-    const centers: Partial<Record<0 | 1 | 2 | 3, number>> = {};
+    const centers: Partial<Record<0 | 1 | 2 | 3 | 4, number>> = {};
     buttons.forEach((btn, i) => {
-      if (i > 3) return;
+      if (i > 4) return;
       const r = btn.getBoundingClientRect();
-      centers[i as 0 | 1 | 2 | 3] = r.left + r.width / 2;
+      centers[i as 0 | 1 | 2 | 3 | 4] = r.left + r.width / 2;
     });
     setPillGeom({ clipBottomPx, centers });
   }, []);
@@ -247,33 +258,57 @@ export default function BottomTabPeekOwl({
       ? undefined
       : tabTransitionBase;
 
-  const clipW = OWL_DISPLAY_PX + CLIP_PAD_X_PX * 2;
+  const clipContentW = OWL_DISPLAY_PX + CLIP_PAD_X_PX * 2;
+  const clipW =
+    clipContentW + (hasUnreadCompanyAnnouncement ? UNREAD_BADGE_ROOM_PX : 0);
+
+  const openAnnouncementOrOwl = () => {
+    if (hasUnreadCompanyAnnouncement) {
+      openCompanyAnnouncementModal();
+      return;
+    }
+    openOwlMessage();
+  };
+
+  const onOwlClick = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation();
+    if (reduceMotion) {
+      openAnnouncementOrOwl();
+      return;
+    }
+    setOwlDip(true);
+    if (dipTimerRef.current) clearTimeout(dipTimerRef.current);
+    dipTimerRef.current = setTimeout(() => {
+      dipTimerRef.current = null;
+      openAnnouncementOrOwl();
+      setOwlDip(false);
+    }, 200);
+  };
 
   return (
     <div
       className="fixed pointer-events-none z-[39] overflow-hidden"
       style={{
-        left: centerX - clipW / 2,
+        /* Keep owl centered on the tab; announcement icon room extends right only. */
+        left: centerX - clipContentW / 2,
         width: clipW,
         bottom: pillGeom.clipBottomPx,
         height: CLIP_HEIGHT_PX,
       }}
     >
       <div
-        className="absolute flex justify-center items-end"
+        className="absolute flex items-end"
         style={{
           left: CLIP_PAD_X_PX,
           bottom: 0,
-          width: OWL_DISPLAY_PX,
           height: CLIP_HEIGHT_PX,
           transform: scrollTranslate,
           transition: scrollTransition,
         }}
       >
         <div
-          className="relative flex flex-col justify-end items-center shrink-0"
+          className="relative flex items-end shrink-0"
           style={{
-            width: OWL_DISPLAY_PX,
             height: OWL_DISPLAY_PX,
             transform: tabTranslate,
             transition: tabTransitionResolved,
@@ -281,22 +316,14 @@ export default function BottomTabPeekOwl({
         >
           <button
             type="button"
-            className="pointer-events-auto flex h-full w-full cursor-pointer items-end justify-center rounded-lg border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
-            aria-label="Open companion message"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (reduceMotion) {
-                openOwlMessage();
-                return;
-              }
-              setOwlDip(true);
-              if (dipTimerRef.current) clearTimeout(dipTimerRef.current);
-              dipTimerRef.current = setTimeout(() => {
-                dipTimerRef.current = null;
-                openOwlMessage();
-                setOwlDip(false);
-              }, 200);
-            }}
+            className="pointer-events-auto relative flex shrink-0 cursor-pointer items-end justify-center rounded-lg border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
+            style={{ width: OWL_DISPLAY_PX, height: OWL_DISPLAY_PX }}
+            aria-label={
+              hasUnreadCompanyAnnouncement
+                ? "Open company announcements"
+                : "Open companion message"
+            }
+            onClick={onOwlClick}
           >
             <div
               className="flex h-full w-full items-end justify-center will-change-transform"
@@ -317,6 +344,38 @@ export default function BottomTabPeekOwl({
               />
             </div>
           </button>
+
+          {hasUnreadCompanyAnnouncement ? (
+            <button
+              type="button"
+              className={[
+                "pointer-events-auto absolute z-10",
+                "flex items-center justify-center",
+                "rounded-full",
+                "bg-[var(--brand)] text-[var(--brand-ink,#29232B)]",
+                "app-dark:bg-[var(--brand)] app-dark:text-[var(--brand-ink)]",
+                "border border-black/15 app-dark:border-black/50",
+                "shadow-[0_2px_6px_rgba(0,0,0,0.28),0_0_0_2px_var(--bg)]",
+                "app-dark:shadow-[0_2px_8px_rgba(0,0,0,0.55),0_0_0_2px_var(--bg)]",
+                "outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",
+                "touch-manipulation",
+              ].join(" ")}
+              style={{
+                left: OWL_DISPLAY_PX + UNREAD_ICON_GAP_PX,
+                bottom: 14,
+                width: UNREAD_ICON_SIZE_PX,
+                height: UNREAD_ICON_SIZE_PX,
+              }}
+              aria-label="Open company announcements"
+              data-company-announcement-unread="1"
+              onClick={(e) => {
+                e.stopPropagation();
+                openCompanyAnnouncementModal();
+              }}
+            >
+              <PiMegaphone className="h-[12px] w-[12px]" aria-hidden />
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

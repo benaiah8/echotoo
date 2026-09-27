@@ -12,7 +12,7 @@ import {
   getPlatform,
   isNativeApp,
 } from "../lib/storage/utils/capacitorDetection";
-import { isVersionLessThan } from "../lib/appUpdateVersionCompare";
+import { decideAppUpdatePrompt } from "../lib/appUpdateDecision";
 import {
   isCooldownExpired,
   readCachedConfig,
@@ -35,25 +35,34 @@ function runtimeToPreviewRow(
   return {
     platform,
     latest_version: c.latest_version,
+    latest_build: c.latest_build,
     minimum_supported_version: c.minimum_supported_version,
+    minimum_supported_build: c.minimum_supported_build,
     update_mode: c.update_mode,
     title: c.title,
     message: c.message,
     android_store_url: platform === "android" ? c.store_url : "",
     ios_store_url: platform === "ios" ? c.store_url : "",
     is_active: c.is_active,
+    store_release_ready: c.store_release_ready ?? true,
     updated_at: "",
     updated_by_user_id: null,
   };
 }
 
-async function getNativeAppVersionString(): Promise<string | null> {
+async function getNativeAppIdentity(): Promise<{
+  version: string | null;
+  build: string | null;
+}> {
   try {
     const { App } = await import("@capacitor/app");
     const info = await App.getInfo();
-    return info.version?.trim() || null;
+    return {
+      version: info.version?.trim() || null,
+      build: info.build?.trim() || null,
+    };
   } catch {
-    return null;
+    return { version: null, build: null };
   }
 }
 
@@ -77,43 +86,43 @@ export default function AppUpdateRuntimeController() {
       setActiveConfig(null);
       setActivePlatform(null);
 
-      if (!config || !config.is_active || config.update_mode === "off") {
+      const identity = await getNativeAppIdentity();
+      const softDismissed = config
+        ? isSoftDismissedFor(
+            platform,
+            config.latest_version,
+            config.latest_build
+          )
+        : false;
+
+      const decision = decideAppUpdatePrompt({
+        isNative: true,
+        config: config
+          ? {
+              is_active: config.is_active,
+              update_mode: config.update_mode,
+              latest_version: config.latest_version,
+              latest_build: config.latest_build,
+              minimum_supported_version: config.minimum_supported_version,
+              minimum_supported_build: config.minimum_supported_build,
+              store_release_ready: config.store_release_ready,
+              store_url: config.store_url,
+            }
+          : null,
+        installedVersion: identity.version,
+        installedBuild: identity.build,
+        softDismissed,
+      });
+
+      if (decision.prompt === "none" || !config) {
         return;
       }
 
-      const current = await getNativeAppVersionString();
-      if (!current) return;
-
-      const min = config.minimum_supported_version;
-      const latest = config.latest_version;
-
-      const belowMin = min ? isVersionLessThan(current, min) : false;
-      const belowLatest = latest ? isVersionLessThan(current, latest) : false;
-
-      if (belowMin) {
-        setActivePlatform(platform);
-        setActiveConfig(config);
-        setHardOpen(true);
-        return;
-      }
-
-      if (!belowLatest) {
-        return;
-      }
-
-      if (config.update_mode === "soft") {
-        if (isSoftDismissedFor(platform, latest)) {
-          return;
-        }
-        setActivePlatform(platform);
-        setActiveConfig(config);
+      setActivePlatform(platform);
+      setActiveConfig(config);
+      if (decision.prompt === "soft") {
         setSoftOpen(true);
-        return;
-      }
-
-      if (config.update_mode === "hard") {
-        setActivePlatform(platform);
-        setActiveConfig(config);
+      } else if (decision.prompt === "hard") {
         setHardOpen(true);
       }
     },
@@ -199,7 +208,6 @@ export default function AppUpdateRuntimeController() {
       try {
         const { App } = await import("@capacitor/app");
         const h = await App.addListener("resume", () => {
-          console.log("[DBG:APP] resume", { t: Date.now() });
           scheduleCheck();
         });
         if (!cancelled) {
@@ -254,8 +262,12 @@ export default function AppUpdateRuntimeController() {
 
   const handleSoftClose = () => {
     setSoftOpen(false);
-    if (platform && config?.latest_version) {
-      writeSoftDismissSignature(platform, config.latest_version);
+    if (platform && config) {
+      writeSoftDismissSignature(
+        platform,
+        config.latest_version,
+        config.latest_build
+      );
     }
   };
 

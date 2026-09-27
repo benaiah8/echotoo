@@ -6,6 +6,10 @@ export const CREATE_FLOW_CAPTION_MAX = 800;
 export const CREATE_FLOW_HASHTAG_MAX = 12;
 export const CREATE_FLOW_HASHTAG_TOKEN_MAX = 24;
 
+/** V4 Finalize "Key details" (stored as additional_info title V4KeyInfo). */
+export const V4_KEY_INFO_MAX_ITEMS = 4;
+export const V4_KEY_INFO_VALUE_MAX = 56;
+
 /** Per-step activity builder (stops, images, location, etc.) — used across create sections. */
 export const CREATE_FLOW_LIMITS = {
   activities: {

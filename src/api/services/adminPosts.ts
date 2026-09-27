@@ -1,6 +1,7 @@
 import { supabase } from "../../lib/supabaseClient";
 import type { ProfileSearchRow } from "../queries/searchProfiles";
 import { invalidatePostDetailCache } from "../queries/getPostById";
+import { invalidateOnPostDelete } from "../../lib/cacheInvalidation";
 import { dataCache } from "../../lib/dataCache";
 import { clearPersistedProfilePosts } from "../../lib/profilePostListCache";
 import { clearAllPersistedHomeFeeds } from "../../lib/homeFeedListCache";
@@ -34,6 +35,8 @@ export type AdminRepublishPostResult = {
 export type AdminGetPostForEditResult = {
   post: Record<string, unknown>;
   activities: Record<string, unknown>[];
+  mediaOrder?: unknown;
+  postMedia?: unknown[];
 };
 
 type TransferRpcRow = {
@@ -41,12 +44,6 @@ type TransferRpcRow = {
   old_author_id: string;
   new_author_id: string;
   did_change: boolean;
-};
-
-type DeleteRpcRow = {
-  post_id: string;
-  author_id: string;
-  deleted: boolean;
 };
 
 type RepublishRpcRow = {
@@ -75,18 +72,6 @@ function parseTransferRpcRow(raw: unknown): AdminTransferPostOwnershipResult {
   };
 }
 
-function parseDeleteRpcRow(raw: unknown): AdminDeletePostResult {
-  const row = (Array.isArray(raw) ? raw[0] : raw) as DeleteRpcRow | null | undefined;
-  if (!row?.post_id || !row.author_id) {
-    throw new Error("Delete failed: invalid response from server");
-  }
-  return {
-    postId: row.post_id,
-    authorId: row.author_id,
-    deleted: Boolean(row.deleted),
-  };
-}
-
 /**
  * Reviewer-only RPC: transfer post ownership to another auth user (`profiles.user_id`).
  */
@@ -110,22 +95,27 @@ export async function adminTransferPostOwnership(
 }
 
 /**
- * Reviewer-only RPC: permanently delete any post (SECURITY DEFINER on server).
+ * Reviewer-only published delete via server-owned Edge orchestration
+ * (Bunny cleanup + admin_delete_post audit/DB).
  */
 export async function adminDeletePost(
   postId: string
 ): Promise<AdminDeletePostResult> {
   if (!postId?.trim()) throw new Error("Missing post id");
 
-  const { data, error } = await supabase.rpc("admin_delete_post", {
-    p_post_id: postId,
-  });
+  const { invokeDeletePublishedPost, DELETE_PUBLISHED_POST_USER_ERROR } =
+    await import("../../lib/deletePublishedPost/invokeDeletePublishedPost");
 
-  if (error) {
-    throw new Error(error.message || "Could not delete post");
+  const result = await invokeDeletePublishedPost({ postId });
+  if (!result.ok) {
+    throw new Error(result.error || DELETE_PUBLISHED_POST_USER_ERROR);
   }
 
-  return parseDeleteRpcRow(data);
+  return {
+    postId: result.postId,
+    authorId: result.authorId ?? "",
+    deleted: true,
+  };
 }
 
 function parseRepublishRpcRow(raw: unknown): AdminRepublishPostResult {
@@ -173,7 +163,17 @@ export async function adminGetPostForEdit(
     );
   }
 
-  return { post, activities };
+  const { getPublishedPostMediaForDetail } = await import(
+    "../../lib/publishedMedia/getPublishedPostMediaForDetail"
+  );
+  const media = await getPublishedPostMediaForDetail(post.id);
+
+  return {
+    post,
+    activities,
+    mediaOrder: media.mediaOrder ?? post.media_order ?? null,
+    postMedia: media.postMedia ?? [],
+  };
 }
 
 /**
@@ -207,6 +207,9 @@ export async function invalidateCachesAfterAdminPostEdit(
   if (!postId || !authorId) return;
 
   invalidatePostDetailCache(postId);
+  void import("../../lib/publishedMedia").then(({ invalidatePublishedMedia }) => {
+    invalidatePublishedMedia(postId);
+  });
   dataCache.delete(`profile_created_${authorId}`);
   dataCache.delete(`profile_interacted_${authorId}`);
   dataCache.delete(`profile_saved_${authorId}`);
@@ -224,7 +227,7 @@ export async function invalidateCachesAfterPostDelete(
   postId: string,
   authorId?: string | null
 ): Promise<void> {
-  invalidatePostDetailCache(postId);
+  invalidateOnPostDelete(postId);
 
   if (authorId) {
     dataCache.delete(`profile_created_${authorId}`);

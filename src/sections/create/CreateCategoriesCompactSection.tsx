@@ -282,7 +282,7 @@ export default function CreateCategoriesCompactSection({
         <div className="mt-4 flex gap-2">
           <input
             type="text"
-            className="flex-1 p-2 rounded-md bg-[var(--surface)] text-[var(--text)] text-xs border border-[var(--border)] placeholder-white/50"
+            className="flex-1 p-2 rounded-md bg-[var(--surface)] text-[var(--text)] text-[16px] border border-[var(--border)] placeholder-white/50"
             placeholder="Add custom tag and press Enter"
             value={customInput}
             onChange={(e) => setCustomInput(e.target.value)}

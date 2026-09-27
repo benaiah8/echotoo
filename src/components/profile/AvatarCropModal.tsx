@@ -1,14 +1,24 @@
 import { useCallback, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Cropper, { type Area, type Point } from "react-easy-crop";
-import { exportAvatarCropToFile } from "../../lib/avatarCropExport";
+import {
+  exportCropToFile,
+  PROFILE_PHOTO_ASPECT,
+  type CropExportMode,
+} from "../../lib/avatarCropExport";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 type Props = {
   open: boolean;
   imageSrc: string | null;
   onCancel: () => void;
-  /** Called with cropped square file ready for `uploadImage`. */
+  /** Called with cropped file ready for upload (avatar) or final Profile Photo bytes. */
   onConfirm: (file: File) => void | Promise<void>;
+  /**
+   * `avatar` (default): circular 1:1 crop — current Edit Profile behavior.
+   * `profilePhoto`: rectangular 4:5 crop for upcoming 3-photo editor (Step 8).
+   */
+  mode?: CropExportMode;
 };
 
 const MIN_ZOOM = 1;
@@ -23,12 +33,19 @@ export default function AvatarCropModal({
   imageSrc,
   onCancel,
   onConfirm,
+  mode = "avatar",
 }: Props) {
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const croppedAreaPixelsRef = useRef<Area | null>(null);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  const isProfilePhoto = mode === "profilePhoto";
+  const aspect = isProfilePhoto ? PROFILE_PHOTO_ASPECT : 1;
+  const cropShape = isProfilePhoto ? "rect" : "round";
+
+  useOverlayBackgroundScrollLock(open && Boolean(imageSrc));
 
   const onCropComplete = useCallback((_: Area, croppedPixels: Area) => {
     croppedAreaPixelsRef.current = croppedPixels;
@@ -53,7 +70,11 @@ export default function AvatarCropModal({
     setBusy(true);
     setLocalError(null);
     try {
-      const file = await exportAvatarCropToFile(imageSrc, area);
+      const file = await exportCropToFile({
+        mode,
+        imageSrc,
+        cropPixels: area,
+      });
       await onConfirm(file);
       setCrop({ x: 0, y: 0 });
       setZoom(1);
@@ -64,7 +85,7 @@ export default function AvatarCropModal({
     } finally {
       setBusy(false);
     }
-  }, [imageSrc, busy, onConfirm]);
+  }, [imageSrc, busy, onConfirm, mode]);
 
   if (typeof document === "undefined") return null;
   if (!open || !imageSrc) return null;
@@ -82,8 +103,8 @@ export default function AvatarCropModal({
           image={imageSrc}
           crop={crop}
           zoom={zoom}
-          aspect={1}
-          cropShape="round"
+          aspect={aspect}
+          cropShape={cropShape}
           showGrid={false}
           minZoom={MIN_ZOOM}
           maxZoom={MAX_ZOOM}

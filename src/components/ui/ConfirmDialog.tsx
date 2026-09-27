@@ -8,11 +8,92 @@
  * - z-[200] above bottom tab
  */
 
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import FrostedCenterModal, {
   frostedModalPanelClassName,
   frostedModalPanelStyle,
 } from "./FrostedCenterModal";
+
+/** Neutral publish progress pill — left→right fill, dual-label contrast. */
+function PublishProgressPill({
+  label,
+  progress,
+  content,
+}: {
+  label: string | null;
+  progress: number | null | undefined;
+  content: React.ReactNode;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [pillWidth, setPillWidth] = useState(0);
+  const pct =
+    typeof progress === "number" && Number.isFinite(progress)
+      ? Math.max(0, Math.min(100, progress))
+      : null;
+
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => setPillWidth(el.offsetWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [label, content]);
+
+  const labelNode =
+    label != null ? (
+      <span className="block px-3 py-2 text-center text-[11px] font-semibold leading-snug">
+        {label}
+      </span>
+    ) : (
+      <div className="px-3 py-2 text-center text-[11px] font-semibold leading-snug">
+        {content}
+      </div>
+    );
+
+  return (
+    <div
+      ref={rootRef}
+      role="status"
+      aria-live="polite"
+      aria-valuemin={pct != null ? 0 : undefined}
+      aria-valuemax={pct != null ? 100 : undefined}
+      aria-valuenow={pct != null ? Math.round(pct) : undefined}
+      data-publish-progress-pill
+      data-progress={pct != null ? String(Math.round(pct)) : undefined}
+      className={[
+        "relative mb-3 overflow-hidden rounded-full border",
+        "border-[var(--text)]/22 bg-[color-mix(in_oklab,var(--surface)_90%,var(--glass-bg))]",
+        "text-[var(--text)]/90 shadow-sm",
+        "app-dark:border-white/30 app-dark:bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] app-dark:text-white/90",
+      ].join(" ")}
+    >
+      {/* Base label (unfilled region contrast) */}
+      <div className="relative z-[1]">{labelNode}</div>
+
+      {/* Fill + clipped contrasting label */}
+      {pct != null && pct > 0 ? (
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 z-[2] overflow-hidden transition-[width] duration-150 ease-out"
+          style={{ width: `${pct}%` }}
+          aria-hidden
+        >
+          <div
+            className={[
+              "h-full",
+              "bg-[var(--text)] text-[var(--bg)]",
+              "app-dark:bg-white app-dark:text-neutral-950",
+            ].join(" ")}
+            style={{ width: pillWidth > 0 ? pillWidth : "100%" }}
+          >
+            {labelNode}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -22,12 +103,15 @@ interface ConfirmDialogProps {
   message: string | React.ReactNode;
   confirmLabel?: string | React.ReactNode;
   cancelLabel?: string;
+  /** Single-action informational dialogs (e.g. edit Save blocked). */
+  hideCancel?: boolean;
   confirmVariant?:
     | "danger"
     | "dangerBlack"
     | "dangerSoft"
     | "primary"
     | "warning"
+    | "orange"
     | "default";
   isLoading?: boolean;
   /** Use z-[210] when opened from within another drawer */
@@ -47,8 +131,16 @@ interface ConfirmDialogProps {
    */
   stackThreeActionsPrimaryBelow?: boolean;
   /**
-   * Optional alert below the message body and above action buttons (e.g. policy copy).
+   * Optional status below the message body and above action buttons.
+   * `danger` (default): red warning treatment (policy / errors).
+   * `progress`: neutral upload/status pill — not an error.
    */
+  inlineAlertVariant?: "danger" | "progress";
+  /**
+   * When `inlineAlertVariant="progress"` and this is 0–100, the pill fills
+   * left→right. Omit/null for phases without a real percentage.
+   */
+  inlineAlertProgress?: number | null;
   inlineAlert?: React.ReactNode;
 }
 
@@ -63,6 +155,7 @@ export const getConfirmDialogButtonClass = (
     | "dangerBlack"
     | "primary"
     | "warning"
+    | "orange"
     | "default"
     | "dangerSoft",
   layout: "equal" | "equalThree" | "intrinsic" | "full" = "equal",
@@ -76,8 +169,9 @@ export const getConfirmDialogButtonClass = (
       : layout === "full"
       ? "w-full min-w-0 px-3"
       : "shrink-0 px-4 min-w-0";
+  /** Pills stay single-line; default equalThree may wrap long labels. */
   const wrap =
-    layout === "equalThree"
+    layout === "equalThree" && shape !== "pill"
       ? "whitespace-normal leading-tight"
       : "whitespace-nowrap";
   const radius = shape === "pill" ? "rounded-full" : "rounded-lg";
@@ -100,6 +194,9 @@ export const getConfirmDialogButtonClass = (
       return `${base} bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-90`;
     case "warning":
       return `${base} bg-yellow-500 text-black hover:bg-yellow-600`;
+    /** Soft caution (leave without delete connotations). */
+    case "orange":
+      return `${base} bg-orange-500 text-black hover:bg-orange-600`;
     case "default":
       return `${base} border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:bg-[var(--surface)]/80`;
     default:
@@ -115,6 +212,7 @@ export default function ConfirmDialog({
   message,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  hideCancel = false,
   confirmVariant = "danger",
   isLoading = false,
   higherZIndex = false,
@@ -124,6 +222,8 @@ export default function ConfirmDialog({
   pillButtons = false,
   stackThreeActionsPrimaryBelow = false,
   inlineAlert,
+  inlineAlertVariant = "danger",
+  inlineAlertProgress = null,
 }: ConfirmDialogProps) {
   const handleConfirm = async () => {
     if (isLoading) return;
@@ -144,7 +244,7 @@ export default function ConfirmDialog({
     ? hasSecondary && stackThreeActionsPrimaryBelow
       ? `${pillCancelBase} flex-1 min-w-0 whitespace-nowrap`
       : hasSecondary
-      ? `${pillCancelBase} flex-1 min-w-[5.5rem] px-2.5 whitespace-normal leading-tight`
+      ? `${pillCancelBase} flex-1 min-w-0 px-2.5 whitespace-nowrap`
       : `${pillCancelBase} flex-1 min-w-0 whitespace-nowrap`
     : hasSecondary
       ? "flex-1 min-w-0 px-2.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface)]/80 transition disabled:opacity-50 whitespace-normal leading-tight text-center"
@@ -153,9 +253,9 @@ export default function ConfirmDialog({
   const actionsRowClass = [
     "min-w-0",
     hasSecondary && !(pillButtons && stackThreeActionsPrimaryBelow)
-      ? `flex w-full flex-wrap gap-2 ${pillButtons ? "sm:flex-nowrap" : ""}`
+      ? `flex w-full gap-2 ${pillButtons ? "flex-nowrap" : "flex-wrap"}`
       : !hasSecondary
-      ? `flex gap-2 min-w-0 ${pillButtons ? "flex-wrap" : ""}`
+      ? `flex gap-2 min-w-0 ${pillButtons ? "flex-nowrap" : ""}`
       : "",
   ].join(" ");
 
@@ -194,17 +294,29 @@ export default function ConfirmDialog({
           </div>
         )}
         {inlineAlert != null && inlineAlert !== false ? (
-          <div
-            role="alert"
-            aria-live="assertive"
-            className="mb-3 rounded-xl border border-red-500/45 bg-[color-mix(in_oklab,var(--danger)_12%,var(--glass-bg))] px-3 py-2 text-center text-[11px] font-semibold leading-snug text-red-800 shadow-sm backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] app-dark:border-red-500/35 app-dark:text-red-200"
-          >
-            {typeof inlineAlert === "string" ? (
-              <p className="m-0 leading-snug">{inlineAlert}</p>
-            ) : (
-              inlineAlert
-            )}
-          </div>
+          inlineAlertVariant === "progress" ? (
+            <PublishProgressPill
+              label={
+                typeof inlineAlert === "string" ? inlineAlert : null
+              }
+              progress={inlineAlertProgress}
+              content={
+                typeof inlineAlert === "string" ? null : inlineAlert
+              }
+            />
+          ) : (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="mb-3 rounded-xl border border-red-500/45 bg-[color-mix(in_oklab,var(--danger)_12%,var(--glass-bg))] px-3 py-2 text-center text-[11px] font-semibold leading-snug text-red-800 shadow-sm backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] app-dark:border-red-500/35 app-dark:text-red-200"
+            >
+              {typeof inlineAlert === "string" ? (
+                <p className="m-0 leading-snug">{inlineAlert}</p>
+              ) : (
+                inlineAlert
+              )}
+            </div>
+          )
         ) : null}
         {pillButtons && stackThreeActionsPrimaryBelow && hasSecondary ? (
           <div className="flex w-full min-w-0 flex-col gap-2">
@@ -242,13 +354,15 @@ export default function ConfirmDialog({
           </div>
         ) : (
           <div className={actionsRowClass}>
-            <button
-              className={cancelBtnClass}
-              onClick={onClose}
-              disabled={isLoading}
-            >
-              {cancelLabel}
-            </button>
+            {!hideCancel ? (
+              <button
+                className={cancelBtnClass}
+                onClick={onClose}
+                disabled={isLoading}
+              >
+                {cancelLabel}
+              </button>
+            ) : null}
             {secondaryLabel && onSecondary ? (
               <>
                 <button
@@ -280,7 +394,7 @@ export default function ConfirmDialog({
               <button
                 className={getConfirmDialogButtonClass(
                   confirmVariant,
-                  "equal",
+                  hideCancel ? "full" : "equal",
                   shape
                 )}
                 onClick={handleConfirm}

@@ -27,6 +27,7 @@ import {
   isPostDetailRoutePath,
 } from "../../lib/inviteOverlayHistory";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 import { supabase } from "../../lib/supabaseClient";
 import Avatar from "../ui/Avatar";
 import InviteThreadMessageList from "./invite-thread/InviteThreadMessageList";
@@ -249,19 +250,11 @@ export default function GroupInviteThreadOverlay({
     bundleRef.current = bundle;
   }, [bundle]);
 
+  useOverlayBackgroundScrollLock(open);
+
   useEffect(() => {
     if (!open) return;
     syncAppSafeAreaBottom();
-    const scrollbarWidth =
-      window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    document.body.style.paddingRight = `${scrollbarWidth}px`;
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
-    };
   }, [open]);
 
   /** Synthetic history: group chat layer */

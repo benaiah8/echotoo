@@ -27,16 +27,25 @@ export const STAGED_REPLY_SCROLL_DELAYS_MS = [0, 120, 300, 600] as const;
 function getModalScrollRoot(): HTMLElement | null {
   if (typeof document === "undefined") return null;
   return document.querySelector(
-    POST_DETAIL_MODAL_SCROLL_ROOT
+    POST_DETAIL_MODAL_SCROLL_ROOT,
   ) as HTMLElement | null;
 }
 
-/** Read composer reserve from scroll-root padding-bottom; fallback matches layout hook base. */
+/** Read composer reserve from in-flow spacer height; legacy padding-bottom fallback. */
 export function getModalComposerReservePx(
-  scrollRoot?: HTMLElement | null
+  scrollRoot?: HTMLElement | null,
 ): number {
   const root = scrollRoot ?? getModalScrollRoot();
   if (!root) return MODAL_COMPOSER_SCROLL_RESERVE_FALLBACK_PX;
+
+  const reserveEl = root.querySelector(
+    "[data-post-detail-modal-composer-reserve]",
+  ) as HTMLElement | null;
+  if (reserveEl) {
+    const h = reserveEl.getBoundingClientRect().height;
+    if (Number.isFinite(h) && h > 0) return h;
+  }
+
   const pb = parseFloat(getComputedStyle(root).paddingBottom || "0");
   return Number.isFinite(pb) && pb > 0
     ? pb
@@ -47,7 +56,7 @@ export function getModalComposerReservePx(
 function getModalComposerBandTopY(): number | null {
   if (typeof document === "undefined") return null;
   const input = document.querySelector(
-    '[data-post-detail-modal-composer-host] input[type="text"]'
+    '[data-post-detail-modal-composer-host] input[type="text"]',
   ) as HTMLElement | null;
   if (!input) return null;
   const pill = input.closest(".pointer-events-auto") as HTMLElement | null;
@@ -57,7 +66,7 @@ function getModalComposerBandTopY(): number | null {
 function clampScrollTop(scrollRoot: HTMLElement, nextTop: number): number {
   const maxScroll = Math.max(
     0,
-    scrollRoot.scrollHeight - scrollRoot.clientHeight
+    scrollRoot.scrollHeight - scrollRoot.clientHeight,
   );
   return Math.max(0, Math.min(maxScroll, nextTop));
 }
@@ -65,7 +74,7 @@ function clampScrollTop(scrollRoot: HTMLElement, nextTop: number): number {
 function scrollElementWithinModalRoot(
   scrollRoot: HTMLElement,
   target: HTMLElement,
-  opts?: { behavior?: ScrollBehavior }
+  opts?: { behavior?: ScrollBehavior },
 ): void {
   const reserve = getModalComposerReservePx(scrollRoot);
   const rootRect = scrollRoot.getBoundingClientRect();
@@ -97,7 +106,7 @@ function scrollElementWithinModalRoot(
 function scrollReplyRowAboveComposerBand(
   scrollRoot: HTMLElement,
   row: HTMLElement,
-  opts?: { behavior?: ScrollBehavior }
+  opts?: { behavior?: ScrollBehavior },
 ): void {
   const rootRect = scrollRoot.getBoundingClientRect();
   const rowRect = row.getBoundingClientRect();
@@ -139,9 +148,52 @@ export function scrollCommentsSectionIntoView(opts: {
     return;
   }
   const target = document.querySelector(
-    "[data-comments-section]"
+    "[data-comments-section]",
   ) as HTMLElement | null;
   target?.scrollIntoView({ behavior, block });
+}
+
+/** Stable published V4 Location section marker (PostDetailBody). */
+export const LOCATION_SECTION_ATTR = "data-location-section";
+
+/**
+ * Scroll published Location section into view.
+ * Returns false when the target (or modal scroll root) is not mounted yet.
+ */
+export function scrollLocationSectionIntoView(opts: {
+  isModal: boolean;
+  behavior?: ScrollBehavior;
+  /** Full-page default: "start". Modal uses scroll-root math with a small top inset. */
+  block?: ScrollLogicalPosition;
+}): boolean {
+  const { isModal, behavior = "smooth", block = "start" } = opts;
+  if (isModal) {
+    const scrollRoot = getModalScrollRoot();
+    if (!scrollRoot) return false;
+    const target = scrollRoot.querySelector(
+      `[${LOCATION_SECTION_ATTR}]`,
+    ) as HTMLElement | null;
+    if (!target) return false;
+
+    const gap = 12;
+    const rootRect = scrollRoot.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const delta = targetRect.top - (rootRect.top + gap);
+    if (Math.abs(delta) >= 2) {
+      const nextTop = clampScrollTop(scrollRoot, scrollRoot.scrollTop + delta);
+      if (Math.abs(nextTop - scrollRoot.scrollTop) >= 2) {
+        scrollRoot.scrollTo({ top: nextTop, behavior });
+      }
+    }
+    return true;
+  }
+
+  const target = document.querySelector(
+    `[${LOCATION_SECTION_ATTR}]`,
+  ) as HTMLElement | null;
+  if (!target) return false;
+  target.scrollIntoView({ behavior, block });
+  return true;
 }
 
 /**
@@ -154,7 +206,7 @@ export function scrollModalCommentsContentAboveComposer(opts?: {
   if (!scrollRoot) return;
 
   const content = scrollRoot.querySelector(
-    "[data-comments-section]"
+    "[data-comments-section]",
   ) as HTMLElement | null;
   if (!content) return;
 
@@ -172,7 +224,7 @@ function escapeCommentId(commentId: string): string {
  */
 export function scrollModalReplyTargetIntoView(
   commentId: string,
-  opts?: { behavior?: ScrollBehavior }
+  opts?: { behavior?: ScrollBehavior },
 ): void {
   const scrollRoot = getModalScrollRoot();
   if (!scrollRoot) return;
@@ -195,7 +247,7 @@ export function modalReplyRowNeedsKeyboardScroll(commentId: string): boolean {
   if (!scrollRoot) return false;
 
   const row = scrollRoot.querySelector(
-    `[${COMMENT_ROW_ATTR}="${escapeCommentId(commentId)}"]`
+    `[${COMMENT_ROW_ATTR}="${escapeCommentId(commentId)}"]`,
   ) as HTMLElement | null;
   if (!row) return false;
 
@@ -225,7 +277,7 @@ export function scheduleStagedModalReplyTargetScroll(
   opts?: {
     isActive?: () => boolean;
     behavior?: ScrollBehavior;
-  }
+  },
 ): StagedReplyScrollHandle {
   const behavior = opts?.behavior ?? "auto";
   const timeoutIds: ReturnType<typeof setTimeout>[] = [];

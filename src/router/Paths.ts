@@ -15,12 +15,26 @@ export const Paths = {
   profile: "/profile",
   createMap: "/create/map",
   feedTest: "/feed-test",
+  /** People tab: compact social-planning source list. */
+  people: "/people",
+  /** Persistent messages inbox tab. */
+  messages: "/messages",
+  /** Full-screen conversation overlay over the Messages inbox tab. */
+  messagesConversation: "/messages/:conversationId",
+  /** DEV-only launcher to open/create a DM (not in bottom nav). */
+  devOpenDm: "/dev/open-dm",
+  /** DEV-only Mine portrait stack depth/shadow preview. */
+  devMinePortraitStack: "/dev/mine-portrait-stack",
   /** Reviewer-only internal landing (links to reports, app updates, etc.). */
   internal: "/internal",
   /** Reviewer-only report queue (not in bottom nav; RLS + allowlist). */
   internalReports: "/internal/reports",
   /** Reviewer-only app updates / release tooling (same allowlist as reports). */
   internalAppUpdates: "/internal/app-updates",
+  /** Reviewer-only company announcements (same allowlist as reports). */
+  internalCompanyAnnouncements: "/internal/company-announcements",
+  /** Reviewer-only JS/React crash reports (same allowlist as reports). */
+  internalCrashReports: "/internal/crash-reports",
   hangoutDetail: "/hangout/:id",
 
   // Profile routes
@@ -49,6 +63,47 @@ export function postDetailPath(
   id: string
 ): string {
   return type === "hangout" ? `/hangout/${id}` : `/experience/${id}`;
+}
+
+/** True for `/messages/:conversationId`, not the inbox `/messages`. */
+export function isMessagesConversationPath(pathname: string): boolean {
+  if (!pathname) return false;
+  return /^\/messages\/[^/]+\/?$/.test(pathname);
+}
+
+/** True for `/create` and nested create-flow steps (finalize, preview, etc.). */
+export function isCreateFlowPath(pathname: string): boolean {
+  if (!pathname) return false;
+  return (
+    pathname === Paths.create || pathname.startsWith(`${Paths.create}/`)
+  );
+}
+
+/** Path for an opened persistent DM conversation. */
+export function messagesConversationPath(conversationId: string): string {
+  return `/messages/${conversationId}`;
+}
+
+/** Messages → Requests deep link (Open Plan / stranger request inbox). */
+export function messagesRequestsPath(requestId?: string): string {
+  const params = new URLSearchParams();
+  params.set("tab", "requests");
+  const rid = requestId?.trim();
+  if (rid) params.set("requestId", rid);
+  return `${Paths.messages}?${params.toString()}`;
+}
+
+/** DM/group deep link; optional messageId query for future scroll/highlight. */
+export function messagesConversationPathWithMessage(
+  conversationId: string,
+  messageId?: string
+): string {
+  const base = messagesConversationPath(conversationId);
+  const mid = messageId?.trim();
+  if (!mid) return base;
+  const params = new URLSearchParams();
+  params.set("messageId", mid);
+  return `${base}?${params.toString()}`;
 }
 
 // Individual exports as requested

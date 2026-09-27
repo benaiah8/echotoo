@@ -2,6 +2,14 @@
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
 import { requestManager } from "../../lib/requestManager";
+import {
+  seedPublishedMediaFromFeedItems,
+} from "../../lib/publishedMedia";
+import {
+  stampSlot0OntoActivities,
+  type ListCardActivity,
+} from "../../lib/listCardSlot0";
+import { normalizeLatestCommentPreview } from "../../lib/latestCommentPreview";
 
 // [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
 // Returns FeedItem format with all related data (follow_status, is_liked, is_saved, rsvp_data, etc.)
@@ -97,10 +105,27 @@ export async function getUserPostsCreatedOptimized(
       viewer_rating: post.viewer_rating ?? null,
       rsvp_data: post.rsvp_data || null,
       rsvp_capacity: post.rsvp_capacity ?? null,
-      // [PHASE 4.1.1 FIX] Include activities from PostgreSQL to prevent extra queries
-      // This eliminates 1 activities query per post (5+ fewer network requests)
-      activities: post.activities || [],
+      // Thin RPC activities keep created_at image order; stamp authoritative slot-0.
+      activities: stampSlot0OntoActivities(
+        (post.activities || []) as ListCardActivity[],
+        {
+          slot0_location_name: post.slot0_location_name,
+          slot0_location_url: post.slot0_location_url,
+          slot0_key_info: post.slot0_key_info,
+        },
+      ) as FeedItem["activities"],
+      media_order: post.media_order ?? null,
+      post_media: post.post_media ?? null,
+      latest_comment_preview: normalizeLatestCommentPreview(
+        post.latest_comment_preview,
+      ),
     }));
+
+    seedPublishedMediaFromFeedItems({
+      items: feedItems,
+      viewerUserId,
+      source: "profile",
+    });
 
     return { data: feedItems, error: null };
   } catch (error: any) {

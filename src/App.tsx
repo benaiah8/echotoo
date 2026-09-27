@@ -28,7 +28,13 @@ import { setupCacheInvalidationListeners } from "./lib/cacheInvalidation";
 import { networkRecovery } from "./lib/networkRecovery";
 import { initAppSafeAreaBottom } from "./lib/appSafeAreaBottom";
 import AppUpdateRuntimeController from "./components/AppUpdateRuntimeController";
+import CompanyAnnouncementRuntimeController from "./components/CompanyAnnouncementRuntimeController";
 import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMount";
+import MessagesUnreadRealtimeMount from "./components/MessagesUnreadRealtimeMount";
+import MessagesActivitiesAttentionMount from "./components/MessagesActivitiesAttentionMount";
+import { clearMessagesUnreadStore } from "./lib/messagesUnreadStore";
+import { clearMessagesActivitiesAttentionStore } from "./lib/messagesActivitiesAttentionStore";
+import { clearCompanyAnnouncementStore } from "./lib/companyAnnouncementStore";
 import PushRegistrationMount from "./components/PushRegistrationMount";
 import NativePushPermissionPromptGate from "./components/notifications/NativePushPermissionPromptGate";
 import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
@@ -37,6 +43,12 @@ import {
   consumeProfileDefaultsLoginPending,
   persistProviderProfileDefaultsAfterSignIn,
 } from "./lib/persistProviderProfileDefaults";
+import { registerDevBunnyUploadInitSmokeTestHook } from "./lib/devBunnyUploadInitSmokeTest";
+import {
+  emitVideoCrashStartupDiagnostic,
+  installVideoCrashDiagWindowHook,
+  installVideoCrashErrorCorrelation,
+} from "./lib/videoCrashDiagnostics";
 
 function App() {
   const dispatch = useDispatch();
@@ -49,6 +61,17 @@ function App() {
         "[auth] Redux 'auth' reducer not mounted; falling back to Supabase session only"
       );
   }
+
+  useEffect(() => registerDevBunnyUploadInitSmokeTestHook(), []);
+
+  useEffect(() => {
+    const stopErrorCorrelation = installVideoCrashErrorCorrelation();
+    installVideoCrashDiagWindowHook();
+    void emitVideoCrashStartupDiagnostic();
+    return () => {
+      stopErrorCorrelation();
+    };
+  }, []);
 
   useEffect(() => {
     applyTheme(getInitialTheme());
@@ -98,6 +121,9 @@ function App() {
       // Clearing on all auth changes causes cache to be cleared when user ID changes from guest → actual user
       // This was causing cache misses and duplicate RPC calls on every page load
       if (event === "SIGNED_OUT") {
+        clearMessagesUnreadStore();
+        clearMessagesActivitiesAttentionStore();
+        clearCompanyAnnouncementStore();
         // Import dataCache dynamically to avoid circular dependencies
         import("./lib/dataCache").then(({ dataCache }) => {
           dataCache.clearFeedCache().catch((error) => {
@@ -129,6 +155,17 @@ function App() {
           .catch((error) => {
             console.warn(
               "[App] Failed to clear notification count cache on logout:",
+              error
+            );
+          });
+
+        import("./lib/messagesActivitiesVisitPrefs")
+          .then(({ clearAllLastActivitiesVisitedAt }) => {
+            clearAllLastActivitiesVisitedAt();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear Activities visit prefs on logout:",
               error
             );
           });
@@ -167,6 +204,61 @@ function App() {
               error
             );
           });
+
+        import("./lib/dmInboxCache")
+          .then(({ clearDmInboxCache }) => {
+            clearDmInboxCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear DM inbox cache on logout:",
+              error
+            );
+          });
+
+        import("./lib/dmMessagesCache")
+          .then(({ clearDmMessagesCache }) => {
+            clearDmMessagesCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear DM messages cache on logout:",
+              error
+            );
+          });
+
+        import("./lib/dmConversationParticipantsCache")
+          .then(({ clearDmConversationParticipantsCache }) => {
+            clearDmConversationParticipantsCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear DM participants cache on logout:",
+              error
+            );
+          });
+
+        import("./lib/groupConversationIdentityCache")
+          .then(({ clearGroupConversationIdentityCache }) => {
+            clearGroupConversationIdentityCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear group identity cache on logout:",
+              error
+            );
+          });
+
+        import("./api/services/messaging")
+          .then(({ clearListMyConversationsInflight }) => {
+            clearListMyConversationsInflight();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear listMyConversations inflight on logout:",
+              error
+            );
+          });
       }
 
       clearAuthCache(); // Clear auth cache and mutual friends cache (feed cache cleared separately above)
@@ -201,9 +293,12 @@ function App() {
         {!showSplash && isNativeApp() && <NativePushTapNavigationBridge />}
         {!showSplash && isNativeApp() && <NativePushForegroundBridge />}
         <PostEngagementRealtimeMount />
+        <MessagesUnreadRealtimeMount />
+        <MessagesActivitiesAttentionMount />
         {isNativeApp() && <PushRegistrationMount />}
         {isNativeApp() && <CapacitorOAuthListener />}
         {!showSplash && <AppUpdateRuntimeController />}
+        {!showSplash && <CompanyAnnouncementRuntimeController />}
         <AppErrorBoundary>
           <CreateChooserProvider>
             <OwlMessageModalProvider>

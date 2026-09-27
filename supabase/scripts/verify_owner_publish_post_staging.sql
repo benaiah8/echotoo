@@ -7,9 +7,19 @@
 --
 -- Prerequisites:
 --   1. Migration 20260628120000_owner_publish_post applied on STAGING only.
---   2. Two authenticated test users (User A = primary owner, User B = other user).
---   3. Optional: User A has at least one follower with post notifications enabled
+--   2. Migration 20260825120100_activities_section_body applied on STAGING
+--      (required for sections P-A … P-F only).
+--   3. Two authenticated test users (User A = primary owner, User B = other user).
+--   4. Optional: User A has at least one follower with post notifications enabled
 --      (needed for section E notification replay).
+--
+-- owner_republish_post — ACTIVITY PAYLOAD CONTRACT (20260825120100+):
+--   • activities key ABSENT     → preserve existing activity rows
+--   • activities: []            → DELETE all existing activities (explicit clear)
+--   • activities: [...]         → DELETE all, INSERT supplied complete snapshot
+--
+-- owner_create_post is unchanged: activities: [] on CREATE inserts zero rows.
+-- admin_republish_post (live): same explicit-payload contract when key present.
 --
 -- How to run:
 --   Supabase SQL editor (authenticated as User A unless noted), or:
@@ -23,6 +33,7 @@
 --   00000000-0000-4000-8000-000000000004  draft UUID conflict seed (G)
 --   00000000-0000-4000-8000-000000000005  forced new-publish rollback (H)
 --   00000000-0000-4000-8000-000000000006  forced republish rollback (J)
+--   00000000-0000-4000-8000-000000000008  V4 Sections contract (P-A … P-F)
 --
 -- =============================================================================
 
@@ -338,12 +349,10 @@
 
 
 -- =============================================================================
--- K. EMPTY ACTIVITIES — CURRENT PRODUCT SEMANTICS (intentionally unchanged)
--- owner_republish_post with activities: [] must NOT delete existing activities.
--- This matches current createFlowPublish owner-edit behavior.
--- "Remove all stops" is a known separate product limitation — NOT Phase 1 scope.
+-- K. EMPTY ACTIVITIES — EXPLICIT CLEAR (owner_republish_post, 20260825120100+)
+-- Run AFTER section I (post 000002 has >= 1 activity).
+-- Expected: activities: [] deletes all rows; caption still updates.
 -- =============================================================================
--- -- Ensure section I left one activity on post 000002, then:
 -- SELECT count(*) AS activity_count_before FROM public.activities
 --   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
 -- -- record count (expect >= 1)
@@ -351,16 +360,65 @@
 -- SELECT * FROM public.owner_republish_post(
 --   '00000000-0000-4000-8000-000000000002'::uuid,
 --   '{
---     "caption": "Caption updated but stops preserved",
+--     "caption": "Caption updated and all activities cleared",
 --     "is_recurring": false,
 --     "rating_enabled": false,
 --     "activities": []
 --   }'::jsonb
 -- );
+-- -- expect: updated = true
 --
 -- SELECT count(*) AS activity_count_after FROM public.activities
 --   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
--- -- expect: activity_count_after = activity_count_before (unchanged)
+-- -- expect: 0
+--
+-- SELECT caption FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: "Caption updated and all activities cleared"
+
+
+-- =============================================================================
+-- K2. OMIT ACTIVITIES KEY — PRESERVE EXISTING (owner_republish_post)
+-- Re-seed one activity on 000002 first if section K cleared it.
+-- Expected: caption updates; activity rows unchanged.
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{
+--     "type": "hangout",
+--     "caption": "K2 seed caption",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{ "title": "Preserved stop", "activity_type": "coffee" }]
+--   }'::jsonb
+-- );
+-- -- if post already exists from prior sections, use republish instead:
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000002'::uuid,
+-- --   '{ "caption": "K2 seed caption", "is_recurring": false, "rating_enabled": false,
+-- --      "activities": [{ "title": "Preserved stop", "activity_type": "coffee" }] }'::jsonb
+-- -- );
+--
+-- SELECT count(*) AS activity_count_before FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: 1
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000002'::uuid,
+--   '{
+--     "caption": "Caption only — activities key omitted",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count_after FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: activity_count_after = activity_count_before (1)
+--
+-- SELECT title FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000002'::uuid;
+-- -- expect: "Preserved stop"
 
 
 -- =============================================================================
@@ -429,6 +487,374 @@
 
 
 -- =============================================================================
+-- P. V4 SECTIONS — POST-MIGRATION CONTRACT (20260825120100_activities_section_body)
+-- UUID: 00000000-0000-4000-8000-000000000008
+-- Run each subsection in order after migration applied on STAGING.
+-- All RPC calls are commented — uncomment one block at a time.
+-- =============================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- P-A. Carrier + 2 V4 Sections → remove Sections → carrier remains
+-- CASE A: republish with carrier-only snapshot (no V4Section rows).
+-- ---------------------------------------------------------------------------
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "P-A carrier + sections seed",
+--     "visibility": "public",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       {
+--         "title": "Stop 1",
+--         "order_idx": 0,
+--         "location_name": "Carrier place",
+--         "additional_info": [{ "title": "V4KeyInfo", "value": "Free entry" }]
+--       },
+--       {
+--         "title": "Stop 2",
+--         "activity_type": "V4Section",
+--         "section_body": "Section one body"
+--       },
+--       {
+--         "title": "Stop 3",
+--         "activity_type": "V4Section",
+--         "section_body": "Section two body"
+--       }
+--     ]
+--   }'::jsonb
+-- );
+-- -- expect: created = true, activity_count = 3
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "caption": "P-A sections removed",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       {
+--         "title": "Stop 1",
+--         "order_idx": 0,
+--         "location_name": "Carrier place",
+--         "additional_info": [{ "title": "V4KeyInfo", "value": "Free entry" }]
+--       }
+--     ]
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: 1
+--
+-- SELECT activity_type, section_body, location_name FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid
+--   ORDER BY order_idx;
+-- -- expect: one row, activity_type NULL/empty, section_body NULL, location_name = Carrier place
+
+
+-- ---------------------------------------------------------------------------
+-- P-B. Post has ONLY 2 V4 Sections → activities: [] → zero activities
+-- CASE B: explicit empty snapshot clears all section rows.
+-- ---------------------------------------------------------------------------
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "P-B sections only seed",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       { "activity_type": "V4Section", "section_body": "Only section A" },
+--       { "activity_type": "V4Section", "section_body": "Only section B" }
+--     ]
+--   }'::jsonb
+-- );
+-- -- expect: activity_count = 2
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "caption": "P-B all sections cleared",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": []
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: 0
+
+
+-- ---------------------------------------------------------------------------
+-- P-C. Legacy activities + V4 Section → remove Section → legacy remain
+-- CASE C: snapshot retains legacy rows only.
+-- ---------------------------------------------------------------------------
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "type": "hangout",
+--     "caption": "P-C legacy + section seed",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       { "title": "Coffee stop", "activity_type": "coffee", "custom_activity": "Espresso" },
+--       { "title": "Walk stop", "activity_type": "walk" },
+--       { "activity_type": "V4Section", "section_body": "Removable section" }
+--     ]
+--   }'::jsonb
+-- );
+-- -- expect: activity_count = 3
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "caption": "P-C section removed",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       { "title": "Coffee stop", "activity_type": "coffee", "custom_activity": "Espresso" },
+--       { "title": "Walk stop", "activity_type": "walk" }
+--     ]
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: 2
+--
+-- SELECT activity_type, custom_activity, section_body FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid
+--   ORDER BY order_idx;
+-- -- expect: coffee/Espresso, walk — no V4Section row
+
+
+-- ---------------------------------------------------------------------------
+-- P-D. Payload omits activities → existing rows preserved
+-- CASE D: same as section K2; uses post 000008 after P-C seed.
+-- ---------------------------------------------------------------------------
+-- SELECT count(*) AS activity_count_before FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- record count (expect >= 1 if P-C ran)
+--
+-- SELECT * FROM public.owner_republish_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "caption": "P-D caption only",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count_after FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: activity_count_after = activity_count_before
+
+
+-- ---------------------------------------------------------------------------
+-- P-E. V4Section round-trip: activity_type + section_body
+-- CASE E: create with section_body, read back from activities table.
+-- ---------------------------------------------------------------------------
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "P-E section round-trip",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       {
+--         "activity_type": "V4Section",
+--         "section_body": "Example section body"
+--       }
+--     ]
+--   }'::jsonb
+-- );
+--
+-- SELECT activity_type, section_body FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: activity_type = 'V4Section', section_body = 'Example section body'
+
+
+-- ---------------------------------------------------------------------------
+-- P-F. Slot0 with only V4KeyInfo persists (carrier row, no legacy stop identity)
+-- CASE F: carrier row stored; additional_info contains V4KeyInfo.
+-- ---------------------------------------------------------------------------
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "P-F key-info-only carrier",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [
+--       {
+--         "title": "Stop 1",
+--         "order_idx": 0,
+--         "additional_info": [{ "title": "V4KeyInfo", "value": "💰 Free entry" }]
+--       }
+--     ]
+--   }'::jsonb
+-- );
+--
+-- SELECT count(*) AS activity_count FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: 1
+--
+-- SELECT additional_info FROM public.activities
+--   WHERE post_id = '00000000-0000-4000-8000-000000000008'::uuid;
+-- -- expect: JSON array containing {"title":"V4KeyInfo","value":"💰 Free entry"}
+
+
+-- =============================================================================
+-- Q. D2A TYPE SWITCH — experience ↔ hangout (20261006120000)
+-- STAGING ONLY after migration applied. Do NOT run against production.
+-- UUID: 00000000-0000-4000-8000-000000000009 (seed + mutate in place)
+-- All calls commented — uncomment one case at a time.
+-- =============================================================================
+--
+-- -- Seed Post (experience, no schedule):
+-- -- SELECT * FROM public.owner_create_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "type": "experience",
+-- --     "caption": "D2A type-switch seed",
+-- --     "visibility": "public",
+-- --     "is_recurring": false,
+-- --     "rating_enabled": false,
+-- --     "activities": []
+-- --   }'::jsonb
+-- -- );
+--
+-- -- Q1. experience + no schedule + omit type → stays experience
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{"caption":"Q1 omit type","is_recurring":false,"rating_enabled":false}'::jsonb
+-- -- );
+-- -- SELECT type FROM public.posts WHERE id = '00000000-0000-4000-8000-000000000009'::uuid;
+-- -- expect: experience
+--
+-- -- Q2. hangout + schedule + omit type → stays hangout
+-- -- (first convert via Q3, then:)
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "caption":"Q2 omit type keep hangout",
+-- --     "selected_dates":["2026-12-01T18:00:00.000Z"],
+-- --     "is_recurring":false,
+-- --     "recurrence_days":[],
+-- --     "rating_enabled":false
+-- --   }'::jsonb
+-- -- );
+-- -- SELECT type FROM public.posts WHERE id = '00000000-0000-4000-8000-000000000009'::uuid;
+-- -- expect: hangout
+--
+-- -- Q3. experience + valid schedule + requested hangout → allowed
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "type":"hangout",
+-- --     "caption":"Q3 to hangout",
+-- --     "selected_dates":["2026-12-01T18:00:00.000Z"],
+-- --     "is_recurring":false,
+-- --     "recurrence_days":[],
+-- --     "rating_enabled":false,
+-- --     "rsvp_capacity":null
+-- --   }'::jsonb
+-- -- );
+-- -- SELECT type, selected_dates FROM public.posts
+-- --   WHERE id = '00000000-0000-4000-8000-000000000009'::uuid;
+-- -- expect: hangout + non-empty selected_dates
+--
+-- -- Q4. hangout + empty structured schedule + requested experience → allowed
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "type":"experience",
+-- --     "caption":"Q4 to experience",
+-- --     "selected_dates":[],
+-- --     "is_recurring":false,
+-- --     "recurrence_days":[],
+-- --     "rating_enabled":false,
+-- --     "rsvp_capacity":null
+-- --   }'::jsonb
+-- -- );
+-- -- SELECT type, selected_dates, is_recurring, recurrence_days FROM public.posts
+-- --   WHERE id = '00000000-0000-4000-8000-000000000009'::uuid;
+-- -- expect: experience + no structured schedule
+--
+-- -- Q5. experience + no schedule + requested hangout → rejected (22023)
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "type":"hangout",
+-- --     "caption":"Q5 reject",
+-- --     "selected_dates":[],
+-- --     "is_recurring":false,
+-- --     "recurrence_days":[]
+-- --   }'::jsonb
+-- -- );
+-- -- expect: ERROR Event (hangout) requires a structured schedule
+--
+-- -- Q6. hangout + valid schedule + requested experience → rejected (22023)
+-- -- (ensure row is hangout with dates via Q3 first)
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{
+-- --     "type":"experience",
+-- --     "caption":"Q6 reject",
+-- --     "selected_dates":["2026-12-01T18:00:00.000Z"],
+-- --     "is_recurring":false,
+-- --     "recurrence_days":[]
+-- --   }'::jsonb
+-- -- );
+-- -- expect: ERROR Post (experience) cannot have a structured schedule
+--
+-- -- Q7/Q8. rendezvous → hangout / playbook → experience → rejected
+-- -- (use staging legacy row from section N; do not create in production)
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '<legacy-staging-uuid>'::uuid,
+-- --   '{"type":"hangout","caption":"Q7","selected_dates":["2026-12-01T18:00:00.000Z"],"is_recurring":false}'::jsonb
+-- -- );
+-- -- expect: ERROR Post type switching is not supported for this post type
+-- --
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '<legacy-staging-uuid>'::uuid,
+-- --   '{"type":"experience","caption":"Q8","selected_dates":[],"is_recurring":false}'::jsonb
+-- -- );
+-- -- expect: ERROR Post type switching is not supported for this post type
+--
+-- -- Q9. legacy type + omitted type → preserved
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '<legacy-staging-uuid>'::uuid,
+-- --   '{"caption":"Q9 omit type","is_recurring":false,"rating_enabled":false}'::jsonb
+-- -- );
+-- -- SELECT type FROM public.posts WHERE id = '<legacy-staging-uuid>'::uuid;
+-- -- expect: type unchanged (rendezvous or playbook)
+--
+-- -- Q10. owner authorization unchanged — non-owner actor
+-- -- SET ROLE authenticated; -- as a different user without ownership
+-- -- SELECT * FROM public.owner_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{"caption":"Q10 not owner"}'::jsonb
+-- -- );
+-- -- expect: Not authorized (42501)
+--
+-- -- Q11. admin reviewer authorization unchanged — non-reviewer
+-- -- SELECT * FROM public.admin_republish_post(
+-- --   '00000000-0000-4000-8000-000000000009'::uuid,
+-- --   '{"caption":"Q11 not reviewer","type":"experience"}'::jsonb
+-- -- );
+-- -- expect: Admin permission required (42501)
+--
+-- -- Admin happy-path (reviewer): same Q3/Q4 rules as owner once unlocked in SQL;
+-- -- frontend remains type-locked in D2A/D2B.
+
+
+-- =============================================================================
 -- O. CLEANUP (staging only — deletes ONLY known test UUIDs from this script)
 -- =============================================================================
 -- DELETE FROM public.posts WHERE id IN (
@@ -437,7 +863,9 @@
 --   '00000000-0000-4000-8000-000000000003'::uuid,
 --   '00000000-0000-4000-8000-000000000004'::uuid,
 --   '00000000-0000-4000-8000-000000000005'::uuid,
---   '00000000-0000-4000-8000-000000000006'::uuid
+--   '00000000-0000-4000-8000-000000000006'::uuid,
+--   '00000000-0000-4000-8000-000000000008'::uuid,
+--   '00000000-0000-4000-8000-000000000009'::uuid
 --   -- add 000000000007 here only if you created it in section N
 -- );
 -- -- activities and notifications cascade per existing FK/trigger rules

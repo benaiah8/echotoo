@@ -23,19 +23,20 @@ import { mergeUiCriticalPostFields } from "../lib/mergeUiCriticalPostFields";
 import { PostDetailDismissContext } from "../context/PostDetailDismissContext";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { subscribeAndroidPostDetailModalBack } from "../lib/androidPostDetailModalBack";
+import { shouldSuppressUnderlyingBackForPairUpPhotoPrompt } from "../lib/pairUpPhotoPromptStore";
 import { useCreateKeyboardInset } from "../hooks/useCreateKeyboardInset";
 import { useOverlayEdgeSwipeDismiss } from "../hooks/useOverlayEdgeSwipeDismiss";
 import { useOverlayContentSwipeDismiss } from "../hooks/useOverlayContentSwipeDismiss";
+import { useOverlayBackgroundScrollLock } from "../hooks/useOverlayBackgroundScrollLock";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
 import type { PostDetailNavigateState } from "../lib/postDetailNavigationState";
 import { scrollCommentsSectionIntoView } from "../lib/postDetailCommentsScroll";
+import { scheduleStabilizedLocationScroll } from "../lib/postDetailLocationScroll";
 import { getPostDetailModalCommentScrollPaddingBottom } from "../hooks/usePostDetailCommentLayout";
 
 /** Conservative: exclude comments, composer host, inputs, controls, and tagged interactive regions. */
 const POST_DETAIL_CONTENT_SWIPE_EXCLUDE_SELECTOR = [
   "[data-no-overlay-swipe]",
-  "[data-comments-section]",
-  "[data-comments-section] *",
   "[data-post-detail-modal-composer-host]",
   "[data-post-detail-modal-composer-host] *",
   "input",
@@ -70,8 +71,10 @@ export default function PostDetailModal() {
   const initialPost = state?.initialPost;
   /** Feed comment icon: scroll comments into view; does not imply composer focus. */
   const shouldScrollToCommentsOnOpen = Boolean(
-    state?.scrollToComments ?? state?.focusCommentComposer
+    state?.scrollToComments ?? state?.focusCommentComposer,
   );
+  /** Feed location pin: scroll published Location section into view. */
+  const shouldScrollToLocationOnOpen = Boolean(state?.scrollToLocation);
   /** Rare explicit opt-in only; outside comment icon never sets this. */
   const shouldAutoFocusComposer = Boolean(state?.autoFocusCommentComposer);
 
@@ -79,7 +82,7 @@ export default function PostDetailModal() {
   const [post, setPost] = useState<Post | null>(() => {
     if (hasMatchingInitialPost) {
       return applyPendingPostPatchToItem(
-        initialPost as Record<string, unknown> & { id?: string }
+        initialPost as Record<string, unknown> & { id?: string },
       ) as Post;
     }
     return null;
@@ -104,20 +107,44 @@ export default function PostDetailModal() {
   const blurBackdropClickRef = useRef(false);
   /** One scroll-to-comments per modal open when arriving from feed comment control. */
   const focusCommentsScrollDoneRef = useRef(false);
+  /** One scroll-to-location per modal open when arriving from feed location pin. */
+  const focusLocationScrollDoneRef = useRef(false);
 
-  const {
-    keyboardInsetPx: modalKeyboardInsetPx,
-    keyboardOpen,
-  } = useCreateKeyboardInset();
+  /** PV2B.1: PublishedMediaFullscreenViewer nested over Detail. */
+  const [publishedMediaFullscreenOpen, setPublishedMediaFullscreenOpen] =
+    useState(false);
+  const publishedMediaFullscreenOpenRef = useRef(false);
+  const publishedMediaFullscreenCloseRef = useRef<(() => void) | null>(null);
+  /** Pass 3E: Detail → Feed playback capture before route leave. */
+  const feedReturnPlaybackCaptureRef = useRef<(() => void) | null>(null);
+  /** Same-gesture click-through guard after fullscreen closes (ms epoch). */
+  const clickThroughGuardUntilRef = useRef(0);
+  const CLICK_THROUGH_GUARD_MS = 320;
+
+  const { keyboardInsetPx: modalKeyboardInsetPx, keyboardOpen } =
+    useCreateKeyboardInset();
+
+  const registerFeedReturnPlaybackCapture = useCallback(
+    (capture: (() => void) | null) => {
+      feedReturnPlaybackCaptureRef.current = capture;
+    },
+    [],
+  );
 
   const handleClose = useCallback(() => {
+    // Pass 3E: capture while Detail tree is still mounted.
+    try {
+      feedReturnPlaybackCaptureRef.current?.();
+    } catch {
+      /* ignore capture errors */
+    }
     if (backgroundLocation) {
       // Do not use navigate(-1): after edit→republish the previous history entry is often
       // /create/... — go to the real underlying tab (home/profile) instead.
       const { pathname, search, hash, state: bgState } = backgroundLocation;
       navigate(
         { pathname, search: search ?? "", hash: hash ?? "" },
-        { state: bgState, replace: true }
+        { state: bgState, replace: true },
       );
     } else {
       navigate("/", { replace: true });
@@ -129,24 +156,41 @@ export default function PostDetailModal() {
   }, [composerFocused]);
 
   useEffect(() => {
+    publishedMediaFullscreenOpenRef.current = publishedMediaFullscreenOpen;
+  }, [publishedMediaFullscreenOpen]);
+
+  const isClickThroughGuardActive = useCallback(() => {
+    return performance.now() < clickThroughGuardUntilRef.current;
+  }, []);
+
+  const armPublishedMediaFullscreenClickThroughGuard = useCallback(() => {
+    clickThroughGuardUntilRef.current =
+      performance.now() + CLICK_THROUGH_GUARD_MS;
+  }, []);
+
+  const registerPublishedMediaFullscreenClose = useCallback(
+    (close: (() => void) | null) => {
+      publishedMediaFullscreenCloseRef.current = close;
+    },
+    [],
+  );
+
+  const tryConsumePublishedMediaFullscreenBack = useCallback(() => {
+    if (!publishedMediaFullscreenOpenRef.current) return false;
+    // Eager clear so a second dismiss in the same turn cannot race Detail close.
+    publishedMediaFullscreenOpenRef.current = false;
+    publishedMediaFullscreenCloseRef.current?.();
+    return true;
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     };
   }, []);
 
   /** Overlay route: keep underlying tab (window scroll) from moving behind the sheet. */
-  useEffect(() => {
-    const scrollbarWidth =
-      window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    document.body.style.paddingRight = `${scrollbarWidth}px`;
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
-    };
-  }, []);
+  useOverlayBackgroundScrollLock(true);
 
   useEffect(() => {
     closingRef.current = false;
@@ -155,10 +199,15 @@ export default function PostDetailModal() {
       exitTimerRef.current = null;
     }
     focusCommentsScrollDoneRef.current = false;
+    focusLocationScrollDoneRef.current = false;
   }, [id]);
 
   useEffect(() => {
-    if (!shouldScrollToCommentsOnOpen || !post || focusCommentsScrollDoneRef.current)
+    if (
+      !shouldScrollToCommentsOnOpen ||
+      !post ||
+      focusCommentsScrollDoneRef.current
+    )
       return;
     focusCommentsScrollDoneRef.current = true;
     const t = window.setTimeout(() => {
@@ -171,14 +220,26 @@ export default function PostDetailModal() {
     return () => clearTimeout(t);
   }, [shouldScrollToCommentsOnOpen, post?.id]);
 
+  useEffect(() => {
+    if (
+      !shouldScrollToLocationOnOpen ||
+      !post ||
+      focusLocationScrollDoneRef.current
+    )
+      return;
+    focusLocationScrollDoneRef.current = true;
+    const handle = scheduleStabilizedLocationScroll({ isModal: true });
+    return () => handle.cancel();
+  }, [shouldScrollToLocationOnOpen, post?.id]);
+
   const hasMatching = !!id && !!initialPost && initialPost.id === id;
   useEffect(() => {
     setPost(
       hasMatching
         ? (applyPendingPostPatchToItem(
-            initialPost as Record<string, unknown> & { id?: string }
+            initialPost as Record<string, unknown> & { id?: string },
           ) as Post)
-        : null
+        : null,
     );
     setLoading(!hasMatching);
     setError(null);
@@ -251,7 +312,7 @@ export default function PostDetailModal() {
         if (!prev) return prev;
         const patched = patchPostAuthorForProfileUpdate(
           prev as Record<string, unknown>,
-          profile
+          profile,
         );
         return patched ? (patched as Post) : prev;
       });
@@ -279,7 +340,7 @@ export default function PostDetailModal() {
         }
       }, navDelayMs);
     },
-    [handleClose]
+    [handleClose],
   );
 
   /**
@@ -287,11 +348,14 @@ export default function PostDetailModal() {
    * for the modal’s whole lifetime so the hook does not zero `translateX` while the sheet is
    * still on screen (avoids post-close transform reset glitch).
    */
+  const parentSwipeGestureDisabled =
+    composerFocused || keyboardOpen || publishedMediaFullscreenOpen;
+
   const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
     useOverlayEdgeSwipeDismiss({
       active: true,
       engageSwipe: true,
-      gestureDisabled: composerFocused || keyboardOpen,
+      gestureDisabled: parentSwipeGestureDisabled,
       edgeStripLeftInsetPx: isNativeApp() ? 8 : 12,
       /** Narrow true-edge strip only — do not reuse invite overlay 42vw / 180px (blocks Reply taps). */
       edgeStripZClass: "z-[32]",
@@ -300,13 +364,14 @@ export default function PostDetailModal() {
        * navigate via the same pipeline as before (no upward sheet motion).
        */
       onDismiss: () => finishDismiss(0),
+      tryConsumeDismissLayer: tryConsumePublishedMediaFullscreenBack,
     });
 
   const { panelSwipeProps, contentSwipeMotionStyle } =
     useOverlayContentSwipeDismiss({
       active: true,
       engageSwipe: true,
-      gestureDisabled: composerFocused || keyboardOpen,
+      gestureDisabled: parentSwipeGestureDisabled,
       startZoneMaxXVw: 0.45,
       startZoneMaxPx: 180,
       leftInsetPx: isNativeApp() ? 8 : 12,
@@ -326,7 +391,10 @@ export default function PostDetailModal() {
 
   useEffect(() => {
     return subscribeAndroidPostDetailModalBack(() => {
+      if (tryConsumePublishedMediaFullscreenBack()) return;
+      if (shouldSuppressUnderlyingBackForPairUpPhotoPrompt()) return;
       if (closingRef.current) return;
+      if (isClickThroughGuardActive()) return;
       if (composerFocusedRef.current) {
         const ae = document.activeElement as HTMLElement | null;
         if (
@@ -341,17 +409,28 @@ export default function PostDetailModal() {
       }
       playAnimatedDismissRef.current();
     });
-  }, []);
+  }, [isClickThroughGuardActive, tryConsumePublishedMediaFullscreenBack]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        playAnimatedDismiss();
+      if (e.key !== "Escape") return;
+      // Fullscreen Escape uses capture + stopPropagation; still guard parent.
+      if (tryConsumePublishedMediaFullscreenBack()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
       }
+      if (shouldSuppressUnderlyingBackForPairUpPhotoPrompt()) return;
+      if (isClickThroughGuardActive()) return;
+      playAnimatedDismiss();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [playAnimatedDismiss]);
+  }, [
+    isClickThroughGuardActive,
+    playAnimatedDismiss,
+    tryConsumePublishedMediaFullscreenBack,
+  ]);
 
   const noopDismissPointer = useCallback(
     (_e: PointerEvent<HTMLButtonElement>) => {},
@@ -360,13 +439,17 @@ export default function PostDetailModal() {
 
   const modalScrollPaddingBottom = useMemo(
     () => getPostDetailModalCommentScrollPaddingBottom(modalKeyboardInsetPx),
-    [modalKeyboardInsetPx]
+    [modalKeyboardInsetPx],
   );
 
   const dismissContextValue = useMemo(
     () => ({
       setComposerFocused,
       modalKeyboardInsetPx,
+      setPublishedMediaFullscreenOpen,
+      registerPublishedMediaFullscreenClose,
+      armPublishedMediaFullscreenClickThroughGuard,
+      registerFeedReturnPlaybackCapture,
       /** Swipe-up handle removed — keep shape so FloatingCommentInput types stay valid. */
       dismissHandle: {
         visible: false,
@@ -378,7 +461,13 @@ export default function PostDetailModal() {
         onLostPointerCapture: noopDismissPointer,
       },
     }),
-    [modalKeyboardInsetPx, noopDismissPointer]
+    [
+      armPublishedMediaFullscreenClickThroughGuard,
+      modalKeyboardInsetPx,
+      noopDismissPointer,
+      registerPublishedMediaFullscreenClose,
+      registerFeedReturnPlaybackCapture,
+    ],
   );
 
   return (
@@ -403,6 +492,8 @@ export default function PostDetailModal() {
           onPointerDown={(e) => {
             if (e.target !== e.currentTarget) return;
             if (closingRef.current) return;
+            if (publishedMediaFullscreenOpenRef.current) return;
+            if (isClickThroughGuardActive()) return;
             if (!blurActiveEditableFirst()) return;
             blurBackdropClickRef.current = true;
             e.preventDefault();
@@ -410,6 +501,11 @@ export default function PostDetailModal() {
           onClick={(e) => {
             if (e.target !== e.currentTarget) return;
             if (closingRef.current) return;
+            if (publishedMediaFullscreenOpenRef.current) return;
+            if (isClickThroughGuardActive()) {
+              blurBackdropClickRef.current = false;
+              return;
+            }
             if (blurBackdropClickRef.current) {
               blurBackdropClickRef.current = false;
               return;
@@ -429,12 +525,9 @@ export default function PostDetailModal() {
               />
               <div
                 {...panelSwipeProps}
-                className="min-h-0 flex-1 overflow-y-auto"
+                className="min-h-0 flex-1 overflow-y-auto [-webkit-overflow-scrolling:touch]"
                 data-post-detail-modal-scroll
-                style={{
-                  touchAction: "pan-y",
-                  ...(post ? { paddingBottom: modalScrollPaddingBottom } : {}),
-                }}
+                style={{ touchAction: "pan-y" }}
               >
                 <div className="relative px-4 pb-6">
                   {(loading || (error && !post)) && (
@@ -460,12 +553,21 @@ export default function PostDetailModal() {
                     />
                   )}
                   {post && (
-                    <PostDetailBody
-                      post={post}
-                      onClose={playAnimatedDismiss}
-                      autoFocusCommentComposer={shouldAutoFocusComposer}
-                      modalComposerPortalHost={modalComposerHostEl}
-                    />
+                    <>
+                      <PostDetailBody
+                        post={post}
+                        onClose={playAnimatedDismiss}
+                        autoFocusCommentComposer={shouldAutoFocusComposer}
+                        modalComposerPortalHost={modalComposerHostEl}
+                      />
+                      <div
+                        data-post-detail-modal-composer-reserve
+                        data-no-overlay-swipe
+                        aria-hidden
+                        className="pointer-events-none shrink-0"
+                        style={{ height: modalScrollPaddingBottom }}
+                      />
+                    </>
                   )}
                 </div>
               </div>

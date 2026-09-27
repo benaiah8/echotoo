@@ -25,6 +25,7 @@ import { dataCache } from "./dataCache";
 import { clearCachedAvatar } from "./avatarCache";
 import { clearMutualFriendsCache } from "./mutualFriendsCache";
 import { invalidatePostDetailCache } from "../api/queries/getPostById";
+import { invalidatePairUpForPost } from "./pairUpCache";
 import { clearCachedRSVPData } from "./rsvpCache";
 import {
   invalidateCachesAfterProfileDisplayUpdate,
@@ -287,4 +288,13 @@ export function invalidateOnRSVP(postId: string): void {
  */
 export function invalidateOnComment(postId: string): void {
   invalidatePostDetailCache(postId);
+}
+
+/** Drop Pair Up cache for a deleted source post. */
+export function invalidateOnPostDelete(postId: string): void {
+  invalidatePostDetailCache(postId);
+  invalidatePairUpForPost(postId);
+  void import("./publishedMedia").then(({ invalidatePublishedMedia }) => {
+    invalidatePublishedMedia(postId);
+  });
 }

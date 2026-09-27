@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 interface ModalProps {
   isOpen: boolean;
@@ -24,19 +25,14 @@ const Modal = ({
   const [isMounted, setIsMounted] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
+  useOverlayBackgroundScrollLock(isOpen);
+
   useEffect(() => {
     if (isOpen) {
-      const scrollbarWidth =
-        window.innerWidth - document.documentElement.clientWidth;
-      document.body.style.overflow = "hidden";
-      document.body.style.paddingRight = `${scrollbarWidth}px`;
-
       setIsMounted(true);
       setTimeout(() => setIsVisible(true), 10);
     } else {
       setIsVisible(false);
-      document.body.style.overflow = "";
-      document.body.style.paddingRight = "";
 
       const timer = setTimeout(() => {
         setIsMounted(false);

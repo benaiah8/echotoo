@@ -2,8 +2,166 @@
 import { isDraftPostId, discardAllDrafts } from "../../lib/drafts";
 import { supabase } from "../../lib/supabaseClient";
 import { retry } from "../../lib/retry";
+import { imgUrlPublic } from "../../lib/img";
+import { getPostScheduleLabel } from "../../lib/postScheduleLabel";
 
 export type PostType = "experience" | "hangout";
+
+/** Compact chat card fields for Share S1 (viewer RLS). */
+export type SharedPostCardData = {
+  id: string;
+  post_type: PostType;
+  caption: string | null;
+  cover_url: string | null;
+  location_name: string | null;
+  schedule_label: string | null;
+};
+
+const SHARED_POST_CARD_MAX_IDS = 100;
+
+type SharedPostCardActivityRow = {
+  title?: string | null;
+  images?: string[] | null;
+  order_idx?: number | null;
+  location_name?: string | null;
+};
+
+type SharedPostCardPostRow = {
+  id: string;
+  type: string;
+  caption?: string | null;
+  selected_dates?: string[] | null;
+  is_recurring?: boolean | null;
+  recurrence_days?: string[] | null;
+  created_at?: string | null;
+  activities?: SharedPostCardActivityRow[] | null;
+};
+
+function sortedActivities(
+  activities: SharedPostCardActivityRow[] | null | undefined
+): SharedPostCardActivityRow[] {
+  if (!activities?.length) return [];
+  return [...activities].sort(
+    (a, b) => (a.order_idx ?? 0) - (b.order_idx ?? 0)
+  );
+}
+
+function coverUrlFromActivities(
+  activities: SharedPostCardActivityRow[]
+): string | null {
+  for (const a of activities) {
+    const imgs = a.images;
+    if (!imgs?.length) continue;
+    for (const raw of imgs) {
+      if (!raw) continue;
+      const u = imgUrlPublic(raw);
+      if (u) return u;
+    }
+  }
+  return null;
+}
+
+function locationFromActivities(
+  activities: SharedPostCardActivityRow[]
+): string | null {
+  for (const a of activities) {
+    const loc = typeof a.location_name === "string" ? a.location_name.trim() : "";
+    if (loc) return loc;
+  }
+  return null;
+}
+
+function mapPostRowToSharedCard(
+  row: SharedPostCardPostRow
+): SharedPostCardData | null {
+  if (row.type !== "hangout" && row.type !== "experience") return null;
+  const post_type = row.type;
+  const activities = sortedActivities(row.activities);
+  const captionRaw =
+    typeof row.caption === "string" ? row.caption.trim() : "";
+  const createdAt =
+    typeof row.created_at === "string" && row.created_at
+      ? row.created_at
+      : new Date(0).toISOString();
+  const schedule = getPostScheduleLabel({
+    type: post_type,
+    createdAt,
+    selectedDates: row.selected_dates,
+    isRecurring: row.is_recurring,
+    recurrenceDays: row.recurrence_days,
+  });
+  const schedule_label = schedule.label?.trim() ? schedule.label : null;
+
+  return {
+    id: row.id,
+    post_type,
+    caption: captionRaw.length > 0 ? captionRaw : null,
+    cover_url: coverUrlFromActivities(activities),
+    location_name: locationFromActivities(activities),
+    schedule_label,
+  };
+}
+
+/**
+ * Batch-fetch compact post cards for chat Share S1 under current-viewer RLS.
+ * Returned ids → accessible; requested but omitted → inaccessible (caller marks unavailable).
+ * Query/network failure → error on the result (caller must NOT mark unavailable).
+ */
+export async function getPostsByIdsForCards(
+  postIds: string[]
+): Promise<{ data: SharedPostCardData[]; error: unknown }> {
+  const ids = [
+    ...new Set(
+      (postIds ?? [])
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    ),
+  ].slice(0, SHARED_POST_CARD_MAX_IDS);
+
+  if (ids.length === 0) {
+    return { data: [], error: null };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("posts")
+      .select(
+        `
+        id,
+        type,
+        caption,
+        selected_dates,
+        is_recurring,
+        recurrence_days,
+        created_at,
+        activities (
+          title,
+          images,
+          order_idx,
+          location_name
+        )
+      `
+      )
+      .in("id", ids);
+
+    if (error) {
+      console.error("[getPostsByIdsForCards] PostgREST error:", error);
+      return { data: [], error };
+    }
+
+    const cards: SharedPostCardData[] = [];
+    for (const row of (data ?? []) as SharedPostCardPostRow[]) {
+      if (!row?.id) continue;
+      const mapped = mapPostRowToSharedCard(row);
+      if (mapped) cards.push(mapped);
+    }
+
+    return { data: cards, error: null };
+  } catch (err) {
+    console.error("[getPostsByIdsForCards] Unexpected error:", err);
+    return { data: [], error: err };
+  }
+}
 
 /**
  * Best-effort FCM for new post: Edge resolves recipients from notifications (server fan-out)
@@ -166,22 +324,16 @@ export async function deletePost(id: string) {
   if (sessErr) throw sessErr;
   if (!session) throw new Error("Not authenticated");
 
-  // First verify the user owns this post
-  const { data: post, error: fetchError } = await supabase
-    .from("posts")
-    .select("author_id")
-    .eq("id", id)
-    .single();
+  const { invokeDeletePublishedPost, DELETE_PUBLISHED_POST_USER_ERROR } =
+    await import("../../lib/deletePublishedPost/invokeDeletePublishedPost");
 
-  if (fetchError) throw fetchError;
-  if (post.author_id !== session.user.id) {
-    throw new Error("You can only delete your own posts");
+  const result = await invokeDeletePublishedPost({ postId: id });
+  if (!result.ok) {
+    throw new Error(result.error || DELETE_PUBLISHED_POST_USER_ERROR);
   }
 
-  // Delete the post (this will cascade delete activities and RSVPs due to foreign key constraints)
-  const { error } = await supabase.from("posts").delete().eq("id", id);
-
-  if (error) throw error;
+  const { invalidateOnPostDelete } = await import("../../lib/cacheInvalidation");
+  invalidateOnPostDelete(id);
 
   return true;
 }
@@ -219,9 +371,17 @@ export async function getPostForEdit(id: string) {
 
       if (activitiesError) throw activitiesError;
 
+      // Attached published media (PV4 edit hydration). Prefer detail helper shape.
+      const { getPublishedPostMediaForDetail } = await import(
+        "../../lib/publishedMedia/getPublishedPostMediaForDetail"
+      );
+      const media = await getPublishedPostMediaForDetail(id);
+
       return {
         post,
         activities: activities || [],
+        mediaOrder: media.mediaOrder ?? post.media_order ?? null,
+        postMedia: media.postMedia ?? [],
       };
     },
     {

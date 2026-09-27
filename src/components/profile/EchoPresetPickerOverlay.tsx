@@ -11,13 +11,14 @@ import {
   AVATAR_PRESET_PREFIX,
   isAvatarPresetValue,
 } from "../../lib/avatarPresets";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 const SLIDE_GAP_PX = 16;
 /** ~55–65% of width, capped for small phones */
 const SLIDE_WIDTH_RATIO = 0.6;
 const SLIDE_MAX_PX = 268;
 
-/** z-[140]: above FullScreenProfileCreation (z-50), below ConfirmDialog (200) / AvatarCrop (205) */
+/** z-[140]: above FullScreenProfileCreation portal (z-[120]), below ConfirmDialog (200) / AvatarCrop (205) */
 const OVERLAY_Z = "z-[140]";
 
 type Props = {
@@ -241,22 +242,8 @@ export default function EchoPresetPickerOverlay({
     t?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
   }, [open, activeIndex]);
 
-  /** Block page scroll behind overlay (Capacitor / mobile WebView) */
-  useEffect(() => {
-    if (!open) return;
-    const prevHtml = document.documentElement.style.overflow;
-    const prevBody = document.body.style.overflow;
-    document.documentElement.style.overflow = "hidden";
-    document.documentElement.style.overscrollBehavior = "none";
-    document.body.style.overflow = "hidden";
-    document.body.style.overscrollBehavior = "none";
-    return () => {
-      document.documentElement.style.overflow = prevHtml;
-      document.documentElement.style.overscrollBehavior = "";
-      document.body.style.overflow = prevBody;
-      document.body.style.overscrollBehavior = "";
-    };
-  }, [open]);
+  /** Nested-safe freeze — parent Edit Profile also locks; no direct body style wipe. */
+  useOverlayBackgroundScrollLock(open);
 
   const handleCancel = useCallback(() => {
     onClose();

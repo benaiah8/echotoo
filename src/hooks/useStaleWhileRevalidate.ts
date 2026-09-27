@@ -79,7 +79,7 @@ export function useStaleWhileRevalidate<T>(
 
   // State
   const [data, setData] = useState<T | null>(() => {
-    // Initialize with cached data immediately (stale)
+    if (!enabled) return null;
     return getCached?.() || null;
   });
   const [error, setError] = useState<Error | null>(null);

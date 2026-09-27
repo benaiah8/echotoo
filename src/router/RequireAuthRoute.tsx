@@ -7,6 +7,12 @@ import { supabase } from "../lib/supabaseClient";
 
 interface RequireAuthRouteProps {
   children: ReactNode;
+  /**
+   * When false, unauthenticated visitors stay on the current route (no AuthModal
+   * redirect). Authenticated children still mount so a persistent tab can stay
+   * alive while another bottom tab is active. Default true.
+   */
+  enforceRedirect?: boolean;
 }
 
 /**
@@ -14,7 +20,10 @@ interface RequireAuthRouteProps {
  * Auth logic matches BottomTab.requireAuth().
  * Uses useEffect for dispatch+navigate so AuthModal opens reliably (Navigate caused unmount before dispatch).
  */
-export function RequireAuthRoute({ children }: RequireAuthRouteProps) {
+export function RequireAuthRoute({
+  children,
+  enforceRedirect = true,
+}: RequireAuthRouteProps) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -43,6 +52,7 @@ export function RequireAuthRoute({ children }: RequireAuthRouteProps) {
 
   const lastHandledKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!enforceRedirect) return;
     if (isAuthedFinal) return;
     if (lastHandledKeyRef.current === location.key) return;
     lastHandledKeyRef.current = location.key;
@@ -51,7 +61,14 @@ export function RequireAuthRoute({ children }: RequireAuthRouteProps) {
     if (location.pathname !== Paths.home) {
       navigate(Paths.home, { replace: true });
     }
-  }, [dispatch, navigate, location.key, location.pathname, isAuthedFinal]);
+  }, [
+    dispatch,
+    navigate,
+    location.key,
+    location.pathname,
+    isAuthedFinal,
+    enforceRedirect,
+  ]);
 
   if (isAuthedFinal) {
     return <>{children}</>;

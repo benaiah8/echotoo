@@ -2,17 +2,19 @@ import { PiArrowLeft, PiChatCircleDots, PiShareFat } from "react-icons/pi";
 import LikeButton from "./LikeButton";
 import SaveButton from "./SaveButton";
 import FollowButton from "./FollowButton";
-import ShareDrawer from "./ShareDrawer";
+import ShareToMessagesDrawer from "../messages/ShareToMessagesDrawer";
 import { useState, useEffect } from "react";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { getCommentCount } from "../../api/services/comments";
 import { isDraftPostId } from "../../lib/drafts";
 import { type FeedItem } from "../../api/queries/getPublicFeed";
 import { storyCreatorFromPost } from "../../lib/shareStoryCreator";
+import CapacitorNotchScrim from "../CapacitorNotchScrim";
 import {
   POST_DETAIL_GLASS_PILL_MAX_WIDTH_PX,
   POST_DETAIL_GLASS_PILL_WIDTH_CLASS,
 } from "../../lib/postDetailGlassUi";
+import { ENABLE_POST_LIKES } from "../../lib/featureFlags";
 // [OPTIMIZATION: Phase 3.4] Removed BatchLoadResult - PostgreSQL function provides all data
 
 /** `floatingGlass`: centered frosted pill (modal / preview) — matches HomeTopBar + BottomTab tokens. */
@@ -54,9 +56,10 @@ export default function StickyPostActions({
   caption,
   postImageUrl,
   postAuthor,
-  onInvite,
+  onInvite: _onInvite,
   onCommentClick,
 }: StickyPostActionsProps) {
+  void _onInvite;
   const { ensureAuthed } = useAuthActionGate();
 
   const [commentCount, setCommentCount] = useState(() =>
@@ -84,7 +87,7 @@ export default function StickyPostActions({
         }
 
         setAuthorProfileId(profileId);
-      } catch (error) {
+      } catch {
         setAuthorProfileId(null);
       }
     };
@@ -142,11 +145,11 @@ export default function StickyPostActions({
 
   const iconSm = barVariant === "floatingGlass" ? 18 : 20;
   const iconMd = barVariant === "floatingGlass" ? 20 : 22;
-  const actionGap = barVariant === "floatingGlass" ? "gap-3.5" : "gap-6";
+  /** Tighter in the glass pill on narrow phones. Duo/Group live in PostDetailSocialDock. */
+  const actionGap = barVariant === "floatingGlass" ? "gap-3" : "gap-6";
   const sideGap = barVariant === "floatingGlass" ? "gap-0.5" : "gap-3";
 
   const showModalBack = barVariant === "floatingGlass" && !!onClose;
-  const displayLikeCount = post?.effective_like_count ?? post?.like_count ?? 0;
   const displaySaveCount = post?.effective_save_count ?? post?.save_count ?? 0;
 
   const actionsRow = (
@@ -198,15 +201,17 @@ export default function StickyPostActions({
             </span>
           )}
         </button>
-        <LikeButton
-          postId={postId}
-          size={iconMd}
-          compactCount={barVariant === "floatingGlass"}
-          isLiked={post?.is_liked}
-          likeCount={displayLikeCount}
-          showCount={true}
-          post={post}
-        />
+        {ENABLE_POST_LIKES ? (
+          <LikeButton
+            postId={postId}
+            size={iconMd}
+            compactCount={barVariant === "floatingGlass"}
+            isLiked={post?.is_liked}
+            likeCount={post?.effective_like_count ?? post?.like_count ?? 0}
+            showCount={true}
+            post={post}
+          />
+        ) : null}
         <SaveButton
           postId={postId}
           size={iconMd}
@@ -225,7 +230,13 @@ export default function StickyPostActions({
         }`}
       >
         {authorProfileId && (
-          <div className="flex h-6 min-w-[84px] max-w-[118px] items-center justify-center sm:h-6 sm:min-w-[88px]">
+          <div
+            className={`flex h-6 max-w-[118px] items-center justify-center sm:h-6 ${
+              barVariant === "floatingGlass"
+                ? "min-w-0 shrink"
+                : "min-w-[84px] sm:min-w-[88px]"
+            }`}
+          >
             <FollowButton
               targetId={authorProfileId}
               followStatus={post?.follow_status}
@@ -250,11 +261,12 @@ export default function StickyPostActions({
     <>
       {barVariant === "floatingGlass" ? (
         <>
+          <CapacitorNotchScrim />
           <div
-            className="pointer-events-none fixed left-0 right-0 top-0 z-40"
+            className="pointer-events-none fixed left-0 right-0 top-0 z-[39]"
             style={{
-              top: "calc(-1px + -1 * env(safe-area-inset-top, 0px))",
-              height: "calc(62px + env(safe-area-inset-top, 0px))",
+              top: 0,
+              height: "calc(66px + var(--safe-area-top-layout))",
               width: "100%",
               background: "var(--gradient-from-top)",
             }}
@@ -263,7 +275,7 @@ export default function StickyPostActions({
           <div
             className={`fixed left-0 right-0 top-0 z-40 flex flex-col items-center pointer-events-none ${className}`}
             style={{
-              paddingTop: "calc(6px + env(safe-area-inset-top, 0px))",
+              paddingTop: "calc(6px + var(--safe-area-top-layout))",
             }}
           >
             <div
@@ -277,7 +289,9 @@ export default function StickyPostActions({
                   "rounded-full shadow-sm",
                 ].join(" ")}
               >
-                <div className="p-1 sm:p-1.5">{actionsRow}</div>
+                <div className="py-1 pl-1 pr-2 sm:py-1.5 sm:pl-1.5 sm:pr-2.5">
+                  {actionsRow}
+                </div>
               </div>
             </div>
           </div>
@@ -290,8 +304,8 @@ export default function StickyPostActions({
         </div>
       )}
 
-      <ShareDrawer
-        isOpen={showShareDrawer}
+      <ShareToMessagesDrawer
+        open={showShareDrawer}
         onClose={() => setShowShareDrawer(false)}
         postId={postId}
         postType={postType}
@@ -300,7 +314,6 @@ export default function StickyPostActions({
         creatorName={storyCreator.creatorName ?? undefined}
         creatorHandle={storyCreator.creatorHandle ?? undefined}
         creatorAvatarUrl={storyCreator.creatorAvatarUrl ?? undefined}
-        onInvite={onInvite}
         selectedDates={post?.selected_dates}
         isRecurring={post?.is_recurring}
         recurrenceDays={post?.recurrence_days}

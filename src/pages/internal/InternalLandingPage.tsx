@@ -140,6 +140,30 @@ export default function InternalLandingPage() {
                 Platform config
               </div>
             </button>
+            <button
+              type="button"
+              onClick={() => navigate(Paths.internalCompanyAnnouncements)}
+              className="w-full text-left rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 px-4 py-3 active:opacity-90 touch-manipulation"
+            >
+              <div className="text-sm font-semibold text-[var(--text)]">
+                Company announcements
+              </div>
+              <div className="text-[11px] text-[var(--text)]/55 mt-0.5">
+                In-app company messages
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(Paths.internalCrashReports)}
+              className="w-full text-left rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 px-4 py-3 active:opacity-90 touch-manipulation"
+            >
+              <div className="text-sm font-semibold text-[var(--text)]">
+                Crash Reports
+              </div>
+              <div className="text-[11px] text-[var(--text)]/55 mt-0.5">
+                JS / React crashes
+              </div>
+            </button>
 
             <div className="mt-5 pt-4 border-t border-[var(--border)]/50">
               <p className="text-[10px] font-medium text-[var(--text)]/45 uppercase tracking-wide mb-2">
@@ -186,8 +210,15 @@ export default function InternalLandingPage() {
               ) : previewRow ? (
                 <p className="text-[10px] text-[var(--text)]/50 mb-2 leading-snug">
                   Config: {previewRow.update_mode} · latest{" "}
-                  {previewRow.latest_version?.trim() || "—"} · min{" "}
-                  {previewRow.minimum_supported_version?.trim() || "—"}
+                  {previewRow.latest_version?.trim() || "—"}
+                  {previewRow.latest_build?.trim()
+                    ? ` (build ${previewRow.latest_build.trim()})`
+                    : ""}{" "}
+                  · min {previewRow.minimum_supported_version?.trim() || "—"}
+                  {previewRow.minimum_supported_build?.trim()
+                    ? ` (build ${previewRow.minimum_supported_build.trim()})`
+                    : ""}
+                  {previewRow.store_release_ready ? " · store ready" : " · store not ready"}
                   {!previewRow.is_active ? " · inactive" : ""}
                 </p>
               ) : (

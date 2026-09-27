@@ -61,7 +61,7 @@ const SECTION_HEADER_BTN =
 /** Combobox input — full-width searchable control (light + dark) */
 const COMBO_INPUT_EMBEDDED =
   "w-full min-w-0 h-10 rounded-full border border-[var(--create-border-panel-line-soft)] " +
-  "bg-[color-mix(in_oklab,var(--surface)_65%,transparent)] px-3 pr-9 text-left text-sm text-[var(--text)] " +
+  "bg-[color-mix(in_oklab,var(--surface)_65%,transparent)] px-3 pr-9 text-left text-[16px] text-[var(--text)] " +
   "placeholder:text-[var(--text)]/44 shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] backdrop-blur-md outline-none transition " +
   "focus-visible:ring-2 focus-visible:ring-[color-mix(in_oklab,var(--brand)_40%,transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] " +
   "app-dark:bg-[color-mix(in_oklab,var(--surface)_22%,transparent)] app-dark:placeholder:text-[var(--text)]/42 " +
@@ -70,7 +70,7 @@ const COMBO_INPUT_EMBEDDED =
 
 const COMBO_INPUT_STANDALONE =
   "w-full min-w-0 h-10 rounded-xl border border-[var(--create-border-panel-line-soft)] " +
-  "bg-[color-mix(in_oklab,var(--surface)_62%,transparent)] px-3 pr-9 text-left text-sm text-[var(--text)] " +
+  "bg-[color-mix(in_oklab,var(--surface)_62%,transparent)] px-3 pr-9 text-left text-[16px] text-[var(--text)] " +
   "placeholder:text-[var(--text)]/44 shadow-[inset_0_1px_0_rgba(0,0,0,0.04)] backdrop-blur-md outline-none transition " +
   "focus-visible:ring-2 focus-visible:ring-[color-mix(in_oklab,var(--brand)_40%,transparent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] " +
   "app-dark:bg-[color-mix(in_oklab,var(--surface)_20%,transparent)] app-dark:placeholder:text-[var(--text)]/42 " +

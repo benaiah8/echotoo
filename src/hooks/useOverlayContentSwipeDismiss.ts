@@ -28,7 +28,9 @@ const LEFTWARD_CANCEL_DX = 8;
 const COMMIT_THRESHOLD_RATIO = 0.87;
 
 const SNAP_BACK_MS = 320;
-const COMMIT_EXIT_MS = 260;
+/** Committed content-swipe exit transform duration (ms). */
+export const OVERLAY_CONTENT_SWIPE_COMMIT_EXIT_MS = 260;
+const COMMIT_EXIT_MS = OVERLAY_CONTENT_SWIPE_COMMIT_EXIT_MS;
 const POLISH_START_THRESHOLD_FRACTION = 0.35;
 const POLISH_SCALE_MIN = 0.985;
 const MOTION_EASING = "cubic-bezier(0.22, 1, 0.32, 1)";
@@ -86,22 +88,20 @@ function resolveSwipeTargetExclusion(
     return { excluded: false, reason: "none" };
   }
 
+  // Explicit exclusions win over allowButtonTargets (e.g. Leave Group).
+  if (excludeSelector !== undefined) {
+    const selector = excludeSelector.trim();
+    if (selector && target.closest(selector)) {
+      return { excluded: true, reason: "excludeSelectorMatch" };
+    }
+  }
+
   if (allowButtonTargets) {
     if (target.closest("button") || target.closest('[role="button"]')) {
       return { excluded: false, reason: "allowButtonTarget" };
     }
   }
 
-  if (excludeSelector === undefined) {
-    return { excluded: false, reason: "none" };
-  }
-  const selector = excludeSelector.trim();
-  if (!selector) {
-    return { excluded: false, reason: "none" };
-  }
-  if (target.closest(selector)) {
-    return { excluded: true, reason: "excludeSelectorMatch" };
-  }
   return { excluded: false, reason: "none" };
 }
 
@@ -194,6 +194,13 @@ export type UseOverlayContentSwipeDismissOptions = {
   horizontalLockPx?: number;
   /** Invoked when a horizontal panel swipe passes commit distance (e.g. edge `playAnimatedDismiss`). */
   onSwipeCommit: () => void;
+  /**
+   * When this identity changes (e.g. conversationId), reset swipe visual state and
+   * disarm click suppression so a dismissed overlay cannot eat inbox taps.
+   */
+  resetToken?: string | number | null;
+  /** DEV diagnostics only. Must not affect gesture arbitration. */
+  onDebugEvent?: (stage: string, data?: Record<string, unknown>) => void;
 };
 
 export type UseOverlayContentSwipeDismissResult = {
@@ -232,12 +239,44 @@ export function useOverlayContentSwipeDismiss(
   const maxDxRef = useRef(0);
   const lastDyRef = useRef(0);
   const suppressNextClickRef = useRef(false);
+  const suppressDisarmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const firstMoveLoggedRef = useRef(false);
   const captureTargetRef = useRef<Element | null>(null);
   const snapBackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onSwipeCommitRef = useRef(options.onSwipeCommit);
   onSwipeCommitRef.current = options.onSwipeCommit;
+
+  const emitDebug = useCallback(
+    (stage: string, data?: Record<string, unknown>) => {
+      optsRef.current.onDebugEvent?.(stage, data);
+    },
+    [],
+  );
+
+  const clearSuppressDisarmTimer = useCallback(() => {
+    if (suppressDisarmTimerRef.current) {
+      clearTimeout(suppressDisarmTimerRef.current);
+      suppressDisarmTimerRef.current = null;
+    }
+  }, []);
+
+  const armSameGestureClickSuppress = useCallback(() => {
+    suppressNextClickRef.current = true;
+    clearSuppressDisarmTimer();
+    // Fallback: never leave suppression armed across a later inbox tap.
+    suppressDisarmTimerRef.current = setTimeout(() => {
+      suppressDisarmTimerRef.current = null;
+      suppressNextClickRef.current = false;
+    }, 450);
+  }, [clearSuppressDisarmTimer]);
+
+  const disarmClickSuppress = useCallback(() => {
+    suppressNextClickRef.current = false;
+    clearSuppressDisarmTimer();
+  }, [clearSuppressDisarmTimer]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -253,11 +292,14 @@ export function useOverlayContentSwipeDismiss(
       if (!suppressNextClickRef.current) return;
       e.preventDefault();
       e.stopPropagation();
-      suppressNextClickRef.current = false;
+      disarmClickSuppress();
     };
     document.addEventListener("click", onClickCapture, true);
-    return () => document.removeEventListener("click", onClickCapture, true);
-  }, []);
+    return () => {
+      document.removeEventListener("click", onClickCapture, true);
+      disarmClickSuppress();
+    };
+  }, [disarmClickSuppress]);
 
   const engage = options.engageSwipe !== false;
   const canStartSwipe =
@@ -279,11 +321,27 @@ export function useOverlayContentSwipeDismiss(
 
   const releasePointerCapture = useCallback((pointerId: number | null) => {
     const el = captureTargetRef.current;
-    captureTargetRef.current = null;
     if (!el || pointerId == null) return;
     try {
       if (el.hasPointerCapture(pointerId)) {
         el.releasePointerCapture(pointerId);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const clearCaptureTarget = useCallback(() => {
+    captureTargetRef.current = null;
+  }, []);
+
+  /** Deferred until horizontal dismiss lock — keeps undecided vertical scroll native. */
+  const acquirePointerCapture = useCallback((pointerId: number | null) => {
+    const el = captureTargetRef.current;
+    if (!el || pointerId == null) return;
+    try {
+      if (!el.hasPointerCapture(pointerId)) {
+        el.setPointerCapture(pointerId);
       }
     } catch {
       /* ignore */
@@ -401,6 +459,7 @@ export function useOverlayContentSwipeDismiss(
 
       clearWindowListeners();
       releasePointerCapture(pointerId);
+      clearCaptureTarget();
       resetGestureTracking();
 
       if (mode !== "horizontal") {
@@ -417,13 +476,19 @@ export function useOverlayContentSwipeDismiss(
         if (visualActive) {
           snapBackVisual();
         }
+        emitDebug("cancel", {
+          mode,
+          releaseDx: Math.round(releaseDx),
+          dy: Math.round(dy),
+          visualActive,
+        });
         return;
       }
 
       const committed = releaseDx >= commitThresholdPx;
 
       if (committed) {
-        suppressNextClickRef.current = true;
+        armSameGestureClickSuppress();
         clearSnapBackTimer();
         setIsDragging(false);
         setTransitionMs(COMMIT_EXIT_MS);
@@ -439,6 +504,11 @@ export function useOverlayContentSwipeDismiss(
           commitThresholdPx,
           true,
         );
+        emitDebug("commit", {
+          releaseDx: Math.round(releaseDx),
+          commitThresholdPx,
+          dy: Math.round(dy),
+        });
         onSwipeCommitRef.current();
         return;
       }
@@ -455,19 +525,33 @@ export function useOverlayContentSwipeDismiss(
       );
 
       if (releaseDx >= horizontalLockPx) {
-        suppressNextClickRef.current = true;
+        armSameGestureClickSuppress();
+        emitDebug("snapback", {
+          releaseDx: Math.round(releaseDx),
+          commitThresholdPx,
+          dy: Math.round(dy),
+        });
         snapBackVisual();
         return;
       }
 
       if (releaseDx > 0 || visualActive) {
+        emitDebug("snapback", {
+          releaseDx: Math.round(releaseDx),
+          commitThresholdPx,
+          dy: Math.round(dy),
+          visualActive,
+        });
         snapBackVisual();
       }
     },
     [
+      armSameGestureClickSuppress,
+      clearCaptureTarget,
       clearSnapBackTimer,
       clearWindowListeners,
       devLogRelease,
+      emitDebug,
       isContentSwipeVisualActive,
       releasePointerCapture,
       resetGestureTracking,
@@ -490,6 +574,13 @@ export function useOverlayContentSwipeDismiss(
         firstMoveLoggedRef.current = true;
         console.info("create-swipe:firstMove", { dx, dy });
       }
+      emitDebug("move", {
+        dx: Math.round(dx),
+        dy: Math.round(dy),
+        mode,
+        cancelable: e.cancelable,
+        pointerType: e.pointerType,
+      });
 
       if (mode === "cancelled") return;
 
@@ -506,6 +597,7 @@ export function useOverlayContentSwipeDismiss(
               mode: "cancelled",
             });
           }
+          emitDebug("cancel", { reason: "left", dx: Math.round(dx), dy: Math.round(dy) });
           finishGesture("cancelled");
           return;
         }
@@ -517,10 +609,17 @@ export function useOverlayContentSwipeDismiss(
           gestureModeRef.current = "horizontal";
           const clampedDx = syncCurrentDragDx(dx);
           setIsDragging(true);
+          acquirePointerCapture(pointerIdRef.current);
           applyDragTranslate(clampedDx);
           if (shouldLogCreateSwipe()) {
             console.info("create-swipe:lock", { dx, dy, mode: "horizontal" });
           }
+          emitDebug("lock", {
+            dx: Math.round(dx),
+            dy: Math.round(dy),
+            preventDefault: e.cancelable,
+            translateX: Math.round(clampedDx),
+          });
           if (e.cancelable) e.preventDefault();
           return;
         }
@@ -539,6 +638,11 @@ export function useOverlayContentSwipeDismiss(
               mode: "cancelled",
             });
           }
+          emitDebug("cancel", {
+            reason: "vertical",
+            dx: Math.round(dx),
+            dy: Math.round(dy),
+          });
           finishGesture("cancelled");
           return;
         }
@@ -551,7 +655,14 @@ export function useOverlayContentSwipeDismiss(
       applyDragTranslate(clampedDx);
       if (e.cancelable) e.preventDefault();
     },
-    [applyDragTranslate, finishGesture, resolveHorizontalLockPx, syncCurrentDragDx],
+    [
+      acquirePointerCapture,
+      applyDragTranslate,
+      emitDebug,
+      finishGesture,
+      resolveHorizontalLockPx,
+      syncCurrentDragDx,
+    ],
   );
 
   const onWindowPointerEnd = useCallback(
@@ -567,9 +678,15 @@ export function useOverlayContentSwipeDismiss(
         currentDxRef.current = releaseDx;
         maxDxRef.current = Math.max(maxDxRef.current, releaseDx);
       }
+      emitDebug(e.type === "pointercancel" ? "pointercancel" : "pointerup", {
+        mode,
+        releaseDx: Math.round(releaseDx),
+        dy: Math.round(lastDyRef.current),
+        type: e.type,
+      });
       finishGesture(mode, releaseDx);
     },
-    [finishGesture],
+    [emitDebug, finishGesture],
   );
 
   const attachWindowListeners = useCallback(() => {
@@ -589,25 +706,41 @@ export function useOverlayContentSwipeDismiss(
   useEffect(() => {
     if (!options.active) {
       releasePointerCapture(pointerIdRef.current);
+      clearCaptureTarget();
       clearWindowListeners();
       resetGestureTracking();
       resetVisualState();
-      suppressNextClickRef.current = false;
+      disarmClickSuppress();
     }
   }, [
     options.active,
+    clearCaptureTarget,
     clearWindowListeners,
+    disarmClickSuppress,
     releasePointerCapture,
     resetGestureTracking,
     resetVisualState,
   ]);
 
   useEffect(() => {
+    releasePointerCapture(pointerIdRef.current);
+    clearCaptureTarget();
+    clearWindowListeners();
+    resetGestureTracking();
+    resetVisualState();
+    disarmClickSuppress();
+    // Intentionally only when conversation/reset identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetToken gate
+  }, [options.resetToken]);
+
+  useEffect(() => {
     return () => {
       clearWindowListeners();
       clearSnapBackTimer();
+      clearSuppressDisarmTimer();
+      suppressNextClickRef.current = false;
     };
-  }, [clearSnapBackTimer, clearWindowListeners]);
+  }, [clearSnapBackTimer, clearSuppressDisarmTimer, clearWindowListeners]);
 
   const onPointerDownCapture = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
@@ -616,30 +749,66 @@ export function useOverlayContentSwipeDismiss(
         devLogCapture(e, devTarget);
       }
 
-      if (!canStartSwipe) return;
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-      if (trackingRef.current) return;
-
       const o = optsRef.current;
-      const exclusion = resolveSwipeTargetExclusion(
-        e.target,
-        o.excludeSelector,
-        o.allowButtonTargets === true,
-      );
-      if (shouldLogCreateSwipe()) {
-        devLogExcluded(exclusion);
-      }
-      if (exclusion.excluded) return;
-
       const maxX = resolveStartZoneMaxClientX(
         o.startZoneMaxXVw ?? DEFAULT_START_ZONE_MAX_VW,
         o.startZoneMaxPx ?? DEFAULT_START_ZONE_MAX_PX,
         o.leftInsetPx ?? DEFAULT_LEFT_INSET_PX,
       );
+      const exclusion = resolveSwipeTargetExclusion(
+        e.target,
+        o.excludeSelector,
+        o.allowButtonTargets === true,
+      );
+      emitDebug("pointerdown", {
+        pointerType: e.pointerType,
+        button: e.button,
+        clientX: Math.round(e.clientX),
+        clientY: Math.round(e.clientY),
+        targetTag: devTarget?.tagName ?? null,
+        canStartSwipe,
+        excluded: exclusion.excluded,
+        excludeReason: exclusion.reason,
+        inZone: e.clientX <= maxX,
+        startZoneMaxX: Math.round(maxX),
+      });
+
+      if (!canStartSwipe) {
+        emitDebug("skip", { reason: "inactive" });
+        return;
+      }
+      if (e.pointerType === "mouse" && e.button !== 0) {
+        emitDebug("skip", { reason: "nonPrimaryMouse" });
+        return;
+      }
+      if (trackingRef.current) {
+        emitDebug("skip", { reason: "alreadyTracking" });
+        return;
+      }
+
+      if (shouldLogCreateSwipe()) {
+        devLogExcluded(exclusion);
+      }
+      if (exclusion.excluded) {
+        emitDebug("skip", {
+          reason: "excluded",
+          excludeReason: exclusion.reason,
+          targetTag: devTarget?.tagName ?? null,
+        });
+        return;
+      }
+
       if (shouldLogCreateSwipe()) {
         devLogZone(e, maxX);
       }
-      if (e.clientX > maxX) return;
+      if (e.clientX > maxX) {
+        emitDebug("skip", {
+          reason: "startZone",
+          clientX: Math.round(e.clientX),
+          startZoneMaxX: Math.round(maxX),
+        });
+        return;
+      }
 
       trackingRef.current = true;
       pointerIdRef.current = e.pointerId;
@@ -651,22 +820,22 @@ export function useOverlayContentSwipeDismiss(
       lastDyRef.current = 0;
       firstMoveLoggedRef.current = false;
 
-      const captureEl =
+      captureTargetRef.current =
         e.target instanceof Element ? e.target : e.currentTarget;
-      captureTargetRef.current = captureEl;
-      try {
-        captureEl.setPointerCapture?.(e.pointerId);
-      } catch {
-        captureTargetRef.current = null;
-      }
 
       attachWindowListeners();
 
       if (shouldLogCreateSwipe()) {
         console.info("create-swipe:trackStart", { pointerId: e.pointerId });
       }
+      emitDebug("trackStart", {
+        pointerType: e.pointerType,
+        clientX: Math.round(e.clientX),
+        clientY: Math.round(e.clientY),
+        targetTag: devTarget?.tagName ?? null,
+      });
     },
-    [attachWindowListeners, canStartSwipe],
+    [attachWindowListeners, canStartSwipe, emitDebug],
   );
 
   const commitThresholdPx = resolveContentCommitThresholdPx();

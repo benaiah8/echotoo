@@ -1,9 +1,8 @@
-import { useRef } from "react";
 import { PiImages } from "react-icons/pi";
+import { useCreatePostMediaPicker } from "../../hooks/useCreatePostMediaPicker";
 import { useCreatePostMedia } from "./CreatePostMediaProvider";
-import { ensureFirstActivitySlotForPostImages } from "../../lib/createFlowEnsureFirstActivitySlot";
-import { CREATE_FLOW_LIMITS } from "../../lib/createFlowLimits";
-import toast from "react-hot-toast";
+import { formatPostMediaCountLabel } from "../../lib/createPostMediaSlots";
+import { hasActivePostVideo } from "../../lib/createPostVideoUpload";
 
 type Props = {
   /** Total images already attached across all activities (post-level cap). */
@@ -16,11 +15,9 @@ type Props = {
   variant?: "empty" | "more";
 };
 
-const MAX = CREATE_FLOW_LIMITS.activities.maxTotalImagesPerPost;
-
 /**
  * Full-width finalize-only hero CTA: opens image picker and uploads into activity index 0
- * via the shared CreatePostMedia pipeline (same as Activities).
+ * via the shared CreatePostMedia pipeline (same as Activities / header Media).
  */
 export default function CreateFinalizeHeroImageCta({
   totalImagesPost,
@@ -28,44 +25,22 @@ export default function CreateFinalizeHeroImageCta({
   onBeforeOpen,
   variant = "empty",
 }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { startPostImageUploads, hasPendingUploads } = useCreatePostMedia();
+  const { videoJob } = useCreatePostMedia();
+  const hasVideo = hasActivePostVideo(videoJob);
+  const { openPicker, fileInput, mediaAcquisitionSheet, hasPendingUploads, atCap } =
+    useCreatePostMediaPicker({
+      totalImagesPost,
+      onBeforeOpen,
+      onAfterStartUploads,
+    });
 
   const title = variant === "more" ? "Add more photos" : "Add photos";
-
-  const atCap = totalImagesPost >= MAX;
-
-  const openPicker = () => {
-    if (hasPendingUploads) {
-      toast.error("Images are still uploading. Please wait.");
-      return;
-    }
-    if (atCap) {
-      toast.error(`You can add up to ${MAX} images per post.`);
-      return;
-    }
-    onBeforeOpen?.();
-    inputRef.current?.click();
-  };
+  const counterLabel = formatPostMediaCountLabel(totalImagesPost, hasVideo);
 
   return (
     <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          const files = e.target.files;
-          if (files?.length) {
-            ensureFirstActivitySlotForPostImages();
-            onAfterStartUploads?.();
-            void startPostImageUploads(Array.from(files), 0);
-          }
-          e.target.value = "";
-        }}
-      />
+      {fileInput}
+      {mediaAcquisitionSheet}
       <button
         type="button"
         onClick={openPicker}
@@ -80,11 +55,11 @@ export default function CreateFinalizeHeroImageCta({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-[15px] font-semibold leading-tight tracking-tight app-light:text-neutral-900 app-dark:text-white">
-            {atCap ? "All photos added" : title}
+            {atCap ? "All media added" : title}
           </span>
         </span>
         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--create-hero-cta-counter-border)] bg-[var(--create-hero-cta-counter-bg)] text-[10px] font-semibold tabular-nums text-[var(--create-hero-cta-counter-fg)] shadow-[var(--create-hero-cta-counter-shadow)]">
-          {totalImagesPost}/{MAX}
+          {counterLabel}
         </span>
       </button>
     </>

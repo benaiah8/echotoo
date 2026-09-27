@@ -1,4 +1,5 @@
 # Minimal Supabase CLI config for Edge Functions.
+# Before any production DB migration / db push: read supabase/MIGRATION_STATUS.md
 # Link project: `supabase link --project-ref <ref>`
 # Deploy function: `supabase functions deploy delete-account`
 # Deploy function: `supabase functions deploy send-post-push`
@@ -12,4 +13,37 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.send-invite-push]
+verify_jwt = false
+
+[functions.send-dm-push]
+verify_jwt = false
+
+[functions.send-saved-event-reminders]
+verify_jwt = false
+
+[functions.send-admin-campaign-push]
+verify_jwt = false
+
+[functions.send-open-plan-request-push]
+verify_jwt = false
+
+[functions.bunny-upload-init]
+# JWT verification is done inside the function via auth.getUser(token).
+verify_jwt = false
+
+[functions.bunny-video-delete]
+# JWT verification is done inside the function via auth.getUser(token).
+verify_jwt = false
+
+[functions.bunny-stream-webhook]
+# Bunny HMAC verification is done inside the function (read-only API key).
+verify_jwt = false
+
+[functions.delete-published-post]
+# JWT verification is done inside the function via auth.getUser(token).
+verify_jwt = false
+
+[functions.edit-staging-gc]
+# Internal/service auth via authorizeInternalPushRequest (service-role bearer
+# or INTERNAL_PUSH_SECRET). DRY-RUN by default — do not schedule in prod yet.
 verify_jwt = false

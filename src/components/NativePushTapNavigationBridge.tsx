@@ -4,30 +4,25 @@ import {
   registerNativePushTapListener,
   setNativePushTapNavigateHandler,
 } from "../lib/nativePushTapBridge";
-import { isNotificationsTabPath } from "../lib/notifications/notificationRouteResolver";
+import { navigateFromNotificationRoute } from "../lib/notifications/notificationRouteNavigation";
 
 /**
  * Wires {@link registerNativePushTapListener} to React Router. Must mount under `BrowserRouter`.
- * Post detail opens in {@link PostDetailModal} (same as feed / in-app notification), not full page.
- * Notifications tab routes use full navigation (no backgroundLocation) so PersistentTabContainer shows the correct pane.
+ * Uses the same {@link navigateFromNotificationRoute} rules as in-app banner taps.
  */
 export default function NativePushTapNavigationBridge() {
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
-    setNativePushTapNavigateHandler((path) => {
+    setNativePushTapNavigateHandler((route) => {
       try {
-        if (isNotificationsTabPath(path)) {
-          console.log("[PUSH_TAP] navigate_notifications_tab", { path });
-          navigate(path);
-          return;
-        }
-        console.log("[PUSH_TAP] navigate_modal", {
-          path,
-          backgroundPath: location.pathname,
+        console.log("[PUSH_TAP] navigate_apply", {
+          kind: route.kind,
+          mode: route.mode,
+          path: route.path,
         });
-        navigate(path, { state: { backgroundLocation: location } });
+        navigateFromNotificationRoute(navigate, location, route);
       } catch (e) {
         console.warn(
           "[PUSH_TAP] navigate error:",

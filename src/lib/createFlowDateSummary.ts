@@ -1,4 +1,9 @@
 import { CREATE_FLOW_WEEKDAYS } from "./createFlowScheduleConstants";
+import {
+  extractExplicitStartTime,
+  formatCreateFlowStartTime,
+  type CreateFlowStartTime,
+} from "./createFlowStartTime";
 
 /** Group consecutive calendar days into ranges (same logic as CreateCategoryPage). */
 export type CreateFlowDateSummaryGroup =
@@ -114,9 +119,12 @@ export function formatFinalizeSelectedDatesSummaryLine(
   now: Date = new Date()
 ): string | null {
   if (groups.length === 0 || allSelectedDates.length === 0) return null;
-  return groups
+  const datesLine = groups
     .map((g) => formatFinalizeDateGroupLabel(g, allSelectedDates, now))
     .join(" · ");
+  const startTime = extractExplicitStartTime(allSelectedDates);
+  if (!startTime) return datesLine;
+  return `${datesLine} · ${formatCreateFlowStartTime(startTime)}`;
 }
 
 /**
@@ -137,6 +145,48 @@ export function formatFinalizeRecurrenceSummaryLine(
     (c) => CREATE_FLOW_WEEKDAYS.find((d) => d.code === c)?.label ?? c
   );
   return `Repeats every ${labels.join(", ")}`;
+}
+
+/** Compact recurrence for the V4 schedule sheet header (`Every Mon, Wed`). */
+export function formatScheduleRecurrenceCompact(
+  recurrenceDayCodes: string[]
+): string | null {
+  if (!recurrenceDayCodes.length) return null;
+  const sorted = [...recurrenceDayCodes].sort(
+    (a, b) => WEEKDAY_ORDER.indexOf(a) - WEEKDAY_ORDER.indexOf(b)
+  );
+  const labels = sorted.map(
+    (c) => CREATE_FLOW_WEEKDAYS.find((d) => d.code === c)?.label ?? c
+  );
+  return `Every ${labels.join(", ")}`;
+}
+
+/**
+ * One-line header for the V4 Date/Time sheet.
+ * Dates are calendar-only; `startTime` is the working copy (may be pending).
+ */
+export function formatScheduleSheetSummaryLine(opts: {
+  selectedDates: Date[];
+  recurrenceDayCodes: string[];
+  startTime: CreateFlowStartTime | null;
+}): string {
+  const groups = formatDateSummary(opts.selectedDates);
+  const datesPart =
+    groups.length > 0
+      ? groups
+          .map((g) =>
+            formatFinalizeDateGroupLabel(g, opts.selectedDates)
+          )
+          .join(" · ")
+      : null;
+  const recurrencePart = formatScheduleRecurrenceCompact(
+    opts.recurrenceDayCodes
+  );
+  const timePart = opts.startTime
+    ? formatCreateFlowStartTime(opts.startTime)
+    : null;
+  const parts = [datesPart, recurrencePart, timePart].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "Choose dates";
 }
 
 /** Next calendar day in local timezone (DST-safe). */

@@ -5,13 +5,15 @@ export type PushDevicePlatform = "ios" | "android";
 
 /**
  * Upsert the current user's push token for one platform (one row per user per OS).
+ * Pass `userId` when upserting from an async callback to avoid auth lookup races.
  */
 export async function upsertPushDevice(
   token: string,
-  platform: PushDevicePlatform
+  platform: PushDevicePlatform,
+  userId?: string
 ): Promise<{ error: Error | null }> {
-  const userId = await getViewerAuthUserId();
-  if (!userId) {
+  const resolvedUserId = userId ?? (await getViewerAuthUserId());
+  if (!resolvedUserId) {
     return { error: new Error("Not authenticated") };
   }
 
@@ -22,7 +24,7 @@ export async function upsertPushDevice(
 
   const { error } = await supabase.from("push_devices").upsert(
     {
-      user_id: userId,
+      user_id: resolvedUserId,
       token: trimmed,
       platform,
     },

@@ -169,7 +169,7 @@ export default function LocationPickerGoogle({
             <input
               type="text"
               placeholder="Search location…"
-              className="w-full p-3 rounded-md border border-gray-300 bg-white text-black drop-shadow-lg"
+              className="w-full p-3 rounded-md border border-gray-300 bg-white text-[16px] text-black drop-shadow-lg"
             />
           </Autocomplete>
           {formattedAddress && (

@@ -25,7 +25,7 @@ export default function PrimaryPageContainer({
   }, []);
 
   return (
-    <div className="w-full bg-[var(--bg)] text-[var(--text)] min-h-screen flex flex-col">
+    <div className="w-full bg-[var(--app-canvas)] text-[var(--text)] min-h-screen flex flex-col">
       {/* Main single column */}
       <div
         className={`w-full app-container flex-1 relative ${

@@ -1,8 +1,8 @@
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 import { invalidateProfileByUserIdCache } from "../api/services/follows";
-import { pickRandomPresetAvatarValue } from "./avatarPresets";
 import { isUsernameMissingOrPlaceholder } from "./profileUsername";
+import { buildMissingEchoIdentityPatch } from "./echoPresetAssignment";
 
 const USERNAME_MAX = 24;
 /** Dedupe concurrent persist for the same auth user (OAuth + SIGNED_IN racing). */
@@ -72,7 +72,8 @@ function emailDisplayFallback(email: string | undefined): string {
   return humanized || "Member";
 }
 
-function pickHttpsAvatarFromMeta(
+/** Exported for unit tests — https avatar/picture from auth user_metadata. */
+export function pickHttpsAvatarFromMeta(
   meta: Record<string, unknown>,
 ): string | null {
   for (const k of ["avatar_url", "picture"] as const) {
@@ -146,7 +147,7 @@ async function syncProfileCachesAndDispatch(
   const { data: row, error } = await supabase
     .from("profiles")
     .select(
-      "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step",
+      "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step, profile_photos, echo_preset",
     )
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -167,6 +168,8 @@ async function syncProfileCachesAndDispatch(
     username: row.username ?? null,
     display_name: row.display_name ?? null,
     avatar_url: row.avatar_url ?? null,
+    profile_photos: row.profile_photos ?? [],
+    echo_preset: row.echo_preset ?? null,
     bio: row.bio ?? null,
     xp: row.xp ?? 0,
     member_no: row.member_no ?? null,
@@ -203,6 +206,15 @@ async function syncProfileCachesAndDispatch(
   );
 }
 
+type ProfileDefaultsRow = {
+  id: string;
+  display_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  profile_photos: string[] | null;
+  echo_preset: string | null;
+};
+
 /**
  * @returns true if progress events (started/finished) were emitted for this run.
  */
@@ -210,6 +222,7 @@ async function runPersist(user: User): Promise<boolean> {
   const userId = user.id;
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
   const email = user.email ?? undefined;
+  const providerHttps = pickHttpsAvatarFromMeta(meta);
 
   const displayFromMeta = stringFromMeta(meta, ["full_name", "name"]);
   let displayName =
@@ -226,7 +239,9 @@ async function runPersist(user: User): Promise<boolean> {
 
   const { data: existing, error: selErr } = await supabase
     .from("profiles")
-    .select("id, display_name, username, avatar_url")
+    .select(
+      "id, display_name, username, avatar_url, profile_photos, echo_preset",
+    )
     .eq("user_id", userId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -239,18 +254,19 @@ async function runPersist(user: User): Promise<boolean> {
     return false;
   }
 
-  const hasDisplay = Boolean(String(existing?.display_name ?? "").trim());
-  const needsUsernameFill =
-    !existing || isUsernameMissingOrPlaceholder(existing.username);
-  const hasAvatar = Boolean(String(existing?.avatar_url ?? "").trim());
+  const row = (existing ?? null) as ProfileDefaultsRow | null;
 
-  let nextDisplay = hasDisplay
+  const hasDisplay = Boolean(String(row?.display_name ?? "").trim());
+  const needsUsernameFill =
+    !row || isUsernameMissingOrPlaceholder(row.username);
+
+  const nextDisplay = hasDisplay
     ? null
     : displayName.trim() || emailDisplayFallback(email);
   let nextUsername: string | null = null;
   if (needsUsernameFill) {
     const explicitDisplay =
-      String(existing?.display_name ?? "").trim() || displayFromMeta;
+      String(row?.display_name ?? "").trim() || displayFromMeta;
     const weakMeta =
       metaUsernameCandidate.length < 3 ||
       /^[0-9]+$/.test(metaUsernameCandidate);
@@ -258,43 +274,50 @@ async function runPersist(user: User): Promise<boolean> {
     if (explicitDisplay) {
       nextUsername = await findAvailableUsername(
         baseUsernameFromDisplayOrEmail(explicitDisplay, email),
-        existing?.id ?? null,
+        row?.id ?? null,
       );
     } else if (metaUsernameCandidate.length >= 3 && !weakMeta) {
       const taken = await isUsernameTaken(
         metaUsernameCandidate,
-        existing?.id ?? null,
+        row?.id ?? null,
       );
       nextUsername = taken
         ? await findAvailableUsername(
             metaUsernameCandidate,
-            existing?.id ?? null,
+            row?.id ?? null,
           )
         : metaUsernameCandidate;
     } else {
       nextUsername = await findAvailableUsername(
         baseUsernameFromDisplayOrEmail(displayName.trim(), email),
-        existing?.id ?? null,
+        row?.id ?? null,
       );
     }
   }
 
-  let nextAvatar: string | null = null;
-  if (!hasAvatar) {
-    nextAvatar = pickHttpsAvatarFromMeta(meta) ?? pickRandomPresetAvatarValue();
-  }
+  const echoPhotoPatch = buildMissingEchoIdentityPatch({
+    userId,
+    echo_preset: row?.echo_preset ?? null,
+    profile_photos: row?.profile_photos ?? [],
+    providerHttpsAvatar: providerHttps,
+  });
 
-  const patch: Record<string, string> = {};
+  const patch: Record<string, string | string[] | null> = {};
   if (!hasDisplay && nextDisplay) patch.display_name = nextDisplay;
   if (needsUsernameFill && nextUsername) patch.username = nextUsername;
-  if (!hasAvatar && nextAvatar) patch.avatar_url = nextAvatar;
+  if (echoPhotoPatch.echo_preset) {
+    patch.echo_preset = echoPhotoPatch.echo_preset;
+  }
+  if (echoPhotoPatch.profile_photos) {
+    patch.profile_photos = echoPhotoPatch.profile_photos;
+  }
 
-  const willWrite = !existing || Object.keys(patch).length > 0;
+  const willWrite = !row || Object.keys(patch).length > 0;
   if (!willWrite) return false;
 
   dispatchProfileDefaultsStarted(userId);
 
-  if (!existing) {
+  if (!row) {
     const insertDisplay = nextDisplay ?? displayName.trim();
     const insertUsername =
       nextUsername ??
@@ -302,17 +325,22 @@ async function runPersist(user: User): Promise<boolean> {
         baseUsernameFromDisplayOrEmail(insertDisplay, email),
         null,
       ));
-    const insertAvatar =
-      nextAvatar ??
-      pickHttpsAvatarFromMeta(meta) ??
-      pickRandomPresetAvatarValue() ??
-      "";
+    const insertEchoPatch = buildMissingEchoIdentityPatch({
+      userId,
+      echo_preset: null,
+      profile_photos: [],
+      providerHttpsAvatar: providerHttps,
+    });
 
     const { error: insErr } = await supabase.from("profiles").insert({
       user_id: userId,
       display_name: insertDisplay,
       username: insertUsername,
-      avatar_url: insertAvatar || null,
+      // Do not write HTTPS to avatar_url alone with echo — seed photos + echo
+      // so trg_profiles_sync_avatar_url keeps avatar_url = photos[1].
+      profile_photos: insertEchoPatch.profile_photos ?? [],
+      echo_preset: insertEchoPatch.echo_preset ?? null,
+      avatar_url: null,
       onboarding_completed: false,
       onboarding_step: 0,
     });
@@ -322,31 +350,43 @@ async function runPersist(user: User): Promise<boolean> {
         insErr.code === "23505" ||
         String(insErr.message || "").includes("duplicate");
       if (isDup) {
-        const { data: row } = await supabase
+        const { data: dupRow } = await supabase
           .from("profiles")
-          .select("id, display_name, username, avatar_url")
+          .select(
+            "id, display_name, username, avatar_url, profile_photos, echo_preset",
+          )
           .eq("user_id", userId)
           .is("deleted_at", null)
           .maybeSingle();
-        if (!row?.id) {
+        if (!dupRow?.id) {
           console.warn(
             "[persistProviderProfileDefaults] insert duplicate but row missing:",
             insErr.message,
           );
           return true;
         }
-        const retryPatch: Record<string, string> = {};
-        if (!String(row.display_name ?? "").trim() && insertDisplay)
+        const retryEcho = buildMissingEchoIdentityPatch({
+          userId,
+          echo_preset: dupRow.echo_preset ?? null,
+          profile_photos: dupRow.profile_photos ?? [],
+          providerHttpsAvatar: providerHttps,
+        });
+        const retryPatch: Record<string, string | string[] | null> = {};
+        if (!String(dupRow.display_name ?? "").trim() && insertDisplay)
           retryPatch.display_name = insertDisplay;
-        if (isUsernameMissingOrPlaceholder(row.username) && insertUsername)
+        if (
+          isUsernameMissingOrPlaceholder(dupRow.username) &&
+          insertUsername
+        )
           retryPatch.username = insertUsername;
-        if (!String(row.avatar_url ?? "").trim() && insertAvatar)
-          retryPatch.avatar_url = insertAvatar;
+        if (retryEcho.echo_preset) retryPatch.echo_preset = retryEcho.echo_preset;
+        if (retryEcho.profile_photos)
+          retryPatch.profile_photos = retryEcho.profile_photos;
         if (Object.keys(retryPatch).length > 0) {
           const { error: upErr } = await supabase
             .from("profiles")
             .update(retryPatch)
-            .eq("id", row.id);
+            .eq("id", dupRow.id);
           if (upErr) {
             console.warn(
               "[persistProviderProfileDefaults] patch after dup insert:",
@@ -373,7 +413,7 @@ async function runPersist(user: User): Promise<boolean> {
   const { error: upErr } = await supabase
     .from("profiles")
     .update(patch)
-    .eq("id", existing.id);
+    .eq("id", row.id);
 
   if (upErr) {
     if (upErr.code === "23505") {
@@ -396,8 +436,10 @@ async function runPersist(user: User): Promise<boolean> {
 }
 
 /**
- * Idempotent: fills missing profiles.display_name, username, avatar_url from
- * auth user_metadata (and safe fallbacks). Does not overwrite non-empty fields.
+ * Idempotent: fills missing profiles.display_name, username, echo_preset
+ * (and seeds provider HTTPS into profile_photos when photos are empty)
+ * from auth user_metadata. Does not overwrite non-empty identity fields,
+ * existing Echo, or non-empty profile_photos.
  * Username: also replaces DB placeholders matching `user_<digits>` when a
  * display-derived username can be assigned.
  */

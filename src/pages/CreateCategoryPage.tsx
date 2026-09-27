@@ -14,7 +14,6 @@ import PrimaryToggle from "../components/input/PrimaryToggle";
 import CalendarModal from "../components/CalendarModal";
 
 import VisibilityPillToggle from "../components/input/VisibilityPillToggle";
-import HorizontalNumberWheel from "../components/input/HorizontalNumberWheel";
 import CreateFlowPostTagsField from "../components/create/CreateFlowPostTagsField";
 import { CREATE_FLOW_WEEKDAYS } from "../lib/createFlowScheduleConstants";
 import { formatDateSummary } from "../lib/createFlowDateSummary";
@@ -60,8 +59,7 @@ export default function CreateCategoryPage() {
           caption: parsed.caption ?? "",
           tags: parsed.tags || [],
           visibility: vis === "anonymous" ? "public" : vis,
-          rsvpCapacity: parsed.rsvp_capacity || 5,
-          rsvpEnabled: parsed.rsvp_capacity ? true : false,
+          rsvpEnabled: false,
           selectedDates: parsed.selected_dates || [],
           isRecurring: parsed.is_recurring || false,
           recurrenceDays: parsed.recurrence_days || [],
@@ -93,15 +91,6 @@ export default function CreateCategoryPage() {
     (initialMeta.visibility as Visibility) || "public"
   );
 
-  const [rsvpCapacity, setRsvpCapacity] = useState<number>(
-    typeof initialMeta.rsvpCapacity === "number" ? initialMeta.rsvpCapacity : 5
-  );
-  const [rsvpEnabled, setRsvpEnabled] = useState<boolean>(
-    typeof initialMeta.rsvpEnabled === "boolean"
-      ? initialMeta.rsvpEnabled
-      : false
-  );
-
   const [showCal, setShowCal] = useState(false);
   const [selectedDates, setSelectedDates] = useState<Date[]>(
     (initialMeta.selectedDates || []).length
@@ -121,7 +110,6 @@ export default function CreateCategoryPage() {
 
   // info toggles
   const [showVisInfo, setShowVisInfo] = useState(false);
-  const [showRsvpInfo, setShowRsvpInfo] = useState(false);
 
   // persist
   useEffect(() => {
@@ -129,8 +117,7 @@ export default function CreateCategoryPage() {
       caption,
       tags,
       visibility,
-      rsvpCapacity,
-      rsvpEnabled,
+      rsvpEnabled: false,
       selectedDates: selectedDates.map((d) => d.toISOString()),
       isRecurring,
       recurrenceDays,
@@ -144,7 +131,6 @@ export default function CreateCategoryPage() {
           parsed.caption = payload.caption;
           parsed.tags = payload.tags;
           parsed.visibility = payload.visibility;
-          parsed.rsvp_capacity = payload.rsvpCapacity;
           parsed.selected_dates = payload.selectedDates;
           parsed.is_recurring = payload.isRecurring;
           parsed.recurrence_days = payload.recurrenceDays;
@@ -174,8 +160,6 @@ export default function CreateCategoryPage() {
     caption,
     tags,
     visibility,
-    rsvpCapacity,
-    rsvpEnabled,
     selectedDates,
     isRecurring,
     recurrenceDays,
@@ -273,7 +257,7 @@ export default function CreateCategoryPage() {
               value={caption}
               placeholder="Say what this is about…"
               onChange={(e) => setCaption(e.target.value)}
-              className="w-full mt-4 text-xs bg-[var(--surface)]/20 text-[var(--text)] placeholder-[var(--text)]/50 border border-[var(--border)] rounded-lg px-3 py-2 resize-none transition-all focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/30 focus:border-[var(--brand)]/50"
+              className="w-full mt-4 text-[16px] bg-[var(--surface)]/20 text-[var(--text)] placeholder-[var(--text)]/50 border border-[var(--border)] rounded-lg px-3 py-2 resize-none transition-all focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/30 focus:border-[var(--brand)]/50"
             />
           </section>
 
@@ -431,70 +415,6 @@ export default function CreateCategoryPage() {
                 Default is <strong>Public</strong>. Choose{" "}
                 <strong>Friends</strong> to limit visibility to friends only.
               </p>
-            )}
-          </section>
-
-          {/* RSVP capacity (0–99) */}
-          <section
-            className={`w-full mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface)]/30 px-3 py-3 transition-opacity duration-200 ${
-              !rsvpEnabled ? "opacity-40" : "opacity-100"
-            }`}
-            onClick={() => {
-              if (!rsvpEnabled) {
-                setRsvpEnabled(true);
-              }
-            }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-medium text-[var(--text)]/85">
-                  RSVP capacity
-                </h3>
-                <button
-                  type="button"
-                  className="text-[var(--text)]/60 text-xs border border-[var(--border)] rounded-full px-2 py-0.5"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowRsvpInfo((s) => !s);
-                  }}
-                  aria-expanded={showRsvpInfo}
-                >
-                  ⓘ
-                </button>
-              </div>
-              <button
-                type="button"
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                  rsvpEnabled
-                    ? "bg-[var(--brand)]"
-                    : "bg-gray-300 dark:bg-gray-600"
-                }`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setRsvpEnabled(!rsvpEnabled);
-                }}
-              >
-                <span
-                  className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
-                    rsvpEnabled ? "translate-x-5" : "translate-x-1"
-                  }`}
-                />
-              </button>
-            </div>
-            {rsvpEnabled && (
-              <>
-                <HorizontalNumberWheel
-                  value={rsvpCapacity}
-                  onChange={(v) => setRsvpCapacity(v)}
-                  max={99}
-                />
-                {showRsvpInfo && (
-                  <p className="text-[var(--text)]/65 text-xs mt-2">
-                    Mostly for events (e.g., set <strong>10</strong> for a
-                    small book club so it doesn't overcrowd).
-                  </p>
-                )}
-              </>
             )}
           </section>
 

@@ -198,7 +198,7 @@ export default function DesktopMarketingPanel() {
           </FeatureCard>
 
           <FeatureCard
-            title="Places / Plans"
+            title="Posts"
             accentClass="bg-[rgba(120,160,255,0.06)] text-[var(--text)]"
             icon={<PiMapTrifold className="text-xl" aria-hidden />}
           >

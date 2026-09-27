@@ -26,12 +26,19 @@ import {
   signInWithGoogleNativeAndroid,
   signInWithGoogleNativeIOS,
 } from "../../lib/nativeGoogleSignIn";
+import {
+  extractGoogleAuthSafeErrorFields,
+  logGoogleAuth,
+} from "../../lib/googleAuthCaptureDiag";
 import Logo from "../ui/Logo";
 import { ECHO_APP_DISPLAY_NAME, ECHO_TAGLINE } from "../../lib/marketingCopy";
 import { invalidateProfileByUserIdCache } from "../../api/services/follows";
-import { pickRandomPresetAvatarValue } from "../../lib/avatarPresets";
+import { deterministicEchoPresetForIdentity } from "../../lib/echoPresetAssignment";
 import { Paths } from "../../router/Paths";
-import { markProfileDefaultsLoginPending } from "../../lib/persistProviderProfileDefaults";
+import {
+  markProfileDefaultsLoginPending,
+  persistProviderProfileDefaultsAfterSignIn,
+} from "../../lib/persistProviderProfileDefaults";
 
 const AUTH_AGREEMENT_TOAST =
   "Please agree to the Terms of Service, Community Guidelines, and Privacy Policy before continuing.";
@@ -49,7 +56,7 @@ async function finalizeAppleProfileClientSync(userId: string): Promise<void> {
   const { data: row, error } = await supabase
     .from("profiles")
     .select(
-      "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step"
+      "id, user_id, username, display_name, avatar_url, bio, xp, member_no, instagram_url, tiktok_url, telegram_url, is_private, social_media_public, user_number, onboarding_completed, onboarding_step, profile_photos, echo_preset"
     )
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -70,6 +77,8 @@ async function finalizeAppleProfileClientSync(userId: string): Promise<void> {
     username: row.username ?? null,
     display_name: row.display_name ?? null,
     avatar_url: row.avatar_url ?? null,
+    profile_photos: row.profile_photos ?? [],
+    echo_preset: row.echo_preset ?? null,
     bio: row.bio ?? null,
     xp: row.xp ?? 0,
     member_no: row.member_no ?? null,
@@ -111,8 +120,8 @@ const AUTH_MODAL_SHELL_CLASS = "!max-w-[min(80vw,400px)] w-full";
 /**
  * Native Sign in with Apple only: persist Apple-provided person name to
  * `profiles.display_name` when missing (never overwrites). Keeps auth
- * `user_metadata.full_name` in sync. Assigns a random Echo `preset:` avatar
- * when `profiles.avatar_url` is empty (never overwrites an existing avatar).
+ * `user_metadata.full_name` in sync. Assigns a deterministic `echo_preset`
+ * when missing (never overwrites an existing Echo or real photos).
  */
 async function persistAppleFullNameAfterNativeSignIn(
   fullNameFromApple: string
@@ -133,11 +142,11 @@ async function persistAppleFullNameAfterNativeSignIn(
     }
   }
 
-  const preset = pickRandomPresetAvatarValue();
+  const echoPreset = deterministicEchoPresetForIdentity(userId);
 
   const { data: existing, error: selErr } = await supabase
     .from("profiles")
-    .select("id, display_name, avatar_url")
+    .select("id, display_name, avatar_url, echo_preset, profile_photos")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -156,7 +165,9 @@ async function persistAppleFullNameAfterNativeSignIn(
       user_id: userId,
       display_name: trimmed,
       username: null,
-      avatar_url: preset ?? null,
+      echo_preset: echoPreset,
+      profile_photos: [],
+      avatar_url: null,
       onboarding_completed: false,
       onboarding_step: 0,
     });
@@ -167,7 +178,7 @@ async function persistAppleFullNameAfterNativeSignIn(
       if (isDup) {
         const { data: row } = await supabase
           .from("profiles")
-          .select("id, display_name, avatar_url")
+          .select("id, display_name, avatar_url, echo_preset")
           .eq("user_id", userId)
           .maybeSingle();
         if (row?.id) {
@@ -175,9 +186,8 @@ async function persistAppleFullNameAfterNativeSignIn(
           if (!String(row.display_name ?? "").trim()) {
             patch.display_name = trimmed;
           }
-          const av = String(row.avatar_url ?? "").trim();
-          if (!av && preset) {
-            patch.avatar_url = preset;
+          if (!String(row.echo_preset ?? "").trim() && echoPreset) {
+            patch.echo_preset = echoPreset;
           }
           if (Object.keys(patch).length > 0) {
             await supabase.from("profiles").update(patch).eq("id", row.id);
@@ -192,9 +202,8 @@ async function persistAppleFullNameAfterNativeSignIn(
     if (trimmed && !String(existing.display_name ?? "").trim()) {
       patch.display_name = trimmed;
     }
-    const av = String(existing.avatar_url ?? "").trim();
-    if (!av && preset) {
-      patch.avatar_url = preset;
+    if (!String(existing.echo_preset ?? "").trim() && echoPreset) {
+      patch.echo_preset = echoPreset;
     }
     if (Object.keys(patch).length > 0) {
       const { error: upErr } = await supabase
@@ -465,8 +474,11 @@ const AuthModal = () => {
       if (canUseNativeGoogleSignInAndroid()) {
         try {
           dbg("Google:native_start", {});
+          logGoogleAuth("native_start", { platform: "android" });
           markProfileDefaultsLoginPending();
           const idToken = await signInWithGoogleNativeAndroid();
+          logGoogleAuth("branch_selected", { branch: "supabase_exchange" });
+          logGoogleAuth("supabase_exchange_started", { ok: true });
           const { error: nativeError } = await supabase.auth.signInWithIdToken({
             provider: "google",
             token: idToken,
@@ -475,11 +487,20 @@ const AuthModal = () => {
             ok: !nativeError,
             error: nativeError?.message,
           });
+          logGoogleAuth("supabase_exchange_finished", {
+            ok: !nativeError,
+            ...extractGoogleAuthSafeErrorFields(nativeError, false),
+          });
           if (nativeError) throw nativeError;
 
           const {
             data: { session: postGoogle },
           } = await supabase.auth.getSession();
+          const sessionEstablished = Boolean(postGoogle?.user?.id);
+          logGoogleAuth("session_established", {
+            session_established: sessionEstablished,
+          });
+          logGoogleAuth("branch_selected", { branch: "native_success" });
           const postUid = postGoogle?.user?.id;
           if (postUid) {
             invalidateProfileByUserIdCache(postUid);
@@ -488,15 +509,18 @@ const AuthModal = () => {
           setLoading(false);
           return;
         } catch (nativeErr: unknown) {
-          if (isGoogleNativeSignInUserCancel(nativeErr)) {
+          const classifiedCancel = isGoogleNativeSignInUserCancel(nativeErr);
+          logGoogleAuth("error_classification", {
+            ...extractGoogleAuthSafeErrorFields(nativeErr, classifiedCancel),
+          });
+          if (classifiedCancel) {
             dbg("Google:native_canceled", {});
+            logGoogleAuth("branch_selected", { branch: "silent_cancel" });
             setLoading(false);
             return;
           }
-          console.warn(
-            "[AuthModal] Native Google sign-in failed, falling back to OAuth:",
-            nativeErr
-          );
+          logGoogleAuth("branch_selected", { branch: "oauth_fallback" });
+          // Intentionally no raw error dump — see GOOGLE_AUTH error_classification.
         }
       }
 
@@ -617,6 +641,11 @@ const AuthModal = () => {
           data: { session: postApple },
         } = await supabase.auth.getSession();
         const postUid = postApple?.user?.id;
+        // Native Apple does not set login-pending before id-token SIGNED_IN, so
+        // run shared provider defaults explicitly (username + missing Echo safety).
+        if (postApple?.user) {
+          await persistProviderProfileDefaultsAfterSignIn(postApple.user);
+        }
         if (postUid) {
           invalidateProfileByUserIdCache(postUid);
           window.dispatchEvent(

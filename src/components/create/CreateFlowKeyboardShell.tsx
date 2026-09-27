@@ -1,7 +1,8 @@
 import { useEffect, type CSSProperties, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
-
-const BOTTOM_MARGIN_PX = 12;
+import { isCreateFinalizeComposerPath } from "../../lib/createFlowChrome";
+import { scrollCreateFlowFieldIntoView } from "../../lib/createFlowScrollFieldIntoView";
 
 /** Bottom padding for create steps that use CreateTabsSection (+24px breathing room). */
 export const createFlowMainColumnStyle: CSSProperties = {
@@ -26,17 +27,17 @@ export const createFlowPreviewColumnStyle: CSSProperties = {
   transition: "padding-bottom 0.28s ease-out",
 };
 
-function readCreateActionsBottomPx(): number {
-  try {
-    const raw = getComputedStyle(document.documentElement)
-      .getPropertyValue("--create-actions-total-bottom")
-      .trim();
-    const n = parseFloat(raw);
-    return Number.isFinite(n) && n > 0 ? n : 96;
-  } catch {
-    return 96;
-  }
-}
+/**
+ * Finalize V4: PrimaryPageContainer already pads `--create-actions-total-bottom`
+ * (metadata toolbar). Add keyboard inset, writing-toolbar height (0 when relocated), and scroll breathing room.
+ */
+export const createFlowFinalizeColumnStyle: CSSProperties = {
+  paddingTop:
+    "calc(var(--create-flow-top-bar-total, 0px) + var(--create-flow-notice-stack-height, 0px))",
+  paddingBottom:
+    "calc(var(--create-keyboard-inset, 0px) + var(--create-finalize-writing-toolbar-height, 28px) + 8px + 72px)",
+  transition: "padding-top 0.28s ease-out, padding-bottom 0.28s ease-out",
+};
 
 function shouldHandleFocusTarget(el: EventTarget | null): el is HTMLElement {
   if (!el || !(el instanceof HTMLElement)) return false;
@@ -59,43 +60,6 @@ function shouldHandleFocusTarget(el: EventTarget | null): el is HTMLElement {
 }
 
 /**
- * Scroll the focused control into the area above the keyboard and fixed bottom chrome.
- * Uses window scroll (create flow is document-scrolled).
- */
-function scrollFocusedFieldIntoView(target: HTMLElement) {
-  const vv = window.visualViewport;
-  const chromeBottom = readCreateActionsBottomPx();
-
-  if (!vv) {
-    target.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
-      inline: "nearest",
-    });
-    return;
-  }
-
-  const marginTop = Math.max(vv.offsetTop, 8) + 8;
-  const safeBottom = vv.offsetTop + vv.height - chromeBottom - BOTTOM_MARGIN_PX;
-  const rect = target.getBoundingClientRect();
-
-  if (rect.bottom <= safeBottom && rect.top >= marginTop) {
-    return;
-  }
-
-  if (rect.bottom > safeBottom) {
-    const delta = rect.bottom - safeBottom;
-    window.scrollBy({ top: delta, behavior: "smooth" });
-    return;
-  }
-
-  if (rect.top < marginTop) {
-    const delta = rect.top - marginTop;
-    window.scrollBy({ top: delta, behavior: "smooth" });
-  }
-}
-
-/**
  * Create-flow only: publishes --create-keyboard-inset on :root and nudges focused
  * inputs/textareas into view. Unmount clears the CSS variable.
  */
@@ -105,6 +69,8 @@ export default function CreateFlowKeyboardShell({
   children: ReactNode;
 }) {
   const { keyboardInsetPx } = useCreateKeyboardInset();
+  const { pathname } = useLocation();
+  const skipDocumentFieldScroll = isCreateFinalizeComposerPath(pathname);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -116,17 +82,20 @@ export default function CreateFlowKeyboardShell({
   }, [keyboardInsetPx]);
 
   useEffect(() => {
+    if (skipDocumentFieldScroll) return;
+
     const onFocusIn = (e: FocusEvent) => {
       if (!shouldHandleFocusTarget(e.target)) return;
       const el = e.target as HTMLElement;
+      if (el.closest("[data-create-finalize-composer-chrome]")) return;
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => scrollFocusedFieldIntoView(el));
+        requestAnimationFrame(() => scrollCreateFlowFieldIntoView(el));
       });
     };
 
     document.addEventListener("focusin", onFocusIn, true);
     return () => document.removeEventListener("focusin", onFocusIn, true);
-  }, []);
+  }, [skipDocumentFieldScroll]);
 
   return <>{children}</>;
 }

@@ -24,6 +24,7 @@ export type UgcActivityLike = {
   locationUrl?: string;
   tags?: string[];
   additionalInfo?: { title: string; value: string }[];
+  sectionBody?: string;
 };
 
 function normalizeForScreening(raw: string): string {
@@ -151,6 +152,7 @@ export function assertCreateFlowDraftTextAllowed(input: {
     assertPlainTextAllowedForUgc(a.location, "default");
     assertPlainTextAllowedForUgc(a.locationNotes, "default");
     assertPlainTextAllowedForUgc(a.locationUrl, "default");
+    assertPlainTextAllowedForUgc(a.sectionBody, "default");
     if (Array.isArray(a.tags)) {
       for (const t of a.tags) {
         assertPlainTextAllowedForUgc(String(t ?? ""), "default");

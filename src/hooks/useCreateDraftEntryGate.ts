@@ -4,14 +4,26 @@ import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   buildCreateFinalizeUrl,
+  DEFAULT_CREATE_ENTRY_POST_TYPE,
   markCreateFlowResumedLocalDraft,
   markCreateFlowSessionActive,
 } from "../lib/draftEntryGate";
 import {
+  buildFreshCreateLeaveBaseline,
+  establishFreshCreateLeaveBaseline,
+} from "../lib/createFlowFreshLeaveBaseline";
+import {
+  cleanupEmptyFreshCreateDraftIfNeeded,
+  shouldOfferCreateDraftEntryDialog,
+} from "../lib/createFlowLeaveGuard";
+import {
   discardAllDrafts,
   ensureDraftPublishPostId,
   isLocalCreateDraftOwnedBy,
+  persistDraftCreatePostType,
   prepareFreshOwnedCreateDraft,
+  readDraftCreatePostType,
+  readDraftPublishPostId,
   runCreateEntryDraftCleanup,
 } from "../lib/drafts";
 import { supabase } from "../lib/supabaseClient";
@@ -65,17 +77,46 @@ export function useCreateDraftEntryGate(
       ownerUserId: string | null | undefined
     ) => {
       markCreateFlowSessionActive();
+      let resolvedType = type;
+
       if (resumeDraft) {
         markCreateFlowResumedLocalDraft();
-        ensureDraftPublishPostId({ fresh: false });
+        ensureDraftPublishPostId({
+          fresh: false,
+          ownerUserId: ownerUserId ?? undefined,
+        });
+        resolvedType = readDraftCreatePostType() ?? type;
       } else if (ownerUserId) {
-        prepareFreshOwnedCreateDraft(ownerUserId);
+        const publishPostId = prepareFreshOwnedCreateDraft(ownerUserId, type);
+        resolvedType = type;
+        establishFreshCreateLeaveBaseline(
+          buildFreshCreateLeaveBaseline({
+            publishPostId,
+            createPostType: type,
+            visibility: "public",
+            ratingEnabled: type === "experience",
+            rsvpEnabled: false,
+          }),
+        );
       } else {
+        discardAllDrafts();
         ensureDraftPublishPostId({ fresh: true });
+        persistDraftCreatePostType(type);
+        resolvedType = type;
+        establishFreshCreateLeaveBaseline(
+          buildFreshCreateLeaveBaseline({
+            publishPostId: readDraftPublishPostId(),
+            createPostType: type,
+            visibility: "public",
+            ratingEnabled: type === "experience",
+            rsvpEnabled: false,
+          }),
+        );
       }
+
       closeChooserOverlay?.();
       window.setTimeout(() => {
-        navigate(buildCreateFinalizeUrl(type, { resumeDraft }));
+        navigate(buildCreateFinalizeUrl(resolvedType, { resumeDraft }));
       }, navDelayMs);
     },
     [closeChooserOverlay, navigate, navDelayMs]
@@ -87,6 +128,12 @@ export function useCreateDraftEntryGate(
       runCleanupAndToast();
       void resolveAuthUserId().then((userId) => {
         if (userId && isLocalCreateDraftOwnedBy(userId)) {
+          // Owned scaffolding (publish id / type only) is not a real draft.
+          if (!shouldOfferCreateDraftEntryDialog()) {
+            cleanupEmptyFreshCreateDraftIfNeeded();
+            navigateToCreatePost(type, false, userId);
+            return;
+          }
           setPendingType(type);
           setGateOpen(true);
           return;
@@ -97,9 +144,17 @@ export function useCreateDraftEntryGate(
     [navigateToCreatePost, resolveAuthUserId, runCleanupAndToast]
   );
 
+  /**
+   * Main Create (+) / `/create` entry: skip Event/Place chooser, enter as Place
+   * (`experience`) while preserving owned-draft resume dialog + leave baseline.
+   */
+  const enterCreateAsDefaultPost = useCallback(() => {
+    onPickerContinue(DEFAULT_CREATE_ENTRY_POST_TYPE);
+  }, [onPickerContinue]);
+
   const onContinueDraft = useCallback(() => {
     if (!pendingType) return;
-    const t = pendingType;
+    const t = readDraftCreatePostType() ?? pendingType;
     void resolveAuthUserId().then((userId) => {
       if (!userId || !isLocalCreateDraftOwnedBy(userId)) {
         setGateOpen(false);
@@ -122,12 +177,6 @@ export function useCreateDraftEntryGate(
     });
   }, [navigateToCreatePost, pendingType, resolveAuthUserId]);
 
-  const onDeleteDraft = useCallback(() => {
-    discardAllDrafts();
-    setGateOpen(false);
-    setPendingType(null);
-  }, []);
-
   const onDismissGate = useCallback(() => {
     setGateOpen(false);
     setPendingType(null);
@@ -135,12 +184,12 @@ export function useCreateDraftEntryGate(
 
   return {
     onPickerContinue,
+    enterCreateAsDefaultPost,
     draftEntryDialogProps: {
       open: gateOpen,
       onDismiss: onDismissGate,
       onContinueDraft,
       onStartNew,
-      onDeleteDraft,
     },
   };
 }

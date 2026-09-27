@@ -29,7 +29,7 @@ const glassInputStyle: CSSProperties = {
 };
 
 const footerMessageBoxClass =
-  "flex-1 min-h-[2.25rem] max-h-[5.25rem] resize-y rounded-xl pl-2.5 pr-16 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/25";
+  "flex-1 min-h-[2.25rem] max-h-[5.25rem] resize-y rounded-xl pl-2.5 pr-16 py-2 text-[16px] text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/25";
 
 const footerMessageBoxStyle: CSSProperties = {
   ...glassInputStyle,

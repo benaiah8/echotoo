@@ -1,41 +1,75 @@
 import { useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { useCreateFlowNotices } from "./CreateFlowNoticeContext";
 import { useCreatePostMedia } from "./CreatePostMediaProvider";
+import { resolveCreateFlowUploadNoticeMessage } from "../../lib/createFlowUploadNotice";
+import { isVideoUploadInProgress } from "../../lib/createPostVideoUpload";
 
-const POST_IMAGE_UPLOAD_NOTICE_ID = "create-flow-post-image-upload";
+const POST_MEDIA_UPLOAD_NOTICE_ID = "create-flow-post-media-upload";
 
 /**
- * Mirrors in-flight post image upload jobs into {@link CreateFlowNoticeStack}
- * on Activities + Categories (stack visibility is route-gated there).
+ * Mirrors in-flight post media upload jobs into {@link CreateFlowNoticeStack}.
  */
 export default function CreateFlowUploadNoticeBridge() {
-  const { jobs } = useCreatePostMedia();
+  const { pathname } = useLocation();
+  const { jobs, videoJob, localVideoIngestPending, videoPreparing } =
+    useCreatePostMedia();
   const { upsertNotice, removeNotice } = useCreateFlowNotices();
 
-  const uploadingCount = useMemo(
+  const imageUploadingCount = useMemo(
     () => jobs.filter((j) => j.status === "uploading").length,
-    [jobs]
+    [jobs],
+  );
+
+  const videoUploadingCount = useMemo(
+    () => (isVideoUploadInProgress(videoJob) ? 1 : 0),
+    [videoJob],
+  );
+
+  const videoAddingCount = useMemo(
+    () => (localVideoIngestPending ? 1 : 0),
+    [localVideoIngestPending],
+  );
+
+  const videoPreparingCount = videoPreparing ? 1 : 0;
+
+  const message = useMemo(
+    () =>
+      resolveCreateFlowUploadNoticeMessage({
+        pathname,
+        imageUploadingCount,
+        videoUploadingCount,
+        videoAddingCount,
+        videoPreparingCount,
+      }),
+    [
+      imageUploadingCount,
+      pathname,
+      videoAddingCount,
+      videoPreparingCount,
+      videoUploadingCount,
+    ],
   );
 
   useEffect(() => {
-    if (uploadingCount === 0) {
-      removeNotice(POST_IMAGE_UPLOAD_NOTICE_ID);
+    if (!message) {
+      removeNotice(POST_MEDIA_UPLOAD_NOTICE_ID);
+      removeNotice("create-flow-post-image-upload");
       return;
     }
-    const message =
-      uploadingCount === 1
-        ? "1 image uploading"
-        : `${uploadingCount} images uploading`;
     upsertNotice({
-      id: POST_IMAGE_UPLOAD_NOTICE_ID,
+      id: POST_MEDIA_UPLOAD_NOTICE_ID,
       variant: "progress",
       message,
       indeterminate: true,
     });
-  }, [uploadingCount, upsertNotice, removeNotice]);
+  }, [message, upsertNotice, removeNotice]);
 
   useEffect(() => {
-    return () => removeNotice(POST_IMAGE_UPLOAD_NOTICE_ID);
+    return () => {
+      removeNotice(POST_MEDIA_UPLOAD_NOTICE_ID);
+      removeNotice("create-flow-post-image-upload");
+    };
   }, [removeNotice]);
 
   return null;

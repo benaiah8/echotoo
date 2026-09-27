@@ -1,4 +1,5 @@
 import { SocialLogin } from "@capgo/capacitor-social-login";
+import { logGoogleAuth } from "./googleAuthCaptureDiag";
 import { isAndroid, isIOS, isNativeApp } from "./storage/utils/capacitorDetection";
 
 let initializePromise: Promise<void> | null = null;
@@ -88,22 +89,40 @@ export function isGoogleNativeSignInUserCancel(error: unknown): boolean {
 }
 
 async function readGoogleIdTokenFromLoginResult(): Promise<string> {
-  const login = await SocialLogin.login({
-    provider: "google",
-    options: {},
-  });
+  let loginOk = false;
+  try {
+    const login = await SocialLogin.login({
+      provider: "google",
+      options: {},
+    });
+    loginOk = true;
 
-  const result = login.result;
-  if (!result || result.responseType === "offline") {
-    throw new Error("Google did not return an identity token.");
+    const result = login.result;
+    const offline = !result || result.responseType === "offline";
+    const idTokenOnline =
+      result && result.responseType !== "offline"
+        ? result.idToken?.trim() ?? ""
+        : "";
+    const hasIdToken = idTokenOnline.length > 0;
+
+    logGoogleAuth("native_login_settled", {
+      ok: true,
+      offline_response: offline,
+    });
+    logGoogleAuth("token_present", { has_id_token: hasIdToken });
+
+    if (!hasIdToken) {
+      throw new Error("Google did not return an identity token.");
+    }
+
+    return idTokenOnline;
+  } catch (err) {
+    if (!loginOk) {
+      logGoogleAuth("native_login_settled", { ok: false });
+      logGoogleAuth("token_present", { has_id_token: false });
+    }
+    throw err;
   }
-
-  const idToken = result.idToken?.trim();
-  if (!idToken) {
-    throw new Error("Google did not return an identity token.");
-  }
-
-  return idToken;
 }
 
 /**

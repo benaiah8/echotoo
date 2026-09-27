@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   useEffect,
   useRef,
   useMemo,
@@ -18,14 +18,27 @@ import { type OffsetAwareLoadResult } from "../../lib/offsetAwareLoader";
 import { supabase } from "../../lib/supabaseClient";
 import { HOME_FEED_FIRST_PAGE } from "../../lib/homeFeedConstants";
 import {
+  getHomeFeedItemPresentationKey,
+  type WithHomeFeedPresentationKey,
+} from "../../lib/homeFeedCycle";
+import { getHomeFilterEndCopy, getHomeSearchPostsEmptyHeading } from "../../lib/homeFilterEndCopy";
+import HomeFilterEndState from "../../components/home/HomeFilterEndState";
+import HomeSearchPostsEmptyReporter from "../../components/home/HomeSearchPostsEmptyReporter";
+import {
+  getMatchedOccurrenceDayKey,
+  hasActiveHomeOccurrenceFilter,
+  type HomeOccurrenceMatchContext,
+} from "../../lib/homeMatchedOccurrence";
+import {
   getDateSpotlightEmptyNotice,
   getDateSpotlightFallbackSectionTitle,
   type HomeDateFilter,
   type HomeDateFilterChip,
+  type HomeFilterAction,
 } from "../../lib/homeVerticalFilters";
 // createOffsetAwareLoader removed - no longer needed with server-side filtering
 
-/** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
+/** TEMP â€” paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
 
 interface Props {
@@ -51,7 +64,7 @@ interface Props {
   useProgressiveFeed?: boolean; // Whether to use ProgressiveFeed
   loadItems?: (
     offset: number,
-    limit: number
+    limit: number,
   ) => Promise<FeedItem[] | OffsetAwareLoadResult<FeedItem>>; // Load function for ProgressiveFeed (supports both formats)
   initialItems?: FeedItem[]; // Initial items for ProgressiveFeed
   getCachedItems?: () => FeedItem[] | null; // Cache getter
@@ -80,9 +93,26 @@ interface Props {
   softRefreshEpoch?: number;
   /** Refetch offset 0 after showing cached / initial Home rows */
   backgroundRevalidateOnMount?: boolean;
-  /** Home Phase 1.5: hide horizontal Discover More rails while post search mode is active. */
+  /** Phase 2B.2A: skip offset-0 restack after unseen-first replacement */
+  skipOffsetZeroHeadReplace?: boolean;
+  /** Phase 2B.2B: continuous true-default-All cycling */
+  continuousCycling?: boolean;
+  onCycleWrap?: (
+    limit: number
+  ) => Promise<
+    | FeedItem[]
+    | import("../../lib/offsetAwareLoader").OffsetAwareLoadResult<FeedItem>
+    | null
+  >;
+  /** Phase 2B.2A: replace the visible vertical list in place */
+  listReplaceRevision?: number;
+  listReplaceItems?: FeedItem[];
+  listReplaceBackendOffset?: number;
+  listReplaceCount?: number;
+  listReplaceCountIsAuthoritative?: boolean;
+  /** Home Phase 1: hide horizontal Discover More rails while post search or explicit filters are active. */
   suppressBrowseRails?: boolean;
-  /** Date spotlight (Today / Tomorrow) above normal feed — does not remount ProgressiveFeed */
+  /** Date spotlight (Today / Tomorrow) above normal feed â€” unused in explicit filtered Home. */
   dateSpotlightActive?: boolean;
   dateFilter?: HomeDateFilter;
   dateSpotlightItems?: FeedItem[];
@@ -90,6 +120,14 @@ interface Props {
   dateSpotlightFallbackItems?: FeedItem[];
   dateSpotlightLoading?: boolean;
   dateSpotlightResolved?: boolean;
+  /** Date / Events / Places / Friends â€” focused list + end-state UI. */
+  explicitContentFilters?: boolean;
+  onHomeFilterAction?: (action: HomeFilterAction) => void;
+  onBackToFeed?: () => void;
+  /** Non-empty posts search query (search overlay only). */
+  searchQuery?: string;
+  /** Settled zero-results signal for Search users ripple — search feed only. */
+  onSearchPostsEmptyActiveChange?: (active: boolean) => void;
 }
 
 const INJECT_EVERY = 8;
@@ -121,6 +159,14 @@ export default function HomePostsSection({
   tabId = "home",
   softRefreshEpoch,
   backgroundRevalidateOnMount = false,
+  skipOffsetZeroHeadReplace = false,
+  continuousCycling = false,
+  onCycleWrap,
+  listReplaceRevision = 0,
+  listReplaceItems,
+  listReplaceBackendOffset,
+  listReplaceCount,
+  listReplaceCountIsAuthoritative,
   dateSpotlightActive = false,
   dateFilter = "none",
   dateSpotlightItems = [],
@@ -128,6 +174,11 @@ export default function HomePostsSection({
   dateSpotlightFallbackItems = [],
   dateSpotlightLoading = false,
   dateSpotlightResolved = false,
+  explicitContentFilters = false,
+  onHomeFilterAction,
+  onBackToFeed,
+  searchQuery = "",
+  onSearchPostsEmptyActiveChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const renderedItemsCountRef = useRef(0);
@@ -154,7 +205,36 @@ export default function HomePostsSection({
     };
   }, []);
 
-  // [OPTIMIZATION: Phase 2 - Progressive] Client-side filtering removed
+  const homeOccurrenceCtx = useMemo((): HomeOccurrenceMatchContext | null => {
+    if (!feedOptions) return null;
+    const ctx: HomeOccurrenceMatchContext = {
+      occursOn: feedOptions.occursOn,
+      occursFrom: feedOptions.occursFrom,
+      occursTo: feedOptions.occursTo,
+      occursTz: feedOptions.occursTz,
+    };
+    return hasActiveHomeOccurrenceFilter(ctx) ? ctx : null;
+  }, [
+    feedOptions?.occursOn,
+    feedOptions?.occursFrom,
+    feedOptions?.occursTo,
+    feedOptions?.occursTz,
+  ]);
+
+  const matchedScheduleDayKeyFor = useCallback(
+    (item: FeedItem): string | null => {
+      if (!homeOccurrenceCtx) return null;
+      return getMatchedOccurrenceDayKey(
+        {
+          selected_dates: item.selected_dates,
+          is_recurring: item.is_recurring,
+          recurrence_days: item.recurrence_days,
+        },
+        homeOccurrenceCtx,
+      );
+    },
+    [homeOccurrenceCtx],
+  );
   // PostgreSQL now handles type filtering server-side, so no need for offsetAwareLoader wrapper
 
   // [FIX: Phase 1.2 - Horizontal Rail] Fallback must use an unconditional hook; pick prop vs fallback after.
@@ -179,7 +259,7 @@ export default function HomePostsSection({
       }
       return mixedPosts;
     },
-    [loadItems]
+    [loadItems],
   );
 
   const railLoadItems = railLoadItemsProp ?? fallbackRailLoadItems;
@@ -190,6 +270,7 @@ export default function HomePostsSection({
       renderedItemsCountRef.current = index + 1;
       const shouldInjectRail =
         !suppressBrowseRails &&
+        !explicitContentFilters &&
         renderedItemsCountRef.current % INJECT_EVERY === 0;
 
       if (DEBUG_RSVP_POST_ID && item.id === DEBUG_RSVP_POST_ID) {
@@ -202,10 +283,14 @@ export default function HomePostsSection({
       }
 
       return (
-        <React.Fragment key={item.id}>
+        <React.Fragment
+          key={getHomeFeedItemPresentationKey(
+            item as WithHomeFeedPresentationKey<FeedItem>
+          )}
+        >
           <Post
             postId={item.id}
-            caption={item.caption || "(no caption)"}
+            caption={item.caption ?? null}
             createdAt={item.created_at}
             authorId={item.author_id}
             author={item.author}
@@ -215,8 +300,10 @@ export default function HomePostsSection({
             anonymousAvatar={item.anonymous_avatar}
             selectedDates={item.selected_dates}
             post={item}
+            matchedScheduleDayKey={matchedScheduleDayKeyFor(item)}
             slideshowHostVisible={isVisible}
             isOwner={authUserId != null && authUserId === item.author_id}
+            publishedListOrigin="feed"
           />
           {shouldInjectRail && (
             <React.Fragment key={`rail-${item.id}`}>
@@ -265,7 +352,9 @@ export default function HomePostsSection({
       isVisible,
       authUserId,
       suppressBrowseRails,
-    ]
+      explicitContentFilters,
+      matchedScheduleDayKeyFor,
+    ],
   );
 
   // getCachedItemsFiltered removed - getCachedItems from HomePage already filters by type
@@ -275,15 +364,17 @@ export default function HomePostsSection({
   // This ensures ProgressiveFeed remounts and resets internal state (offsetRef, initialLoadCompleteRef)
   const feedKey = useMemo(
     () =>
-      `feed-${viewMode}-${selectedTags.join(",")}-${feedOptions?.q || ""}-${feedOptions?.occursOn || ""
-      }@${feedOptions?.occursTz || ""}-${feedOptions?.occursFrom || ""}..${
-        feedOptions?.occursTo || ""
-      }-${feedOptions?.currentUserId || "guest"}-${
-        feedOptions?.friendsFilter ? "friends" : ""
-      }`,
+      `feed-${viewMode}-${feedOptions?.type || ""}-${selectedTags.join(",")}-${
+        feedOptions?.q || ""
+      }-${feedOptions?.occursOn || ""}@${feedOptions?.occursTz || ""}-${
+        feedOptions?.occursFrom || ""
+      }..${feedOptions?.occursTo || ""}-${
+        feedOptions?.currentUserId || "guest"
+      }-${feedOptions?.friendsFilter ? "friends" : ""}`,
     [
       viewMode,
       selectedTags,
+      feedOptions?.type,
       feedOptions?.q,
       feedOptions?.occursOn,
       feedOptions?.occursTz,
@@ -291,12 +382,87 @@ export default function HomePostsSection({
       feedOptions?.occursTo,
       feedOptions?.currentUserId,
       feedOptions?.friendsFilter,
-    ]
+    ],
   );
 
   const verticalEmptyMessage = hasActiveFilters
     ? "No posts match your current filters."
     : "No posts to show right now.";
+
+  const searchQueryActive = searchQuery.trim().length > 0;
+  const reportSearchEmpty =
+    Boolean(onSearchPostsEmptyActiveChange) && searchQueryActive;
+
+  const filterEndCopy = explicitContentFilters
+    ? getHomeFilterEndCopy({
+        dateFilter,
+        viewMode,
+        friendsFilter: Boolean(feedOptions?.friendsFilter),
+        variant: "zero",
+        searchActive: searchQueryActive,
+      })
+    : null;
+  const filterExhaustedCopy = explicitContentFilters
+    ? getHomeFilterEndCopy({
+        dateFilter,
+        viewMode,
+        friendsFilter: Boolean(feedOptions?.friendsFilter),
+        variant: "exhausted",
+        searchActive: searchQueryActive,
+      })
+    : null;
+
+  const wrapSearchEmpty = (node: React.ReactNode) =>
+    reportSearchEmpty ? (
+      <HomeSearchPostsEmptyReporter
+        active
+        onActiveChange={onSearchPostsEmptyActiveChange}
+      >
+        {node}
+      </HomeSearchPostsEmptyReporter>
+    ) : (
+      node
+    );
+
+  const filterEmptySurface =
+    filterEndCopy && onHomeFilterAction && onBackToFeed
+      ? wrapSearchEmpty(
+          <HomeFilterEndState
+            variant="zero"
+            heading={filterEndCopy.heading}
+            createPrompt={filterEndCopy.createPrompt}
+            primaryLabel={filterEndCopy.primaryLabel}
+            secondaryLabel={filterEndCopy.secondaryLabel}
+            tertiaryLabel={filterEndCopy.tertiaryLabel}
+            onSecondary={() => onHomeFilterAction(filterEndCopy.secondaryAction)}
+            onTertiary={onBackToFeed}
+          />
+        )
+      : searchQueryActive
+        ? wrapSearchEmpty(
+            <div className="w-full py-8 text-center">
+              <p className="text-sm text-[var(--text)]/70">
+                {getHomeSearchPostsEmptyHeading(false)}
+              </p>
+            </div>
+          )
+        : undefined;
+
+  const filterExhaustedSurface =
+    filterExhaustedCopy && onHomeFilterAction && onBackToFeed ? (
+      <HomeFilterEndState
+        variant="exhausted"
+        heading={filterExhaustedCopy.heading}
+        createPrompt={filterExhaustedCopy.createPrompt}
+        primaryLabel={filterExhaustedCopy.primaryLabel}
+        secondaryLabel={filterExhaustedCopy.secondaryLabel}
+        tertiaryLabel={filterExhaustedCopy.tertiaryLabel}
+        onSecondary={() =>
+          onHomeFilterAction(filterExhaustedCopy.secondaryAction)
+        }
+        onTertiary={onBackToFeed}
+      />
+    ) : undefined;
 
   // Legacy mode: prefetch logic
   useEffect(() => {
@@ -319,7 +485,7 @@ export default function HomePostsSection({
           }
         }
       },
-      { threshold: 0.8 }
+      { threshold: 0.8 },
     );
 
     observer.observe(containerRef.current!);
@@ -328,10 +494,10 @@ export default function HomePostsSection({
 
   // Show appropriate items based on viewMode (legacy mode)
   const hangoutItems = legacyItems.filter(
-    (p: FeedItem) => String(p.type).toLowerCase() === "hangout"
+    (p: FeedItem) => String(p.type).toLowerCase() === "hangout",
   );
   const experienceItems = legacyItems.filter(
-    (p: FeedItem) => String(p.type).toLowerCase() === "experience"
+    (p: FeedItem) => String(p.type).toLowerCase() === "experience",
   );
 
   const displayItems =
@@ -353,7 +519,7 @@ export default function HomePostsSection({
       <Post
         key={`${keyPrefix}-${item.id}`}
         postId={item.id}
-        caption={item.caption || "(no caption)"}
+        caption={item.caption ?? null}
         createdAt={item.created_at}
         authorId={item.author_id}
         author={item.author}
@@ -363,20 +529,24 @@ export default function HomePostsSection({
         anonymousAvatar={item.anonymous_avatar}
         selectedDates={item.selected_dates}
         post={item}
+        matchedScheduleDayKey={matchedScheduleDayKeyFor(item)}
         slideshowHostVisible={isVisible}
         isOwner={authUserId != null && authUserId === item.author_id}
+        publishedListOrigin="feed"
       />
     ),
-    [isVisible, authUserId]
+    [isVisible, authUserId, matchedScheduleDayKeyFor],
   );
 
   const showDateSpotlightEmptyNotice =
+    !explicitContentFilters &&
     dateSpotlightActive &&
     dateSpotlightResolved &&
     !dateSpotlightLoading &&
     dateSpotlightItems.length === 0;
 
   const showDateSpotlightFallback =
+    !explicitContentFilters &&
     dateSpotlightActive &&
     dateSpotlightResolved &&
     !dateSpotlightLoading &&
@@ -390,13 +560,13 @@ export default function HomePostsSection({
         ref={containerRef}
         className="flex flex-col w-full px-1.5 gap-4 mt-3"
       >
-        {dateSpotlightActive ? (
+        {!explicitContentFilters && dateSpotlightActive ? (
           <div className="flex flex-col gap-4">
             {showDateSpotlightEmptyNotice && showDateSpotlightFallback ? (
               <p className="py-2 text-center text-sm text-[var(--text)]/70">
                 {getDateSpotlightEmptyNotice(dateFilter)}{" "}
                 {getDateSpotlightFallbackSectionTitle(
-                  dateSpotlightFallbackFilter!
+                  dateSpotlightFallbackFilter!,
                 )}
                 .
               </p>
@@ -406,19 +576,19 @@ export default function HomePostsSection({
               </p>
             ) : null}
             {dateSpotlightItems.map((item) =>
-              renderSpotlightPost(item, "date-spotlight-primary")
+              renderSpotlightPost(item, "date-spotlight-primary"),
             )}
             {showDateSpotlightFallback ? (
               <div className="flex flex-col gap-4">
                 {showDateSpotlightEmptyNotice ? null : (
                   <p className="text-[var(--text)]/90 text-sm font-medium">
                     {getDateSpotlightFallbackSectionTitle(
-                      dateSpotlightFallbackFilter!
+                      dateSpotlightFallbackFilter!,
                     )}
                   </p>
                 )}
                 {dateSpotlightFallbackItems.map((item) =>
-                  renderSpotlightPost(item, "date-spotlight-fallback")
+                  renderSpotlightPost(item, "date-spotlight-fallback"),
                 )}
               </div>
             ) : null}
@@ -436,6 +606,14 @@ export default function HomePostsSection({
           tabId={tabId}
           softRefreshEpoch={softRefreshEpoch}
           backgroundRevalidateOnMount={backgroundRevalidateOnMount}
+          skipOffsetZeroHeadReplace={skipOffsetZeroHeadReplace}
+          continuousCycling={continuousCycling}
+          onCycleWrap={onCycleWrap}
+          listReplaceRevision={listReplaceRevision}
+          listReplaceItems={listReplaceItems}
+          listReplaceBackendOffset={listReplaceBackendOffset}
+          listReplaceCount={listReplaceCount}
+          listReplaceCountIsAuthoritative={listReplaceCountIsAuthoritative}
           enableVirtualScrolling={false} // Disable for now, can enable later
           bufferSize="adaptive"
           enableLazyLoading={true}
@@ -443,6 +621,8 @@ export default function HomePostsSection({
           loading={loading}
           loadingComponent={<PostSkeleton />}
           emptyMessage={verticalEmptyMessage}
+          emptySurface={filterEmptySurface}
+          exhaustedSurface={filterExhaustedSurface}
           pageSize={HOME_FEED_FIRST_PAGE} // Matches Home vertical dataCache.generateFeedKey first-page limit
         />
 
@@ -460,7 +640,7 @@ export default function HomePostsSection({
               <Post
                 key={`fallback-${p.id}`}
                 postId={p.id}
-                caption={p.caption || "(no caption)"}
+                caption={p.caption ?? null}
                 createdAt={p.created_at}
                 authorId={p.author_id}
                 author={p.author}
@@ -470,9 +650,11 @@ export default function HomePostsSection({
                 anonymousAvatar={p.anonymous_avatar}
                 selectedDates={p.selected_dates}
                 post={p}
+                matchedScheduleDayKey={matchedScheduleDayKeyFor(p)}
                 batchedData={batchedData}
                 slideshowHostVisible={isVisible}
                 isOwner={authUserId != null && authUserId === p.author_id}
+                publishedListOrigin="feed"
               />
             ))}
           </>
@@ -522,7 +704,7 @@ export default function HomePostsSection({
         <React.Fragment key={p.id}>
           <Post
             postId={p.id}
-            caption={p.caption || "(no caption)"}
+            caption={p.caption ?? null}
             createdAt={p.created_at}
             authorId={p.author_id}
             author={p.author}
@@ -532,44 +714,48 @@ export default function HomePostsSection({
             anonymousAvatar={p.anonymous_avatar}
             selectedDates={p.selected_dates}
             post={p}
+            matchedScheduleDayKey={matchedScheduleDayKeyFor(p)}
             batchedData={batchedData}
             slideshowHostVisible={isVisible}
             isOwner={authUserId != null && authUserId === p.author_id}
+            publishedListOrigin="feed"
           />
 
           {/* Inject horizontal rail every 8 posts - Legacy mode (not used when useProgressiveFeed=true) */}
-          {(idx + 1) % INJECT_EVERY === 0 && !suppressBrowseRails && (
-            <>
-              {/* Add spacing and separator line */}
-              <div className="mt-6 mb-4">
-                <div className="h-px bg-[var(--border)]/100 mb-4" />
-                <div className="text-[var(--text)]/90 text-sm font-medium">
-                  Discover More
+          {(idx + 1) % INJECT_EVERY === 0 &&
+            !suppressBrowseRails &&
+            !explicitContentFilters && (
+              <>
+                {/* Add spacing and separator line */}
+                <div className="mt-6 mb-4">
+                  <div className="h-px bg-[var(--border)]/100 mb-4" />
+                  <div className="text-[var(--text)]/90 text-sm font-medium">
+                    Discover More
+                  </div>
                 </div>
-              </div>
-              <HomeHangoutSection
-                items={[]}
-                loading={false}
-                batchedData={batchedData}
-                useProgressiveLoading={true}
-                isVisible={isVisible}
-                tabId={tabId}
-                loadItems={railLoadItems}
-                initialItems={[]}
-                // [FIX: Phase 1.2 - Horizontal Rail] Use rail-specific cache functions for filters
-                getCachedItems={
-                  railGetCachedItemsProp
-                    ? () => railGetCachedItemsProp(0)
-                    : getCachedItems
-                }
-                setCachedItems={
-                  railSetCachedItemsProp
-                    ? (items: FeedItem[]) => railSetCachedItemsProp(items, 0)
-                    : setCachedItems
-                }
-              />
-            </>
-          )}
+                <HomeHangoutSection
+                  items={[]}
+                  loading={false}
+                  batchedData={batchedData}
+                  useProgressiveLoading={true}
+                  isVisible={isVisible}
+                  tabId={tabId}
+                  loadItems={railLoadItems}
+                  initialItems={[]}
+                  // [FIX: Phase 1.2 - Horizontal Rail] Use rail-specific cache functions for filters
+                  getCachedItems={
+                    railGetCachedItemsProp
+                      ? () => railGetCachedItemsProp(0)
+                      : getCachedItems
+                  }
+                  setCachedItems={
+                    railSetCachedItemsProp
+                      ? (items: FeedItem[]) => railSetCachedItemsProp(items, 0)
+                      : setCachedItems
+                  }
+                />
+              </>
+            )}
         </React.Fragment>
       ))}
 
@@ -600,7 +786,7 @@ export default function HomePostsSection({
             <React.Fragment key={`fallback-${p.id}`}>
               <Post
                 postId={p.id}
-                caption={p.caption || "(no caption)"}
+                caption={p.caption ?? null}
                 createdAt={p.created_at}
                 authorId={p.author_id}
                 author={p.author}
@@ -610,9 +796,11 @@ export default function HomePostsSection({
                 anonymousAvatar={p.anonymous_avatar}
                 selectedDates={p.selected_dates}
                 post={p}
+                matchedScheduleDayKey={matchedScheduleDayKeyFor(p)}
                 batchedData={batchedData}
                 slideshowHostVisible={isVisible}
                 isOwner={authUserId != null && authUserId === p.author_id}
+                publishedListOrigin="feed"
               />
             </React.Fragment>
           ))}

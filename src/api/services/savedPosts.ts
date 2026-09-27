@@ -4,6 +4,8 @@ import { isDraftPostId } from "../../lib/drafts";
 import { getViewerAuthUserId } from "./follows";
 import { invalidateOnSave } from "../../lib/cacheInvalidation";
 import { emitPostChanged } from "../../lib/postEvents";
+import type { LatestCommentPreview } from "../../lib/latestCommentPreview";
+import { normalizeLatestCommentPreview } from "../../lib/latestCommentPreview";
 
 // Cache for saved posts to reduce egress
 const SAVED_POSTS_CACHE_KEY = "saved_posts_cache";
@@ -108,6 +110,10 @@ export interface SavedPostWithDetails {
       additional_info: any;
       tags: string[];
     }[];
+    slot0_location_name?: string | null;
+    slot0_location_url?: string | null;
+    slot0_key_info?: { title: string; value: string }[] | null;
+    latest_comment_preview?: LatestCommentPreview | null;
   };
 }
 
@@ -295,7 +301,13 @@ export async function getSavedPostsOptimized(
         is_saved: post.is_saved,
         follow_status: post.follow_status,
         has_images: post.has_images,
-      } as any,
+        slot0_location_name: post.slot0_location_name ?? null,
+        slot0_location_url: post.slot0_location_url ?? null,
+        slot0_key_info: post.slot0_key_info ?? null,
+        latest_comment_preview: normalizeLatestCommentPreview(
+          post.latest_comment_preview,
+        ),
+      } as SavedPostWithDetails["posts"],
     }));
 
     if (import.meta.env.DEV) {

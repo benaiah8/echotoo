@@ -1,5 +1,6 @@
 import { supabase } from "../../lib/supabaseClient";
 import { type FeedItem } from "./getPublicFeed";
+import { seedSocialActionsFromFeedItem } from "../../lib/seedSocialActionsFromFeed";
 
 const TTL_MS = 120_000; // 2 minutes
 
@@ -42,6 +43,9 @@ export async function getPostByIdOptimized(
   const cached = postDetailCache.get(key);
   if (cached && Date.now() - cached.ts < TTL_MS) {
     postDetailDbg("[detail-cache] hit", key);
+    if (cached.value.data) {
+      seedSocialActionsFromFeedItem(cached.value.data, viewerUserId);
+    }
     return cached.value;
   }
 
@@ -167,7 +171,28 @@ async function getPostByIdOptimizedImpl(
       viewer_rating: post.viewer_rating ?? null,
       // Activities are included in the post object from PostgreSQL
       activities: post.activities || [],
+      duo_own_active:
+        typeof post.duo_own_active === "boolean"
+          ? post.duo_own_active
+          : post.duo_own_active === null
+            ? null
+            : undefined,
+      group_own_active:
+        typeof post.group_own_active === "boolean"
+          ? post.group_own_active
+          : post.group_own_active === null
+            ? null
+            : undefined,
+      discoverable_group_count:
+        typeof post.discoverable_group_count === "number" &&
+        Number.isFinite(post.discoverable_group_count)
+          ? Math.max(0, Math.floor(post.discoverable_group_count))
+          : post.discoverable_group_count === null
+            ? null
+            : undefined,
     };
+
+    seedSocialActionsFromFeedItem(feedItem, viewerUserId || null);
 
     postDetailDbg("[getPostByIdOptimized] Query result:", {
       postId: feedItem.id,

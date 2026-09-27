@@ -1,6 +1,5 @@
 /**
  * Shared push/FCM types for Supabase Edge functions.
- * Phase 1B-A: invite-shaped data payload (post push migrates in 1B-C).
  */
 
 export type PushDevicePlatform = "android" | "ios";
@@ -17,20 +16,37 @@ export type FcmSendOptions = {
   };
 };
 
-/** FCM `data` map fields for invite-style platform-aware sends. */
+/**
+ * FCM `data` map fields — all values serialized to strings in {@link sendFcmToDevice}.
+ * Post routing fields optional for DM/campaign-only payloads.
+ */
 export type FcmDataPayload = {
   type?: string;
   title?: string;
   body?: string;
   avatarUrl?: string;
-  postId: string;
-  postType: string;
-  /** Optional; included for single-recipient sends (e.g. invite) when the client has one invite row. */
+  /** Post detail routing */
+  postId?: string;
+  postType?: string;
   inviteId?: string;
   threadId?: string;
   threadKind?: string;
   actorId?: string;
   target?: string;
+  /** DM / group messaging */
+  conversationId?: string;
+  messageId?: string;
+  senderUserId?: string;
+  senderName?: string;
+  groupName?: string;
+  /** Saved event reminder */
+  occurrenceDate?: string;
+  /** Admin campaign deep link (app path, optional) */
+  targetPath?: string;
+  /** Open Plan request (creator notify; no requester identity) */
+  requestId?: string;
+  opportunityId?: string;
+  sourcePostId?: string;
 };
 
 export type FcmSendResult = {

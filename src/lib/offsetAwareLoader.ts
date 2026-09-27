@@ -29,6 +29,23 @@ export interface OffsetAwareLoadResult<T> {
   items: T[];
   consumedOffset: number; // How many offsets were actually consumed by the API
   count?: number; // Optional: Total count returned by API (for reliable hasMore detection)
+  /** False when count is a client fallback (e.g. cache length), not RPC total. */
+  countIsAuthoritative?: boolean;
+  /** DEV diagnostics — ignored by hasMore math except via countIsAuthoritative. */
+  __feedDiag?: {
+    responseSource?:
+      | "network"
+      | "memory-cache"
+      | "fallback-cache"
+      | "abort-fallback"
+      | "error-fallback"
+      | "unknown";
+    countSource?: "rpc" | "fallback-cache-length" | "unknown" | "none";
+    rpcError?: string | null;
+    elapsedMs?: number | null;
+    personalizationInputCount?: number | null;
+    personalizationOutputCount?: number | null;
+  };
 }
 
 export type LoadItemsFunction<T> = (
@@ -157,6 +174,8 @@ export interface NormalizedLoadResult<T> {
   items: T[];
   consumedOffset: number; // Backend rows consumed (raw response length)
   count?: number; // Total from backend (for hasMore)
+  countIsAuthoritative?: boolean;
+  __feedDiag?: OffsetAwareLoadResult<T>["__feedDiag"];
 }
 
 /**
@@ -169,13 +188,21 @@ export interface NormalizedLoadResult<T> {
 export function normalizeLoadResult<T>(
   result:
     | T[]
-    | { items?: T[]; posts?: T[]; consumedOffset?: number; count?: number }
+    | {
+        items?: T[];
+        posts?: T[];
+        consumedOffset?: number;
+        count?: number;
+        countIsAuthoritative?: boolean;
+        __feedDiag?: OffsetAwareLoadResult<T>["__feedDiag"];
+      }
 ): NormalizedLoadResult<T> {
   if (Array.isArray(result)) {
     return {
       items: result,
       consumedOffset: result.length,
       count: undefined,
+      countIsAuthoritative: undefined,
     };
   }
   if (result && typeof result === "object") {
@@ -189,6 +216,11 @@ export function normalizeLoadResult<T>(
       items: arr,
       consumedOffset,
       count: typeof result.count === "number" ? result.count : undefined,
+      countIsAuthoritative:
+        typeof result.countIsAuthoritative === "boolean"
+          ? result.countIsAuthoritative
+          : undefined,
+      __feedDiag: result.__feedDiag,
     };
   }
   return { items: [], consumedOffset: 0, count: undefined };

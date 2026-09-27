@@ -12,7 +12,13 @@ import { useDispatch } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 import { getViewerAuthUserId } from "../api/services/follows";
 import toast from "react-hot-toast";
-import { discardAllDrafts } from "../lib/drafts";
+import { discardAllDrafts, readDraftCreatePostType } from "../lib/drafts";
+import {
+  isCreateFlowResumedLocalDraft,
+  RESUME_DRAFT_SEARCH_PARAM,
+  RESUME_DRAFT_SEARCH_VALUE,
+} from "../lib/draftEntryGate";
+import { resolveCreatePostTypeForSession } from "../lib/createFlowPostType";
 import { saveDraft } from "../api/services/posts";
 import PostDetailBody, {
   Post as DetailPost,
@@ -104,14 +110,20 @@ export default function PreviewPage() {
   const editData = read<any>("editPostData", null);
   const isEditMode = editData !== null;
 
-  // Determine post type - use edit data if available, otherwise use URL param
+  const resumeDraft =
+    q.get(RESUME_DRAFT_SEARCH_PARAM) === RESUME_DRAFT_SEARCH_VALUE;
+
+  // Determine post type - use edit data if available, otherwise canonical draft/session type
   const postType = isEditMode
     ? ((editData.type || "experience").toLowerCase() as
         | "experience"
         | "hangout")
-    : ((q.get("type") || "experience").toLowerCase() as
-        | "experience"
-        | "hangout");
+    : resolveCreatePostTypeForSession({
+        urlType: q.get("type"),
+        resumeDraft,
+        storedType: readDraftCreatePostType(),
+        isResumedSession: isCreateFlowResumedLocalDraft(),
+      });
 
   // meta & activities
   const meta = read<DraftMeta>("draftMeta", {});

@@ -1,5 +1,8 @@
 // Unified media upload wrapper supporting Cloudinary and Supabase Storage
-import { prepareImageForUpload } from "../../lib/prepareImageForUpload";
+import {
+  prepareImageForUpload,
+  type PreparedImageForUpload,
+} from "../../lib/prepareImageForUpload";
 import type { NormalizedPostImage } from "../../lib/postImagePipeline";
 import {
   getMediaUploadErrorCategory,
@@ -8,6 +11,14 @@ import {
 import { retry } from "../../lib/retry";
 import { uploadToCloudinary, uploadToCloudinaryRaw } from "./cloudinaryUpload";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  decideProfilePhotoStorageDeletion,
+  isManagedProfilePhotoStoragePath,
+  type ProfilePhotoDeleteSkipReason,
+} from "../../lib/profilePhotos";
+
+/** Supabase Storage bucket used for posts, avatars, and Profile photos. */
+export const MEDIA_STORAGE_BUCKET = "media";
 
 export interface UploadImageOptions {
   userId: string;
@@ -32,6 +43,21 @@ type MediaUploadIoMeta = {
   provider: MediaProvider;
   bytes: number;
   contentType: string;
+};
+
+/**
+ * Result of a best-effort Profile photo Storage cleanup.
+ * Never throws for skip/failure — orphaned objects are preferable to broken Profile state.
+ */
+export type ProfilePhotoStorageCleanupResult = {
+  deleted: boolean;
+  skipped: boolean;
+  /** Set when skipped before calling Storage, or when Storage returned an error. */
+  reason?: ProfilePhotoDeleteSkipReason | "storage_error";
+  /** Managed object key when a delete was attempted or would have been. */
+  path?: string;
+  /** Storage / unexpected error message (cleanup failed; profile metadata already OK). */
+  error?: string;
 };
 
 function readMediaProvider(): MediaProvider {
@@ -128,10 +154,12 @@ async function uploadBlobToSupabaseStorage(
   };
 
   return runMediaUploadWithRetry(meta, async () => {
-    const { data, error } = await supabase.storage.from("media").upload(path, blob, {
-      contentType,
-      upsert: false,
-    });
+    const { data, error } = await supabase.storage
+      .from(MEDIA_STORAGE_BUCKET)
+      .upload(path, blob, {
+        contentType,
+        upsert: false,
+      });
 
     if (error) {
       const message = error.message || JSON.stringify(error);
@@ -155,6 +183,142 @@ async function uploadFileToCloudinaryWithRetry(
   uploadFn: () => Promise<string>
 ): Promise<string> {
   return runMediaUploadWithRetry(meta, uploadFn);
+}
+
+/**
+ * Low-level `media` bucket object remove. Caller must already have validated the path.
+ * Does not throw — returns structured success/failure.
+ *
+ * Intentional limitation: Cloudinary objects are never deleted from the client
+ * (no Admin API / secrets in this app).
+ */
+export async function deleteMediaStorageObject(
+  path: string
+): Promise<{ ok: boolean; error?: string }> {
+  const trimmed = typeof path === "string" ? path.trim() : "";
+  if (!trimmed) {
+    return { ok: false, error: "Missing storage path." };
+  }
+
+  try {
+    const { error } = await supabase.storage
+      .from(MEDIA_STORAGE_BUCKET)
+      .remove([trimmed]);
+
+    if (error) {
+      const message = error.message || JSON.stringify(error);
+      console.warn(MEDIA_UPLOAD_LOG, {
+        event: "storage_remove_failed",
+        path: trimmed,
+        raw: message,
+      });
+      return { ok: false, error: message };
+    }
+
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn(MEDIA_UPLOAD_LOG, {
+      event: "storage_remove_exception",
+      path: trimmed,
+      raw: message,
+    });
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * After a successful `profile_photos` DB update: best-effort delete a superseded
+ * managed Storage object. Never consults `avatar_url`. Never mutates profile rows.
+ *
+ * Skip (no delete) when preset / http(s) / other-user / still referenced / unknown.
+ */
+export async function deleteProfilePhotoIfSafe(args: {
+  userId: string;
+  removedPhoto: string | null | undefined;
+  remainingPhotos?: string[] | null;
+}): Promise<ProfilePhotoStorageCleanupResult> {
+  const decision = decideProfilePhotoStorageDeletion({
+    userId: args.userId,
+    removedPhoto: args.removedPhoto,
+    remainingPhotos: args.remainingPhotos,
+  });
+
+  if (decision.action === "skip") {
+    return {
+      deleted: false,
+      skipped: true,
+      reason: decision.reason,
+      path:
+        typeof args.removedPhoto === "string"
+          ? args.removedPhoto.trim() || undefined
+          : undefined,
+    };
+  }
+
+  const removed = await deleteMediaStorageObject(decision.path);
+  if (!removed.ok) {
+    return {
+      deleted: false,
+      skipped: false,
+      reason: "storage_error",
+      path: decision.path,
+      error: removed.error,
+    };
+  }
+
+  return {
+    deleted: true,
+    skipped: false,
+    path: decision.path,
+  };
+}
+
+/**
+ * Clean up a newly uploaded managed object when upload succeeded but the
+ * subsequent `profile_photos` DB write failed (object never committed).
+ *
+ * Still requires `{userId}/avatar/...` — skips http(s) / Cloudinary / presets.
+ */
+export async function deleteUncommittedProfilePhotoUpload(args: {
+  userId: string;
+  uploadedPath: string | null | undefined;
+}): Promise<ProfilePhotoStorageCleanupResult> {
+  const path =
+    typeof args.uploadedPath === "string" ? args.uploadedPath.trim() : "";
+  const userId =
+    typeof args.userId === "string" ? args.userId.trim() : "";
+
+  if (!path) {
+    return { deleted: false, skipped: true, reason: "empty" };
+  }
+  if (!userId) {
+    return { deleted: false, skipped: true, reason: "missing_user_id", path };
+  }
+  if (/^https?:\/\//i.test(path) || /^[a-z][a-z0-9+.-]*:/i.test(path)) {
+    return { deleted: false, skipped: true, reason: "http_url", path };
+  }
+  if (!isManagedProfilePhotoStoragePath(path, userId)) {
+    return {
+      deleted: false,
+      skipped: true,
+      reason: "not_managed_path",
+      path,
+    };
+  }
+
+  const removed = await deleteMediaStorageObject(path);
+  if (!removed.ok) {
+    return {
+      deleted: false,
+      skipped: false,
+      reason: "storage_error",
+      path,
+      error: removed.error,
+    };
+  }
+
+  return { deleted: true, skipped: false, path };
 }
 
 /**
@@ -239,6 +403,52 @@ export async function uploadNormalizedPostImage(
   }
 
   const path = `${opts.userId}/post/${crypto.randomUUID()}.${extension}`;
+
+  try {
+    return await uploadBlobToSupabaseStorage(path, blob, contentType, kind);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Supabase Storage upload failed: ${String(error)}`);
+  }
+}
+
+/**
+ * Upload a Profile Photo already finalized by {@link exportProfilePhotoCropToFile}
+ * (or {@link preparedProfilePhotoFromExport}). Does not re-compress.
+ * Storage path stays the existing avatar convention: `{userId}/avatar/{uuid}.{ext}`.
+ */
+export async function uploadPreparedProfilePhoto(
+  prepared: PreparedImageForUpload,
+  opts: Pick<UploadImageOptions, "userId">
+): Promise<string> {
+  const { blob, contentType, extension } = prepared;
+  const provider = readMediaProvider();
+  const kind: MediaUploadKind = "avatar";
+  const safeExt = extension === "jpeg" ? "jpg" : extension;
+
+  if (provider === "cloudinary") {
+    const file = new File(
+      [blob],
+      `profile-photo-${crypto.randomUUID()}.${safeExt}`,
+      {
+        type: contentType,
+        lastModified: Date.now(),
+      }
+    );
+    return uploadFileToCloudinaryWithRetry(
+      {
+        kind,
+        provider: "cloudinary",
+        bytes: blob.size,
+        contentType,
+      },
+      () => uploadToCloudinaryRaw(file)
+    );
+  }
+
+  const path = `${opts.userId}/avatar/${crypto.randomUUID()}.${safeExt}`;
 
   try {
     return await uploadBlobToSupabaseStorage(path, blob, contentType, kind);

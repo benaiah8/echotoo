@@ -8,17 +8,10 @@ import React, {
 } from "react";
 import { useLocation } from "react-router-dom";
 import OwlMessageModal from "../components/ui/OwlMessageModal";
-import { OWL_MESSAGES } from "../lib/owlMessages";
-import {
-  advanceOwlMessageAfterClose,
-  getCurrentOwlMessageEntry,
-  loadOwlMessagesState,
-  type OwlMessagesPersisted,
-} from "../lib/owlMessagesStorage";
 
 export type OwlMessageModalContextValue = {
   isOpen: boolean;
-  /** Opens the modal showing the current shuffled line (does not advance). */
+  /** Opens the owl games overlay. */
   openOwlMessage: () => void;
   closeOwlMessage: () => void;
 };
@@ -40,16 +33,15 @@ export function useOwlMessageModal(): OwlMessageModalContextValue {
   if (import.meta.env.DEV && !missingProviderWarned) {
     missingProviderWarned = true;
     console.warn(
-      "[useOwlMessageModal] OwlMessageModalProvider missing — owl message modal is disabled."
+      "[useOwlMessageModal] OwlMessageModalProvider missing — owl games overlay is disabled."
     );
   }
   return FALLBACK;
 }
 
 /**
- * Global owl message card (frosted). Wire triggers via {@link useOwlMessageModal}.
- * Shuffled order + cursor live in localStorage (see {@link loadOwlMessagesState}).
- * Cursor advances when the modal closes so the next open shows the next line (wraps).
+ * Global owl games overlay (full-screen frosted). Wire triggers via {@link useOwlMessageModal}.
+ * Quote cycling files (`owlMessages.ts` / `owlMessagesStorage.ts`) are left in the repo unused by this overlay.
  */
 export function OwlMessageModalProvider({
   children,
@@ -57,14 +49,10 @@ export function OwlMessageModalProvider({
   children: React.ReactNode;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
-  const [owlPersisted, setOwlPersisted] = useState<OwlMessagesPersisted>(() =>
-    loadOwlMessagesState()
-  );
   const location = useLocation();
 
   const closeOwlMessage = useCallback(() => {
     setModalOpen(false);
-    setOwlPersisted((prev) => advanceOwlMessageAfterClose(prev));
   }, []);
 
   const openOwlMessage = useCallback(() => {
@@ -74,14 +62,6 @@ export function OwlMessageModalProvider({
   useEffect(() => {
     setModalOpen(false);
   }, [location.pathname]);
-
-  const { message, messageCategory } = useMemo(() => {
-    const entry = getCurrentOwlMessageEntry(owlPersisted, OWL_MESSAGES);
-    return {
-      message: entry?.text ?? "",
-      messageCategory: entry?.category,
-    };
-  }, [owlPersisted]);
 
   const value = useMemo(
     () => ({
@@ -95,12 +75,7 @@ export function OwlMessageModalProvider({
   return (
     <OwlMessageModalContext.Provider value={value}>
       {children}
-      <OwlMessageModal
-        open={modalOpen}
-        onClose={closeOwlMessage}
-        message={message}
-        messageCategory={messageCategory}
-      />
+      <OwlMessageModal open={modalOpen} onClose={closeOwlMessage} />
     </OwlMessageModalContext.Provider>
   );
 }

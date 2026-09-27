@@ -6,6 +6,7 @@ import type { PostReportReasonCode, ReportDraft } from "../../types/report";
 import { submitPostReport, submitProfileReport } from "../../api/services/reports";
 import { showErrorToast } from "../../lib/errorHandling";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 const REASON_OPTIONS: {
   label: string;
@@ -19,7 +20,7 @@ const REASON_OPTIONS: {
 ];
 
 const fieldBase =
-  "rounded-lg text-xs font-medium text-[var(--text)] border transition " +
+  "rounded-lg text-[16px] font-medium text-[var(--text)] border transition " +
   "app-dark:bg-black app-dark:border-[var(--border)] " +
   "app-light:bg-white app-light:border-[var(--border)]";
 
@@ -51,20 +52,8 @@ export default function ReportModal({ open, draft, onClose }: Props) {
     }
   }, [open, draftKey]);
 
-  /** Full-screen modal: lock page scroll (same idea as BottomDrawer). */
-  useEffect(() => {
-    if (!open || !draft) return;
-    const scrollbarWidth =
-      window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    document.body.style.paddingRight = `${scrollbarWidth}px`;
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
-    };
-  }, [open, draftKey]);
+  /** Full-screen modal: nested-safe page scroll freeze. */
+  useOverlayBackgroundScrollLock(open && Boolean(draft));
 
   if (!open || !draft) return null;
 

@@ -88,6 +88,12 @@ export async function flushCachesAfterBlockStatusChange(options?: {
   );
   invalidatePostDetailCacheForViewer(options?.viewerProfileId ?? null);
 
+  const { clearPublishedMediaCache } = await import("../../lib/publishedMedia");
+  clearPublishedMediaCache();
+
+  const { invalidateAllPairUpCache } = await import("../../lib/pairUpCache");
+  invalidateAllPairUpCache();
+
   const { HOME_TAB_REFRESH_EVENT, PROFILE_TAB_REFRESH_EVENT } = await import(
     "../../lib/homeRefreshEvents"
   );

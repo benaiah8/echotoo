@@ -10,13 +10,16 @@ export default function PrivacyPage() {
       >
         {/* POLICY CONTENT START */}
 
-        <p>Last updated: March 13, 2026</p>
+        <p>Last updated: September 27, 2026</p>
 
         <p>
           EchoToo is a social discovery platform for finding and sharing
-          real-world experiences, hangouts, events, and itineraries. This
-          Privacy Policy explains what information we collect, how we use it,
-          how it is stored, and what choices you have when using EchoToo.
+          real-world experiences, hangouts, events, and itineraries. It also
+          includes optional features that help people connect around plans
+          (such as Duo and Group Up), message after they connect, and share
+          photos or videos. This Privacy Policy explains what information we
+          collect, how we use it, how it is stored, and what choices you have
+          when using EchoToo.
         </p>
 
         <h3>1. Introduction</h3>
@@ -41,6 +44,15 @@ export default function PrivacyPage() {
           your username, bio, profile image, and other public-facing details.
         </p>
 
+        <h3>Optional Private Profile Details</h3>
+        <p>
+          You may optionally provide a date of birth and gender (including
+          &quot;prefer not to say&quot;). These details are treated as private
+          profile metadata. They are not required to use EchoToo, and they are
+          not part of the public profile shown to other users the way username,
+          bio, or profile photos are.
+        </p>
+
         <h3>User Content</h3>
         <p>
           We collect and store the content you create on EchoToo, including:
@@ -49,11 +61,28 @@ export default function PrivacyPage() {
           <li>posts</li>
           <li>comments</li>
           <li>images you upload</li>
+          <li>videos you upload</li>
           <li>activity lists and itineraries</li>
           <li>
             location-related information you include in a post or activity
           </li>
         </ul>
+
+        <h3>Messages and Conversations</h3>
+        <p>
+          When you use messaging features, we store the messages and related
+          conversation data needed to deliver direct messages and group chats,
+          including message content, participants, timestamps, and request or
+          inbox state (for example, pending connect requests).
+        </p>
+
+        <h3>Duo, Group Up, and Connection Activity</h3>
+        <p>
+          If you use Duo, Group Up, or related People features, we may store
+          information such as your interest in a plan or place, notes you add,
+          join or leave actions, connect or group requests, matches or
+          acceptances, and membership in a group chat tied to that plan.
+        </p>
 
         <h3>Location Information You Provide</h3>
         <p>
@@ -66,18 +95,33 @@ export default function PrivacyPage() {
           <li>a Google Maps or similar location link</li>
           <li>optional map-selected location details you choose to submit</li>
         </ul>
+        <p>
+          If you allow location permission on your device, EchoToo may use it
+          to help with map-related features you choose to use. We do not claim
+          continuous background tracking as a core product feature.
+        </p>
+
+        <h3>Device Permissions You Choose to Allow</h3>
+        <p>
+          Depending on the features you use, the app may request optional
+          device permissions such as camera and microphone (for photos or
+          videos), notifications (for invites, messages, and updates), photo
+          library access, and location (for map help). You can deny or later
+          change these permissions in your device settings.
+        </p>
 
         <h3>Social Activity</h3>
         <p>
           We may store information related to how you use the platform,
-          including follower relationships, likes, and in-app notifications.
+          including follower relationships, likes, blocks, and in-app
+          notifications.
         </p>
 
         <h3>Reports and Support Requests</h3>
         <p>
-          If you report a user or post, or contact support, we may collect the
-          information you send to us, including the reason for the report and
-          any related details.
+          If you report a user, post, message, or other content, or contact
+          support, we may collect the information you send to us, including the
+          reason for the report and any related details.
         </p>
 
         <h3>3. How We Use Information</h3>
@@ -86,9 +130,10 @@ export default function PrivacyPage() {
           <li>create and manage your account</li>
           <li>display your profile and content within the platform</li>
           <li>
-            enable social features such as posting, commenting, following, and
-            notifications
+            enable social features such as posting, commenting, following,
+            notifications, Duo, Group Up, messaging, and media sharing
           </li>
+          <li>deliver and maintain direct messages and group conversations</li>
           <li>review reports and respond to safety or moderation issues</li>
           <li>maintain, secure, and improve the platform</li>
           <li>respond to support requests and account-related issues</li>
@@ -97,9 +142,10 @@ export default function PrivacyPage() {
         <h3>4. User-Generated Content</h3>
         <p>
           EchoToo is a user-generated content platform. Content you choose to
-          post, including your profile information, posts, comments, images, and
-          activity details, may be visible to other users depending on how the
-          platform works at the time.
+          post, including your profile information, posts, comments, images,
+          videos, messages, and activity details, may be visible to other users
+          depending on how the platform works at the time (for example, public
+          posts versus private messages).
         </p>
         <p>
           Please do not share sensitive personal information in public content
@@ -128,8 +174,8 @@ export default function PrivacyPage() {
             operate EchoToo
           </li>
           <li>
-            when content is shared publicly within the platform as part of
-            normal app functionality
+            when content is shared within the platform as part of normal app
+            functionality (including with people you message or connect with)
           </li>
           <li>
             when required by law, regulation, legal process, or valid government
@@ -143,7 +189,8 @@ export default function PrivacyPage() {
 
         <h3>7. Reporting, Safety, and Moderation</h3>
         <p>
-          EchoToo allows users to report posts and user accounts. Report
+          EchoToo allows users to report posts, user accounts, and other
+          concerning behavior or content available through in-app tools. Report
           information may be reviewed by the EchoToo team for moderation,
           safety, and enforcement purposes.
         </p>
@@ -208,8 +255,9 @@ export default function PrivacyPage() {
 
         <h3>12. Your Choices</h3>
         <p>
-          You may choose not to provide certain information, but some features
-          of EchoToo may not function properly without it.
+          You may choose not to provide certain information, including optional
+          birthday or gender details, but some features of EchoToo may not
+          function properly without other required account information.
         </p>
         <p>
           You may also contact us if you need help related to your account,

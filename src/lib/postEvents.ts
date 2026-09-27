@@ -60,6 +60,8 @@ export type PostPatch = {
   first_image_url?: string | null;
   has_images?: boolean;
   image_count?: number;
+  /** Reviewer editorial boost for Home Event social-discovery rails. */
+  social_discovery_boosted_at?: string | null;
 };
 
 export function emitPostChanged(postId: string, patch: PostPatch): void {

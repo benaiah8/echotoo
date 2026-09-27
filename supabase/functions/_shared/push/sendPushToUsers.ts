@@ -11,6 +11,7 @@ import type {
   FcmDataPayload,
   FcmSendOptions,
   PushDeviceTarget,
+  PushSendFailure,
   SendPushBatchResult,
   SendPushToUsersResult,
 } from "./types.ts";
@@ -31,6 +32,31 @@ export function sanitizeErrorPreview(
   const singleLine = value.replace(/\s+/g, " ").trim();
   if (!singleLine) return undefined;
   return singleLine.length > max ? `${singleLine.slice(0, max)}...` : singleLine;
+}
+
+/** One-line summary for a single FCM device failure (no full tokens). */
+export function formatPushFailureLine(failure: PushSendFailure): string {
+  const parts: string[] = [];
+  if (failure.platform) parts.push(failure.platform);
+  if (failure.errorStatus) parts.push(failure.errorStatus);
+  if (failure.errorCode) parts.push(failure.errorCode);
+  const message =
+    sanitizeErrorPreview(failure.errorMessage) ??
+    sanitizeErrorPreview(failure.detail);
+  if (message) parts.push(message);
+  if (parts.length === 0 && failure.status) {
+    parts.push(`status=${failure.status}`);
+  }
+  return parts.join(" | ") || "unknown push failure";
+}
+
+/** Join multiple push failures into a compact audit/log string. */
+export function formatPushFailuresSummary(
+  failures: PushSendFailure[],
+  max = 3
+): string | undefined {
+  if (failures.length === 0) return undefined;
+  return failures.slice(0, max).map(formatPushFailureLine).join("; ");
 }
 
 export type SendPushToDeviceTargetsOptions = {

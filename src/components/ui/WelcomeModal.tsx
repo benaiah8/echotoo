@@ -1,4 +1,4 @@
-import { useEffect, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
 import {
   PiAppleLogo,
   PiConfetti,
@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { getOwlLogoPath } from "../../lib/assets";
 import { DESKTOP_POLICY_NAV } from "../../lib/desktopPolicyRoutes";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import { APP_STORE_URL, PLAY_STORE_URL } from "../../lib/storeLinks";
@@ -44,19 +45,7 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
     navigate(path);
   };
 
-  // Disable body scroll when modal is open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-
-    // Cleanup on unmount
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [isOpen]);
+  useOverlayBackgroundScrollLock(isOpen);
 
   if (!isOpen) return null;
 

@@ -706,7 +706,7 @@ export default function ActivitiesTagsInput({
                 ? "Edit this line, then tap the check or press Enter"
                 : "Add ideas, plans, or notes for this stop"
             }
-            className="min-h-[3.25rem] w-full resize-none bg-transparent pb-7 pr-12 pl-0.5 pt-0 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-[14px] placeholder:leading-relaxed placeholder:text-neutral-500 app-dark:text-[var(--text)] app-dark:placeholder:text-[var(--text)]/52"
+            className="min-h-[3.25rem] w-full resize-none bg-transparent pb-7 pr-12 pl-0.5 pt-0 text-[16px] leading-relaxed text-neutral-900 outline-none placeholder:text-[16px] placeholder:leading-relaxed placeholder:text-neutral-500 app-dark:text-[var(--text)] app-dark:placeholder:text-[var(--text)]/52"
           />
           <span
             className={`pointer-events-none absolute bottom-1 right-1 text-[10px] tabular-nums leading-none ${charCounterClassForTone(

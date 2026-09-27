@@ -32,6 +32,18 @@ import {
   type OffsetAwareLoadResult,
   normalizeLoadResult,
 } from "../lib/offsetAwareLoader";
+import { inferHasMoreAfterPage } from "../lib/homeFeedPagination";
+import {
+  getHomeFeedItemPresentationKey,
+  pruneMountedHomeFeedItems,
+  HOME_FEED_CYCLE_MAX_WRAPS_PER_LOAD,
+  type WithHomeFeedPresentationKey,
+} from "../lib/homeFeedCycle";
+import {
+  HOME_FEED_MAX_MOUNTED_ITEMS,
+  HOME_FEED_PRUNE_TO_ITEMS,
+} from "../lib/homeFeedConstants";
+import { noteFeedHasMoreTransition } from "../lib/feedStopDiagnostics";
 import { onPostChanged, onPostDeleted } from "../lib/postEvents";
 import { onBlockStatusChanged } from "../lib/blockStatusCache";
 import { applyPostPatch, preserveViewerLocalFeedFields } from "../lib/applyPostPatch";
@@ -44,6 +56,10 @@ import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import { batchFetchActivitiesForPosts } from "../api/services/activitiesBatch";
 import FeedLoadErrorState from "./ui/FeedLoadErrorState";
+import {
+  getProgressiveFeedErrorCopy,
+  isBrowserOffline,
+} from "../lib/progressiveFeedErrorCopy";
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
@@ -87,26 +103,6 @@ function isDraftLikeFeedRow<T extends { id: string }>(row: T): boolean {
   return Boolean((row as { isDraft?: boolean }).isDraft);
 }
 
-/** One page fetched: infer whether more backend rows likely exist */
-function inferHasMoreAfterPage(args: {
-  /** Backend rows returned/consumed in this single request (not draft-prepended client length) */
-  consumedOffsetThisPage: number;
-  requestedLimit: number;
-  nextOffset: number;
-  count: number | null | undefined;
-}): boolean {
-  const { consumedOffsetThisPage, requestedLimit, nextOffset, count } = args;
-  if (consumedOffsetThisPage === 0) return false;
-  if (
-    count != null &&
-    count > requestedLimit &&
-    count >= nextOffset
-  ) {
-    return nextOffset < count;
-  }
-  return consumedOffsetThisPage >= requestedLimit;
-}
-
 export interface ProgressiveFeedProps<T> {
   // Data loading
   // Supports both old format (Promise<T[]>) and new format (Promise<OffsetAwareLoadResult<T>>)
@@ -143,6 +139,10 @@ export interface ProgressiveFeedProps<T> {
   loading?: boolean;
   error?: string | null;
   emptyMessage?: string;
+  /** Optional zero-results surface; defaults to `emptyMessage`. */
+  emptySurface?: React.ReactNode;
+  /** Optional exhausted surface; defaults to the All-feed caught-up copy. */
+  exhaustedSurface?: React.ReactNode;
 
   // Loading skeleton component
   loadingComponent?: React.ReactNode;
@@ -161,6 +161,24 @@ export interface ProgressiveFeedProps<T> {
   softRefreshEpoch?: number;
   /** Home: after cache/initialItems hydrate, refetch offset 0 in background (once per mount) */
   backgroundRevalidateOnMount?: boolean;
+  /**
+   * Phase 2B.2A: skip offset-0 head restack (native resume / mount revalidate)
+   * after an explicit unseen-first replacement in the current cycle.
+   */
+  skipOffsetZeroHeadReplace?: boolean;
+  /**
+   * Phase 2B.2B: true default All continuous cycling — wrap at exhaustion,
+   * presentation-key append dedupe, front prune, suppress caught-up end state.
+   */
+  continuousCycling?: boolean;
+  /**
+   * Called when continuous cycling hits genuine exhaustion. Should start the
+   * next cycle and return its first page (or null/empty to stop safely).
+   */
+  onCycleWrap?: (
+    limit: number
+  ) => Promise<T[] | OffsetAwareLoadResult<T> | null>;
+
   /** Telemetry for targeted flows (Created tab publish refresh) */
   onSoftRefreshStart?: () => void;
   onSoftRefreshDone?: (args: {
@@ -179,6 +197,16 @@ export interface ProgressiveFeedProps<T> {
   /** Bump to remove a post by id (e.g. ownership left Created tab) */
   externalRemoveRevision?: number;
   externalRemovePostId?: string | null;
+
+  /**
+   * Phase 2B.2A: replace the entire visible list (Home-tab / pull unseen page).
+   * Does not append onto the previous page.
+   */
+  listReplaceRevision?: number;
+  listReplaceItems?: T[];
+  listReplaceBackendOffset?: number;
+  listReplaceCount?: number;
+  listReplaceCountIsAuthoritative?: boolean;
 
   /**
    * Own Profile Created publish return: merged cache rows + locally built new post (+ drafts).
@@ -225,6 +253,8 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   loading: externalLoading = false,
   error: externalError = null,
   emptyMessage = "No items to display",
+  emptySurface,
+  exhaustedSurface,
   loadingComponent,
   orientation = "vertical",
   containerRef: externalContainerRef,
@@ -234,6 +264,9 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   tabId = "unknown",
   softRefreshEpoch,
   backgroundRevalidateOnMount = false,
+  skipOffsetZeroHeadReplace = false,
+  continuousCycling = false,
+  onCycleWrap,
   onSoftRefreshStart,
   onSoftRefreshDone,
   externalPrependRevision = 0,
@@ -242,6 +275,11 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   externalReplaceItem = null,
   externalRemoveRevision = 0,
   externalRemovePostId = null,
+  listReplaceRevision = 0,
+  listReplaceItems,
+  listReplaceBackendOffset,
+  listReplaceCount,
+  listReplaceCountIsAuthoritative,
   authoritativeHydratedSeed,
 }: ProgressiveFeedProps<T>) {
   // PWA detection: Use centralized utility
@@ -344,10 +382,55 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   const inFlightOffsetsRef = useRef<Set<string>>(new Set());
   // [FIX B] Use refs for stable dependencies in loadMore
   const hasMoreRef = useRef(!Boolean(authoritativeHydratedSeed?.length));
+  const hasMorePrevRef = useRef<boolean | null>(null);
   const commitHasMore = useCallback((next: boolean) => {
     hasMoreRef.current = next;
     setHasMore(next);
   }, []);
+
+  const emitFeedStopDiag = useCallback(
+    (
+      nextHasMore: boolean,
+      args: {
+        requestedOffset: number;
+        requestedLimit: number;
+        postsLength: number;
+        count: number | null | undefined;
+        countIsAuthoritative?: boolean;
+        consumedOffsetThisPage: number;
+        nextOffset: number;
+        __feedDiag?: OffsetAwareLoadResult<T>["__feedDiag"];
+        personalizationInputCount?: number | null;
+        personalizationOutputCount?: number | null;
+      }
+    ) => {
+      const prev = hasMorePrevRef.current;
+      noteFeedHasMoreTransition(prev, nextHasMore, {
+        requestedOffset: args.requestedOffset,
+        requestedLimit: args.requestedLimit,
+        postsLength: args.postsLength,
+        count: args.count,
+        countIsAuthoritative: args.countIsAuthoritative,
+        countSource: args.__feedDiag?.countSource,
+        consumedOffsetThisPage: args.consumedOffsetThisPage,
+        nextOffset: args.nextOffset,
+        inferredHasMore: nextHasMore,
+        responseSource: args.__feedDiag?.responseSource ?? "unknown",
+        rpcError: args.__feedDiag?.rpcError ?? null,
+        elapsedMs: args.__feedDiag?.elapsedMs ?? null,
+        personalizationInputCount:
+          args.personalizationInputCount ??
+          args.__feedDiag?.personalizationInputCount ??
+          null,
+        personalizationOutputCount:
+          args.personalizationOutputCount ??
+          args.__feedDiag?.personalizationOutputCount ??
+          null,
+      });
+      hasMorePrevRef.current = nextHasMore;
+    },
+    []
+  );
   const isVisibleRef = useRef(true);
   // [FIX A] Store observer in ref for proper cleanup
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -365,6 +448,12 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   const lastExternalPrependRevisionAppliedRef = useRef(0);
   const lastExternalReplaceRevisionAppliedRef = useRef(0);
   const lastExternalRemoveRevisionAppliedRef = useRef(0);
+  const lastListReplaceRevisionAppliedRef = useRef(0);
+  /** Phase 2B.2B: apply scroll compensation once after a front prune commits. */
+  const pendingPruneScrollAdjustRef = useRef<{
+    scrollY: number;
+    heightBefore: number;
+  } | null>(null);
 
   const captureSoftBaselineEpoch = () => {
     softBaselineEpochRef.current = mergedSoftRefreshEpoch;
@@ -372,6 +461,43 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   };
 
   const isDraftRow = useCallback((row: T) => isDraftLikeFeedRow(row), []);
+
+  const itemPresentationKey = useCallback(
+    (item: T) =>
+      getHomeFeedItemPresentationKey(
+        item as WithHomeFeedPresentationKey<T>
+      ),
+    []
+  );
+
+  const appendUniqueByPresentationKey = useCallback(
+    (prev: T[], incoming: T[]): T[] => {
+      const existingKeys = new Set(prev.map((p) => itemPresentationKey(p)));
+      const toAppend = incoming.filter(
+        (item) => !existingKeys.has(itemPresentationKey(item))
+      );
+      return [...prev, ...toAppend];
+    },
+    [itemPresentationKey]
+  );
+
+  const applyMountedPrune = useCallback(
+    (merged: T[]): T[] => {
+      if (!continuousCycling) return merged;
+      const { items: pruned, prunedCount } = pruneMountedHomeFeedItems(merged, {
+        maxMounted: HOME_FEED_MAX_MOUNTED_ITEMS,
+        pruneTo: HOME_FEED_PRUNE_TO_ITEMS,
+      });
+      if (prunedCount > 0 && typeof window !== "undefined") {
+        pendingPruneScrollAdjustRef.current = {
+          scrollY: window.scrollY,
+          heightBefore: document.documentElement.scrollHeight,
+        };
+      }
+      return pruned;
+    },
+    [continuousCycling]
+  );
 
   const authoritativeHydrationLayoutAppliedRef = useRef(false);
 
@@ -458,6 +584,18 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   // This allows us to read current items without using setItems callback
   useEffect(() => {
     itemsRef.current = items;
+  }, [items]);
+
+  // Phase 2B.2B: after front prune commits, compensate window scroll once.
+  useLayoutEffect(() => {
+    const pending = pendingPruneScrollAdjustRef.current;
+    if (!pending || typeof window === "undefined") return;
+    pendingPruneScrollAdjustRef.current = null;
+    const heightAfter = document.documentElement.scrollHeight;
+    const delta = pending.heightBefore - heightAfter;
+    if (delta > 0) {
+      window.scrollTo({ top: Math.max(0, pending.scrollY - delta), behavior: "auto" });
+    }
   }, [items]);
 
   // [POST EVENTS] Subscribe to post:changed and patch feed items (like/save/comment/follow)
@@ -676,6 +814,70 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     externalRemovePostId,
     setCachedItems,
     scheduleTimeout,
+  ]);
+
+  /** Phase 2B.2A: replace the visible Home list with an unseen-first page. */
+  useEffect(() => {
+    const rev = listReplaceRevision ?? 0;
+    const rows = listReplaceItems;
+    if (!rows?.length) return;
+    if (rev <= 0 || rev <= lastListReplaceRevisionAppliedRef.current) return;
+    lastListReplaceRevisionAppliedRef.current = rev;
+
+    const seen = new Set<string>();
+    const unique: T[] = [];
+    for (const item of rows) {
+      if (!item?.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      unique.push(item);
+    }
+    if (unique.length === 0) return;
+
+    const backendOffset =
+      typeof listReplaceBackendOffset === "number"
+        ? listReplaceBackendOffset
+        : unique.length;
+    offsetRef.current = backendOffset;
+    const nextHasMore = inferHasMoreAfterPage({
+      consumedOffsetThisPage: pageSize,
+      requestedLimit: pageSize,
+      nextOffset: backendOffset,
+      count: listReplaceCount,
+      countIsAuthoritative: listReplaceCountIsAuthoritative,
+    });
+    commitHasMore(nextHasMore);
+    initialLoadCompleteRef.current = true;
+    setEmptySurfaceAwaitingInitialResponse(false);
+    chainCountRef.current = 0;
+
+    const idsNeedingActivities = unique
+      .filter(
+        (item: T & { activity_count?: number }) =>
+          (item.activity_count ?? 0) > 0
+      )
+      .map((item) => item.id);
+    if (idsNeedingActivities.length > 0) {
+      batchFetchActivitiesForPosts(idsNeedingActivities);
+    }
+
+    setItems(unique);
+    if (setCachedItems) {
+      scheduleTimeout(() => {
+        if (!mountedRef.current) return;
+        setCachedItems(unique);
+      }, 0);
+    }
+    captureSoftBaselineEpoch();
+  }, [
+    listReplaceRevision,
+    listReplaceItems,
+    listReplaceBackendOffset,
+    listReplaceCount,
+    listReplaceCountIsAuthoritative,
+    pageSize,
+    setCachedItems,
+    scheduleTimeout,
+    commitHasMore,
   ]);
 
   // [STEP 1] Keep refs in sync with state for stable dependencies
@@ -939,33 +1141,82 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
       const loadResult = await loadWithRetry();
 
       // [PAGINATION FIX] Normalize result - offset/hasMore use backend rows only, never client dedupe
-      const {
-        items: fetchedItems,
+      let {
+        items: pageItems,
         consumedOffset,
         count,
+        countIsAuthoritative,
+        __feedDiag,
       } = normalizeLoadResult(loadResult);
 
-      debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.loadMore");
+      debugRsvpFreshFetch(pageItems, "ProgressiveFeed.loadMore");
 
       const oldOffset = offsetRef.current;
       const requestedLimit = actualPageSize;
-      const fetchedLen = fetchedItems.length;
 
       // Rule 1 — Backend offset: advance by backend rows consumed (raw response length)
-      const backendConsumed = consumedOffset;
-      const nextOffset = oldOffset + backendConsumed;
+      let backendConsumed = consumedOffset;
+      let nextOffset = oldOffset + backendConsumed;
       offsetRef.current = nextOffset;
 
-      const nextHasMore = inferHasMoreAfterPage({
+      let nextHasMore = inferHasMoreAfterPage({
         consumedOffsetThisPage: backendConsumed,
         requestedLimit,
         nextOffset,
         count,
+        countIsAuthoritative,
       });
+
+      // Phase 2B.2B: on genuine exhaustion, wrap into the next cycle and append.
+      if (
+        !nextHasMore &&
+        continuousCycling &&
+        typeof onCycleWrap === "function"
+      ) {
+        let wraps = 0;
+        while (wraps < HOME_FEED_CYCLE_MAX_WRAPS_PER_LOAD) {
+          wraps += 1;
+          const wrapRaw = await onCycleWrap(requestedLimit);
+          if (!wrapRaw) break;
+          const wrapNorm = normalizeLoadResult(wrapRaw);
+          offsetRef.current = wrapNorm.consumedOffset;
+          nextOffset = wrapNorm.consumedOffset;
+          backendConsumed = wrapNorm.consumedOffset;
+          count = wrapNorm.count;
+          countIsAuthoritative = wrapNorm.countIsAuthoritative;
+          __feedDiag = wrapNorm.__feedDiag ?? __feedDiag;
+          nextHasMore = inferHasMoreAfterPage({
+            consumedOffsetThisPage: wrapNorm.consumedOffset,
+            requestedLimit,
+            nextOffset,
+            count,
+            countIsAuthoritative,
+          });
+          if (wrapNorm.items.length === 0) {
+            nextHasMore = false;
+            break;
+          }
+          pageItems = [...pageItems, ...wrapNorm.items];
+          // One successful wrap per loadMore; further pages via sentinel.
+          break;
+        }
+      }
+
+      const fetchedLen = pageItems.length;
       commitHasMore(nextHasMore);
+      emitFeedStopDiag(nextHasMore, {
+        requestedOffset: oldOffset,
+        requestedLimit,
+        postsLength: fetchedLen,
+        count,
+        countIsAuthoritative,
+        consumedOffsetThisPage: backendConsumed,
+        nextOffset,
+        __feedDiag,
+      });
 
       if (DEBUG_PF) {
-        const ids = fetchedItems.map((i) => i.id);
+        const ids = pageItems.map((i) => i.id);
         const first5 = ids.slice(0, 5).join(",");
         const last5 = ids.length > 5 ? ids.slice(-5).join(",") : "";
         const idsStr = ids.length <= 5 ? first5 : `${first5}...${last5}`;
@@ -980,9 +1231,26 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         loadingRef.current = false;
         setIsLoadingMore(false);
         if (DEBUG_PF) {
-          console.log("[PF] loadMore exit: end reached", {
+          console.log("[PF] loadMore exit: displayed empty", {
             logId,
             nextOffset,
+            hasMore: nextHasMore,
+          });
+        }
+        if (nextHasMore) {
+          scheduleRaf(() => {
+            if (
+              chainCountRef.current < MAX_CHAINED_LOADS &&
+              hasMoreRef.current &&
+              !loadingRef.current &&
+              !softRefreshInFlightRef.current &&
+              initialLoadCompleteRef.current
+            ) {
+              chainCountRef.current++;
+              loadMoreRef.current?.();
+            } else {
+              chainCountRef.current = 0;
+            }
           });
         }
       } else {
@@ -994,7 +1262,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         }
 
         // Kick off batch activities fetch BEFORE setItems (feed returns first_image_url only; batch gets full carousel)
-        const idsNeedingActivities = fetchedItems
+        const idsNeedingActivities = pageItems
           .filter(
             (item: T & { activity_count?: number }) =>
               (item.activity_count ?? 0) > 0
@@ -1004,34 +1272,30 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
           batchFetchActivitiesForPosts(idsNeedingActivities);
         }
 
-        // [ORDERING] Keep prev in stable order, append only truly-new items (dedupe by id)
+        // Phase 2B.2B: dedupe by presentation key so cycle-2 real IDs can append.
         setItems((prev) => {
-          const existingIds = new Set(prev.map((p) => p.id));
-          const toAppend = fetchedItems.filter(
-            (item) => !existingIds.has(item.id)
+          const merged = applyMountedPrune(
+            appendUniqueByPresentationKey(prev, pageItems)
           );
-          const merged = [...prev, ...toAppend];
           if (maxItems > 0 && merged.length >= maxItems) {
             commitHasMore(false);
           }
-          // [TASK B] Feed pipeline debug - items appended vs deduped, final UI length
           if (DEBUG_PF) {
-            const dedupedCount = fetchedItems.length - toAppend.length;
             console.log("[FeedPipeline] ProgressiveFeed setItems", {
               logId,
               prevLen: prev.length,
-              fetchedLen: fetchedItems.length,
-              appended: toAppend.length,
-              deduped: dedupedCount,
+              fetchedLen: pageItems.length,
               mergedLen: merged.length,
             });
           }
           debugRsvpMerged(merged, "loadMore-append-merge", {
             prevHadDebugId: prev.some((p) => p.id === DEBUG_RSVP_POST_ID),
-            fetchHadDebugId: fetchedItems.some(
+            fetchHadDebugId: pageItems.some(
               (p) => p.id === DEBUG_RSVP_POST_ID
             ),
-            appendedDebugId: toAppend.some((p) => p.id === DEBUG_RSVP_POST_ID),
+            appendedDebugId: pageItems.some(
+              (p) => p.id === DEBUG_RSVP_POST_ID
+            ),
           });
           return merged;
         });
@@ -1056,26 +1320,11 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         };
         scheduleRaf(() => scheduleRaf(tryChain));
 
-        // Update cache asynchronously (non-blocking)
+        // Update cache asynchronously (non-blocking) — parent compact-bounds snapshot
         if (setCachedItems) {
-          const itemsToCache = [...fetchedItems];
           scheduleTimeout(() => {
             if (!mountedRef.current || !isVisibleRef.current) return;
-            const currentItems = itemsRef.current;
-            const existingIds = new Set(currentItems.map((i) => i.id));
-            const toAppend = itemsToCache.filter(
-              (item) => !existingIds.has(item.id)
-            );
-            const mergedItems = [...currentItems, ...toAppend];
-            if (DEBUG_PF) {
-              console.log("[PF] cache update", {
-                logId,
-                currentLen: currentItems.length,
-                addLen: itemsToCache.length,
-                mergedLen: mergedItems.length,
-              });
-            }
-            setCachedItems(mergedItems);
+            setCachedItems(itemsRef.current);
           }, 0);
         }
       }
@@ -1121,6 +1370,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     isSentinelNearBottom,
     tabId,
     commitHasMore,
+    emitFeedStopDiag,
   ]);
 
   // Store loadMore in ref for use in other hooks
@@ -1271,6 +1521,8 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
               items: fetchedItems,
               consumedOffset,
               count,
+              countIsAuthoritative,
+              __feedDiag,
             } = normalizeLoadResult(loadResult);
 
             debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.initialLoad");
@@ -1288,8 +1540,19 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
               requestedLimit,
               nextOffset,
               count,
+              countIsAuthoritative,
             });
             commitHasMore(nextHasMore);
+            emitFeedStopDiag(nextHasMore, {
+              requestedOffset: oldOffset,
+              requestedLimit,
+              postsLength: fetchedLen,
+              count,
+              countIsAuthoritative,
+              consumedOffsetThisPage: consumedOffset,
+              nextOffset,
+              __feedDiag,
+            });
 
             if (DEBUG_PF) {
               const ids = fetchedItems.map((i) => i.id);
@@ -1335,11 +1598,9 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
               scheduleRaf(() => scheduleRaf(tryChainInitial));
 
               setItems((prev) => {
-                const existingIds = new Set(prev.map((p) => p.id));
-                const toAppend = fetchedItems.filter(
-                  (item) => !existingIds.has(item.id)
+                const merged = applyMountedPrune(
+                  appendUniqueByPresentationKey(prev, fetchedItems)
                 );
-                const merged = [...prev, ...toAppend];
                 if (DEBUG_PF) {
                   console.log(
                     "[FeedPipeline] ProgressiveFeed initialLoad setItems",
@@ -1347,8 +1608,6 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
                       logId,
                       prevLen: prev.length,
                       fetchedLen: fetchedItems.length,
-                      appended: toAppend.length,
-                      deduped: fetchedItems.length - toAppend.length,
                       mergedLen: merged.length,
                     }
                   );
@@ -1358,7 +1617,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
                   fetchHadDebugId: fetchedItems.some(
                     (p) => p.id === DEBUG_RSVP_POST_ID
                   ),
-                  appendedDebugId: toAppend.some(
+                  appendedDebugId: fetchedItems.some(
                     (p) => p.id === DEBUG_RSVP_POST_ID
                   ),
                 });
@@ -1375,12 +1634,29 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
               }
               initialLoadGuardRef.current = false;
             } else {
-              commitHasMore(false);
               loadingRef.current = false;
               setIsLoadingMore(false);
               initialLoadCompleteRef.current = true;
+              initialLoadGuardRef.current = false;
               if (DEBUG_PF) {
-                console.log("[PF] initialLoad no items", { logId });
+                console.log("[PF] initialLoad no displayed items", {
+                  logId,
+                  hasMore: nextHasMore,
+                });
+              }
+              if (nextHasMore) {
+                scheduleRaf(() => scheduleRaf(() => {
+                  if (
+                    chainCountRef.current < MAX_CHAINED_LOADS &&
+                    hasMoreRef.current &&
+                    !loadingRef.current &&
+                    !softRefreshInFlightRef.current &&
+                    initialLoadCompleteRef.current
+                  ) {
+                    chainCountRef.current++;
+                    loadMoreRef.current?.();
+                  }
+                }));
               }
             }
           })
@@ -1467,6 +1743,10 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     const ready =
       initialLoadCompleteRef.current || itemsRef.current.length > 0;
     if (!ready || softRefreshInFlightRef.current) return;
+    if (skipOffsetZeroHeadReplace) {
+      captureSoftBaselineEpoch();
+      return;
+    }
 
     let cancelled = false;
     softRefreshInFlightRef.current = true;
@@ -1493,14 +1773,34 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         const fetchedItems = normalized.items;
         const consumedOffset = normalized.consumedOffset;
         const count = normalized.count;
+        const countIsAuthoritative = normalized.countIsAuthoritative;
+        const __feedDiag = normalized.__feedDiag;
 
         debugRsvpFreshFetch(fetchedItems, "ProgressiveFeed.softRefresh");
 
         const fetchedLen = fetchedItems.length;
+        const nextOffset = consumedOffset;
+        const nextHasMore = inferHasMoreAfterPage({
+          consumedOffsetThisPage: consumedOffset,
+          requestedLimit: runLimit,
+          nextOffset,
+          count,
+          countIsAuthoritative,
+        });
 
-        if (fetchedLen === 0) {
-          offsetRef.current = 0;
+        if (fetchedLen === 0 && !nextHasMore) {
+          offsetRef.current = nextOffset;
           commitHasMore(false);
+          emitFeedStopDiag(false, {
+            requestedOffset: 0,
+            requestedLimit: runLimit,
+            postsLength: 0,
+            count,
+            countIsAuthoritative,
+            consumedOffsetThisPage: consumedOffset,
+            nextOffset,
+            __feedDiag,
+          });
           setItems([]);
           if (setCachedItems) {
             scheduleTimeout(() => {
@@ -1516,18 +1816,54 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
           return;
         }
 
-        const firstPublished = fetchedItems.find((it) => !isDraftRow(it));
+        if (fetchedLen === 0 && nextHasMore) {
+          offsetRef.current = nextOffset;
+          commitHasMore(true);
+          emitFeedStopDiag(true, {
+            requestedOffset: 0,
+            requestedLimit: runLimit,
+            postsLength: 0,
+            count,
+            countIsAuthoritative,
+            consumedOffsetThisPage: consumedOffset,
+            nextOffset,
+            __feedDiag,
+          });
+          captureSoftBaselineEpoch();
+          chainCountRef.current = 0;
+          scheduleRaf(() => scheduleRaf(() => {
+            if (
+              chainCountRef.current < MAX_CHAINED_LOADS &&
+              hasMoreRef.current &&
+              !loadingRef.current &&
+              !softRefreshInFlightRef.current &&
+              initialLoadCompleteRef.current
+            ) {
+              chainCountRef.current++;
+              loadMoreRef.current?.();
+            }
+          }));
+          onSoftRefreshDone?.({
+            returnedCount: 0,
+            firstPostId: null,
+          });
+          return;
+        }
 
-        const nextOffset = consumedOffset;
-        const nextHasMore = inferHasMoreAfterPage({
-          consumedOffsetThisPage: consumedOffset,
-          requestedLimit: runLimit,
-          nextOffset,
-          count,
-        });
+        const firstPublished = fetchedItems.find((it) => !isDraftRow(it));
 
         offsetRef.current = nextOffset;
         commitHasMore(nextHasMore);
+        emitFeedStopDiag(nextHasMore, {
+          requestedOffset: 0,
+          requestedLimit: runLimit,
+          postsLength: fetchedLen,
+          count,
+          countIsAuthoritative,
+          consumedOffsetThisPage: consumedOffset,
+          nextOffset,
+          __feedDiag,
+        });
 
         const idsNeedingActivities = fetchedItems
           .filter(
@@ -1636,12 +1972,16 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     isSentinelNearBottom,
     isDraftRow,
     commitHasMore,
+    emitFeedStopDiag,
+    skipOffsetZeroHeadReplace,
   ]);
 
   // Safety check: Update offsetRef if initialItems prop changes after mount
   // This handles edge cases where initialItems changes without component remounting
   // (Normally components should remount with a new key when filters change)
   useEffect(() => {
+    if (skipOffsetZeroHeadReplace) return;
+    if (lastListReplaceRevisionAppliedRef.current > 0) return;
     if (initialItems && initialItems.length > 0) {
       const newLength = initialItems.length;
       // Only update if offsetRef doesn't match and we haven't loaded more items yet
@@ -1652,7 +1992,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         offsetRef.current = newLength;
       }
     }
-  }, [initialItems, items.length]);
+  }, [initialItems, items.length, skipOffsetZeroHeadReplace]);
 
   // Intersection Observer for lazy loading
   useEffect(() => {
@@ -1803,10 +2143,13 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   const isLoading =
     externalLoading || isValidating || emptyAwaitingBootstrap;
 
-  // Error display
+  // Error display (copy only — loading/cache/retry mechanics unchanged)
   if (error && items.length === 0) {
+    const emptyErrorCopy = getProgressiveFeedErrorCopy({ hasItems: false });
     return (
       <FeedLoadErrorState
+        title={emptyErrorCopy.title}
+        body={emptyErrorCopy.body}
         onRetry={() => {
           setError(null);
           loadMore();
@@ -1817,6 +2160,9 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
   // Empty state
   if (!isLoading && items.length === 0) {
+    if (emptySurface) {
+      return <>{emptySurface}</>;
+    }
     return (
       <div className="w-full py-8 text-center">
         <p className="text-sm text-[var(--text)]/70">{emptyMessage}</p>
@@ -1824,14 +2170,24 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     );
   }
 
+  const itemsErrorCopy =
+    error && items.length > 0
+      ? getProgressiveFeedErrorCopy({
+          hasItems: true,
+          isOffline: isBrowserOffline(),
+        })
+      : null;
+
   return (
     <div
       ref={containerRef as React.RefObject<HTMLDivElement>}
       className="w-full"
     >
-      {error && items.length > 0 && (
+      {error && items.length > 0 && itemsErrorCopy && (
         <FeedLoadErrorState
           compact
+          title={itemsErrorCopy.title}
+          body={itemsErrorCopy.body}
           onRetry={() => {
             setError(null);
             loadMore();
@@ -1850,9 +2206,10 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         >
           {itemsToRender.map((item, index) => {
             const actualIndex = virtualScrolling.startIndex + index;
+            const rowKey = itemPresentationKey(item);
             return (
               <div
-                key={item.id}
+                key={rowKey}
                 className={feedItemShellClass(item.id)}
                 style={{
                   position: "absolute",
@@ -1869,11 +2226,14 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         // Normal mode (render all items with progressive animation)
         // Note: renderItem should return elements with keys, we don't wrap in Fragment
         <div className="feed-item-container">
-          {itemsToRender.map((item, index) => (
-            <div key={item.id} className={feedItemShellClass(item.id)}>
-              {renderItem(item, index)}
-            </div>
-          ))}
+          {itemsToRender.map((item, index) => {
+            const rowKey = itemPresentationKey(item);
+            return (
+              <div key={rowKey} className={feedItemShellClass(item.id)}>
+                {renderItem(item, index)}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1886,13 +2246,17 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         </div>
       )}
 
-      {/* "No more posts" message when feed ends */}
+      {/* "No more posts" — only when hasMore is false (filtered end, or wrap failed empty) */}
       {!hasMore && items.length > 0 && (
-        <div className="w-full py-8 text-center">
-          <p className="text-sm text-[var(--text)]/70">
-            You're all caught up! No more posts to show.
-          </p>
-        </div>
+        exhaustedSurface ? (
+          exhaustedSurface
+        ) : (
+          <div className="w-full py-8 text-center">
+            <p className="text-sm text-[var(--text)]/70">
+              You're all caught up! No more posts to show.
+            </p>
+          </div>
+        )
       )}
 
       {/* Sentinel for intersection observer */}

@@ -37,8 +37,8 @@ const allSuggestions = [
 type Props = {
   tags: string[];
   onTagsChange: Dispatch<SetStateAction<string[]>>;
-  /** `embedded` = inside finalize caption card; `standalone` = bordered section on categories */
-  variant?: "embedded" | "standalone";
+  /** `embedded` = caption card; `panel`/`toolbar` = finalize composer; `standalone` = categories */
+  variant?: "embedded" | "standalone" | "panel" | "toolbar";
   /** Fired when the hashtag text input receives focus (finalize: close metadata panels). */
   onInputFocus?: () => void;
   /** Temporary nudge after publish-warning modal Back */
@@ -82,6 +82,9 @@ export default function CreateFlowPostTagsField({
   const [showHashtagHelp, setShowHashtagHelp] = useState(false);
 
   const isEmbedded = variant === "embedded";
+  const isPanel = variant === "panel" || variant === "toolbar";
+  const isToolbar = variant === "toolbar";
+  const composerStyle = isEmbedded || isPanel;
 
   useEffect(() => {
     return () => {
@@ -91,10 +94,10 @@ export default function CreateFlowPostTagsField({
 
   const suggestions = useMemo(
     () =>
-      isEmbedded
+      isEmbedded || isPanel
         ? []
         : allSuggestions.filter((s) => !tags.includes(s)).slice(0, 6),
-    [tags, isEmbedded]
+    [tags, isEmbedded, isPanel]
   );
 
   const atTagLimit = tags.length >= CREATE_FLOW_HASHTAG_MAX;
@@ -117,7 +120,7 @@ export default function CreateFlowPostTagsField({
   };
 
   const scheduleTagBlurCommit = () => {
-    if (isEmbedded) {
+    if (composerStyle) {
       if (tagBlurTimerRef.current) clearTimeout(tagBlurTimerRef.current);
       tagBlurTimerRef.current = setTimeout(() => {
         tagBlurTimerRef.current = null;
@@ -150,7 +153,7 @@ export default function CreateFlowPostTagsField({
   const removeTag = (t: string) =>
     onTagsChange((prev) => prev.filter((x) => x !== t));
 
-  const chipClass = isEmbedded
+  const chipClass = composerStyle
     ? "inline-flex items-center gap-0.5 rounded-full border border-[color-mix(in_oklab,var(--brand)_42%,var(--border))] bg-[color-mix(in_oklab,var(--brand)_12%,var(--surface))] px-1.5 py-0.5 text-[10px] font-medium leading-tight text-neutral-900 shadow-[0_1px_2px_rgba(0,0,0,0.06)] app-dark:border-[color-mix(in_oklab,var(--brand)_45%,white)] app-dark:bg-[color-mix(in_oklab,var(--brand)_32%,rgba(15,15,18,0.92))] app-dark:text-white app-dark:shadow-[0_1px_4px_rgba(0,0,0,0.45)]"
     : "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs bg-[var(--surface)]/40 text-[var(--text)]";
 
@@ -176,11 +179,23 @@ export default function CreateFlowPostTagsField({
             {tags.length}/{CREATE_FLOW_HASHTAG_MAX}
           </span>
         </div>
+      ) : isToolbar ? (
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <span className="text-[12px] font-semibold text-[var(--text)]">
+            Tags
+          </span>
+          <span
+            className="text-[10px] tabular-nums text-[var(--text)]/50"
+            aria-live="polite"
+          >
+            {tags.length}/{CREATE_FLOW_HASHTAG_MAX}
+          </span>
+        </div>
       ) : (
         <>
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide app-light:!text-neutral-900 app-dark:!text-white/88">
-              Hashtags
+              {isPanel ? "Tags" : "Hashtags"}
             </span>
             <div className="flex shrink-0 items-center gap-2">
               <span
@@ -193,7 +208,7 @@ export default function CreateFlowPostTagsField({
                 type="button"
                 className="rounded-full p-0.5 text-neutral-500 transition-colors hover:text-neutral-800 app-dark:text-white/55 app-dark:hover:text-white/80"
                 aria-expanded={showHashtagHelp}
-                aria-label="About hashtags"
+                aria-label={isPanel ? "About tags" : "About hashtags"}
                 onClick={() => setShowHashtagHelp((s) => !s)}
               >
                 <PiInfo className="h-3.5 w-3.5" aria-hidden />
@@ -202,8 +217,9 @@ export default function CreateFlowPostTagsField({
           </div>
           {showHashtagHelp ? (
             <p className="mb-1.5 text-[10px] leading-snug app-light:text-neutral-600 app-dark:text-white/50">
-              A few hashtags make your post easier to find in search and help
-              the right people discover it.
+              {isPanel
+                ? "A few tags make your post easier to find in search and help the right people discover it."
+                : "A few hashtags make your post easier to find in search and help the right people discover it."}
             </p>
           ) : null}
         </>
@@ -213,7 +229,7 @@ export default function CreateFlowPostTagsField({
         <div
           className={[
             "flex flex-wrap",
-            isEmbedded ? "gap-1.5 mb-4" : "gap-2 mb-2",
+            isToolbar ? "gap-1.5 mb-2" : isEmbedded || isPanel ? "gap-1.5 mb-4" : "gap-2 mb-2",
           ].join(" ")}
           onPointerDownCapture={(e) => {
             if ((e.target as HTMLElement).closest("button")) {
@@ -227,7 +243,7 @@ export default function CreateFlowPostTagsField({
               <button
                 type="button"
                 className={
-                  isEmbedded
+                  composerStyle
                     ? "opacity-70 hover:opacity-100 text-[10px] leading-none pl-0.5 text-neutral-700 hover:text-neutral-900 app-dark:text-white/85 app-dark:hover:text-white"
                     : "opacity-80 hover:opacity-100"
                 }
@@ -248,7 +264,7 @@ export default function CreateFlowPostTagsField({
           }}
           className="relative"
         >
-          {isEmbedded ? (
+          {composerStyle ? (
             <input
               ref={tagInputRef}
               value={tagInput}
@@ -300,10 +316,17 @@ export default function CreateFlowPostTagsField({
               enterKeyHint="done"
               placeholder={
                 atTagLimit
-                  ? `Max ${CREATE_FLOW_HASHTAG_MAX} hashtags`
-                  : "Add hashtags people might search for"
+                  ? `Max ${CREATE_FLOW_HASHTAG_MAX} tags`
+                  : isToolbar || isPanel
+                    ? "Add tags people might search for"
+                    : "Add hashtags people might search for"
               }
-              className="w-full rounded-[var(--create-radius-field)] border-2 border-[var(--create-border-primary-field)] bg-white px-2.5 py-1.5 text-[13px] app-light:!text-neutral-900 outline-none app-light:placeholder:text-neutral-500 app-dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] app-dark:!text-white/92 app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] app-dark:placeholder:text-white/40 focus:border-[var(--brand)]/55 focus:ring-1 focus:ring-[color-mix(in_oklab,var(--brand)_28%,transparent)] app-dark:focus:border-[var(--brand)]/65 disabled:opacity-50"
+              className={
+                isToolbar
+                  ? "w-full border-0 bg-transparent px-0 py-1.5 text-[16px] font-normal leading-snug text-[var(--text)] outline-none shadow-none placeholder:text-[var(--text)]/40 placeholder:transition-colors focus:shadow-[inset_0_-1.5px_0_0_color-mix(in_oklab,var(--brand)_45%,transparent)] disabled:opacity-50"
+                  : "w-full rounded-[var(--create-radius-field)] border-2 border-[var(--create-border-primary-field)] bg-white px-2.5 py-2 text-[16px] leading-snug app-light:!text-neutral-900 outline-none app-light:placeholder:text-neutral-500 app-dark:bg-[color-mix(in_oklab,var(--surface)_12%,transparent)] app-dark:!text-white/92 app-dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] app-dark:placeholder:text-white/40 focus:border-[var(--brand)]/55 focus:ring-1 focus:ring-[color-mix(in_oklab,var(--brand)_28%,transparent)] app-dark:focus:border-[var(--brand)]/65 disabled:opacity-50"
+              }
+              style={{ fontSize: 16 }}
             />
           ) : (
             <div className="flex items-center border border-[var(--create-border-subtle)] rounded-[var(--create-radius-field)] px-3 py-2">
@@ -321,7 +344,7 @@ export default function CreateFlowPostTagsField({
                 onFocus={() => onInputFocus?.()}
                 enterKeyHint="done"
                 placeholder="Add hashtags people might search for"
-                className="flex-1 bg-transparent text-sm text-[var(--text)] outline-none pr-16"
+                className="flex-1 bg-transparent text-[16px] text-[var(--text)] outline-none pr-16"
               />
               <button
                 type="submit"
@@ -343,7 +366,7 @@ export default function CreateFlowPostTagsField({
           <div
             className={[
               "flex flex-wrap",
-              isEmbedded ? "gap-1 mt-1.5" : "gap-2 mt-2",
+              isEmbedded || isPanel ? "gap-1 mt-1.5" : "gap-2 mt-2",
             ].join(" ")}
             onPointerDownCapture={(e) => {
               if ((e.target as HTMLElement).closest("button")) {
@@ -357,7 +380,7 @@ export default function CreateFlowPostTagsField({
                 type="button"
                 onClick={() => addTag(s)}
                 className={
-                  isEmbedded
+                  composerStyle
                     ? "text-[10px] px-1.5 py-0.5 rounded-full border border-[var(--create-border-panel-line-soft)] text-[var(--text)]/55 hover:bg-[var(--surface)]/25"
                     : "text-xs px-2 py-1 rounded-full border border-[var(--create-border-subtle)] text-[var(--text)]/85 hover:bg-[var(--surface)]/40"
                 }
@@ -371,11 +394,11 @@ export default function CreateFlowPostTagsField({
     </>
   );
 
-  if (isEmbedded) {
+  if (composerStyle) {
     return (
       <div
         className={[
-          "mt-2 w-full rounded-[var(--create-radius-field)]",
+          isPanel ? "w-full" : "mt-2 w-full rounded-[var(--create-radius-field)]",
           advisoryHighlight ? CREATE_FLOW_ADVISORY_FIELD_HIGHLIGHT_CLASS : "",
         ]
           .filter(Boolean)

@@ -57,6 +57,51 @@
   }
 }
 
+/* People Discover: source / note candidate-change polish */
+@keyframes peopleDiscoverTextIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes peopleDuoModeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--duo-enter-y, 36px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes peopleDuoModeFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes peopleDiscoverTextIn {
+    from {
+      opacity: 0;
+      transform: none;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
 /* Shake animation */
 @keyframes shake {
   0%,
@@ -556,6 +601,53 @@
 .rdp-theme.rdp-theme--modal .rdp-day_button:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--brand) 45%, transparent) !important;
   outline-offset: 0 !important;
+}
+
+/*
+ * Place Duo only (`rdp-theme--full-width` via dayPickerClassName).
+ * Create Finalize keeps fixed 44px day cells + modal padding.
+ * Root cause of inset grid: fixed --rdp-day-width (44px × 7) inside a wider panel.
+ */
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-months,
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-month,
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-month_grid {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-month_grid {
+  table-layout: fixed !important;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-weekdays,
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-week {
+  width: 100% !important;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-weekday,
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-day {
+  width: calc(100% / 7) !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: var(--rdp-day-height);
+  padding: 0 !important;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-day_button {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: var(--rdp-day_button-height) !important;
+  margin-inline: auto;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-month_caption {
+  width: 100% !important;
+  justify-content: center;
+}
+.rdp-theme.rdp-theme--modal.rdp-theme--full-width .rdp-nav {
+  inset-inline: 0 !important;
+  width: 100% !important;
 }
 
 /* pill container must be position:relative */

@@ -11,6 +11,7 @@ import {
   LIGHTBOX_SWIPE_VERTICAL_THRESHOLD,
 } from "../lib/lightboxSwipeDim";
 import { acquirePullToRefreshBlock } from "../lib/pullToRefreshBlock";
+import { useOverlayBackgroundScrollLock } from "../hooks/useOverlayBackgroundScrollLock";
 
 /**
  * Full-screen avatar / single-image preview for profile pages.
@@ -48,14 +49,7 @@ export default function ImageLightbox({
     }, 160);
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
+  useOverlayBackgroundScrollLock(open);
 
   useEffect(() => {
     if (!open) return;

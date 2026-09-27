@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700;800;900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600;700;800;900&family=Quicksand:wght@400;500;600&display=swap");
 
 @import "tailwindcss";
 
@@ -17,8 +17,13 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
+  /* Mine portrait display names — rounded / playful; medium weight, not heavy. */
+  --font-people-display: "Quicksand", "Poppins", ui-rounded, sans-serif;
+
   /* Theme variables */
   --bg: #0b0b0c;
+  /** Main app canvas (pages / html shell). Overlays keep using --bg / surfaces. */
+  --app-canvas: var(--bg);
   --surface: #151516;
   --surface-2: #1b1c1e;
   --text: #ffffff;
@@ -33,6 +38,8 @@
   --ring: rgba(255, 255, 255, 0.28);
   --brand: #f7d047;
   --brand-dark: #d4a03e; /* Darker yellow for better text contrast */
+  /** Accent text/borders on surfaces — bright brand in dark mode. */
+  --brand-readable: var(--brand);
   --green-bg: rgba(34, 197, 94, 0.15); /* Green background with transparency */
   --green-text: rgb(34, 197, 94); /* Dark green text */
   --green-border: rgba(34, 197, 94, 0.3); /* Green border */
@@ -92,15 +99,17 @@
   );
   /* Create flow only: extra bottom inset when keyboard is open (set by CreateFlowKeyboardShell) */
   --create-keyboard-inset: 0px;
+  /* Finalize V4: measured height of Detail/+ Section writing toolbar */
+  --create-finalize-writing-toolbar-height: 28px;
 
   /* Frosted glass effect variables (dark theme) */
   --glass-bg: rgba(
     21,
     21,
     22,
-    0.4
-  ); /* Semi-transparent dark background - further reduced intensity */
-  --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
+    0.78
+  ); /* Frosted panel fill — closer to solid, blur still shows through */
+  --glass-blur: 16px; /* Backdrop blur amount */
   --glass-active-bg: rgba(
     255,
     255,
@@ -155,29 +164,29 @@
   --brand-glass-border: rgba(247, 208, 71, 0.5);
   --brand-glass-text: var(--brand-ink);
 
-  /* Edge gradients: theme-aware (use var(--bg)). Edit once, applies everywhere. */
+  /* Edge gradients: follow main canvas (not overlay --bg). */
   --gradient-from-top: linear-gradient(
     to bottom,
-    var(--bg) 0%,
+    var(--app-canvas) 0%,
     transparent 100%
   ); /* Solid at top → transparent (top bar region) */
   --gradient-from-bottom: linear-gradient(
     to top,
-    var(--bg) 0%,
+    var(--app-canvas) 0%,
     transparent 100%
   ); /* Solid at bottom → transparent (bottom tab region) */
   /* Native shell: short scrim under status bar when main header scrolls away (Capacitor only in UI). */
   --gradient-notch-cap: linear-gradient(
     to bottom,
-    var(--bg) 0%,
-    color-mix(in oklab, var(--bg) 28%, transparent) 52%,
+    var(--app-canvas) 0%,
+    color-mix(in oklab, var(--app-canvas) 28%, transparent) 52%,
     transparent 100%
   );
   /* Short fade over system nav / home indicator strip (above tab chrome). */
   --gradient-bottom-system-scrim: linear-gradient(
     to top,
-    var(--bg) 0%,
-    color-mix(in oklab, var(--bg) 42%, transparent) 45%,
+    var(--app-canvas) 0%,
+    color-mix(in oklab, var(--app-canvas) 42%, transparent) 45%,
     transparent 100%
   );
   /* Create chooser bottom CTA — selected Hangout/Experience (high-contrast surface; dark theme default) */
@@ -321,6 +330,7 @@
 
 .theme-light {
   --bg: #ffffff;
+  --app-canvas: #fffbf5;
   --surface: #f2f3f6;
   --surface-2: #e8eaef;
   --text: #0b0b0c;
@@ -331,7 +341,8 @@
   --border-contrast: rgba(0, 0, 0, 1); /* High contrast border for logos */
   --ring: rgba(0, 0, 0, 0.28);
   --brand: #f7d047;
-  --brand-dark: #d4a03e; /* Darker yellow for better text contrast */
+  --brand-dark: #b45309; /* Amber-gold — readable on white, still on-brand */
+  --brand-readable: var(--brand-dark);
   --green-bg: rgba(
     21,
     128,
@@ -391,9 +402,9 @@
     242,
     243,
     246,
-    0.45
-  ); /* Semi-transparent light background - further reduced intensity */
-  --glass-blur: 6px; /* Backdrop blur amount - further reduced for better visibility */
+    0.82
+  ); /* Frosted panel fill — closer to solid, blur still shows through */
+  --glass-blur: 16px; /* Backdrop blur amount */
   --glass-active-bg: rgba(
     255,
     255,
@@ -441,27 +452,27 @@
   --brand-glass-border: rgba(247, 208, 71, 0.6);
   --brand-glass-text: var(--brand-ink);
 
-  /* Edge gradients: inherit from :root (use var(--bg), already theme-aware). */
+  /* Edge gradients: follow --app-canvas (main pages), leave --bg for overlays. */
   --gradient-from-top: linear-gradient(
     to bottom,
-    var(--bg) 0%,
+    var(--app-canvas) 0%,
     transparent 100%
   );
   --gradient-from-bottom: linear-gradient(
     to top,
-    var(--bg) 0%,
+    var(--app-canvas) 0%,
     transparent 100%
   );
   --gradient-notch-cap: linear-gradient(
     to bottom,
-    var(--bg) 0%,
-    color-mix(in oklab, var(--bg) 28%, transparent) 52%,
+    var(--app-canvas) 0%,
+    color-mix(in oklab, var(--app-canvas) 28%, transparent) 52%,
     transparent 100%
   );
   --gradient-bottom-system-scrim: linear-gradient(
     to top,
-    var(--bg) 0%,
-    color-mix(in oklab, var(--bg) 42%, transparent) 45%,
+    var(--app-canvas) 0%,
+    color-mix(in oklab, var(--app-canvas) 42%, transparent) 45%,
     transparent 100%
   );
 
@@ -557,7 +568,7 @@
 html,
 body,
 #root {
-  background: var(--bg);
+  background: var(--app-canvas);
   color: var(--text);
 }
 
@@ -568,6 +579,69 @@ body,
   margin-right: auto;
   padding-left: var(--gutter);
   padding-right: var(--gutter);
+  /*
+   * Clip decorative social-shelf ::after (100vw) at the column/phone edge.
+   * Does not touch html/body scroll. Vertical overflow stays visible.
+   */
+  overflow-x: clip;
+}
+
+/* Duo/Group inverse contrast shelf — paint-only right bleed (Feed + Profile). */
+.social-action-contrast-shelf--bleed::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 100vw;
+  max-width: 100vw;
+  background: inherit;
+  pointer-events: none;
+}
+
+/*
+ * Subtle resolving shimmer on the shelf plate only (under Duo/Group).
+ * Does not change geometry; overflow only while resolving so bleed ::after stays intact otherwise.
+ */
+@keyframes social-shelf-resolving-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+.social-action-contrast-shelf[data-social-shelf-resolving="true"] {
+  overflow: hidden;
+}
+
+.social-action-contrast-shelf[data-social-shelf-resolving="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    color-mix(in oklab, var(--bg) 22%, transparent) 42%,
+    color-mix(in oklab, var(--bg) 38%, transparent) 50%,
+    color-mix(in oklab, var(--bg) 22%, transparent) 58%,
+    transparent 100%
+  );
+  opacity: 0.55;
+  animation: social-shelf-resolving-shimmer 1.35s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .social-action-contrast-shelf[data-social-shelf-resolving="true"]::before {
+    animation: none;
+    opacity: 0.12;
+    background: color-mix(in oklab, var(--bg) 28%, transparent);
+    transform: none;
+  }
 }
 
 .page-content {
@@ -651,9 +725,9 @@ body,
 
 .ui-input {
   width: 100%;
-  min-height: var(--auth-control-height, 36px);
+  min-height: var(--auth-control-height, 40px);
   padding: 0 12px;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.35;
   color: var(--text);
   background: var(--glass-active-bg);
@@ -853,7 +927,497 @@ input:focus {
   }
 }
 
-/* Owl companion message modal — open from bottom-tab peek */
+@keyframes pop {
+  from {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Owl Flap — stage-up ripple from the owl sprite */
+@keyframes owl-flap-stage-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.45);
+    opacity: 0.88;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(3.4);
+    opacity: 0;
+  }
+}
+
+.owl-flap-stage-ripple {
+  animation: owl-flap-stage-ripple 640ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  border: 2px solid var(--brand);
+  background: color-mix(in oklab, var(--brand) 18%, transparent);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--brand) 35%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owl-flap-stage-ripple {
+    animation-duration: 1ms;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .group\/social:active [data-social-face] {
+    transform: none !important;
+  }
+  .social-pill-attention-press,
+  .social-pill-attention-active [data-social-face] {
+    animation: none !important;
+    transform: none !important;
+  }
+  .group\/social:active [data-social-ripple],
+  .social-pill-attention-active [data-social-ripple] {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .group\/social:active [data-social-glow] {
+    opacity: 1 !important;
+  }
+}
+
+/*
+ * Active Duo/Group ambient glow — biased left/bottom (matches green extrusion).
+ * Soft, local, paint-only; slight dip on press.
+ */
+.social-pill-active-glow {
+  background: transparent;
+  box-shadow:
+    -3px 4px 12px 2px color-mix(in oklab, var(--green-text) 26%, transparent),
+    -1px 2px 5px 0 color-mix(in oklab, var(--green-text) 16%, transparent);
+  opacity: 1;
+  transition: opacity 100ms ease-out;
+}
+
+html.theme-light .social-pill-active-glow {
+  box-shadow:
+    -3px 4px 13px 2px color-mix(in oklab, var(--green-text) 30%, transparent),
+    -1px 2px 6px 0 color-mix(in oklab, var(--green-text) 18%, transparent);
+}
+
+html:not(.theme-light) .social-pill-active-glow {
+  box-shadow:
+    -3px 4px 12px 2px color-mix(in oklab, var(--green-text) 22%, transparent),
+    -1px 2px 5px 0 color-mix(in oklab, var(--green-text) 14%, transparent);
+}
+
+.group\/social:active .social-pill-active-glow {
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .social-pill-active-glow {
+    transition: none;
+  }
+}
+
+/* Subtle expanding ripple on real press + synthetic attention (visual only). */
+@keyframes social-pill-ripple-expand {
+  0% {
+    opacity: 0.42;
+    transform: scale(0.88);
+  }
+  45% {
+    opacity: 0.28;
+    transform: scale(1.35);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.72);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .group\/social:active [data-social-ripple] {
+    animation: social-pill-ripple-expand 380ms ease-out;
+  }
+
+  .social-pill-attention-active [data-social-ripple] {
+    animation: social-pill-ripple-expand 400ms ease-out;
+  }
+
+  .social-pill-attention-active [data-social-face] {
+    animation: social-pill-attention-press 170ms ease-out;
+  }
+}
+
+/* Home search dock — one-shot Search users hint (posts empty). */
+@keyframes home-search-users-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand) 0%, transparent);
+  }
+  35% {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand) 45%, transparent);
+  }
+}
+
+@keyframes home-search-users-ripple {
+  0% {
+    opacity: 0.4;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.55);
+  }
+}
+
+.home-search-users-hint {
+  isolation: isolate;
+  overflow: visible;
+}
+
+.home-search-users-hint.home-search-users-hint--play {
+  animation: home-search-users-pulse 720ms ease-out 1;
+}
+
+.home-search-users-hint__wave {
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1.5px solid color-mix(in oklab, var(--brand) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.home-search-users-hint.home-search-users-hint--play
+  .home-search-users-hint__wave--a {
+  animation: home-search-users-ripple 720ms ease-out 1;
+}
+
+.home-search-users-hint.home-search-users-hint--play
+  .home-search-users-hint__wave--b {
+  animation: home-search-users-ripple 720ms ease-out 140ms 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-search-users-hint {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand) 40%, transparent);
+  }
+
+  .home-search-users-hint.home-search-users-hint--play {
+    animation: none;
+  }
+
+  .home-search-users-hint__wave {
+    display: none;
+  }
+}
+
+/* Bottom social-action toast (Duo success; reusable for Group later). */
+@keyframes social-action-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes social-action-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.social-action-toast--visible {
+  animation: social-action-toast-in 220ms ease-out both;
+}
+
+.social-action-toast--hidden {
+  animation: social-action-toast-out 160ms ease-in both;
+}
+
+/*
+ * Vertical swipe recognition on capsule; browser may keep horizontal pan.
+ * Scoped to toast only — not Toaster / body / shell.
+ */
+.social-action-toast {
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
+  overflow: visible;
+}
+
+.social-action-toast--exiting-up,
+.social-action-toast--exiting-down {
+  animation: none !important;
+  pointer-events: none;
+}
+
+.social-action-toast--exiting-up.social-action-toast--exit-armed {
+  transform: translateY(-130%);
+  opacity: 0;
+}
+
+.social-action-toast--exiting-down.social-action-toast--exit-armed {
+  transform: translateY(130%);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .social-action-toast--visible,
+  .social-action-toast--hidden {
+    animation: none !important;
+    opacity: 1;
+  }
+
+  .social-action-toast--exiting-up.social-action-toast--exit-armed,
+  .social-action-toast--exiting-down.social-action-toast--exit-armed {
+    transition: none !important;
+  }
+}
+
+/* Duo unified note editor — one-shot empty guide accent */
+@keyframes duo-note-placeholder-pulse {
+  0% {
+    color: color-mix(in oklab, var(--text) 42%, transparent);
+  }
+  35% {
+    color: var(--brand);
+  }
+  100% {
+    color: color-mix(in oklab, var(--text) 42%, transparent);
+  }
+}
+
+.duo-note-canvas--placeholder-pulse::placeholder {
+  animation: duo-note-placeholder-pulse 700ms ease-out both;
+}
+
+.duo-note-guide--pulse {
+  animation: duo-note-placeholder-pulse 700ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duo-note-canvas--placeholder-pulse::placeholder,
+  .duo-note-guide--pulse {
+    animation: none;
+  }
+}
+
+/* Create Finalize — one-shot caption-required placeholder emphasis (stays on brand). */
+@keyframes create-finalize-caption-required-pulse {
+  0%,
+  100% {
+    color: var(--brand);
+    opacity: 1;
+  }
+  40% {
+    color: var(--brand);
+    opacity: 0.55;
+  }
+}
+
+.create-finalize-caption--required-pulse::placeholder {
+  animation: create-finalize-caption-required-pulse 700ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-finalize-caption--required-pulse::placeholder {
+    animation: none;
+  }
+}
+
+/* Create Finalize caption — shared type metrics for textarea + link overlay.
+ * font-size 16px prevents iOS Safari focus zoom. */
+.create-finalize-caption-compose-type {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.25rem 0; /* py-1 */
+  border: 0;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.375; /* leading-snug */
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 8;
+}
+
+/* Section body — same type metrics as caption overlay, zero padding (py-0). */
+.create-finalize-section-compose-type {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.375; /* leading-snug */
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 8;
+}
+
+/* Ocean-blue URL highlight in compose overlay (inline, not pill).
+ * Visual fill is sized to the glyph box so top/bottom hug the text evenly.
+ * Layout metrics stay inherited so the overlay stays aligned with the textarea. */
+.create-compose-link-highlight {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25em;
+  font: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  color: #1d6fa8;
+  text-decoration: none;
+  background-color: transparent;
+  background-image: linear-gradient(
+    color-mix(in oklab, #3aa0d8 24%, transparent),
+    color-mix(in oklab, #3aa0d8 24%, transparent)
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 1.05em;
+  background-position: center;
+  box-shadow: 0 0 8px color-mix(in oklab, #4eb5e8 26%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.app-dark .create-compose-link-highlight {
+  color: #7ec8ef;
+  background-image: linear-gradient(
+    color-mix(in oklab, #3aa0d8 30%, transparent),
+    color-mix(in oklab, #3aa0d8 30%, transparent)
+  );
+  box-shadow: 0 0 10px color-mix(in oklab, #4eb5e8 32%, transparent);
+}
+
+/* Below-compose open chips — same ocean-blue family as inline URL highlights. */
+.create-compose-link-open-chip {
+  color: #1d6fa8;
+  border-color: color-mix(in oklab, #3aa0d8 42%, transparent);
+  background-color: color-mix(in oklab, #3aa0d8 14%, transparent);
+}
+
+.create-compose-link-open-chip:hover {
+  background-color: color-mix(in oklab, #3aa0d8 22%, transparent);
+  color: #176090;
+}
+
+.app-dark .create-compose-link-open-chip {
+  color: #7ec8ef;
+  border-color: color-mix(in oklab, #4eb5e8 40%, transparent);
+  background-color: color-mix(in oklab, #3aa0d8 18%, transparent);
+}
+
+.app-dark .create-compose-link-open-chip:hover {
+  background-color: color-mix(in oklab, #3aa0d8 28%, transparent);
+  color: #9ad4f3;
+}
+
+.create-compose-link-open-chip__icon {
+  color: inherit;
+  opacity: 0.95;
+}
+
+/* Create Finalize — smooth spacious ↔ compact empty canvas via min-height class swap.
+ * Empty states clear inline height so this transition is not overridden by autosize. */
+.create-finalize-caption-canvas {
+  transition: min-height 220ms ease-out;
+}
+
+/* Transparent ink while ComposeLinkPreviewOverlay paints URL highlights underneath. */
+.create-finalize-caption-canvas--link-preview {
+  color: transparent;
+  caret-color: var(--text);
+  -webkit-text-fill-color: transparent;
+}
+
+.create-finalize-caption-canvas--link-preview::placeholder {
+  -webkit-text-fill-color: currentColor;
+}
+
+.create-finalize-caption-canvas--link-preview::selection {
+  background: color-mix(in oklab, #3b82f6 28%, transparent);
+  color: transparent;
+}
+
+.app-dark .create-finalize-caption-canvas--link-preview::selection {
+  background: color-mix(in oklab, #60a5fa 32%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-finalize-caption-canvas {
+    transition: none;
+  }
+}
+
+/* Create Finalize — soft warm invite tint while empty caption is focused
+ * (not validation — required state keeps full brand via Tailwind placeholder classes). */
+.create-finalize-caption--focus-invite::placeholder {
+  color: color-mix(in oklab, var(--brand) 48%, transparent);
+}
+
+.app-dark .create-finalize-caption--focus-invite::placeholder {
+  color: color-mix(in oklab, var(--brand) 40%, transparent);
+}
+
+/* Create Finalize — one-shot empty-placeholder focus flash over the invite tint. */
+@keyframes create-finalize-caption-focus-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.5;
+  }
+}
+
+.create-finalize-caption--focus-pulse::placeholder {
+  animation: create-finalize-caption-focus-pulse 650ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-finalize-caption--focus-pulse::placeholder {
+    animation: none;
+  }
+}
+
+/* Visual-only Duo/Group attention press (never fires actions). */
+@keyframes social-pill-attention-press {
+  0% {
+    transform: translate(0, 0);
+  }
+  40% {
+    transform: translate(-2px, 2px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+.social-pill-attention-press {
+  animation: social-pill-attention-press 170ms ease-out;
+}
+
+/* Owl companion games overlay — open from bottom-tab peek */
 @keyframes owl-message-modal-panel-in {
   from {
     opacity: 0;
@@ -877,11 +1441,13 @@ input:focus {
 }
 
 .owl-message-modal-panel {
-  animation: owl-message-modal-panel-in 320ms cubic-bezier(0.33, 1, 0.68, 1) both;
+  animation: owl-message-modal-panel-in 320ms cubic-bezier(0.33, 1, 0.68, 1)
+    both;
 }
 
 .owl-message-modal-owl {
-  animation: owl-message-modal-owl-in 420ms cubic-bezier(0.33, 1, 0.68, 1) 90ms both;
+  animation: owl-message-modal-owl-in 420ms cubic-bezier(0.33, 1, 0.68, 1) 90ms
+    both;
 }
 
 @keyframes owl-message-modal-panel-out {
@@ -907,7 +1473,8 @@ input:focus {
 }
 
 .owl-message-modal-panel--exit {
-  animation: owl-message-modal-panel-out 320ms cubic-bezier(0.4, 0, 0.68, 1) both;
+  animation: owl-message-modal-panel-out 320ms cubic-bezier(0.4, 0, 0.68, 1)
+    both;
 }
 
 .owl-message-modal-owl--exit {
@@ -1002,8 +1569,7 @@ html.theme-light .owl-message-text-well {
   overflow-x: clip;
   background-color: #060608;
   /* Shared ambient: warm + cool glows bridge phone + marketing column */
-  background-image:
-    radial-gradient(
+  background-image: radial-gradient(
       ellipse 85% 65% at 18% 42%,
       rgba(247, 208, 71, 0.15),
       transparent 58%
@@ -1018,11 +1584,7 @@ html.theme-light .owl-message-text-well {
       rgba(247, 208, 71, 0.07),
       transparent 48%
     ),
-    linear-gradient(
-      165deg,
-      rgba(255, 255, 255, 0.04) 0%,
-      transparent 42%
-    ),
+    linear-gradient(165deg, rgba(255, 255, 255, 0.04) 0%, transparent 42%),
     radial-gradient(
       ellipse 120% 80% at 50% -10%,
       rgba(255, 255, 255, 0.03),
@@ -1056,6 +1618,7 @@ html.theme-light .owl-message-text-well {
   border-radius: 0;
   /* Mirror :root dark palette (see index.css :root) — independent of html.theme-light */
   --bg: #0b0b0c;
+  --app-canvas: #0b0b0c;
   --surface: #151516;
   --surface-2: #1b1c1e;
   --text: #ffffff;
@@ -1102,4 +1665,239 @@ html.theme-light .owl-message-text-well {
 .desktop-phone-inner-scroll {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklab, var(--text) 30%, transparent) transparent;
+}
+
+/*
+ * People immersive route: hide the phone-shell scrollbar track/line only while
+ * People is active. Does not alter Home/other routes or disable scroll globally.
+ */
+.desktop-phone-inner-scroll:has([data-people-route-active="true"]) {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.desktop-phone-inner-scroll:has([data-people-route-active="true"])::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Create finalize video — two-layer played/remaining scrubber */
+.video-progress-scrub {
+  --scrub-track: rgba(255, 255, 255, 0.28);
+  --scrub-fill: var(--brand, #f7d047);
+}
+
+.video-progress-scrub__track {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--scrub-track);
+}
+
+.video-progress-scrub__played {
+  height: 3px;
+  max-width: 100%;
+  border-radius: 999px;
+  background: var(--scrub-fill);
+}
+
+.video-progress-scrub__handle {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--scrub-fill);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  opacity: 0.85;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.video-progress-scrub__handle--active {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.15);
+}
+
+.video-thin-scrub {
+  --scrub-track: rgba(255, 255, 255, 0.28);
+  --scrub-fill: var(--brand, #f7d047);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.video-thin-scrub::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.video-thin-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6.5px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.video-thin-scrub::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+}
+
+.video-thin-scrub::-moz-range-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.video-thin-scrub::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Profile overview (P2) — bio clamp + compact social tiles. CSS-only. */
+.profile-overview-bio {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+}
+
+@media (min-height: 701px) {
+  .profile-overview-bio {
+    -webkit-line-clamp: 3;
+  }
+}
+
+.profile-social-tile-btn {
+  height: 4.5rem;
+  width: 4.5rem;
+}
+
+/* Other Profile only: compact horizontal rectangles (W > H). */
+.profile-overview-other-stats .profile-social-tile-btn {
+  height: 3.3rem;
+  width: 4.15rem;
+  padding-block: 0.26rem;
+}
+
+.profile-overview-other-stats .profile-social-tile-btn > .profile-social-tile-value {
+  font-size: 15px;
+}
+
+.profile-overview-other-stats .profile-social-tile-btn > .profile-social-tile-icon {
+  height: 1.2rem;
+  width: 1.2rem;
+}
+
+.profile-overview-other-stats .profile-social-tile-btn > .profile-social-tile-label {
+  margin-top: 0.18rem;
+}
+
+.profile-overview-other-stats .profile-social-tile-fan-left {
+  transform-origin: 100% 100%;
+  transform: rotate(-3.25deg);
+}
+
+.profile-overview-other-stats .profile-social-tile-fan-center {
+  transform-origin: 50% 100%;
+}
+
+.profile-overview-other-stats .profile-social-tile-fan-right {
+  transform-origin: 0% 100%;
+  transform: rotate(3.25deg);
+}
+
+.profile-social-tile-fan-left {
+  transform-origin: 100% 100%;
+  transform: rotate(-5.5deg);
+}
+
+.profile-social-tile-fan-center {
+  transform-origin: 50% 100%;
+}
+
+.profile-social-tile-fan-right {
+  transform-origin: 0% 100%;
+  transform: rotate(5.5deg);
+}
+
+@media (max-height: 700px) {
+  .profile-social-tile-btn {
+    height: 4.05rem;
+    width: 4.05rem;
+  }
+
+  .profile-overview-other-stats .profile-social-tile-btn {
+    height: 3.15rem;
+    width: 4rem;
+  }
+
+  .profile-overview-identity {
+    margin-top: 0.75rem;
+  }
+
+  .profile-overview-stats {
+    margin-top: 0.5rem;
+  }
+
+  .profile-overview-other-stats {
+    margin-top: 0.5rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .profile-overview-other-stats {
+    gap: 0.55rem;
+  }
+
+  .profile-overview-other-stats .profile-social-tile-btn {
+    height: 3.1rem;
+    width: 3.9rem;
+  }
+}
+
+@media (max-width: 320px) {
+  .profile-overview-other-stats {
+    gap: 0.45rem;
+  }
+
+  .profile-overview-other-stats .profile-social-tile-btn {
+    height: 3rem;
+    width: 3.75rem;
+  }
+}
+
+@media (max-height: 700px), (max-width: 360px) {
+  .profile-social-tile-fan-left {
+    transform: rotate(-4deg);
+  }
+
+  .profile-social-tile-fan-right {
+    transform: rotate(4deg);
+  }
+
+  .profile-overview-other-stats .profile-social-tile-fan-left {
+    transform: rotate(-2.75deg);
+  }
+
+  .profile-overview-other-stats .profile-social-tile-fan-right {
+    transform: rotate(2.75deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-social-tile-fan-left,
+  .profile-social-tile-fan-right,
+  .profile-overview-other-stats .profile-social-tile-fan-left,
+  .profile-overview-other-stats .profile-social-tile-fan-right {
+    transform: none;
+  }
 }

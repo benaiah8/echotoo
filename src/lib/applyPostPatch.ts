@@ -139,6 +139,9 @@ export function applyPostPatch<T extends Record<string, unknown>>(
   if (p.recurrence_days !== undefined) {
     (updated as any).recurrence_days = p.recurrence_days;
   }
+  if (p.social_discovery_boosted_at !== undefined) {
+    (updated as any).social_discovery_boosted_at = p.social_discovery_boosted_at;
+  }
   if (p.activities !== undefined) {
     (updated as any).activities = p.activities;
   }

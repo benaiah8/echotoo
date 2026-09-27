@@ -10,8 +10,9 @@ import { useLocation } from "react-router-dom";
 import { Paths } from "../../router/Paths";
 import { CREATE_FLOW_CAPTION_REQUIRED_NOTICE_ID } from "../../lib/createFlowNoticeIds";
 import {
-  readCreateFlowBottomTabWidthPx,
+  readCreateFlowComposerWidthPx,
   lastCreateFlowBottomTabWidthPx,
+  CREATE_FLOW_NOTICE_STACK_Z_CLASS,
 } from "../../lib/createFlowChrome";
 import {
   useCreateFlowNotices,
@@ -40,7 +41,7 @@ export default function CreateFlowNoticeStack() {
   const { pathname } = useLocation();
   const { notices } = useCreateFlowNotices();
   const rootRef = useRef<HTMLDivElement>(null);
-  const [btWidth, setBtWidth] = useState(readCreateFlowBottomTabWidthPx);
+  const [btWidth, setBtWidth] = useState(readCreateFlowComposerWidthPx);
 
   const showAnchoredStack =
     pathname.startsWith(Paths.createActivities) ||
@@ -48,19 +49,26 @@ export default function CreateFlowNoticeStack() {
     pathname.startsWith(Paths.createFinalize);
 
   const onActivitiesStep = pathname.startsWith(Paths.createActivities);
+  const onFinalizeStep = pathname.startsWith(Paths.createFinalize);
 
-  /** Caption warning: hide on activities so Prev doesn’t leave a dead pill; shown on categories + finalize. */
+  /**
+   * Caption warning: hide on activities so Prev doesn’t leave a dead pill;
+   * finalize uses inline placeholder instead of the top notice pill.
+   * Categories still shows the shared caption notice when present.
+   */
   const visibleNotices = useMemo(() => {
-    if (!onActivitiesStep) return notices;
-    return notices.filter(
-      (n) => n.id !== CREATE_FLOW_CAPTION_REQUIRED_NOTICE_ID
-    );
-  }, [notices, onActivitiesStep]);
+    if (onActivitiesStep || onFinalizeStep) {
+      return notices.filter(
+        (n) => n.id !== CREATE_FLOW_CAPTION_REQUIRED_NOTICE_ID
+      );
+    }
+    return notices;
+  }, [notices, onActivitiesStep, onFinalizeStep]);
 
   useEffect(() => {
     const el = document.getElementById("bottom-tab");
     const measure = () => {
-      const w = readCreateFlowBottomTabWidthPx();
+      const w = readCreateFlowComposerWidthPx();
       setBtWidth(w > 0 ? w : lastCreateFlowBottomTabWidthPx);
     };
     measure();
@@ -112,7 +120,7 @@ export default function CreateFlowNoticeStack() {
   return (
     <div
       ref={rootRef}
-      className="fixed inset-x-0 z-[38] flex flex-col items-center justify-start px-3 pt-2 pointer-events-none"
+      className={`fixed inset-x-0 ${CREATE_FLOW_NOTICE_STACK_Z_CLASS} flex flex-col items-center justify-start px-3 pt-2 pointer-events-none`}
       style={{
         top: "var(--create-flow-top-bar-total, 0px)",
       }}

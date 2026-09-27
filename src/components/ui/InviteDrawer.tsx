@@ -51,7 +51,7 @@ const inviteSearchPillClass =
 
 /** Text field only — border lives on the pill shell. */
 const inviteSearchInputClass =
-  "min-h-0 min-w-0 flex-1 border-0 bg-transparent py-2 pl-9 pr-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/50 outline-none";
+  "min-h-0 min-w-0 flex-1 border-0 bg-transparent py-2 pl-9 pr-2 text-[16px] text-[var(--text)] placeholder:text-[var(--text)]/50 outline-none";
 
 const glassInputStyle: CSSProperties = {
   backgroundColor: "color-mix(in oklab, var(--glass-bg) 75%, var(--bg))",
@@ -98,11 +98,11 @@ function isInviteeFkError(err: unknown): boolean {
 
 /** Room for the character counter in the bottom-right; text may pass underneath. */
 const messageBoxClass =
-  "w-full min-h-[2.75rem] max-h-24 resize-y rounded-xl pl-3 pr-11 pb-6 pt-2 text-sm text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
+  "w-full min-h-[2.75rem] max-h-24 resize-y rounded-xl pl-3 pr-11 pb-6 pt-2 text-[16px] text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
 
 /** Single-line pill when note is empty and unfocused (compact drawer). */
 const messageBoxCollapsedClass =
-  "w-full min-h-[2.5rem] max-h-[2.5rem] resize-none overflow-hidden rounded-full border py-2 pl-3 pr-10 text-sm leading-snug text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
+  "w-full min-h-[2.5rem] max-h-[2.5rem] resize-none overflow-hidden rounded-full border py-2 pl-3 pr-10 text-[16px] leading-snug text-[var(--text)] placeholder:text-[var(--text)]/40 focus:outline-none focus:ring-2 focus:ring-primary/30";
 
 const messageBoxStyle: CSSProperties = {
   ...glassInputStyle,

@@ -13,13 +13,17 @@ export function coerceAppUpdateMode(value: string): AppUpdateMode {
 export type AppUpdateConfigRow = {
   platform: AppUpdatePlatform;
   latest_version: string;
+  latest_build: string;
   minimum_supported_version: string;
+  minimum_supported_build: string;
   update_mode: AppUpdateMode;
   title: string;
   message: string;
   android_store_url: string;
   ios_store_url: string;
   is_active: boolean;
+  /** False until the store build is actually downloadable. */
+  store_release_ready: boolean;
   updated_at: string;
   updated_by_user_id: string | null;
 };

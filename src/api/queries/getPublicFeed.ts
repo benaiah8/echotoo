@@ -7,14 +7,118 @@ import {
 } from "../../lib/dataCache";
 import { retry } from "../../lib/retry";
 import { filterExpiredHangouts } from "../../lib/feedExpiryFilters";
+import { HOME_EVENT_TIMEZONE } from "../../lib/homeFeedConstants";
+import {
+  cachedFeedPageSlice,
+  rpcConsumedOffset,
+} from "../../lib/homeFeedPagination";
+import { shouldApplyLegacyFeedDateSort } from "../../lib/homeMatchedOccurrence";
+import { seedSocialActionsFromFeedItems } from "../../lib/seedSocialActionsFromFeed";
+import {
+  seedPublishedMediaFromFeedItems,
+} from "../../lib/publishedMedia";
+import { buildHomeSlot0Activities } from "../../lib/listCardSlot0";
+import type { LatestCommentPreview } from "../../lib/latestCommentPreview";
+import { normalizeLatestCommentPreview } from "../../lib/latestCommentPreview";
 
 const IS_DEV_BUILD = Boolean(import.meta.env.DEV);
+
+function mapSocialSnapshotFields(post: {
+  duo_own_active?: unknown;
+  group_own_active?: unknown;
+  discoverable_group_count?: unknown;
+  discoverable_pair_count?: unknown;
+  social_discovery_boosted_at?: unknown;
+}): Pick<
+  FeedItem,
+  | "duo_own_active"
+  | "group_own_active"
+  | "discoverable_group_count"
+  | "discoverable_pair_count"
+  | "social_discovery_boosted_at"
+> {
+  const duo =
+    typeof post.duo_own_active === "boolean"
+      ? post.duo_own_active
+      : post.duo_own_active === null
+        ? null
+        : undefined;
+  const group =
+    typeof post.group_own_active === "boolean"
+      ? post.group_own_active
+      : post.group_own_active === null
+        ? null
+        : undefined;
+  const countRaw = post.discoverable_group_count;
+  const count =
+    typeof countRaw === "number" && Number.isFinite(countRaw)
+      ? Math.max(0, Math.floor(countRaw))
+      : countRaw === null
+        ? null
+        : undefined;
+  const pairRaw = post.discoverable_pair_count;
+  const pairCount =
+    typeof pairRaw === "number" && Number.isFinite(pairRaw)
+      ? Math.max(0, Math.floor(pairRaw))
+      : pairRaw === null
+        ? null
+        : undefined;
+  const boostedRaw = post.social_discovery_boosted_at;
+  const boostedAt =
+    typeof boostedRaw === "string" && boostedRaw.trim().length > 0
+      ? boostedRaw
+      : boostedRaw === null
+        ? null
+        : undefined;
+  return {
+    duo_own_active: duo,
+    group_own_active: group,
+    discoverable_group_count: count,
+    discoverable_pair_count: pairCount,
+    social_discovery_boosted_at: boostedAt,
+  };
+}
 
 /** Non-empty feed pages only — empty `[]` must not short-circuit network fetches (Phase 1.1). */
 function isNonemptyFeedCache<T>(
   cached: T[] | null | undefined
 ): cached is T[] {
   return Array.isArray(cached) && cached.length > 0;
+}
+
+/** Re-evaluate discovery eligibility (handles stale cache / local day rollover). */
+function applyDiscoveryExpiryFilter(items: FeedItem[]): FeedItem[] {
+  if (items.length === 0) return items;
+  return filterExpiredHangouts(
+    items as FeedItemWithDates[],
+    new Date(),
+    HOME_EVENT_TIMEZONE
+  ) as FeedItem[];
+}
+
+/** Cached snapshots are display rows — never treat list length as true_total. */
+function cachedPublicFeedPage(
+  cachedData: FeedItem[],
+  requestedLimit: number,
+  responseSource: NonNullable<
+    PublicFeedWithCountResult["__feedDiag"]
+  >["responseSource"]
+): PublicFeedWithCountResult {
+  const { pageItems, consumedOffset } = cachedFeedPageSlice(
+    cachedData,
+    requestedLimit
+  );
+  return {
+    items: applyDiscoveryExpiryFilter(pageItems),
+    consumedOffset,
+    count: pageItems.length,
+    countIsAuthoritative: false,
+    __feedDiag: {
+      responseSource,
+      countSource: "fallback-cache-length",
+      elapsedMs: null,
+    },
+  };
 }
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
@@ -116,6 +220,19 @@ export type FeedItem = {
   effective_rating_count?: number | null;
   /** Current viewer's stars; null if logged out or unrated. */
   viewer_rating?: number | null;
+  /**
+   * Compact social first-paint snapshot from Feed/Detail RPC.
+   * `undefined` = field absent (old cache → UNKNOWN).
+   * `null` = signed-out / not applicable from server.
+   * boolean/number = known for this viewer.
+   */
+  duo_own_active?: boolean | null;
+  group_own_active?: boolean | null;
+  discoverable_group_count?: number | null;
+  /** Active discoverable Pair Ups (Duo) on this source — page-scoped feed scalar. */
+  discoverable_pair_count?: number | null;
+  /** Reviewer editorial boost for Home Event social-discovery rails. */
+  social_discovery_boosted_at?: string | null;
   activities?: Array<{
     id?: string;
     title: string | null;
@@ -127,11 +244,26 @@ export type FeedItem = {
     location_notes?: string | null;
     additional_info?: { title: string; value: string }[] | null;
     tags?: string[] | null;
+    activity_type?: string | null;
+    section_body?: string | null;
+    custom_activity?: string | null;
   }>;
   // [SHRINK] Feed returns activity summary only; full activities fetched on detail
   activity_count?: number;
   first_image_url?: string | null;
   image_count?: number;
+  /**
+   * Compact published media manifest (PV2A list RPCs).
+   * Present when feed/profile RPCs include media_order / attached post_media.
+   */
+  media_order?: unknown;
+  post_media?: unknown;
+  /** Slot-0 carrier from list RPCs (Home mapper stamps onto activities[0]). */
+  slot0_location_name?: string | null;
+  slot0_location_url?: string | null;
+  slot0_key_info?: { title: string; value: string }[] | null;
+  /** One latest eligible top-level comment; null/absent when none. */
+  latest_comment_preview?: LatestCommentPreview | null;
 };
 
 export type FeedOptions = {
@@ -151,7 +283,19 @@ export type FeedOptions = {
   occursTo?: string | null;
   /** When true, RPC returns only posts from mutual approved follows (`p_friends_only`). */
   friendsOnly?: boolean;
+  /**
+   * Phase 2B.2A: skip in-memory RPC page lookups for this request (offset-0 peek).
+   * Not part of the cache key. Does not call clearFeedCache().
+   */
+  skipMemoryCache?: boolean;
 };
+
+/** True when this request must not read the in-memory RPC feed cache. */
+export function shouldSkipPublicFeedMemoryCache(
+  opts: Pick<FeedOptions, "skipMemoryCache">
+): boolean {
+  return opts.skipMemoryCache === true;
+}
 
 /** Map FeedOptions to dataCache.generateFeedKey input (`friendsOnly` → `filters` segment). */
 export function feedOptionsForCacheKey(
@@ -170,6 +314,7 @@ export function feedOptionsForCacheKey(
     occursFrom,
     occursTo,
   } = opts;
+  // skipMemoryCache is intentionally omitted from the cache key.
   return {
     type,
     q,
@@ -191,7 +336,7 @@ export async function getPublicFeed(
   // console.log("[getPublicFeed] Starting query with opts:", opts);
 
   const { type, q, tags, limit = 12, offset = 0, viewerProfileId } = opts;
-  if (offset === 0) {
+  if (offset === 0 && !shouldSkipPublicFeedMemoryCache(opts)) {
     // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
     const cacheKey = dataCache.generateFeedKey(
       feedOptionsForCacheKey({ ...opts, viewerProfileId })
@@ -199,7 +344,7 @@ export async function getPublicFeed(
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
       // console.log("[getPublicFeed] Returning cached data for key:", cacheKey);
-      return cachedData;
+      return applyDiscoveryExpiryFilter(cachedData);
     }
   }
 
@@ -322,7 +467,7 @@ export async function getPublicFeed(
 
     // [OPTIMIZATION: Phase 7.5] Graceful degradation: return cached data on error
     // Why: User still sees content even if network request fails
-    if (offset === 0) {
+    if (offset === 0 && !shouldSkipPublicFeedMemoryCache(opts)) {
       // [CACHE FIX] Pass viewerProfileId to generateFeedKey for user-specific caching
       const cacheKey = dataCache.generateFeedKey(
         feedOptionsForCacheKey({ ...opts, viewerProfileId })
@@ -334,7 +479,7 @@ export async function getPublicFeed(
             "[getPublicFeed] Returning cached data after query failure"
           );
         }
-        return cachedData;
+        return applyDiscoveryExpiryFilter(cachedData);
       }
     }
 
@@ -364,8 +509,9 @@ export async function getPublicFeed(
     rawData = await filterPostsByPrivacy(rawData, opts.viewerProfileId);
   }
 
-  // Apply smart sorting for better user experience
-  const sortedData = sortFeedItems(rawData);
+  const sortedData = shouldApplyLegacyFeedDateSort(opts)
+    ? sortFeedItems(rawData)
+    : rawData;
   // console.log(
   //   "[getPublicFeed] Sorted data:",
   //   sortedData,
@@ -384,7 +530,11 @@ export async function getPublicFeed(
   // [PHASE 1] Filter expired hangouts immediately after sorting
   // Why: Remove hangouts with all past dates before returning to feed
   // This ensures expired events never appear in Home feed
-  const filteredData = filterExpiredHangouts(sortedData);
+  const filteredData = filterExpiredHangouts(
+    sortedData,
+    new Date(),
+    HOME_EVENT_TIMEZONE
+  );
 
   // Debug: Log the final return data
   // console.log(
@@ -424,9 +574,28 @@ export async function getPublicFeed(
  * Internal function that returns both items and count from PostgreSQL function.
  * Used by ProgressiveFeed for reliable hasMore detection.
  */
+export type PublicFeedWithCountResult = {
+  items: FeedItem[];
+  consumedOffset?: number;
+  count: number;
+  countIsAuthoritative?: boolean;
+  __feedDiag?: {
+    responseSource?:
+      | "network"
+      | "memory-cache"
+      | "fallback-cache"
+      | "abort-fallback"
+      | "error-fallback"
+      | "unknown";
+    countSource?: "rpc" | "fallback-cache-length" | "unknown" | "none";
+    rpcError?: string | null;
+    elapsedMs?: number | null;
+  };
+};
+
 export async function getPublicFeedOptimizedWithCount(
   opts: FeedOptions = {}
-): Promise<{ items: FeedItem[]; consumedOffset?: number; count: number }> {
+): Promise<PublicFeedWithCountResult> {
   const {
     type,
     q,
@@ -439,7 +608,9 @@ export async function getPublicFeedOptimizedWithCount(
     occursFrom = null,
     occursTo = null,
     friendsOnly,
+    skipMemoryCache = false,
   } = opts;
+  const readMemoryCache = !shouldSkipPublicFeedMemoryCache({ skipMemoryCache });
 
   // [PHASE 2.3 - FIX] Wait for cache preload to complete before checking cache
   // Why: Ensures cache is loaded from StorageManager before cache lookup
@@ -455,7 +626,7 @@ export async function getPublicFeedOptimizedWithCount(
   // [PHASE 2.3 - Layer 1] Smart Cache Lookup: Check cache first, including normalized and larger limits
   // Why: Allows cache sharing between main feed (limit: 5) and rails (limit: 20)
   // This eliminates duplicate RPC calls when data is already cached with larger limit
-  if (offset === 0) {
+  if (offset === 0 && readMemoryCache) {
     // Step 1: Check normalized cache first (for offset=0 with limit < 20)
     // This allows limit:5 and limit:10 to share limit:20 cache
     // Only check if normalization would change the limit
@@ -469,16 +640,14 @@ export async function getPublicFeedOptimizedWithCount(
       const normalizedCachedData =
         getCachedFeedResult<FeedItem>(normalizedCacheKey);
       if (normalizedCachedData && normalizedCachedData.length >= limit) {
-        // Found normalized cache - slice to requested size
-        const slicedData = normalizedCachedData.slice(0, limit);
-        // Cache the sliced result for future exact matches
+        const page = cachedPublicFeedPage(
+          normalizedCachedData,
+          limit,
+          "memory-cache"
+        );
         const exactCacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
-        cacheFeedResult(exactCacheKey, slicedData, 2 * 60 * 1000);
-        return {
-          items: slicedData,
-          consumedOffset: slicedData.length,
-          count: normalizedCachedData.length,
-        };
+        cacheFeedResult(exactCacheKey, page.items, 2 * 60 * 1000);
+        return page;
       }
     }
 
@@ -486,19 +655,7 @@ export async function getPublicFeedOptimizedWithCount(
     const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
-      // SILENCED: Too verbose - only log misses
-      // console.log('[DIAG-FeedCache] ✅ EXACT CACHE HIT (offset=0):', {
-      //   cacheKey,
-      //   requestedLimit: limit,
-      //   cachedItems: cachedData.length,
-      //   type: type || 'all',
-      //   tags: tags?.join(',') || 'none',
-      // });
-      return {
-        items: cachedData,
-        consumedOffset: cachedData.length,
-        count: cachedData.length,
-      };
+      return cachedPublicFeedPage(cachedData, limit, "memory-cache");
     }
 
     // Step 3: If exact miss, check larger limits (smart lookup)
@@ -515,50 +672,24 @@ export async function getPublicFeedOptimizedWithCount(
         );
         const largerCachedData = getCachedFeedResult<FeedItem>(largerCacheKey);
         if (largerCachedData && largerCachedData.length >= limit) {
-          // Found cache with larger limit - slice to requested size
-          const slicedData = largerCachedData.slice(0, limit);
-          // Cache the sliced result for future exact matches
-          cacheFeedResult(cacheKey, slicedData, 2 * 60 * 1000);
-          // SILENCED: Too verbose - only log misses
-          // console.log('[DIAG-FeedCache] ✅ LARGER LIMIT CACHE HIT (offset=0):', {
-          //   requestedLimit: limit,
-          //   foundLimit: largerLimit,
-          //   foundItems: largerCachedData.length,
-          //   slicedTo: slicedData.length,
-          //   cacheKey,
-          //   largerCacheKey,
-          //   type: type || 'all',
-          //   tags: tags?.join(',') || 'none',
-          // });
-          return {
-            items: slicedData,
-            consumedOffset: slicedData.length,
-            count: largerCachedData.length,
-          };
+          const page = cachedPublicFeedPage(
+            largerCachedData,
+            limit,
+            "memory-cache"
+          );
+          cacheFeedResult(cacheKey, page.items, 2 * 60 * 1000);
+          return page;
         }
       }
     }
-  } else if (offset > 0 && offset < 100) {
+  } else if (readMemoryCache && offset > 0 && offset < 100) {
     // [OPTIMIZATION: Phase 2] Cache lookup for paginated results (offset > 0)
     // Why: Reduces duplicate pagination requests when user scrolls or multiple rails load
     // Safety: Only cache offset < 100 to prevent memory bloat, 30s TTL for freshness
     const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
     const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
     if (isNonemptyFeedCache(cachedData)) {
-      // SILENCED: Too verbose - only log misses
-      // console.log('[DIAG-FeedCache] ✅ PAGINATED CACHE HIT:', {
-      //   cacheKey,
-      //   offset,
-      //   limit,
-      //   cachedItems: cachedData.length,
-      //   type: type || 'all',
-      //   tags: tags?.join(',') || 'none',
-      // });
-      return {
-        items: cachedData,
-        consumedOffset: cachedData.length,
-        count: cachedData.length,
-      };
+      return cachedPublicFeedPage(cachedData, limit, "memory-cache");
     }
   } else {
     // SILENCED: Too verbose
@@ -592,22 +723,22 @@ export async function getPublicFeedOptimizedWithCount(
     tags?.join(",") || ""
   }:${normalizedLimitForDedup}:${offset}:${viewerProfileId || "guest"}:${occursOn || ""}:${
     occursTz || ""
-  }:${occursFrom || ""}:${occursTo || ""}:${friendsOnly ? "friends" : ""}`;
+  }:${occursFrom || ""}:${occursTo || ""}:${friendsOnly ? "friends" : ""}${
+    skipMemoryCache ? ":skipMem" : ""
+  }`;
 
   // [Top-level in-flight dedupe] Same requestKey → one RPC even if called twice back-to-back (e.g. StrictMode)
-  const existingPromise = feedRpcInFlight.get(dedupeKey);
+  const existingPromise = skipMemoryCache
+    ? undefined
+    : feedRpcInFlight.get(dedupeKey);
   if (existingPromise) {
     return await existingPromise;
   }
 
-  const promise = (async (): Promise<{
-    items: FeedItem[];
-    consumedOffset?: number;
-    count: number;
-  }> => {
+  const promise = (async (): Promise<PublicFeedWithCountResult> => {
     const result = await requestManager.execute(
       dedupeKey,
-      async (signal) => {
+      async (signal): Promise<PublicFeedWithCountResult> => {
         // Check if aborted before proceeding
         if (signal.aborted) {
           throw new Error("Aborted");
@@ -616,7 +747,7 @@ export async function getPublicFeedOptimizedWithCount(
         // Check cache again inside RequestManager (another call might have populated it)
         // This handles race conditions where multiple calls happen before first one completes
         // [OPTIMIZATION: Phase 4] Also check normalized cache here (might have been populated by another request)
-        if (offset === 0) {
+        if (offset === 0 && readMemoryCache) {
           // Step 1: Check normalized cache first (if normalization applies)
           if (normalizedLimitForCache > limit) {
             const normalizedCacheKey = dataCache.generateFeedKey(
@@ -628,14 +759,14 @@ export async function getPublicFeedOptimizedWithCount(
             const normalizedCachedData =
               getCachedFeedResult<FeedItem>(normalizedCacheKey);
             if (normalizedCachedData && normalizedCachedData.length >= limit) {
-              const slicedData = normalizedCachedData.slice(0, limit);
+              const page = cachedPublicFeedPage(
+                normalizedCachedData,
+                limit,
+                "memory-cache"
+              );
               const exactCacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
-              cacheFeedResult(exactCacheKey, slicedData, 2 * 60 * 1000);
-              return {
-                items: slicedData,
-                consumedOffset: slicedData.length,
-                count: normalizedCachedData.length,
-              };
+              cacheFeedResult(exactCacheKey, page.items, 2 * 60 * 1000);
+              return page;
             }
           }
 
@@ -643,18 +774,7 @@ export async function getPublicFeedOptimizedWithCount(
           const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
           const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
           if (isNonemptyFeedCache(cachedData)) {
-            // SILENCED: Too verbose
-            // console.log('[DIAG-RequestManager] ✅ CACHE HIT inside RequestManager (race condition handled):', {
-            //   dedupeKey,
-            //   cacheKey,
-            //   cachedItems: cachedData.length,
-            //   type: type || 'all',
-            // });
-            return {
-              items: cachedData,
-              consumedOffset: cachedData.length,
-              count: cachedData.length,
-            };
+            return cachedPublicFeedPage(cachedData, limit, "memory-cache");
           }
 
           // Step 3: Also check larger limits again (might have been populated)
@@ -670,21 +790,13 @@ export async function getPublicFeedOptimizedWithCount(
               const largerCachedData =
                 getCachedFeedResult<FeedItem>(largerCacheKey);
               if (largerCachedData && largerCachedData.length >= limit) {
-                const slicedData = largerCachedData.slice(0, limit);
-                cacheFeedResult(cacheKey, slicedData, 2 * 60 * 1000);
-                // SILENCED: Too verbose
-                // console.log('[DIAG-RequestManager] ✅ LARGER LIMIT CACHE HIT inside RequestManager (race condition handled):', {
-                //   dedupeKey,
-                //   requestedLimit: limit,
-                //   foundLimit: largerLimit,
-                //   foundItems: largerCachedData.length,
-                //   type: type || 'all',
-                // });
-                return {
-                  items: slicedData,
-                  consumedOffset: slicedData.length,
-                  count: largerCachedData.length,
-                };
+                const page = cachedPublicFeedPage(
+                  largerCachedData,
+                  limit,
+                  "memory-cache"
+                );
+                cacheFeedResult(cacheKey, page.items, 2 * 60 * 1000);
+                return page;
               }
             }
           }
@@ -783,10 +895,23 @@ export async function getPublicFeedOptimizedWithCount(
             p_occurs_to: occursTo ?? null,
           };
 
+          const rpcStartedAt = import.meta.env.DEV ? performance.now() : 0;
           const { data, error } = await supabase.rpc(
             "get_feed_with_related_data",
             rpcParams
           );
+          const rpcElapsedMs = import.meta.env.DEV
+            ? Math.round(performance.now() - rpcStartedAt)
+            : null;
+          if (import.meta.env.DEV && rpcElapsedMs != null) {
+            console.debug("[FeedRpcTiming]", {
+              rpc: "get_feed_with_related_data",
+              offset,
+              limit: normalizedLimitForDedup,
+              elapsedMs: rpcElapsedMs,
+              error: error?.message ?? null,
+            });
+          }
 
           // Check if aborted after RPC call
           if (signal.aborted) {
@@ -817,6 +942,39 @@ export async function getPublicFeedOptimizedWithCount(
               totalBytes,
               postsLength,
               avgKbPerPost: `${avgKbPerPost} KB`,
+            });
+            // PV2A media manifest diagnostics (DEV only)
+            const samplePosts =
+              ((data as { posts?: unknown[] })?.posts as Record<
+                string,
+                unknown
+              >[]) || [];
+            let mediaManifestBytes = 0;
+            let postsWithManifest = 0;
+            let maxManifestBytes = 0;
+            for (const p of samplePosts) {
+              const slice = {
+                media_order: p?.media_order ?? null,
+                post_media: p?.post_media ?? null,
+              };
+              const n = JSON.stringify(slice).length;
+              if (
+                slice.media_order != null ||
+                (Array.isArray(slice.post_media) && slice.post_media.length > 0)
+              ) {
+                postsWithManifest += 1;
+                mediaManifestBytes += n;
+                if (n > maxManifestBytes) maxManifestBytes = n;
+              }
+            }
+            console.debug("[FeedPayload][PV2A media manifest]", {
+              postsWithManifest,
+              mediaManifestTotalBytes: mediaManifestBytes,
+              avgManifestBytesPerPost:
+                postsWithManifest > 0
+                  ? Math.round(mediaManifestBytes / postsWithManifest)
+                  : 0,
+              maxManifestBytes,
             });
 
             const rawResponseSize = totalBytes;
@@ -949,6 +1107,10 @@ export async function getPublicFeedOptimizedWithCount(
               effective_rating_average?: number | null;
               effective_rating_count?: number | null;
               viewer_rating?: number | null;
+              slot0_location_name?: string | null;
+              slot0_location_url?: string | null;
+              slot0_key_info?: { title: string; value: string }[] | null;
+              latest_comment_preview?: LatestCommentPreview | null;
             }>;
             count: number;
           };
@@ -957,7 +1119,18 @@ export async function getPublicFeedOptimizedWithCount(
             console.warn(
               "[getPublicFeedOptimizedWithCount] Invalid response structure"
             );
-            return { items: [], consumedOffset: 0, count: 0 };
+            return {
+              items: [],
+              consumedOffset: 0,
+              count: 0,
+              countIsAuthoritative: false,
+              __feedDiag: {
+                responseSource: "network",
+                countSource: "none",
+                rpcError: "invalid-response-structure",
+                elapsedMs: rpcElapsedMs,
+              },
+            };
           }
 
           if (DEBUG_RSVP_POST_ID) {
@@ -973,27 +1146,21 @@ export async function getPublicFeedOptimizedWithCount(
             }
           }
 
-          // Map to FeedItem format (SHRINK: minimal fields; first_image_url only, no full activities)
+          // Map to FeedItem format (SHRINK: first_image_url + slot-0 location / Key Details)
           const feedItems: FeedItem[] = result.posts.map((post) => {
-            // Build minimal activities from first_image_url for immediate carousel display
-            const firstUrl = (post as any).first_image_url;
-            const activities =
-              firstUrl && typeof firstUrl === "string"
-                ? ([
-                    {
-                      id: undefined,
-                      title: null,
-                      images: normalizeActivityImages([firstUrl]),
-                      order_idx: 0,
-                      location_name: null,
-                      location_desc: null,
-                      location_url: null,
-                      location_notes: null,
-                      additional_info: null,
-                      tags: null,
-                    },
-                  ] as FeedItem["activities"])
-                : undefined;
+            const firstUrl = (post as { first_image_url?: unknown }).first_image_url;
+            const firstImage =
+              typeof firstUrl === "string"
+                ? normalizeActivityImages([firstUrl])
+                : null;
+            const activities = buildHomeSlot0Activities({
+              images: firstImage,
+              slot0: {
+                slot0_location_name: post.slot0_location_name,
+                slot0_location_url: post.slot0_location_url,
+                slot0_key_info: post.slot0_key_info,
+              },
+            }) as FeedItem["activities"];
 
             // rsvp_data: new format { currentUserStatus, going_count }; adapt for RSVPComponent
             const rawRsvp = (post as any).rsvp_data;
@@ -1039,13 +1206,15 @@ export async function getPublicFeedOptimizedWithCount(
               effective_like_count: post.effective_like_count ?? (post.like_count ?? 0),
               effective_save_count: post.effective_save_count ?? (post.save_count ?? 0),
               comment_count: post.comment_count ?? 0,
-              has_images: (post as any).has_images ?? !!firstUrl,
+              has_images: (post as { has_images?: boolean }).has_images ?? typeof firstUrl === "string",
               activities,
               rsvp_data,
               rsvp_capacity: rawCap ?? null,
-              activity_count: (post as any).activity_count,
-              first_image_url: firstUrl,
+              activity_count: (post as { activity_count?: number }).activity_count,
+              first_image_url: typeof firstUrl === "string" ? firstUrl : null,
               image_count: (post as any).image_count,
+              media_order: (post as any).media_order ?? null,
+              post_media: (post as any).post_media ?? null,
               rating_enabled: post.rating_enabled,
               rating_average: post.rating_average ?? null,
               rating_count: post.rating_count ?? null,
@@ -1056,7 +1225,30 @@ export async function getPublicFeedOptimizedWithCount(
               viewer_rating: post.viewer_rating ?? null,
               is_recurring: post.is_recurring ?? null,
               recurrence_days: post.recurrence_days ?? null,
+              ...mapSocialSnapshotFields(post as {
+                duo_own_active?: unknown;
+                group_own_active?: unknown;
+                discoverable_group_count?: unknown;
+                discoverable_pair_count?: unknown;
+                social_discovery_boosted_at?: unknown;
+              }),
+              latest_comment_preview: normalizeLatestCommentPreview(
+                (post as { latest_comment_preview?: unknown })
+                  .latest_comment_preview,
+              ),
             };
+
+            // PV2A/PV3.3: seed viewer-scoped published media cache during normalization (no per-card effects).
+            if (
+              mapped.media_order != null ||
+              (Array.isArray(mapped.post_media) && mapped.post_media.length > 0)
+            ) {
+              seedPublishedMediaFromFeedItems({
+                items: [mapped],
+                viewerUserId,
+                source: "feed",
+              });
+            }
 
             if (DEBUG_RSVP_POST_ID && post.id === DEBUG_RSVP_POST_ID) {
               console.log("RSVP DEBUG mapped feed item", {
@@ -1093,24 +1285,31 @@ export async function getPublicFeedOptimizedWithCount(
           //   });
           // }
 
-          // Apply smart sorting (same as original function)
-          const sortedData = sortFeedItems(feedItems as FeedItemWithDates[]);
+          const sortedData = shouldApplyLegacyFeedDateSort(opts)
+            ? sortFeedItems(feedItems as FeedItemWithDates[])
+            : (feedItems as FeedItemWithDates[]);
 
           // Temporary: if sorting removes items, return raw data instead
           if (feedItems.length > 0 && sortedData.length === 0) {
             console.warn(
               "[getPublicFeedOptimizedWithCount] Sorting removed all items, returning raw data"
             );
+            seedSocialActionsFromFeedItems(feedItems, viewerUserId);
             return {
               items: feedItems,
               consumedOffset: result.posts.length,
               count: result.count,
+              countIsAuthoritative: true,
+              __feedDiag: {
+                responseSource: "network",
+                countSource: "rpc",
+                elapsedMs: rpcElapsedMs,
+              },
             };
           }
 
-          // [Option A] RPC eligible_base now excludes PAST scheduled non-recurring hangouts
-          // No client-side filterExpiredHangouts needed for optimized path
-          let finalData = sortedData as FeedItem[];
+          // Drop past hangouts even when RPC returns them (calendar-day semantics).
+          let finalData = applyDiscoveryExpiryFilter(sortedData as FeedItem[]);
 
           // [OPTIMIZATION: Phase 4] Slice result if we fetched with normalized limit
           // Why: If we fetched limit:20 but requested limit:5, slice to requested size
@@ -1129,6 +1328,12 @@ export async function getPublicFeedOptimizedWithCount(
             //   slicedItems: finalData.length,
             //   type: type || 'all',
             // });
+          }
+
+          // Seed canonical Duo/Group stores before UI consumes items (first paint).
+          seedSocialActionsFromFeedItems(finalData, viewerUserId);
+          if (fullDataForCache?.length) {
+            seedSocialActionsFromFeedItems(fullDataForCache, viewerUserId);
           }
 
           // [OPTIMIZATION: Phase 3.2] Cache avatars from feed data for instant reuse (fire-and-forget)
@@ -1228,11 +1433,17 @@ export async function getPublicFeedOptimizedWithCount(
             // });
           }
 
-          // consumedOffset = raw RPC posts length for correct pagination
+          // consumedOffset = raw RPC posts for this request, before expiry / display slice
           return {
             items: finalData,
-            consumedOffset: finalData.length,
+            consumedOffset: rpcConsumedOffset(result.posts.length, limit),
             count: result.count,
+            countIsAuthoritative: true,
+            __feedDiag: {
+              responseSource: "network",
+              countSource: "rpc",
+              elapsedMs: rpcElapsedMs,
+            },
           };
         } catch (error) {
           // Check if aborted - return empty result instead of throwing
@@ -1240,14 +1451,28 @@ export async function getPublicFeedOptimizedWithCount(
             signal.aborted ||
             (error instanceof Error && error.message === "Aborted")
           ) {
-            return { items: [], consumedOffset: 0, count: 0 };
+            return {
+              items: [],
+              consumedOffset: 0,
+              count: 0,
+              countIsAuthoritative: false,
+              __feedDiag: {
+                responseSource: "abort-fallback",
+                countSource: "none",
+                rpcError: "Aborted",
+                elapsedMs: null,
+              },
+            };
           }
 
           console.error("[getPublicFeedOptimizedWithCount] Error:", error);
 
           // Graceful degradation: return cached data on error
           // Check cache for both offset 0 and paginated results
-          if (offset === 0 || (offset > 0 && offset < 100)) {
+          if (
+            readMemoryCache &&
+            (offset === 0 || (offset > 0 && offset < 100))
+          ) {
             const cacheKey = dataCache.generateFeedKey(feedOptionsForCacheKey(opts));
             const cachedData = getCachedFeedResult<FeedItem>(cacheKey);
             if (isNonemptyFeedCache(cachedData)) {
@@ -1257,11 +1482,18 @@ export async function getPublicFeedOptimizedWithCount(
                   { offset, cacheKey, cachedItems: cachedData.length }
                 );
               }
-              // Return cached data with unknown count (will use length check fallback)
+              const page = cachedPublicFeedPage(
+                cachedData,
+                limit,
+                "error-fallback"
+              );
               return {
-                items: cachedData,
-                consumedOffset: cachedData.length,
-                count: cachedData.length,
+                ...page,
+                __feedDiag: {
+                  ...page.__feedDiag,
+                  rpcError:
+                    error instanceof Error ? error.message : String(error),
+                },
               };
             }
           }
@@ -1274,12 +1506,33 @@ export async function getPublicFeedOptimizedWithCount(
 
     // Check if request was aborted
     if (result.error && result.error.message === "Aborted") {
-      return { items: [], consumedOffset: 0, count: 0 };
+      return {
+        items: [],
+        consumedOffset: 0,
+        count: 0,
+        countIsAuthoritative: false,
+        __feedDiag: {
+          responseSource: "abort-fallback",
+          countSource: "none",
+          rpcError: "Aborted",
+          elapsedMs: null,
+        },
+      };
     }
     if (result.error) {
       throw result.error;
     }
-    return result.data ?? { items: [], consumedOffset: 0, count: 0 };
+    return result.data ?? {
+      items: [],
+      consumedOffset: 0,
+      count: 0,
+      countIsAuthoritative: false,
+      __feedDiag: {
+        responseSource: "unknown",
+        countSource: "none",
+        elapsedMs: null,
+      },
+    };
   })();
 
   feedRpcInFlight.set(dedupeKey, promise);

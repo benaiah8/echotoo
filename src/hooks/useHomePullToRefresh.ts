@@ -14,19 +14,43 @@ export type HomePullToRefreshUi = {
   isRefreshing: boolean;
 };
 
+export type UseHomePullToRefreshOptions = {
+  enabled: boolean;
+  /**
+   * Fired when the pull commits. Return a Promise to keep `isRefreshing`
+   * until that work settles (+ hold). Void commits still end via `refreshEpoch`.
+   */
+  onCommit: () => void | Promise<void>;
+  refreshEpoch: number;
+  /** Default: () => window.scrollY */
+  getScrollTop?: () => number;
+  /** Default: window — touch listeners attach here */
+  touchTarget?: HTMLElement | Window | Document | null;
+};
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value != null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as PromiseLike<unknown>).then === "function"
+  );
+}
+
 /**
  * Instagram-style pull: rubber-band distance, spinner fades in with pull.
  * Commits only on release past threshold; otherwise animates closed.
  */
-export function useHomePullToRefresh(options: {
-  enabled: boolean;
-  onCommit: () => void;
-  refreshEpoch: number;
-}): HomePullToRefreshUi {
-  const { enabled, onCommit, refreshEpoch } = options;
+export function useHomePullToRefresh(
+  options: UseHomePullToRefreshOptions
+): HomePullToRefreshUi {
+  const { enabled, onCommit, refreshEpoch, getScrollTop, touchTarget } =
+    options;
   const lastCommitRef = useRef(0);
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
+
+  const getScrollTopRef = useRef(getScrollTop ?? (() => window.scrollY));
+  getScrollTopRef.current = getScrollTop ?? (() => window.scrollY);
 
   const [pullPx, setPullPx] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -34,6 +58,9 @@ export function useHomePullToRefresh(options: {
   pullPxRef.current = pullPx;
 
   const animRef = useRef<number | null>(null);
+  const refreshingHoldTimerRef = useRef<number | null>(null);
+  /** When onCommit returns a Promise, epoch bumps must not end the spinner early. */
+  const awaitCommitPromiseRef = useRef(false);
 
   const stopAnim = () => {
     if (animRef.current != null) {
@@ -42,41 +69,79 @@ export function useHomePullToRefresh(options: {
     }
   };
 
-  useEffect(() => {
-    if (refreshEpoch <= 0) return;
-    const t = window.setTimeout(() => {
+  const clearRefreshingHoldTimer = () => {
+    if (refreshingHoldTimerRef.current != null) {
+      window.clearTimeout(refreshingHoldTimerRef.current);
+      refreshingHoldTimerRef.current = null;
+    }
+  };
+
+  const endRefreshingUi = () => {
+    clearRefreshingHoldTimer();
+    awaitCommitPromiseRef.current = false;
+    setIsRefreshing(false);
+    setPullPx(0);
+  };
+
+  const scheduleEndRefreshingUi = () => {
+    clearRefreshingHoldTimer();
+    refreshingHoldTimerRef.current = window.setTimeout(() => {
+      refreshingHoldTimerRef.current = null;
+      awaitCommitPromiseRef.current = false;
       setIsRefreshing(false);
       setPullPx(0);
     }, REFRESHING_HOLD_MS);
-    return () => clearTimeout(t);
+  };
+
+  const readScrollTop = () => getScrollTopRef.current();
+
+  useEffect(() => {
+    if (refreshEpoch <= 0) return;
+    // Promise-aware commits own the hold; ignore epoch until that settles.
+    if (awaitCommitPromiseRef.current) return;
+    scheduleEndRefreshingUi();
+    return () => clearRefreshingHoldTimer();
   }, [refreshEpoch]);
 
   useEffect(() => {
     if (!enabled) {
       stopAnim();
-      setPullPx(0);
-      setIsRefreshing(false);
+      endRefreshingUi();
       return;
     }
+
+    const target = touchTarget ?? window;
+    if (!target) return;
 
     let startY = 0;
     let startX = 0;
     let tracking = false;
     let verticalPull = false;
 
-    const animateTo = (target: number) => {
+    const abortGesture = () => {
+      tracking = false;
+      verticalPull = false;
+      stopAnim();
+      // Keep refreshing hold if a commit is already in flight.
+      if (!awaitCommitPromiseRef.current && refreshingHoldTimerRef.current == null) {
+        pullPxRef.current = 0;
+        setPullPx(0);
+      }
+    };
+
+    const animateTo = (targetPx: number) => {
       stopAnim();
       const start = performance.now();
       const from = pullPxRef.current;
-      if (Math.abs(from - target) < 0.5) {
-        setPullPx(target);
+      if (Math.abs(from - targetPx) < 0.5) {
+        setPullPx(targetPx);
         return;
       }
       const dur = 220;
       const step = (now: number) => {
         const t = Math.min(1, (now - start) / dur);
         const eased = 1 - (1 - t) * (1 - t);
-        const v = from + (target - from) * eased;
+        const v = from + (targetPx - from) * eased;
         pullPxRef.current = v;
         setPullPx(v);
         if (t < 1) {
@@ -90,7 +155,7 @@ export function useHomePullToRefresh(options: {
 
     const onTouchStart = (e: TouchEvent) => {
       if (isPullToRefreshBlocked()) return;
-      if (window.scrollY > SCROLL_TOP_TOLERANCE) return;
+      if (readScrollTop() > SCROLL_TOP_TOLERANCE) return;
       const t = e.touches[0];
       if (!t) return;
       startY = t.clientY;
@@ -110,18 +175,14 @@ export function useHomePullToRefresh(options: {
         if (dy > 10 && dy > Math.abs(dx) * 1.2) {
           verticalPull = true;
         } else if (Math.abs(dx) > 10 && Math.abs(dx) > dy) {
-          tracking = false;
-          pullPxRef.current = 0;
-          setPullPx(0);
+          abortGesture();
           return;
         }
       }
 
       if (!verticalPull) return;
-      if (window.scrollY > SCROLL_TOP_TOLERANCE) {
-        tracking = false;
-        pullPxRef.current = 0;
-        setPullPx(0);
+      if (readScrollTop() > SCROLL_TOP_TOLERANCE) {
+        abortGesture();
         return;
       }
 
@@ -133,12 +194,13 @@ export function useHomePullToRefresh(options: {
       }
     };
 
+    const onTouchCancel = () => {
+      abortGesture();
+    };
+
     const onTouchEnd = () => {
       if (isPullToRefreshBlocked()) {
-        tracking = false;
-        verticalPull = false;
-        pullPxRef.current = 0;
-        setPullPx(0);
+        abortGesture();
         return;
       }
       if (!tracking) return;
@@ -148,7 +210,7 @@ export function useHomePullToRefresh(options: {
         setPullPx(0);
         return;
       }
-      if (window.scrollY > SCROLL_TOP_TOLERANCE) {
+      if (readScrollTop() > SCROLL_TOP_TOLERANCE) {
         pullPxRef.current = 0;
         setPullPx(0);
         return;
@@ -165,24 +227,41 @@ export function useHomePullToRefresh(options: {
         return;
       }
       lastCommitRef.current = now;
+      clearRefreshingHoldTimer();
       setIsRefreshing(true);
       const hold = Math.min(px, 44);
       pullPxRef.current = hold;
       setPullPx(hold);
-      onCommitRef.current();
+      const commitResult = onCommitRef.current();
+      if (isThenable(commitResult)) {
+        awaitCommitPromiseRef.current = true;
+        void Promise.resolve(commitResult).finally(() => {
+          scheduleEndRefreshingUi();
+        });
+      }
     };
 
-    window.addEventListener("touchstart", onTouchStart, { passive: true });
-    window.addEventListener("touchmove", onTouchMove, { passive: false });
-    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    target.addEventListener("touchstart", onTouchStart as EventListener, {
+      passive: true,
+    });
+    target.addEventListener("touchmove", onTouchMove as EventListener, {
+      passive: false,
+    });
+    target.addEventListener("touchend", onTouchEnd as EventListener, {
+      passive: true,
+    });
+    target.addEventListener("touchcancel", onTouchCancel as EventListener, {
+      passive: true,
+    });
 
     return () => {
-      window.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("touchend", onTouchEnd);
+      target.removeEventListener("touchstart", onTouchStart as EventListener);
+      target.removeEventListener("touchmove", onTouchMove as EventListener);
+      target.removeEventListener("touchend", onTouchEnd as EventListener);
+      target.removeEventListener("touchcancel", onTouchCancel as EventListener);
       stopAnim();
     };
-  }, [enabled]);
+  }, [enabled, touchTarget]);
 
   const pullProgress = Math.min(1, pullPx / COMMIT_DAMPED_PX);
 

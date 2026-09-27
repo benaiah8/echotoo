@@ -44,6 +44,9 @@ export type OwnCreatedPrependPendingPayload = {
   visibility?: "public" | "friends" | "private" | null;
   activities: OwnCreatedPrependActivityStored[];
   markerAt: string;
+  /** PV3.4 compact published media manifest for creator-first paint. */
+  media_order?: unknown;
+  post_media?: unknown;
 };
 
 export type ConsumeOwnCreatedPrependResult =
@@ -230,6 +233,8 @@ function parsePayload(raw: string): OwnCreatedPrependPendingPayload | null {
       visibility,
       activities,
       markerAt,
+      media_order: o.media_order ?? undefined,
+      post_media: o.post_media ?? undefined,
     };
   } catch {
     return null;
@@ -393,6 +398,8 @@ export function buildLocalPrependedFeedItem(
     activities: activitiesMapped,
     activity_count:
       pending.activities.length > 0 ? pending.activities.length : undefined,
+    media_order: pending.media_order ?? null,
+    post_media: pending.post_media ?? null,
   };
 
   return item;

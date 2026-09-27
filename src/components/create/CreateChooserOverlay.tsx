@@ -5,11 +5,9 @@ import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
 import { useOverlayContentSwipeDismiss } from "../../hooks/useOverlayContentSwipeDismiss";
 import CreateChooserPanel from "./CreateChooserPanel";
-import CreateDraftEntryDialog from "./CreateDraftEntryDialog";
-import { useCreateDraftEntryGate } from "../../hooks/useCreateDraftEntryGate";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 
 const EXIT_MS = 300;
-const NAV_DELAY_MS = 280;
 /** Backdrop: cancel tap-to-close if pointer moves farther than this (px) from down position. */
 const BACKDROP_TAP_MAX_MOVE_PX = 10;
 
@@ -24,21 +22,31 @@ const CREATE_CHOOSER_PANEL_SWIPE_EXCLUDE_SELECTOR =
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** Shared draft-entry gate (owned by CreateChooserProvider). */
+  onPickerContinue: (type: "hangout" | "experience") => void;
+  /** When the resume/start-new dialog is open above this overlay. */
+  draftGateOpen?: boolean;
+  onDismissDraftGate?: () => void;
 };
 
 /**
  * Full-screen dim + blur below bottom tab (z-40); z-[38] so tab bar stays tappable.
  * Body scroll locked while open. Enter/exit transitions; confirmed backdrop tap closes smoothly.
+ *
+ * Draft entry dialog is rendered by CreateChooserProvider (not here) so direct Create (+)
+ * entry can show the dialog without opening this overlay.
  */
-export default function CreateChooserOverlay({ open, onClose }: Props) {
-  const { onPickerContinue, draftEntryDialogProps } = useCreateDraftEntryGate({
-    closeChooserOverlay: onClose,
-    navDelayMs: NAV_DELAY_MS,
-  });
+export default function CreateChooserOverlay({
+  open,
+  onClose,
+  onPickerContinue,
+  draftGateOpen = false,
+  onDismissDraftGate,
+}: Props) {
   const draftDialogOpenRef = useRef(false);
-  const onDismissDraftRef = useRef(draftEntryDialogProps.onDismiss);
-  draftDialogOpenRef.current = draftEntryDialogProps.open;
-  onDismissDraftRef.current = draftEntryDialogProps.onDismiss;
+  const onDismissDraftRef = useRef(onDismissDraftGate);
+  draftDialogOpenRef.current = draftGateOpen;
+  onDismissDraftRef.current = onDismissDraftGate;
 
   const [visible, setVisible] = useState(open);
   const [animateIn, setAnimateIn] = useState(false);
@@ -69,18 +77,11 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!visible) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [visible]);
+  useOverlayBackgroundScrollLock(visible);
 
   const swipeActive = visible;
   const swipeEngaged = open && animateIn;
-  const swipeDisabled = draftEntryDialogProps.open;
+  const swipeDisabled = draftGateOpen;
 
   // Edge strip: single owner of overlay transform + exit animation.
   const { overlayMotionStyle, edgeStripProps, playAnimatedDismiss } =
@@ -117,7 +118,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (draftDialogOpenRef.current) {
-        onDismissDraftRef.current();
+        onDismissDraftRef.current?.();
         return;
       }
       playAnimatedDismiss();
@@ -130,7 +131,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     if (!open) return;
     return subscribeAndroidHardwareBack(() => {
       if (draftDialogOpenRef.current) {
-        onDismissDraftRef.current();
+        onDismissDraftRef.current?.();
         return;
       }
       playAnimatedDismiss();
@@ -212,7 +213,7 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
     if (cancelled || movedTooMuch) return;
 
     if (draftDialogOpenRef.current) {
-      onDismissDraftRef.current();
+      onDismissDraftRef.current?.();
       return;
     }
     playAnimatedDismiss();
@@ -290,7 +291,6 @@ export default function CreateChooserOverlay({ open, onClose }: Props) {
       >
         <CreateChooserPanel variant="overlay" onContinue={handleContinue} />
       </div>
-      <CreateDraftEntryDialog {...draftEntryDialogProps} />
       <div {...edgeStripProps} />
     </div>,
     document.body

@@ -6,8 +6,9 @@ const OPEN_THRESHOLD_PX = 48;
 const LAYOUT_SHRUNK_PX = 80;
 
 /**
- * Keyboard inset for the create flow (px). Uses visualViewport when available,
- * and merges with @capacitor/keyboard heights on native when that fires.
+ * Keyboard inset for create / drawers (px).
+ * Single authority: visualViewport gap + Capacitor keyboard height, with Android
+ * double-lift guard when the WebView already resized.
  */
 export function useCreateKeyboardInset(): {
   keyboardInsetPx: number;
@@ -20,6 +21,8 @@ export function useCreateKeyboardInset(): {
   const peakInnerHeightRef = useRef(
     typeof window !== "undefined" ? window.innerHeight : 0
   );
+  const pendingCapRef = useRef<number | null>(null);
+  const capRafRef = useRef(0);
 
   const updateViewportMetrics = useCallback(() => {
     const ih = window.innerHeight;
@@ -29,48 +32,83 @@ export function useCreateKeyboardInset(): {
     setLayoutShrinkPx(Math.max(0, peakInnerHeightRef.current - ih));
   }, []);
 
+  const scheduleCapInset = useCallback((next: number) => {
+    pendingCapRef.current = Math.max(0, next);
+    if (capRafRef.current) return;
+    capRafRef.current = window.requestAnimationFrame(() => {
+      capRafRef.current = 0;
+      const pending = pendingCapRef.current;
+      pendingCapRef.current = null;
+      if (pending == null) return;
+      setCapInset(pending);
+      // Re-read vv in the same frame so layout-shrink vs cap don't fight.
+      updateViewportMetrics();
+    });
+  }, [updateViewportMetrics]);
+
   useEffect(() => {
     const vv = window.visualViewport;
+    let rafId = 0;
+
+    const scheduleUpdate = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        updateViewportMetrics();
+      });
+    };
 
     updateViewportMetrics();
-    vv?.addEventListener("resize", updateViewportMetrics);
-    vv?.addEventListener("scroll", updateViewportMetrics);
-    window.addEventListener("resize", updateViewportMetrics);
+    vv?.addEventListener("resize", scheduleUpdate);
+    vv?.addEventListener("scroll", scheduleUpdate);
+    window.addEventListener("resize", scheduleUpdate);
 
     return () => {
-      vv?.removeEventListener("resize", updateViewportMetrics);
-      vv?.removeEventListener("scroll", updateViewportMetrics);
-      window.removeEventListener("resize", updateViewportMetrics);
+      if (rafId) window.cancelAnimationFrame(rafId);
+      vv?.removeEventListener("resize", scheduleUpdate);
+      vv?.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
     };
   }, [updateViewportMetrics]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
-    let showHandle: { remove: () => Promise<void> } | undefined;
-    let hideHandle: { remove: () => Promise<void> } | undefined;
+    let willShow: { remove: () => Promise<void> } | undefined;
+    let didShow: { remove: () => Promise<void> } | undefined;
+    let willHide: { remove: () => Promise<void> } | undefined;
+    let didHide: { remove: () => Promise<void> } | undefined;
 
     (async () => {
       try {
         const { Keyboard } = await import("@capacitor/keyboard");
-        showHandle = await Keyboard.addListener("keyboardWillShow", (info) => {
+        const onShow = (info: { keyboardHeight?: number }) => {
           const h =
             typeof info.keyboardHeight === "number" ? info.keyboardHeight : 0;
-          setCapInset(Math.max(0, h));
-        });
-        hideHandle = await Keyboard.addListener("keyboardWillHide", () => {
-          setCapInset(0);
-        });
+          scheduleCapInset(h);
+        };
+        const onHide = () => scheduleCapInset(0);
+
+        willShow = await Keyboard.addListener("keyboardWillShow", onShow);
+        didShow = await Keyboard.addListener("keyboardDidShow", onShow);
+        willHide = await Keyboard.addListener("keyboardWillHide", onHide);
+        didHide = await Keyboard.addListener("keyboardDidHide", onHide);
       } catch {
-        setCapInset(0);
+        scheduleCapInset(0);
       }
     })();
 
     return () => {
-      void showHandle?.remove();
-      void hideHandle?.remove();
+      if (capRafRef.current) {
+        window.cancelAnimationFrame(capRafRef.current);
+        capRafRef.current = 0;
+      }
+      void willShow?.remove();
+      void didShow?.remove();
+      void willHide?.remove();
+      void didHide?.remove();
     };
-  }, []);
+  }, [scheduleCapInset]);
 
   // Track peak layout height while IME is closed so we can tell "viewport already shrunk"
   // from "vv gap is 0 but Capacitor still reports keyboard height" (double-lift on Android).

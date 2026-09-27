@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import type { Notification, NotificationWithActor } from "../../types/notification";
@@ -12,6 +20,7 @@ import {
 } from "../../api/services/notifications";
 import { supabase } from "../../lib/supabaseClient";
 import { clearCachedNotificationCount } from "../../lib/notificationCountCache";
+import { isActivitiesSurfaceNotification } from "../../lib/activitiesNotificationEligibility";
 import NotificationItem from "./NotificationItem";
 import NotificationPermissionBanner from "./NotificationPermissionBanner";
 import {
@@ -40,6 +49,7 @@ import {
   writePersistedNotificationList,
   readPersistedNotificationList,
 } from "../../lib/notificationListCache";
+import { groupNotificationsByRecency } from "../../lib/notifications/groupNotificationsByRecency";
 import { Paths } from "../../router/Paths";
 
 /** Max extra invite pages to auto-fetch while resolving a push deep link (avoids infinite loops). */
@@ -271,7 +281,22 @@ interface Props {
   className?: string;
   /** When false, skips initial fetch (e.g. tab hidden). When true, fetches immediately. */
   isVisible?: boolean;
+  /**
+   * `activityOnly` — Messages bell overlay: lock to activity, hide Invites|Activity switcher.
+   * Default preserves `/notifications` dual UI.
+   */
+  mode?: "default" | "activityOnly";
+  /** Host owns chrome (no fixed dual-bar top padding; wider list pad). */
+  embedded?: boolean;
+  /** Reports unread count in the current activity view (for host Clear unread). */
+  onUnreadInViewChange?: (count: number) => void;
 }
+
+export type NotificationListHandle = {
+  clearUnread: () => Promise<void>;
+  /** Quiet force-refresh of page 0; keeps existing rows visible while fetching. */
+  refresh: () => Promise<void>;
+};
 
 /**
  * NotificationList Component
@@ -280,10 +305,18 @@ interface Props {
  * Previously used URL search params which caused race condition with navigate()
  * Now uses simple React state - no URL manipulation, no event listeners needed
  */
-export default function NotificationList({
-  className = "",
-  isVisible = true,
-}: Props) {
+const NotificationList = forwardRef<NotificationListHandle, Props>(
+  function NotificationList(
+    {
+      className = "",
+      isVisible = true,
+      mode = "default",
+      embedded = false,
+      onUnreadInViewChange,
+    },
+    ref
+  ) {
+  const activityOnly = mode === "activityOnly";
   const [notifications, setNotifications] = useState<NotificationWithActor[]>(
     []
   );
@@ -293,7 +326,9 @@ export default function NotificationList({
   const [loadingMore, setLoadingMore] = useState(false);
 
   /** Invites (type invite) vs everything else */
-  const [listView, setListView] = useState<"invites" | "activity">("invites");
+  const [listView, setListView] = useState<"invites" | "activity">(
+    activityOnly ? "activity" : "invites"
+  );
   const listViewRef = useRef(listView);
   listViewRef.current = listView;
 
@@ -365,7 +400,7 @@ export default function NotificationList({
     offset = 0,
     append = false,
     opts?: LoadNotificationsOptions
-  ) => {
+  ): Promise<boolean> => {
     const quiet = opts?.quiet ?? false;
     const forceRefresh = opts?.forceRefresh ?? false;
     const listViewForRequest = opts?.listViewForRequest;
@@ -396,6 +431,8 @@ export default function NotificationList({
       );
 
       // [OPTIMIZATION] Batch hydrate invite direction/status to eliminate N+1 getInviteById
+      // Activity-only / activity typeGroup: no invite rows — skip invite RPCs entirely.
+      if (typeGroup === "invite") {
       const inviteIdsToHydrate = data
         .filter(
           (n) =>
@@ -451,8 +488,7 @@ export default function NotificationList({
         }
       }
 
-      if (typeGroup === "invite") {
-        data = sortInviteNotificationsByLatestActivity(data);
+      data = sortInviteNotificationsByLatestActivity(data);
       }
 
       // [OPTIMIZATION] Batch load follow statuses BEFORE setting notifications
@@ -586,12 +622,14 @@ export default function NotificationList({
           statusMap
         );
       }
+      return true;
     } catch (err: any) {
       console.error("Failed to load notifications:", err);
       if (!quiet) {
         setError(err.message || "Failed to load notifications");
         toast.error("Failed to load notifications");
       }
+      return false;
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -630,7 +668,7 @@ export default function NotificationList({
 
   /** Supabase Realtime: invite rows only when Invites tab is visible — merges without loading skeleton or scroll reset */
   useEffect(() => {
-    if (!isVisible || listView !== "invites") return;
+    if (activityOnly || !isVisible || listView !== "invites") return;
 
     let cancelled = false;
     const channelRef: {
@@ -752,7 +790,7 @@ export default function NotificationList({
         channelRef.current = null;
       }
     };
-  }, [isVisible, listView]);
+  }, [activityOnly, isVisible, listView]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -1022,7 +1060,7 @@ export default function NotificationList({
     });
   };
 
-  const handleClearUnreadInView = async () => {
+  const handleClearUnreadInView = useCallback(async () => {
     if (notifications.some((n) => !n.is_read)) {
       try {
         await markViewNotificationsAsRead(
@@ -1052,7 +1090,27 @@ export default function NotificationList({
         toast.error("Couldn’t clear unread");
       }
     }
-  };
+  }, [listView, notifications]);
+
+  const handleRefresh = useCallback(async () => {
+    const ok = await loadNotifications(0, false, {
+      forceRefresh: true,
+      quiet: true,
+      listViewForRequest: activityOnly ? "activity" : undefined,
+    });
+    if (!ok) {
+      throw new Error("refresh failed");
+    }
+  }, [activityOnly, loadNotifications]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      clearUnread: handleClearUnreadInView,
+      refresh: handleRefresh,
+    }),
+    [handleClearUnreadInView, handleRefresh]
+  );
 
   /**
    * Auto-mark visible notifications read when the list is shown (activity tab only for invite rows).
@@ -1063,7 +1121,9 @@ export default function NotificationList({
     const markable = notifications
       .filter((n) => {
         if (n.is_read) return false;
-        if (listView === "activity" && n.type === "saved") return false;
+        if (listView === "activity" && !isActivitiesSurfaceNotification(n)) {
+          return false;
+        }
         /** Invites stay unread until the user opens the thread from the row (InviteNotificationItem). */
         if (listView === "invites" && n.type === "invite") return false;
         if (
@@ -1113,7 +1173,7 @@ export default function NotificationList({
   // Exclude declined follow requests from in-page unread row
   const unreadInView = notifications.filter((n) => {
     if (!n.is_read) {
-      if (listView === "activity" && n.type === "saved") {
+      if (listView === "activity" && !isActivitiesSurfaceNotification(n)) {
         return false;
       }
       if (
@@ -1127,14 +1187,23 @@ export default function NotificationList({
     return false;
   }).length;
 
+  useEffect(() => {
+    onUnreadInViewChange?.(unreadInView);
+  }, [unreadInView, onUnreadInViewChange]);
+
   const visibleNotifications =
     listView === "invites" && inviteSubFilter != null
       ? notifications.filter((n) =>
           inviteRowMatchesSubFilter(n, inviteSubFilter)
         )
       : listView === "activity"
-        ? notifications.filter((n) => n.type !== "saved")
+        ? notifications.filter((n) => isActivitiesSurfaceNotification(n))
         : notifications;
+
+  const activityRecencyGroups = useMemo(() => {
+    if (!activityOnly || listView !== "activity") return null;
+    return groupNotificationsByRecency(visibleNotifications);
+  }, [activityOnly, listView, visibleNotifications]);
 
   const showInviteFilteredEmpty =
     listView === "invites" &&
@@ -1150,6 +1219,8 @@ export default function NotificationList({
 
   const inviteUnreadBadge = tabBadgeBreakdown.invite;
   const activityUnreadBadge = tabBadgeBreakdown.activity;
+
+  const showViewSwitcher = !activityOnly;
 
   const topBarPill = (
     <div
@@ -1240,25 +1311,37 @@ export default function NotificationList({
     </div>
   );
 
-  const listScrollPadding: React.CSSProperties = {
-    paddingTop: "calc(62px + env(safe-area-inset-top, 0px))",
-  };
+  const listScrollPadding: React.CSSProperties | undefined = embedded
+    ? undefined
+    : {
+        paddingTop: "calc(62px + env(safe-area-inset-top, 0px))",
+      };
 
-  /** Invites tab: slightly wider list; activity unchanged. */
-  const listPanelHorizontalClass =
-    listView === "invites" ? "px-1.5 sm:px-2" : "px-3";
+  /**
+   * Embedded (Messages Activities host): px-0 so host `var(--gutter)` is sole inset.
+   * Invites tab: slightly wider; default activity uses px-3.
+   */
+  const listPanelHorizontalClass = embedded
+    ? "px-0"
+    : listView === "invites"
+      ? "px-1.5 sm:px-2"
+      : "px-3";
+
+  const viewSwitcherChrome = showViewSwitcher ? (
+    <div
+      className="fixed left-0 right-0 z-[30] flex flex-col items-center"
+      style={{
+        paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
+      }}
+    >
+      {topBarPill}
+    </div>
+  ) : null;
 
   if (error) {
     return (
       <div className={`w-full min-h-0 ${className}`}>
-        <div
-          className="fixed left-0 right-0 z-[30] flex flex-col items-center"
-          style={{
-            paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
-          }}
-        >
-          {topBarPill}
-        </div>
+        {viewSwitcherChrome}
         <div
           id="notifications-list-panel"
           role="tabpanel"
@@ -1286,14 +1369,7 @@ export default function NotificationList({
   if (notifications.length === 0 && !loading) {
     return (
       <div className={`w-full min-h-0 ${className}`}>
-        <div
-          className="fixed left-0 right-0 z-[30] flex flex-col items-center"
-          style={{
-            paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
-          }}
-        >
-          {topBarPill}
-        </div>
+        {viewSwitcherChrome}
         <div
           id="notifications-list-panel"
           role="tabpanel"
@@ -1317,14 +1393,7 @@ export default function NotificationList({
 
   return (
     <div className={`w-full min-h-0 ${className}`}>
-      <div
-        className="fixed left-0 right-0 z-[30] flex flex-col items-center"
-        style={{
-          paddingTop: "calc(8px + env(safe-area-inset-top, 0px))",
-        }}
-      >
-        {topBarPill}
-      </div>
+      {viewSwitcherChrome}
 
       <div
         id="notifications-list-panel"
@@ -1338,10 +1407,10 @@ export default function NotificationList({
         style={listScrollPadding}
       >
         <div className="pt-1">
-          <NotificationPermissionBanner />
+          {!activityOnly ? <NotificationPermissionBanner /> : null}
         </div>
 
-        {listView === "activity" && unreadInView > 0 && (
+        {listView === "activity" && !activityOnly && unreadInView > 0 && (
           <div className="mb-1 flex items-center justify-between gap-2 border-b border-[var(--border)]/60 py-2">
             <span className="min-w-0 shrink text-xs text-[var(--text)]/65">
               {unreadInView} unread
@@ -1470,6 +1539,33 @@ export default function NotificationList({
             <p className="py-6 text-center text-sm text-[var(--text)]/55">
               No activity to show here yet.
             </p>
+          ) : listView === "activity" && activityRecencyGroups ? (
+            activityRecencyGroups.map((group) => (
+              <section key={group.bucket} className="mb-1">
+                <h3 className="sticky top-0 z-[1] bg-[var(--bg)]/92 px-0.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-[var(--text)]/40 backdrop-blur-sm">
+                  {group.label}
+                </h3>
+                {group.items.map((notification) => (
+                  <div
+                    key={notification.id}
+                    className="border-b border-[var(--border)]/50 last:border-b-0"
+                  >
+                    <NotificationItem
+                      notification={notification}
+                      onMarkAsRead={handleMarkAsRead}
+                      showGoToPostButton
+                      activityCalm
+                      batchedFollowStatus={
+                        notification.type === "follow" &&
+                        notification.additional_data?.follow_request_status
+                          ? batchedFollowStatuses[notification.id]
+                          : undefined
+                      }
+                    />
+                  </div>
+                ))}
+              </section>
+            ))
           ) : listView === "activity" ? (
             visibleNotifications.map((notification) => (
               <div
@@ -1497,7 +1593,15 @@ export default function NotificationList({
                 ref={(el) => {
                   inviteRowRefs.current.set(notification.id, el);
                 }}
-                className="border-b border-[var(--border)]/45 last:border-b-0"
+                className={[
+                  "border-b border-[var(--border)]/45 last:border-b-0 transition-opacity duration-300",
+                  pushHighlightNotificationId &&
+                  pushHighlightNotificationId !== notification.id
+                    ? "opacity-[0.55]"
+                    : "opacity-100",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
                 <NotificationItem
                   notification={notification}
@@ -1531,4 +1635,7 @@ export default function NotificationList({
       </div>
     </div>
   );
-}
+  }
+);
+
+export default NotificationList;

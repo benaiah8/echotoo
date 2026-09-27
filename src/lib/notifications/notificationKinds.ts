@@ -14,6 +14,7 @@ export const NOTIFICATION_KINDS = {
   ACTIVITY_COMMENT: "activity_comment",
   ACTIVITY_FOLLOW: "activity_follow",
   ACTIVITY_RSVP: "activity_rsvp",
+  OPEN_PLAN_REQUEST: "open_plan_request",
 } as const;
 
 export type NotificationKind =
@@ -65,12 +66,12 @@ export const NOTIFICATION_KIND_META: Record<
     bannerCapable: true,
   },
   [NOTIFICATION_KINDS.DM_MESSAGE]: {
-    routable: false,
+    routable: true,
     pushCapable: true,
     bannerCapable: true,
   },
   [NOTIFICATION_KINDS.GROUP_MESSAGE]: {
-    routable: false,
+    routable: true,
     pushCapable: true,
     bannerCapable: true,
   },
@@ -92,6 +93,11 @@ export const NOTIFICATION_KIND_META: Record<
   [NOTIFICATION_KINDS.ACTIVITY_RSVP]: {
     routable: true,
     pushCapable: false,
+    bannerCapable: true,
+  },
+  [NOTIFICATION_KINDS.OPEN_PLAN_REQUEST]: {
+    routable: true,
+    pushCapable: true,
     bannerCapable: true,
   },
 };

@@ -7,6 +7,9 @@ import {
   PiPencilSimple,
   PiTrash,
   PiUserSwitch,
+  PiMegaphone,
+  PiPushPin,
+  PiPushPinSlash,
 } from "react-icons/pi";
 import toast from "react-hot-toast";
 import { deletePost } from "../../api/services/posts";
@@ -17,6 +20,7 @@ import {
 } from "../../api/services/adminPosts";
 import { discardAllDrafts, isDraftPostId } from "../../lib/drafts";
 import { emitPostDeleted } from "../../lib/postEvents";
+import type { PublishedPostMediaRow } from "../../lib/publishedMedia";
 import {
   buildAdminEditPostData,
   createEditActivitiesHref,
@@ -25,9 +29,12 @@ import {
   type EditPostReturnState,
   type EditPostSourceRow,
 } from "../../lib/editPostBootstrap";
+import { ENABLE_ADMIN_CAMPAIGN_PUSH_UI } from "../../lib/featureFlags";
 import { useIsReportReviewer } from "../../hooks/useIsReportReviewer";
 import AdminAssignPostDialog from "../admin/AdminAssignPostDialog";
+import AdminCampaignPushDialog from "../admin/AdminCampaignPushDialog";
 import ConfirmDialog from "./ConfirmDialog";
+import { setPostSocialDiscoveryBoost } from "../../api/services/adminSocialDiscovery";
 
 interface PostMenuProps {
   postId: string;
@@ -47,6 +54,14 @@ interface PostMenuProps {
   editReturnPath?: string;
   /** Overlay detail restore state for admin edit republish. */
   editReturnState?: EditPostReturnState;
+  /** Portaled dropdown z-index tier (default feed-safe z-[100]). */
+  dropdownZClassName?: string;
+  /** Published post type for admin campaign deep-link (hangout | experience). */
+  postType?: "hangout" | "experience";
+  /** Post caption for campaign push preview / fallback copy. */
+  postCaption?: string | null;
+  /** Current social-discovery boost timestamp when known (Event rails). */
+  socialDiscoveryBoostedAt?: string | null;
 }
 
 type DeleteMode = "owner" | "admin";
@@ -63,6 +78,10 @@ export default function PostMenu({
   onRequestReport,
   editReturnPath,
   editReturnState,
+  dropdownZClassName = "z-[100]",
+  postType,
+  postCaption,
+  socialDiscoveryBoostedAt = null,
 }: PostMenuProps) {
   const navigate = useNavigate();
   const { isReportReviewer } = useIsReportReviewer();
@@ -70,14 +89,44 @@ export default function PostMenu({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteMode, setDeleteMode] = useState<DeleteMode>("owner");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
+  const [showCampaignDialog, setShowCampaignDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isAdminEditLoading, setIsAdminEditLoading] = useState(false);
+  const [isSocialBoostLoading, setIsSocialBoostLoading] = useState(false);
+  const [boostedAt, setBoostedAt] = useState<string | null>(
+    socialDiscoveryBoostedAt ?? null
+  );
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setBoostedAt(socialDiscoveryBoostedAt ?? null);
+  }, [socialDiscoveryBoostedAt]);
+
   const showAssignAction =
     isReportReviewer && !isDraft && !isDraftPostId(postId);
+
+  const resolvedPostType =
+    postType === "hangout" || postType === "experience" ? postType : undefined;
+
+  const showSocialDiscoveryBoostAction =
+    isReportReviewer &&
+    !isDraft &&
+    !isDraftPostId(postId) &&
+    resolvedPostType === "hangout";
+
+  const socialDiscoveryBoosted = Boolean(
+    typeof boostedAt === "string" && boostedAt.trim().length > 0
+  );
+
+  const showCampaignAction =
+    ENABLE_ADMIN_CAMPAIGN_PUSH_UI &&
+    isReportReviewer &&
+    !isDraft &&
+    !isDraftPostId(postId) &&
+    Boolean(postId) &&
+    Boolean(resolvedPostType);
 
   const showAdminDeleteAction =
     isReportReviewer && !isOwner && !isDraft && !isDraftPostId(postId);
@@ -138,6 +187,41 @@ export default function PostMenu({
     setShowAssignDialog(true);
   };
 
+  const handleCampaignPush = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsOpen(false);
+    setShowCampaignDialog(true);
+  };
+
+  const handleSocialDiscoveryBoost = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsOpen(false);
+    if (isSocialBoostLoading || !showSocialDiscoveryBoostAction) return;
+
+    const nextEnabled = !socialDiscoveryBoosted;
+    setIsSocialBoostLoading(true);
+    const loadingToast = toast.loading(
+      nextEnabled ? "Prioritizing for social discovery…" : "Removing social priority…"
+    );
+    try {
+      const result = await setPostSocialDiscoveryBoost(postId, nextEnabled);
+      setBoostedAt(result.socialDiscoveryBoostedAt);
+      toast.dismiss(loadingToast);
+      toast.success(
+        nextEnabled ? "Prioritized for social discovery" : "Social priority removed"
+      );
+    } catch (error) {
+      console.error("Error updating social discovery boost:", error);
+      toast.dismiss(loadingToast);
+      const msg = error instanceof Error ? error.message : "";
+      toast.error(msg || "Could not update social priority");
+    } finally {
+      setIsSocialBoostLoading(false);
+    }
+  };
+
   const handleAdminEdit = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -147,12 +231,15 @@ export default function PostMenu({
     setIsAdminEditLoading(true);
     const loadingToast = toast.loading("Loading post for edit…");
     try {
-      const { post, activities } = await adminGetPostForEdit(postId);
+      const { post, activities, mediaOrder, postMedia } =
+        await adminGetPostForEdit(postId);
       const editData = buildAdminEditPostData(
         post as unknown as EditPostSourceRow,
         activities as unknown as EditActivitySourceRow[],
         {
           returnPath: editReturnPath ?? window.location.pathname,
+          mediaOrder,
+          postMedia: postMedia as PublishedPostMediaRow[] | null | undefined,
           ...(editReturnState ? { returnState: editReturnState } : {}),
         }
       );
@@ -170,6 +257,7 @@ export default function PostMenu({
   };
 
   const confirmDelete = async () => {
+    if (isDeleting) return;
     setIsDeleting(true);
     try {
       if (isDraft || isDraftPostId(postId)) {
@@ -203,7 +291,7 @@ export default function PostMenu({
       setShowDeleteModal(false);
     } catch (error) {
       console.error("Error deleting post:", error);
-      toast.error("Failed to delete post");
+      toast.error("Couldn't delete the post. Try again.");
     } finally {
       setIsDeleting(false);
     }
@@ -245,7 +333,7 @@ export default function PostMenu({
         createPortal(
           <div
             ref={dropdownRef}
-            className="fixed z-[100] rounded-lg shadow-xl py-1 min-w-[120px]"
+            className={`fixed ${dropdownZClassName} rounded-lg shadow-xl py-1 min-w-[120px]`}
             style={{
               top: menuRect.bottom + 4,
               right: window.innerWidth - menuRect.right,
@@ -286,6 +374,29 @@ export default function PostMenu({
               <button onClick={handleAssign} className={menuItemClass}>
                 <PiUserSwitch size={16} />
                 Assign post
+              </button>
+            ) : null}
+            {showSocialDiscoveryBoostAction ? (
+              <button
+                type="button"
+                onClick={handleSocialDiscoveryBoost}
+                disabled={isSocialBoostLoading}
+                className={menuItemClass}
+              >
+                {socialDiscoveryBoosted ? (
+                  <PiPushPinSlash size={16} />
+                ) : (
+                  <PiPushPin size={16} />
+                )}
+                {socialDiscoveryBoosted
+                  ? "Remove Social Discovery"
+                  : "Social Discovery"}
+              </button>
+            ) : null}
+            {showCampaignAction ? (
+              <button onClick={handleCampaignPush} className={menuItemClass}>
+                <PiMegaphone size={16} />
+                Campaign push
               </button>
             ) : null}
             {showAdminEditAction ? (
@@ -330,6 +441,15 @@ export default function PostMenu({
           onClose={() => setShowAssignDialog(false)}
           postId={postId}
           currentAuthorId={currentAuthorId}
+        />
+      ) : null}
+      {showCampaignAction && resolvedPostType ? (
+        <AdminCampaignPushDialog
+          open={showCampaignDialog}
+          onClose={() => setShowCampaignDialog(false)}
+          postId={postId}
+          postType={resolvedPostType}
+          postCaption={postCaption}
         />
       ) : null}
     </div>

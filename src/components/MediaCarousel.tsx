@@ -1,20 +1,17 @@
 // Optimized media carousel: Swiper inline carousel, fullscreen lightbox with thumbnails
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Swiper, SwiperSlide } from "swiper/react";
-import { Autoplay, Zoom } from "swiper/modules";
+import { Autoplay } from "swiper/modules";
 import type { Swiper as SwiperType } from "swiper";
 import "swiper/swiper.css";
-import "swiper/css/zoom";
 import { imgUrlPublic } from "../lib/img";
 import {
-  applyLightboxSwipeContentStyle,
-  clearLightboxSwipeContentStyle,
-  lightboxSwipeBackdropRgba,
-  LIGHTBOX_SWIPE_VERTICAL_THRESHOLD,
-} from "../lib/lightboxSwipeDim";
-import { acquirePullToRefreshBlock } from "../lib/pullToRefreshBlock";
+  usePublishedMultiMediaFrame,
+  type PublishedMediaItem,
+  type PublishedMultiMediaFramePolicy,
+} from "../lib/publishedMedia";
 import ProgressiveImage from "./ui/ProgressiveImage";
+import MediaGalleryLightbox from "./MediaGalleryLightbox";
 
 type Props = {
   images: string[];
@@ -29,18 +26,35 @@ type Props = {
    */
   interactiveDots?: boolean;
   /**
+   * When false, hide overlay pagination (Create uses external dots).
+   * Default true so Feed / Post Detail stay unchanged.
+   */
+  showDots?: boolean;
+  /**
    * When false, inline autoplay never runs (e.g. persistent tab hidden via display:none, or profile sub-tab inactive).
    * Default true for detail/modal carousels that omit this prop.
    */
   hostVisible?: boolean;
+  /**
+   * Optional controlled slide (`images` index). Finalize media manager only.
+   * Omit everywhere else — feed/detail stay uncontrolled.
+   */
+  activeIndex?: number;
+  onActiveIndexChange?: (index: number) => void;
+  /**
+   * Feed/Profile list: `"stable-list"` locks the first established multi frame.
+   * Detail/Create omit this (default geometry).
+   */
+  framePolicy?: PublishedMultiMediaFramePolicy;
+  /**
+   * Feed `image_count` when known — reserves multi frame before full gallery hydrates.
+   */
+  expectedMediaCount?: number;
 };
 
 type SlideItem = { src: string; originalIndex: number };
 
 const AUTOPLAY_DELAY_MS = 3000;
-
-/** Above PostDetailModal (z-50), drawers (z-100), FrostedCenterModal (z-200), Modal/Dropdown (z-9999). */
-const LIGHTBOX_PORTAL_Z = 10050;
 
 /** Inline slides: no Swiper Zoom (feed scroll + pinch stay sane); lightbox keeps Zoom. */
 const SLIDE_INNER =
@@ -54,7 +68,12 @@ export default function MediaCarousel({
   enableLightbox = false,
   autoplay = false,
   interactiveDots = true,
+  showDots = true,
   hostVisible = true,
+  activeIndex,
+  onActiveIndexChange,
+  framePolicy = "default",
+  expectedMediaCount,
 }: Props) {
   const swiperRef = useRef<SwiperType | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -98,14 +117,16 @@ export default function MediaCarousel({
     [shouldAutoplay]
   );
 
-  const zoomOptions = useMemo(
-    () => ({ maxRatio: 3, minRatio: 1, toggle: true }),
-    []
+  const syncInlineIndex = useCallback(
+    (swiper: SwiperType) => {
+      setIndex(swiper.realIndex);
+      if (!onActiveIndexChange) return;
+      const original =
+        slideItems[swiper.realIndex]?.originalIndex ?? swiper.realIndex;
+      onActiveIndexChange(original);
+    },
+    [onActiveIndexChange, slideItems]
   );
-
-  const syncInlineIndex = useCallback((swiper: SwiperType) => {
-    setIndex(swiper.realIndex);
-  }, []);
 
   const goTo = (slideIdx: number) => {
     const swiper = swiperRef.current;
@@ -122,25 +143,69 @@ export default function MediaCarousel({
     setIndex((prev) => (slideCount === 0 ? 0 : Math.min(prev, slideCount - 1)));
   }, [slideCount]);
 
+  useEffect(() => {
+    if (typeof activeIndex !== "number" || slideCount === 0) return;
+    const slideIdx = slideItems.findIndex((s) => s.originalIndex === activeIndex);
+    const target =
+      slideIdx >= 0
+        ? slideIdx
+        : Math.max(0, Math.min(slideCount - 1, activeIndex));
+    setIndex((prev) => (prev === target ? prev : target));
+    const swiper = swiperRef.current;
+    if (!swiper || slideCount <= 1) return;
+    if (swiper.realIndex === target) return;
+    if (swiper.params.loop && typeof swiper.slideToLoop === "function") {
+      swiper.slideToLoop(target);
+    } else {
+      swiper.slideTo(target);
+    }
+  }, [activeIndex, slideCount, slideItems]);
+
   const imgFit =
     fit === "cover"
       ? "w-full h-full object-cover"
       : "w-full h-full object-contain";
+  /** Create/Detail heroes fill a parent stage — do not impose aspect-ratio identity. */
+  const fillParentStage =
+    maxHeight === "100%" || /\bh-full\b/.test(className);
+  const expectedCount =
+    typeof expectedMediaCount === "number" &&
+    Number.isFinite(expectedMediaCount) &&
+    expectedMediaCount > 0
+      ? Math.floor(expectedMediaCount)
+      : 0;
+  const forceMultiFrame =
+    framePolicy === "stable-list" &&
+    !fillParentStage &&
+    expectedCount > 1 &&
+    slideCount <= 1;
+  /** PV3.6: one image always intrinsic — unless list reserved multi via image_count. */
+  const singleImageNatural = slideCount === 1 && !forceMultiFrame;
+  const multiSlideFrame = slideCount > 1 || forceMultiFrame;
+  const applyMultiContentFrame = multiSlideFrame && !fillParentStage;
+  const imgClass = singleImageNatural
+    ? "w-full h-auto object-contain select-none max-w-full"
+    : `${imgFit} select-none max-h-full max-w-full`;
+
+  const legacyMediaItems = useMemo((): PublishedMediaItem[] => {
+    return slideItems.map((s) => ({
+      kind: "image" as const,
+      key: `image:${s.src}`,
+      url: s.src,
+    }));
+  }, [slideItems]);
+
+  const { multiFrameStyle, reportImageNaturalSize } =
+    usePublishedMultiMediaFrame(legacyMediaItems, {
+      policy: framePolicy,
+      forceMulti: forceMultiFrame,
+    });
 
   const frame =
     "relative isolate rounded-2xl border border-[var(--border)] overflow-hidden";
 
   const [open, setOpen] = useState(false);
   const closingRef = useRef(false);
-  const lightboxSwiperRef = useRef<SwiperType | null>(null);
-  const lightboxSlideToIndexRef = useRef<number | null>(null);
-  const lightboxSwipeContentRef = useRef<HTMLDivElement | null>(null);
-
-  const lightboxGoTo = (i: number) => {
-    const clamped = Math.max(0, Math.min(slideCount - 1, i));
-    setIndex(clamped);
-    lightboxSlideToIndexRef.current = clamped;
-  };
 
   const closeLightbox = useCallback(() => {
     if (closingRef.current) return;
@@ -150,60 +215,6 @@ export default function MediaCarousel({
       closingRef.current = false;
     }, 150);
   }, []);
-
-  /** Tap outside the image (letterbox / chrome) closes; pinch/double-tap zoom stays on .swiper-zoom-container only. */
-  const handleLightboxBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (closingRef.current) return;
-      const t = e.target as HTMLElement;
-      if (
-        t.closest(".swiper-zoom-container") ||
-        t.closest("[data-lightbox-thumbs]") ||
-        t.closest("[data-lightbox-close]")
-      ) {
-        return;
-      }
-      closeLightbox();
-    },
-    [closeLightbox]
-  );
-
-  useEffect(() => {
-    if (!open) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeLightbox();
-      }
-    };
-    window.addEventListener("keydown", handleEscape, true);
-    return () => window.removeEventListener("keydown", handleEscape, true);
-  }, [open, closeLightbox]);
-
-  useEffect(() => {
-    if (!open || !enableLightbox) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, enableLightbox]);
-
-  useEffect(() => {
-    if (!open || !enableLightbox) return;
-    return acquirePullToRefreshBlock();
-  }, [open, enableLightbox]);
-
-  useEffect(() => {
-    if (!open || lightboxSlideToIndexRef.current === null) return;
-    const targetIndex = lightboxSlideToIndexRef.current;
-    lightboxSlideToIndexRef.current = null;
-    const s = lightboxSwiperRef.current;
-    if (s && s.activeIndex !== targetIndex) {
-      s.slideTo(targetIndex, 280);
-    }
-  }, [open, index]);
 
   const [swiperReady, setSwiperReady] = useState(false);
   const [inViewport, setInViewport] = useState(false);
@@ -284,7 +295,19 @@ export default function MediaCarousel({
 
   return (
     <>
-      <div ref={containerRef} className={`${frame} ${className}`}>
+      <div
+        ref={containerRef}
+        className={`${frame} ${className}`}
+        style={
+          singleImageNatural
+            ? undefined
+            : applyMultiContentFrame && multiFrameStyle
+              ? multiFrameStyle
+              : { height: maxHeight }
+        }
+        data-media-carousel-single={singleImageNatural ? "true" : undefined}
+        data-media-carousel-multi={multiSlideFrame ? "true" : undefined}
+      >
         <Swiper
           key={swiperInstanceKey}
           modules={inlineSwiperModules}
@@ -318,8 +341,18 @@ export default function MediaCarousel({
           touchReleaseOnEdges={true}
           nested={true}
           watchOverflow={true}
-          style={{ height: maxHeight }}
-          className="relative z-0 w-full"
+          style={
+            singleImageNatural
+              ? { height: "auto" }
+              : applyMultiContentFrame && multiFrameStyle
+                ? { height: "100%" }
+                : { height: maxHeight }
+          }
+          className={
+            singleImageNatural
+              ? "relative z-0 w-full [&_.swiper-wrapper]:h-auto [&_.swiper-slide]:h-auto"
+              : "relative z-0 h-full w-full [&_.swiper-wrapper]:h-full [&_.swiper-slide]:h-full"
+          }
         >
           {slideItems.map(({ src, originalIndex }, slideIdx) => {
             const imageUrl = imgUrlPublic(src);
@@ -329,7 +362,11 @@ export default function MediaCarousel({
                   <SwiperSlide key={`o-${originalIndex}`}>
                     <div className="min-w-full h-full bg-[var(--surface)] grid place-items-center">
                       <div
-                        className={SLIDE_INNER}
+                        className={
+                          singleImageNatural
+                            ? "media-carousel-slide-inner w-full grid place-items-center"
+                            : SLIDE_INNER
+                        }
                         onClick={() => {
                           if (enableLightbox && !closingRef.current) {
                             setOpen(true);
@@ -342,7 +379,7 @@ export default function MediaCarousel({
                         <img
                           src={src}
                           alt=""
-                          className={`${imgFit} select-none max-h-full max-w-full`}
+                          className={imgClass}
                           draggable={false}
                           loading="lazy"
                           decoding="async"
@@ -362,9 +399,19 @@ export default function MediaCarousel({
               slideIdx === index + 1;
             return (
               <SwiperSlide key={`o-${originalIndex}`}>
-                <div className="min-w-full h-full bg-[var(--surface)] grid place-items-center">
+                <div
+                  className={
+                    singleImageNatural
+                      ? "min-w-full w-full bg-[var(--surface)] grid place-items-center"
+                      : "min-w-full h-full bg-[var(--surface)] grid place-items-center"
+                  }
+                >
                   <div
-                    className={SLIDE_INNER}
+                    className={
+                      singleImageNatural
+                        ? "media-carousel-slide-inner w-full grid place-items-center"
+                        : SLIDE_INNER
+                    }
                     onClick={() => {
                       if (enableLightbox && !closingRef.current) {
                         setOpen(true);
@@ -378,11 +425,36 @@ export default function MediaCarousel({
                     <ProgressiveImage
                       src={imageUrl}
                       alt=""
-                      className={`${imgFit} select-none max-h-full max-w-full`}
+                      layout={singleImageNatural ? "natural" : "fill"}
+                      fit={
+                        singleImageNatural
+                          ? "contain"
+                          : multiSlideFrame
+                            ? "cover"
+                            : fit === "contain"
+                              ? "contain"
+                              : "cover"
+                      }
+                      fillMinHeight={
+                        singleImageNatural || applyMultiContentFrame
+                          ? false
+                          : "200px"
+                      }
+                      className={
+                        singleImageNatural
+                          ? "w-full max-w-full select-none"
+                          : imgClass
+                      }
                       viewportWidth={800}
                       rootMargin="400px"
                       priority={isPrioritySlide}
                       onError={() => handleImageError(originalIndex)}
+                      onNaturalSize={
+                        applyMultiContentFrame
+                          ? (w, h) =>
+                              reportImageNaturalSize(`image:${src}`, w, h)
+                          : undefined
+                      }
                     />
                   </div>
                 </div>
@@ -391,7 +463,7 @@ export default function MediaCarousel({
           })}
         </Swiper>
 
-        {multiSlide && (
+        {showDots && multiSlide && (
           <div
             className={`pointer-events-none absolute bottom-2 left-0 right-0 z-20 flex items-center justify-center gap-1.5 ${
               interactiveDots ? "[&>button]:pointer-events-auto" : ""
@@ -426,227 +498,21 @@ export default function MediaCarousel({
         )}
       </div>
 
-      {enableLightbox &&
-        open &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <div
-            className="fixed inset-0 flex flex-col bg-black/90"
-            style={{
-              zIndex: LIGHTBOX_PORTAL_Z,
-              cursor: "zoom-out",
-            }}
-            role="presentation"
-            onClick={handleLightboxBackdropClick}
-            ref={(overlayEl) => {
-              if (!overlayEl) return;
-
-              let swipeStartY = 0;
-              let swipeStartX = 0;
-              let isVerticalSwipe = false;
-
-              const handleSwipeStart = (e: TouchEvent) => {
-                swipeStartY = e.touches[0].clientY;
-                swipeStartX = e.touches[0].clientX;
-                isVerticalSwipe = false;
-              };
-
-              const handleSwipeMove = (e: TouchEvent) => {
-                if (!swipeStartY) return;
-
-                const currentY = e.touches[0].clientY;
-                const currentX = e.touches[0].clientX;
-                const diffY = currentY - swipeStartY;
-                const diffX = Math.abs(currentX - swipeStartX);
-
-                if (
-                  diffY > LIGHTBOX_SWIPE_VERTICAL_THRESHOLD &&
-                  diffY > diffX
-                ) {
-                  isVerticalSwipe = true;
-                  overlayEl.style.backgroundColor =
-                    lightboxSwipeBackdropRgba(diffY);
-                  applyLightboxSwipeContentStyle(
-                    lightboxSwipeContentRef.current,
-                    diffY
-                  );
-                }
-              };
-
-              const handleSwipeEnd = (e: TouchEvent) => {
-                if (!swipeStartY) return;
-
-                const endY = e.changedTouches[0].clientY;
-                const diffY = endY - swipeStartY;
-
-                if (isVerticalSwipe && diffY > 100) {
-                  if (!closingRef.current) {
-                    closingRef.current = true;
-                    setOpen(false);
-                    setTimeout(() => {
-                      closingRef.current = false;
-                    }, 150);
-                  }
-                } else {
-                  overlayEl.style.backgroundColor = "";
-                  clearLightboxSwipeContentStyle(
-                    lightboxSwipeContentRef.current
-                  );
-                }
-
-                swipeStartY = 0;
-                swipeStartX = 0;
-                isVerticalSwipe = false;
-              };
-
-              overlayEl.addEventListener("touchstart", handleSwipeStart, {
-                passive: true,
-              });
-              overlayEl.addEventListener("touchmove", handleSwipeMove, {
-                passive: true,
-              });
-              overlayEl.addEventListener("touchend", handleSwipeEnd, {
-                passive: true,
-              });
-
-              return () => {
-                overlayEl.removeEventListener("touchstart", handleSwipeStart);
-                overlayEl.removeEventListener("touchmove", handleSwipeMove);
-                overlayEl.removeEventListener("touchend", handleSwipeEnd);
-                overlayEl.style.backgroundColor = "";
-                clearLightboxSwipeContentStyle(lightboxSwipeContentRef.current);
-              };
-            }}
-          >
-            <div className="flex min-h-0 w-full flex-1 flex-col gap-5">
-              <div
-                ref={lightboxSwipeContentRef}
-                className="flex min-h-0 min-w-0 flex-1 flex-col"
-                role="presentation"
-              >
-                <Swiper
-                  modules={[Zoom]}
-                  zoom={zoomOptions}
-                  slidesPerView={1}
-                  spaceBetween={0}
-                  speed={420}
-                  threshold={14}
-                  longSwipesRatio={0.32}
-                  resistanceRatio={0.75}
-                  initialSlide={Math.min(
-                    Math.max(0, index),
-                    Math.max(0, slideCount - 1)
-                  )}
-                  className="media-lightbox-swiper h-full min-h-0 w-full [&_.swiper-slide]:box-border [&_.swiper-slide]:h-full"
-                  style={{ height: "100%" }}
-                  onSwiper={(swiper) => {
-                    lightboxSwiperRef.current = swiper;
-                    if (slideCount > 0) {
-                      const start = Math.min(
-                        Math.max(0, index),
-                        slideCount - 1
-                      );
-                      swiper.slideTo(start, 0);
-                    }
-                  }}
-                  onSlideChange={(s) => setIndex(s.activeIndex)}
-                >
-                  {slideItems.map(({ src, originalIndex }, slideIdx) => {
-                    const imageUrl = imgUrlPublic(src);
-                    if (!imageUrl) {
-                      if (src && src.startsWith("data:image/")) {
-                        return (
-                          <SwiperSlide key={`lb-o-${originalIndex}`}>
-                            <div className="flex h-full w-full items-center justify-center">
-                              <div className="swiper-zoom-container flex h-fit max-h-full w-fit max-w-full items-center justify-center">
-                                <img
-                                  src={src}
-                                  alt=""
-                                  className="max-h-full max-w-full object-contain select-none"
-                                  draggable={false}
-                                />
-                              </div>
-                            </div>
-                          </SwiperSlide>
-                        );
-                      }
-                      return null;
-                    }
-                    return (
-                      <SwiperSlide key={`lb-o-${originalIndex}`}>
-                        <div className="flex h-full w-full items-center justify-center">
-                          <div className="swiper-zoom-container flex h-fit max-h-full w-fit max-w-full items-center justify-center">
-                            <img
-                              src={imageUrl}
-                              alt=""
-                              className="max-h-full max-w-full object-contain select-none"
-                              draggable={false}
-                            />
-                          </div>
-                        </div>
-                      </SwiperSlide>
-                    );
-                  })}
-                </Swiper>
-              </div>
-
-              <div className="pointer-events-auto flex flex-shrink-0 flex-col">
-                <div className="flex justify-center px-3 pb-1">
-                  <button
-                    type="button"
-                    data-lightbox-close
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeLightbox();
-                    }}
-                    aria-label="Close"
-                    className="grid h-10 w-10 place-items-center rounded-full bg-white/15 text-xl leading-none text-white hover:bg-white/25"
-                  >
-                    ×
-                  </button>
-                </div>
-                <div
-                  data-lightbox-thumbs
-                  className="flex flex-shrink-0 justify-center gap-1.5 overflow-x-auto scroll-hide px-3 pt-1 pb-[calc(var(--safe-area-bottom-layout)+8px)]"
-                  style={{ minHeight: 52 }}
-                >
-                  {slideItems.map(({ src, originalIndex }, slideIdx) => {
-                    const thumbUrl = imgUrlPublic(src);
-                    if (!thumbUrl && !src?.startsWith?.("data:image/"))
-                      return null;
-                    const thumbSrc = thumbUrl || src;
-                    const active = slideIdx === index;
-                    return (
-                      <button
-                        key={`thumb-${originalIndex}`}
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          lightboxGoTo(slideIdx);
-                        }}
-                        className={`flex-shrink-0 w-12 h-12 overflow-hidden transition-all ${
-                          active
-                            ? "ring-2 ring-white opacity-100"
-                            : "opacity-50 hover:opacity-70"
-                        }`}
-                        aria-label={`View image ${slideIdx + 1}`}
-                        aria-current={active ? "true" : undefined}
-                      >
-                        <img
-                          src={thumbSrc}
-                          alt=""
-                          className="w-full h-full object-cover"
-                          draggable={false}
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
+      {enableLightbox ? (
+        <MediaGalleryLightbox
+          images={slideItems.map((s) => s.src)}
+          open={open}
+          activeIndex={index}
+          onActiveIndexChange={(i) => {
+            setIndex(i);
+            const swiper = swiperRef.current;
+            if (swiper && swiper.activeIndex !== i) {
+              swiper.slideTo(i, 0);
+            }
+          }}
+          onClose={closeLightbox}
+        />
+      ) : null}
     </>
   );
 }

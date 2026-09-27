@@ -1,10 +1,11 @@
 import type { AppUpdateRuntimeConfig } from "../api/services/appUpdateRuntime";
+import { softDismissSignature } from "./appUpdateDecision";
 
 const PREFIX = "echotoo_app_update_";
 
 export const APP_UPDATE_LAST_CHECK_KEY = `${PREFIX}last_check_at`;
 export const APP_UPDATE_CACHED_CONFIG_KEY = `${PREFIX}cached_config_json`;
-/** Value: `${platform}:${latest_version}` when user dismissed soft prompt for that pair. */
+/** Value: soft-dismiss signature for platform + latest target. */
 export const APP_UPDATE_SOFT_DISMISS_KEY = `${PREFIX}soft_dismiss`;
 
 const COOLDOWN_MS = 12 * 60 * 60 * 1000;
@@ -66,13 +67,17 @@ export function readSoftDismissSignature(): string | null {
   }
 }
 
-export function writeSoftDismissSignature(platform: string, latestVersion: string): void {
+export function writeSoftDismissSignature(
+  platform: string,
+  latestVersion: string,
+  latestBuild?: string | null
+): void {
   try {
     const v = latestVersion.trim();
-    if (!v) return;
+    if (!v && !(latestBuild ?? "").trim()) return;
     localStorage.setItem(
       APP_UPDATE_SOFT_DISMISS_KEY,
-      `${platform}:${v}`
+      softDismissSignature(platform, latestVersion, latestBuild)
     );
   } catch {
     /* noop */
@@ -81,9 +86,10 @@ export function writeSoftDismissSignature(platform: string, latestVersion: strin
 
 export function isSoftDismissedFor(
   platform: string,
-  latestVersion: string
+  latestVersion: string,
+  latestBuild?: string | null
 ): boolean {
-  const sig = `${platform}:${latestVersion.trim()}`;
-  if (!latestVersion.trim()) return false;
+  const sig = softDismissSignature(platform, latestVersion, latestBuild);
+  if (!latestVersion.trim() && !(latestBuild ?? "").trim()) return false;
   return readSoftDismissSignature() === sig;
 }

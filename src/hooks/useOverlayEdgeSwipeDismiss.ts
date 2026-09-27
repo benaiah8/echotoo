@@ -82,6 +82,10 @@ export function defaultOverlayEdgeSwipeMaxDragPx(): number {
 /** Past the right viewport edge so commit / programmatic exit does not stall with sheet still visible (~92vw max drag). */
 const EXIT_TRANSLATE_OVERSHOOT_PX = 48;
 
+/** Ignore strip starts on interactive controls under the activation region. */
+const EDGE_STRIP_INTERACTIVE_SELECTOR =
+  "a,button,input,textarea,select,[role='button']";
+
 /**
  * Horizontal translate for the committed dismiss animation only — fully off-screen to the right.
  * Live finger drag still uses {@link defaultOverlayEdgeSwipeMaxDragPx} / `maxDragPx`.
@@ -155,6 +159,12 @@ export type UseOverlayEdgeSwipeDismissOptions = {
    */
   tryConsumeDismissLayer?: () => boolean;
   /**
+   * Fires when this overlay's exit animation is committed — not on snap-back,
+   * incomplete swipe, or when `tryConsumeDismissLayer` consumes.
+   * Does not replace `onDismiss` (still delayed until navigation).
+   */
+  onDismissCommitStart?: () => void;
+  /**
    * Minimum strip width floor (px), combined with `env(safe-area-inset-left)` in CSS.
    * When `edgeMaxWidthVw` is set, width is `min(max(floor, Nvw), edgeMaxWidthPx)`.
    */
@@ -183,6 +193,11 @@ export type UseOverlayEdgeSwipeDismissOptions = {
    * Default: {@link defaultOverlayEdgeSwipeExitTranslatePx} (fully off-screen right).
    */
   exitTranslatePx?: number | (() => number);
+  /**
+   * When this identity changes (e.g. conversationId), reset exit transform / drag
+   * so a reused overlay never stays translated off-screen.
+   */
+  resetToken?: string | number | null;
 };
 
 export type OverlayEdgeSwipeDismissStripProps = {
@@ -224,7 +239,11 @@ export type UseOverlayEdgeSwipeDismissResult = {
  * - When `!active`, `engageSwipe === false`, or `gestureDisabled`, the strip uses
  *   `pointer-events-none` so it does not intercept taps (callers often disable while the
  *   composer or mention UI is active). During an in-flight strip gesture, the strip stays
- *   interactive until pointer-up.
+ *   interactive until pointer-up — except after vertical cancel, when it briefly
+ *   pass-throughs so the scroll layer can continue the gesture (M3B.3).
+ * - M3B.3: `preventDefault` / hard horizontal ownership only after horizontal lock;
+ *   vertical cancel releases capture and pass-throughs. Strip uses `touch-action: pan-y`
+ *   while armed (not `none` on pointerdown).
  * - `playAnimatedDismiss()` runs the same exit transform + delayed `onDismiss` as a committed
  *   swipe (for in-app Back / Escape wiring). It is a no-op while `!active`, during an edge-strip
  *   pointer session, or while a commit timer is already pending.
@@ -251,11 +270,16 @@ export function useOverlayEdgeSwipeDismiss(
   const startClientYRef = useRef(0);
   const translateRef = useRef(0);
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Strip element that holds provisional capture (released on vertical cancel). */
+  const stripElRef = useRef<HTMLDivElement | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
 
   const onDismissRef = useRef(options.onDismiss);
   onDismissRef.current = options.onDismiss;
   const tryConsumeRef = useRef(options.tryConsumeDismissLayer);
   tryConsumeRef.current = options.tryConsumeDismissLayer;
+  const onDismissCommitStartRef = useRef(options.onDismissCommitStart);
+  onDismissCommitStartRef.current = options.onDismissCommitStart;
 
   useEffect(() => {
     translateRef.current = translateX;
@@ -269,12 +293,30 @@ export function useOverlayEdgeSwipeDismiss(
       setEdgeStripPointerSession(false);
       draggingRef.current = false;
       gestureModeRef.current = "undecided";
+      activePointerIdRef.current = null;
+      stripElRef.current = null;
       if (commitTimerRef.current) {
         clearTimeout(commitTimerRef.current);
         commitTimerRef.current = null;
       }
     }
   }, [options.active]);
+
+  useEffect(() => {
+    // New conversation (or equivalent): never inherit prior exit translate.
+    setTranslateX(0);
+    setTransitionMs(0);
+    setIsDragging(false);
+    setEdgeStripPointerSession(false);
+    draggingRef.current = false;
+    gestureModeRef.current = "undecided";
+    activePointerIdRef.current = null;
+    stripElRef.current = null;
+    if (commitTimerRef.current) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+  }, [options.resetToken]);
 
   useEffect(() => {
     return () => {
@@ -325,12 +367,53 @@ export function useOverlayEdgeSwipeDismiss(
     setIsDragging(false);
   }, []);
 
+  /** Vertical / leftward cancel: release ownership so the message scroll layer can receive the gesture. */
+  const abortStripGestureForNativeScroll = useCallback(
+    (stripEl: HTMLDivElement | null, pointerId: number | null) => {
+      gestureModeRef.current = "cancelled";
+      draggingRef.current = false;
+      setIsDragging(false);
+      setEdgeStripPointerSession(false);
+      setTransitionMs(0);
+      setTranslateX(0);
+      if (stripEl != null) {
+        // Immediate hit-through (do not wait for React re-render of pointer-events class).
+        stripEl.style.pointerEvents = "none";
+        if (pointerId != null) {
+          try {
+            if (stripEl.hasPointerCapture(pointerId)) {
+              stripEl.releasePointerCapture(pointerId);
+            }
+          } catch {
+            /* already released */
+          }
+        }
+        // Restore interactivity after this finger lifts (strip may not receive pointerup).
+        const restore = () => {
+          stripEl.style.pointerEvents = "";
+          window.removeEventListener("pointerup", restore);
+          window.removeEventListener("pointercancel", restore);
+        };
+        window.addEventListener("pointerup", restore);
+        window.addEventListener("pointercancel", restore);
+      }
+      activePointerIdRef.current = null;
+    },
+    [],
+  );
+
   const playAnimatedDismiss = useCallback(() => {
     if (!optsRef.current.active) return;
     if (commitTimerRef.current) return;
-    if (draggingRef.current) return;
     if (tryConsumeRef.current?.() === true) return;
 
+    // Programmatic close must not be skipped because an edge drag ref is stale.
+    draggingRef.current = false;
+    gestureModeRef.current = "undecided";
+    setIsDragging(false);
+    setEdgeStripPointerSession(false);
+
+    onDismissCommitStartRef.current?.();
     const exitX = resolveExitTranslatePx();
     setTransitionMs(COMMIT_EXIT_MS);
     setTranslateX(exitX);
@@ -345,6 +428,8 @@ export function useOverlayEdgeSwipeDismiss(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!draggingRef.current) {
         setEdgeStripPointerSession(false);
+        activePointerIdRef.current = null;
+        e.currentTarget.style.pointerEvents = "";
         return;
       }
       try {
@@ -354,6 +439,8 @@ export function useOverlayEdgeSwipeDismiss(
       }
 
       setEdgeStripPointerSession(false);
+      activePointerIdRef.current = null;
+      e.currentTarget.style.pointerEvents = "";
 
       const mode = gestureModeRef.current;
       resetGestureState();
@@ -384,6 +471,7 @@ export function useOverlayEdgeSwipeDismiss(
           setTranslateX(0);
           return;
         }
+        onDismissCommitStartRef.current?.();
         const exitX = resolveExitTranslatePx();
         setTransitionMs(COMMIT_EXIT_MS);
         setTranslateX(exitX);
@@ -416,14 +504,30 @@ export function useOverlayEdgeSwipeDismiss(
       if (e.pointerType === "mouse" && e.button !== 0) return;
       if (commitTimerRef.current) return;
 
-      e.preventDefault();
+      const target = e.target;
+      if (
+        target instanceof Element &&
+        target.closest(EDGE_STRIP_INTERACTIVE_SELECTOR)
+      ) {
+        return;
+      }
+
+      // M3B.3: do not preventDefault / permanently own the gesture before horizontal lock.
+      stripElRef.current = e.currentTarget;
+      activePointerIdRef.current = e.pointerId;
+      e.currentTarget.style.pointerEvents = "";
       setEdgeStripPointerSession(true);
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture optional until horizontal lock */
+      }
       draggingRef.current = true;
       gestureModeRef.current = "undecided";
       startClientXRef.current = e.clientX;
       startClientYRef.current = e.clientY;
       setTransitionMs(0);
+      setTranslateX(0);
     },
     [canStartSwipe],
   );
@@ -443,15 +547,11 @@ export function useOverlayEdgeSwipeDismiss(
           Math.abs(dy) > VERTICAL_SLOP_PX &&
           Math.abs(dy) >= Math.abs(dx) * VERTICAL_DOMINANCE_OVER_DX
         ) {
-          gestureModeRef.current = "cancelled";
-          setTransitionMs(0);
-          setTranslateX(0);
+          abortStripGestureForNativeScroll(e.currentTarget, e.pointerId);
           return;
         }
         if (dx < -LEFTWARD_CANCEL_DX) {
-          gestureModeRef.current = "cancelled";
-          setTransitionMs(0);
-          setTranslateX(0);
+          abortStripGestureForNativeScroll(e.currentTarget, e.pointerId);
           return;
         }
 
@@ -463,6 +563,14 @@ export function useOverlayEdgeSwipeDismiss(
         ) {
           gestureModeRef.current = "horizontal";
           setIsDragging(true);
+          try {
+            if (!e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }
+          } catch {
+            /* ignore */
+          }
+          e.preventDefault();
           setTranslateX(Math.max(0, Math.min(dx, cap)));
           return;
         }
@@ -481,10 +589,11 @@ export function useOverlayEdgeSwipeDismiss(
       }
 
       if (gestureModeRef.current !== "horizontal") return;
+      e.preventDefault();
       const cap = resolveMaxDragPx();
       setTranslateX(Math.max(0, Math.min(dx, cap)));
     },
-    [resolveMaxDragPx],
+    [resolveMaxDragPx, abortStripGestureForNativeScroll],
   );
 
   const inset =
@@ -541,8 +650,11 @@ export function useOverlayEdgeSwipeDismiss(
       left: `calc(env(safe-area-inset-left, 0px) + ${edgeStripLeftInsetPx}px)`,
       top: `calc(env(safe-area-inset-top, 0px) + ${topPad}px)`,
       width: stripWidthCss,
-      /** When interactive, block browser horizontal pan hijack; when inert, avoid affecting hit-testing quirks. */
-      touchAction: edgeStripReceivesPointers ? "none" : "auto",
+      /**
+       * pan-y: allow vertical native scroll arbitration before horizontal lock.
+       * Horizontal dismiss uses preventDefault only after lock (not touch-action:none on down).
+       */
+      touchAction: edgeStripReceivesPointers ? "pan-y" : "auto",
       WebkitTapHighlightColor: "transparent",
     },
     onPointerDown,

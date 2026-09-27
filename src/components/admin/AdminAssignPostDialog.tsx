@@ -17,6 +17,7 @@ import {
 } from "../../api/services/adminPosts";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
 
 /** Aligns with BottomDrawer / useCreateKeyboardInset — keyboard affects layout. */
@@ -118,20 +119,7 @@ export default function AdminAssignPostDialog({
     }
   }, [open]);
 
-  /** Lock page scroll while assign flow is open (search + confirm). */
-  useEffect(() => {
-    if (!open) return;
-    const scrollbarWidth =
-      window.innerWidth - document.documentElement.clientWidth;
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
-    document.body.style.overflow = "hidden";
-    document.body.style.paddingRight = `${scrollbarWidth}px`;
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
-    };
-  }, [open]);
+  useOverlayBackgroundScrollLock(open);
 
   useEffect(() => {
     if (!open) return;
@@ -303,7 +291,7 @@ export default function AdminAssignPostDialog({
               autoComplete="off"
               enterKeyHint="search"
               placeholder="Search username or name…"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-sm text-[var(--text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40"
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] app-light:bg-white px-3 py-2 text-[16px] text-[var(--text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/40"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />

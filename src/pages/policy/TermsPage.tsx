@@ -9,7 +9,7 @@ export default function TermsPage() {
         intro="These terms explain the rules for using EchoToo."
       >
         {/* POLICY CONTENT START */}
-        <p>Last updated: March 13, 2026</p>
+        <p>Last updated: September 27, 2026</p>
 
         <p>
           These Terms of Service govern your use of EchoToo. By creating an
@@ -33,8 +33,15 @@ export default function TermsPage() {
         <p>
           EchoToo is a social discovery platform that helps users find and share
           real-world experiences, hangouts, events, and itineraries. Users may
-          create posts, upload images, comment, follow other users, and interact
-          with content shared on the platform.
+          create posts, upload images and videos, comment, follow other users,
+          and interact with content shared on the platform.
+        </p>
+        <p>
+          EchoToo also offers optional connection features such as Duo and Group
+          Up, which let people express interest in meeting around a specific
+          plan or place, send or accept connection requests, and message after
+          they connect. Messaging may include direct messages and group chats
+          related to those plans.
         </p>
 
         <h3>2. Eligibility</h3>
@@ -73,13 +80,17 @@ export default function TermsPage() {
           <li>
             scrape data, automate abuse, or interfere with platform operations
           </li>
+          <li>
+            use Duo, Group Up, messaging, or People features to stalk, pressure,
+            exploit, or endanger others
+          </li>
         </ul>
 
         <h3>5. User Content</h3>
         <p>
           You are responsible for the content you post on EchoToo, including
-          posts, comments, images, activity details, and location-related
-          information.
+          posts, comments, images, videos, messages, activity details, and
+          location-related information.
         </p>
         <p>
           You retain ownership of the content you create. However, by posting
@@ -93,10 +104,12 @@ export default function TermsPage() {
           others.
         </p>
 
-        <h3>6. Public Content and Real-World Activities</h3>
+        <h3>6. Public Content, Messaging, and Real-World Activities</h3>
         <p>
           EchoToo is focused on real-world discovery. Content on the platform
-          may refer to places, events, and meetups submitted by users.
+          may refer to places, events, and meetups submitted by users. Duo and
+          Group Up are user-initiated ways to express interest in connecting
+          around a plan; EchoToo does not arrange or supervise offline meetings.
         </p>
         <p>
           EchoToo does not organize, verify, endorse, or guarantee user-posted
@@ -106,7 +119,9 @@ export default function TermsPage() {
         </p>
         <p>
           If you choose to attend a meetup, gathering, or event discovered
-          through EchoToo, you do so at your own discretion and risk.
+          through EchoToo, or to meet someone you connected with through Duo,
+          Group Up, or messaging, you do so at your own discretion and risk.
+          EchoToo is not a party to those offline interactions.
         </p>
 
         <h3>7. Safety Expectations</h3>
@@ -119,6 +134,7 @@ export default function TermsPage() {
           <li>meet in public places when appropriate</li>
           <li>verify event details independently</li>
           <li>avoid sharing overly sensitive personal information</li>
+          <li>use block and report tools when needed</li>
           <li>report suspicious, abusive, or unsafe behavior</li>
         </ul>
 
@@ -203,7 +219,8 @@ export default function TermsPage() {
         </p>
         <p>
           This includes issues related to user content, user conduct, events,
-          meetups, or third-party services.
+          meetups, messaging, Duo or Group Up connections, or third-party
+          services.
         </p>
 
         <h3>14. Changes to These Terms</h3>

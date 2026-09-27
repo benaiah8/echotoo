@@ -56,9 +56,26 @@ type IosApnsWaitEntry = {
 const iosApnsWaitEntries: IosApnsWaitEntry[] = [];
 
 const IOS_APNS_REGISTRATION_WAIT_MS = 20_000;
+const ANDROID_REGISTRATION_WAIT_MS = 20_000;
 
 /** Delays before 2nd–4th `getToken` attempts (after prior attempt fails or returns empty). */
 const IOS_FCM_GET_TOKEN_RETRY_DELAYS_MS = [500, 1000, 1500] as const;
+
+type AndroidRegistrationOutcome = {
+  ok: boolean;
+  error?: string;
+  dbUpsertStatus: "ok" | "error" | "skipped";
+  dbUpsertError: string | null;
+  tokenPreviewSafe: string | null;
+};
+
+type AndroidRegistrationWaitEntry = {
+  userId: string;
+  timeoutId: ReturnType<typeof setTimeout>;
+  finish: (outcome: AndroidRegistrationOutcome) => void;
+};
+
+const androidRegistrationWaitEntries: AndroidRegistrationWaitEntry[] = [];
 
 function flushIosApnsWaitersSuccess(): void {
   const pending = iosApnsWaitEntries.splice(0);
@@ -74,6 +91,98 @@ function flushIosApnsWaitersError(message: string): void {
     clearTimeout(e.timeoutId);
     e.finish({ seen: false, error: message });
   }
+}
+
+function resolveAndroidRegistrationWaiter(outcome: AndroidRegistrationOutcome): void {
+  const entry = androidRegistrationWaitEntries.shift();
+  if (!entry) return;
+  clearTimeout(entry.timeoutId);
+  entry.finish(outcome);
+}
+
+function flushAndroidRegistrationWaitersError(message: string): void {
+  while (androidRegistrationWaitEntries.length > 0) {
+    resolveAndroidRegistrationWaiter({
+      ok: false,
+      error: message,
+      dbUpsertStatus: "error",
+      dbUpsertError: message,
+      tokenPreviewSafe: null,
+    });
+  }
+}
+
+async function saveAndroidRegistrationToken(
+  value: string,
+  userId: string
+): Promise<AndroidRegistrationOutcome> {
+  console.log("[explicitNativePush] token received", {
+    tokenPreview: safePushTokenPreview(value),
+  });
+
+  const { error } = await upsertPushDevice(value, "android", userId);
+  if (error) {
+    console.warn("[explicitNativePush] registration failed", {
+      reason: error.message,
+    });
+    return {
+      ok: false,
+      error: error.message,
+      dbUpsertStatus: "error",
+      dbUpsertError: error.message,
+      tokenPreviewSafe: safePushTokenPreview(value),
+    };
+  }
+
+  console.log("[explicitNativePush] token saved", {
+    tokenPreview: safePushTokenPreview(value),
+  });
+  return {
+    ok: true,
+    dbUpsertStatus: "ok",
+    dbUpsertError: null,
+    tokenPreviewSafe: safePushTokenPreview(value),
+  };
+}
+
+/**
+ * Wait for the next Android `registration` event, upsert with the captured auth user id.
+ */
+function waitForAndroidRegistrationToken(
+  userId: string,
+  timeoutMs: number
+): Promise<AndroidRegistrationOutcome> {
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      const idx = androidRegistrationWaitEntries.findIndex(
+        (e) => e.timeoutId === timeoutId
+      );
+      if (idx >= 0) androidRegistrationWaitEntries.splice(idx, 1);
+      console.warn("[explicitNativePush] registration failed", {
+        reason: "registration timeout",
+      });
+      resolve({
+        ok: false,
+        error: "registration timeout",
+        dbUpsertStatus: "skipped",
+        dbUpsertError: "registration timeout",
+        tokenPreviewSafe: null,
+      });
+    }, timeoutMs);
+
+    androidRegistrationWaitEntries.push({
+      userId,
+      timeoutId,
+      finish: (outcome) => {
+        clearTimeout(timeoutId);
+        const idx = androidRegistrationWaitEntries.findIndex(
+          (e) => e.timeoutId === timeoutId
+        );
+        if (idx >= 0) androidRegistrationWaitEntries.splice(idx, 1);
+        resolve(outcome);
+      },
+    });
+  });
 }
 
 /**
@@ -123,28 +232,44 @@ function ensurePushListeners(): Promise<void> {
             console.warn(
               "[explicitNativePush] registration event with empty token"
             );
+            if (androidRegistrationWaitEntries.length > 0) {
+              resolveAndroidRegistrationWaiter({
+                ok: false,
+                error: "empty token",
+                dbUpsertStatus: "error",
+                dbUpsertError: "empty token",
+                tokenPreviewSafe: null,
+              });
+            }
             return;
           }
-          const { error } = await upsertPushDevice(value, platform);
-          if (error) {
-            console.warn(
-              "[explicitNativePush] Failed to save push token:",
-              error.message
+          const pendingAndroid = androidRegistrationWaitEntries[0];
+          if (pendingAndroid) {
+            const outcome = await saveAndroidRegistrationToken(
+              value,
+              pendingAndroid.userId
             );
+            resolveAndroidRegistrationWaiter(outcome);
+            return;
           }
+          console.log(
+            "[explicitNativePush] registration event without active waiter (ignored)"
+          );
         }
       );
       await PushNotifications.addListener(
         "registrationError",
         (err: unknown) => {
-          console.warn(
-            "[explicitNativePush] registrationError:",
-            err != null ? JSON.stringify(err) : String(err)
-          );
+          const errMsg =
+            err != null ? JSON.stringify(err) : "registration error";
+          console.warn("[explicitNativePush] registration failed", {
+            reason: errMsg,
+          });
           if (Capacitor.getPlatform() === "ios") {
-            flushIosApnsWaitersError(
-              err != null ? JSON.stringify(err) : "registration error"
-            );
+            flushIosApnsWaitersError(errMsg);
+          }
+          if (Capacitor.getPlatform() === "android") {
+            flushAndroidRegistrationWaitersError(errMsg);
           }
         }
       );
@@ -198,7 +323,9 @@ type IosFcmFetchOutcome = {
   tokenPreviewSafe: string | null;
 };
 
-async function fetchUpsertIosFcmWithRetries(): Promise<IosFcmFetchOutcome> {
+async function fetchUpsertIosFcmWithRetries(
+  authUserId: string
+): Promise<IosFcmFetchOutcome> {
   let lastFcmError: string | null = null;
 
   const maxAttempts = IOS_FCM_GET_TOKEN_RETRY_DELAYS_MS.length + 1;
@@ -230,13 +357,16 @@ async function fetchUpsertIosFcmWithRetries(): Promise<IosFcmFetchOutcome> {
       continue;
     }
 
-    const { error } = await upsertPushDevice(token, "ios");
+    console.log("[explicitNativePush] token received", {
+      tokenPreview: safePushTokenPreview(token),
+    });
+
+    const { error } = await upsertPushDevice(token, "ios", authUserId);
     if (error) {
-      console.warn(
-        "[explicitNativePush] Failed to save iOS FCM token:",
-        error.message,
-        { tokenPreview: safePushTokenPreview(token) }
-      );
+      console.warn("[explicitNativePush] registration failed", {
+        reason: error.message,
+        tokenPreview: safePushTokenPreview(token),
+      });
       return {
         fcmTokenStatus: "ok",
         fcmErrorMessage: null,
@@ -246,7 +376,7 @@ async function fetchUpsertIosFcmWithRetries(): Promise<IosFcmFetchOutcome> {
       };
     }
 
-    console.log("[explicitNativePush] iOS FCM token saved", {
+    console.log("[explicitNativePush] token saved", {
       tokenPreview: safePushTokenPreview(token),
     });
     return {
@@ -281,8 +411,7 @@ export type ExplicitNativePushResult = {
   /** True when not running on iOS/Android native (e.g. web) — no plugin calls. */
   skipped: boolean;
   /**
-   * Android: true after `PushNotifications.register()` is invoked (upsert still happens async in listener).
-   * iOS: true only when FCM token was saved to Supabase (`dbUpsertStatus === 'ok'`).
+   * True only when the FCM/APNs token was saved to Supabase (`dbUpsertStatus === 'ok'`).
    */
   registered: boolean;
   /** Always false; reserved if a future explicit “Open Settings” action is added. */
@@ -299,7 +428,7 @@ export type ExplicitNativePushResult = {
   /** iOS: outcome of FCM `getToken` after retries. */
   fcmTokenStatus?: "ok" | "empty" | "error";
   fcmErrorMessage?: string | null;
-  /** iOS: Supabase upsert outcome. Android omitted (async listener). */
+  /** Supabase upsert outcome (Android + iOS explicit registration). */
   dbUpsertStatus?: "ok" | "error" | "skipped";
   dbUpsertError?: string | null;
   /** Safe preview when a token was obtained (`first6… len=n`). */
@@ -337,8 +466,11 @@ export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult
 
   const platform = Capacitor.getPlatform();
 
-  if (platform === "ios" && result.sessionOk === true) {
-    if (result.dbUpsertStatus === "ok") {
+  if (
+    (platform === "ios" || platform === "android") &&
+    result.sessionOk === true
+  ) {
+    if (result.dbUpsertStatus === "ok" && result.registered) {
       return {
         kind: "success",
         message: result.permissionAlreadyGranted
@@ -348,23 +480,14 @@ export function getPushRegistrationUserFeedback(result: ExplicitNativePushResult
     }
     if (
       result.dbUpsertStatus === "error" ||
-      result.fcmTokenStatus === "empty" ||
-      result.fcmTokenStatus === "error"
+      result.dbUpsertStatus === "skipped" ||
+      !result.registered
     ) {
       return {
         kind: "error",
         message: "Couldn’t enable notifications. Please try again.",
       };
     }
-  }
-
-  if (platform === "android" && result.registered) {
-    return {
-      kind: "success",
-      message: result.permissionAlreadyGranted
-        ? "Notifications are up to date"
-        : "Notifications enabled",
-    };
   }
 
   return { kind: "none", message: "" };
@@ -431,6 +554,10 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     const permissionReceive = perm.receive as PushPermissionReceiveState;
 
     if (perm.receive !== "granted") {
+      console.log("[explicitNativePush] permission denied", {
+        receive: perm.receive,
+        platform,
+      });
       const r: ExplicitNativePushResult = {
         granted: false,
         skipped: false,
@@ -451,9 +578,9 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    const sessionOk = Boolean(session?.user);
+    const authUserId = session?.user?.id;
 
-    if (!sessionOk) {
+    if (!authUserId) {
       const r: ExplicitNativePushResult = {
         granted: true,
         skipped: false,
@@ -472,6 +599,15 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       return r;
     }
 
+    console.log("[explicitNativePush] registration started", {
+      platform,
+      authUserId,
+    });
+    console.log("[explicitNativePush] permission granted", {
+      platform,
+      permissionAlreadyGranted,
+    });
+
     await ensurePushListeners();
     await ensureIosFcmTokenRefreshListener();
 
@@ -487,9 +623,17 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       await PushNotifications.register();
       const apnsOutcome = await apnsWait;
 
-      const fcmOutcome = await fetchUpsertIosFcmWithRetries();
+      const fcmOutcome = await fetchUpsertIosFcmWithRetries(authUserId);
 
       const iosRegistered = fcmOutcome.dbUpsertStatus === "ok";
+      if (!iosRegistered) {
+        console.warn("[explicitNativePush] registration failed", {
+          platform: "ios",
+          fcmTokenStatus: fcmOutcome.fcmTokenStatus,
+          dbUpsertStatus: fcmOutcome.dbUpsertStatus,
+          dbUpsertError: fcmOutcome.dbUpsertError,
+        });
+      }
 
       const r: ExplicitNativePushResult = {
         granted: true,
@@ -516,21 +660,37 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
       return r;
     }
 
+    const androidWait = waitForAndroidRegistrationToken(
+      authUserId,
+      ANDROID_REGISTRATION_WAIT_MS
+    );
     console.log("[DBG:PUSH] register_before", {
       t: Date.now(),
       platform,
       receive: perm.receive,
     });
     await PushNotifications.register();
+    const androidOutcome = await androidWait;
+
+    const androidRegistered = androidOutcome.ok;
+    if (!androidRegistered) {
+      console.warn("[explicitNativePush] registration failed", {
+        platform: "android",
+        error: androidOutcome.error ?? androidOutcome.dbUpsertError,
+      });
+    }
 
     const r: ExplicitNativePushResult = {
       granted: true,
       skipped: false,
-      registered: true,
+      registered: androidRegistered,
       openedSettings: false,
       permissionReceive,
       permissionAlreadyGranted,
       sessionOk: true,
+      dbUpsertStatus: androidOutcome.dbUpsertStatus,
+      dbUpsertError: androidOutcome.dbUpsertError,
+      tokenPreviewSafe: androidOutcome.tokenPreviewSafe,
     };
     console.log("[DBG:PUSH] requestNotificationPermissionAndRegister_result", {
       t: Date.now(),
@@ -540,10 +700,10 @@ export async function requestNotificationPermissionAndRegister(): Promise<Explic
     });
     return r;
   } catch (e) {
-    console.warn(
-      "[explicitNativePush] request/register failed:",
-      e instanceof Error ? e.message : String(e)
-    );
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.warn("[explicitNativePush] registration failed", {
+      reason: errMsg,
+    });
     const r: ExplicitNativePushResult = {
       granted: false,
       skipped: false,

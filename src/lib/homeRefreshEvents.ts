@@ -9,3 +9,5 @@ export type HomeTabRefreshDetail = {
 };
 export const PROFILE_TAB_REFRESH_EVENT = "echotoo:profile-refresh";
 export const NOTIFICATIONS_TAB_REFRESH_EVENT = "echotoo:notifications-refresh";
+export const PEOPLE_TAB_REFRESH_EVENT = "echotoo:people-refresh";
+export const MESSAGES_TAB_REFRESH_EVENT = "echotoo:messages-refresh";

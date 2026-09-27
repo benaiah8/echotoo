@@ -2,17 +2,21 @@ import React from "react";
 import { Profile } from "../../contexts/ProfileContext";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { resolveSocialProfileUrl, type SocialPlatform } from "../../lib/socialLinks";
+import { PROFILE_OVERVIEW_SOCIAL_LINKS_CLASS } from "../../lib/profileOverviewPresentation";
 
 interface SocialMediaLinksProps {
   profile: Profile | null;
   loading?: boolean;
   showSocialMedia?: boolean; // If false, don't render. If true or undefined, check privacy settings
+  /** When false, omit horizontal rules above/below the icon row (own profile). */
+  showDividers?: boolean;
 }
 
 const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
   profile,
   loading = false,
   showSocialMedia = true, // Default to true for backward compatibility
+  showDividers = true,
 }) => {
   // Determine if social media should be shown
   // Show if: explicitly set to false (don't show), OR
@@ -52,9 +56,10 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
   // Show skeleton loading
   if (loading) {
     return (
-      <div className="mt-3">
-        {/* Top divider line */}
-        <div className="h-px bg-[var(--border)] mb-3" />
+      <div className={PROFILE_OVERVIEW_SOCIAL_LINKS_CLASS}>
+        {showDividers ? (
+          <div className="h-px bg-[var(--border)] mb-2" />
+        ) : null}
 
         {/* Skeleton social media logos */}
         <div className="flex justify-center gap-2">
@@ -63,8 +68,9 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
           <div className="w-6 h-6 rounded bg-[var(--text)]/10 animate-pulse" />
         </div>
 
-        {/* Bottom divider line */}
-        <div className="h-px bg-[var(--border)] mt-3" />
+        {showDividers ? (
+          <div className="h-px bg-[var(--border)] mt-2" />
+        ) : null}
       </div>
     );
   }
@@ -80,9 +86,10 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
   };
 
   return (
-    <div className="mt-3">
-      {/* Top divider line */}
-      <div className="h-px bg-[var(--border)] mb-3" />
+    <div className={PROFILE_OVERVIEW_SOCIAL_LINKS_CLASS}>
+      {showDividers ? (
+        <div className="h-px bg-[var(--border)] mb-2" />
+      ) : null}
 
       {/* Centered social media logos */}
       <div className="flex justify-center gap-2">
@@ -102,8 +109,9 @@ const SocialMediaLinks: React.FC<SocialMediaLinksProps> = ({
         ))}
       </div>
 
-      {/* Bottom divider line */}
-      <div className="h-px bg-[var(--border)] mt-3" />
+      {showDividers ? (
+        <div className="h-px bg-[var(--border)] mt-2" />
+      ) : null}
     </div>
   );
 };

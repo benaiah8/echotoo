@@ -8,6 +8,12 @@
 import { type FeedItem } from "../api/queries/getPublicFeed";
 import { type LikedPostWithDetails } from "../api/services/likes";
 import { type SavedPostWithDetails } from "../api/services/savedPosts";
+import {
+  stampSlot0OntoActivities,
+  type ListCardActivity,
+} from "./listCardSlot0";
+import { normalizeLatestCommentPreview } from "./latestCommentPreview";
+import type { LatestCommentPreview } from "./latestCommentPreview";
 
 /**
  * Convert LikedPostWithDetails to FeedItem format
@@ -53,7 +59,21 @@ export function convertLikedToFeedItem(liked: LikedPostWithDetails): FeedItem {
  * Used for Saved tab in profile pages
  */
 export function convertSavedToFeedItem(saved: SavedPostWithDetails): FeedItem {
-  const row = saved.posts as any;
+  const row = saved.posts as SavedPostWithDetails["posts"] & {
+    anonymous_name?: string | null;
+    anonymous_avatar?: string | null;
+    follow_status?: FeedItem["follow_status"];
+    is_liked?: boolean;
+    like_count?: number;
+    save_count?: number;
+    comment_count?: number;
+    has_images?: boolean;
+    rating_enabled?: boolean;
+    rating_average?: number | null;
+    rating_count?: number | null;
+    viewer_rating?: number | null;
+    latest_comment_preview?: LatestCommentPreview | null;
+  };
   return {
     id: saved.posts.id,
     type: saved.posts.type as "experience" | "hangout",
@@ -83,6 +103,18 @@ export function convertSavedToFeedItem(saved: SavedPostWithDetails): FeedItem {
     rating_count: row.rating_count ?? null,
     viewer_rating: row.viewer_rating ?? null,
     rsvp_data: null,
-    activities: row.activities || [],
+    activities: stampSlot0OntoActivities(
+      (row.activities || []) as ListCardActivity[],
+      {
+        slot0_location_name: row.slot0_location_name,
+        slot0_location_url: row.slot0_location_url,
+        slot0_key_info: row.slot0_key_info,
+      },
+    ) as FeedItem["activities"],
+    latest_comment_preview: normalizeLatestCommentPreview(
+      row.latest_comment_preview ??
+        (saved.posts as { latest_comment_preview?: unknown })
+          .latest_comment_preview,
+    ),
   };
 }

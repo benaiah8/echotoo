@@ -13,9 +13,11 @@ import { ProfileProvider, type Profile } from "../contexts/ProfileContext";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
 import { RootState } from "../app/store";
-import { Paths } from "../router/Paths";
+import { Paths, messagesConversationPath } from "../router/Paths";
+import { getOrCreateDirectConversation, isDmDirectAccessDeniedError, DM_MESSAGING_UNAVAILABLE_COPY } from "../api/services/messaging";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
 import {
+  PiChatCircle,
   PiClock,
   PiLock,
   PiShareFat,
@@ -51,18 +53,27 @@ import {
   clearCachedFollowCounts,
 } from "../lib/followCountsCache";
 import { clearCachedNotificationSettings } from "../lib/notificationSettingsCache";
-import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
-import AvatarPreviewLightbox, {
+import {
   AvatarPreviewLightboxAction,
 } from "../components/profile/AvatarPreviewLightbox";
-import Avatar from "../components/ui/Avatar";
+import ProfilePhotoHero from "../components/profile/ProfilePhotoHero";
+import ProfileIdentityRow from "../components/profile/ProfileIdentityRow";
 import SocialMediaLinks from "../components/profile/SocialMediaLinks";
 import ShareProfileModal from "../components/profile/ShareProfileModal";
 import ProfileHeroAvatarAtmosphere from "../components/profile/ProfileHeroAvatarAtmosphere";
 import ProfileStats from "../components/profile/ProfileStats";
-import MemberNumberPill from "../components/profile/MemberNumberPill";
+import ProfileSocialTile from "../components/profile/ProfileSocialTile";
+import ProfileSocialOpportunityRail from "../components/profile/ProfileSocialOpportunityRail";
 import NotificationBell from "../components/ui/NotificationBell";
+import {
+  PROFILE_OVERVIEW_BIO_TEXT_CLASS,
+  PROFILE_OVERVIEW_BIO_WRAP_CLASS,
+  PROFILE_OVERVIEW_FOLLOW_ROW_CLASS,
+  PROFILE_OVERVIEW_OTHER_STATS_ROW_CLASS,
+  PROFILE_OVERVIEW_SECTION_CLASS,
+  hasProfileOverviewBio,
+} from "../lib/profileOverviewPresentation";
 import { handleError, getErrorMessage } from "../lib/errorHandling";
 import toast from "react-hot-toast";
 import ReportModal from "../components/ui/ReportModal";
@@ -90,6 +101,7 @@ import {
   PROFILE_TAB_REFRESH_EVENT,
 } from "../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
+import { nextProfileHeaderHiddenFromScroll } from "../lib/profileHeaderScrollChrome";
 
 const AUTOMATIC_BLOCK_MODERATION_DETAILS =
   "Automatic moderation signal: this profile was blocked by a user. Please review for potential abusive or objectionable behavior.";
@@ -103,10 +115,18 @@ const AUTOMATIC_BLOCK_MODERATION_DETAILS =
  */
 interface OtherProfilePageProps {
   username?: string; // [FIX] Accept username as prop when rendered inside PersistentTabContainer
+  /**
+   * People Mine overlay: treat as visible outside the other-profile tab and
+   * route close/own-profile redirects through the host overlay.
+   */
+  embedded?: boolean;
+  onEmbeddedClose?: () => void;
 }
 
 export default function OtherProfilePage({
   username: usernameProp,
+  embedded = false,
+  onEmbeddedClose,
 }: OtherProfilePageProps = {}) {
   // [FIX] Get username from prop (when rendered in PersistentTabContainer) or useParams (when rendered by Route)
   // This fixes the issue where useParams() doesn't work inside PersistentTabContainer
@@ -126,7 +146,9 @@ export default function OtherProfilePage({
   const location = useLocation();
 
   // [FIX] Use parent tab active status from PersistentTabContainer - stops background fetches when Other Profile tab is display:none
-  const isOtherProfileVisible = useTabActive("other-profile");
+  // Embedded Mine overlay forces visible so feed/posts still load above People.
+  const isOtherProfileTabVisible = useTabActive("other-profile");
+  const isOtherProfileVisible = isOtherProfileTabVisible || embedded;
 
   const [otherProfileFeedRefreshEpoch, setOtherProfileFeedRefreshEpoch] =
     useState(0);
@@ -162,6 +184,9 @@ export default function OtherProfilePage({
       current.username !== profile.username ||
       current.display_name !== profile.display_name ||
       current.avatar_url !== profile.avatar_url ||
+      current.echo_preset !== profile.echo_preset ||
+      current.profile_photos.join("\0") !==
+        (profile.profile_photos ?? []).join("\0") ||
       current.is_private !== profile.is_private ||
       current.bio !== profile.bio ||
       current.member_no !== profile.member_no;
@@ -172,14 +197,20 @@ export default function OtherProfilePage({
     }
 
     // Data changed - update ref and return new profile
-    stableProfileRef.current = profile;
-    return profile;
+    stableProfileRef.current = {
+      ...profile,
+      profile_photos: profile.profile_photos ?? [],
+      echo_preset: profile.echo_preset ?? null,
+    };
+    return stableProfileRef.current;
   }, [
     profile?.id,
     profile?.user_id,
     profile?.username,
     profile?.display_name,
     profile?.avatar_url,
+    profile?.echo_preset,
+    profile?.profile_photos,
     profile?.is_private,
     profile?.bio,
     profile?.member_no,
@@ -217,10 +248,13 @@ export default function OtherProfilePage({
   const [followStatus, setFollowStatus] = useState<FollowStatus | null>(null); // null = unknown/loading
   const [followStatusLoading, setFollowStatusLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [messageBusy, setMessageBusy] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState<
     false | "followers" | "following"
   >(false);
-  const [lightbox, setLightbox] = useState(false);
+  const [heroAtmospherePath, setHeroAtmospherePath] = useState<string | null>(
+    null,
+  );
   const [showShareModal, setShowShareModal] = useState(false);
   const [hasAccess, setHasAccess] = useState<boolean | null>(null); // null = checking, true = has access, false = no access
   const [showPrivateTooltip, setShowPrivateTooltip] = useState(false);
@@ -248,6 +282,44 @@ export default function OtherProfilePage({
     }
     setReportDraft(buildProfileReportDraftFromProfile(profile));
   }, [authState?.loading, dispatch, isAuthenticated, profile]);
+
+  const handleMessage = useCallback(async () => {
+    if (!profile?.user_id || messageBusy) return;
+    setMessageBusy(true);
+    try {
+      const { data, error } = await getOrCreateDirectConversation(
+        profile.user_id
+      );
+      if (error || !data) {
+        toast.error(
+          isDmDirectAccessDeniedError(error)
+            ? DM_MESSAGING_UNAVAILABLE_COPY
+            : getErrorMessage(error) || "Could not open direct conversation."
+        );
+        return;
+      }
+      navigate(messagesConversationPath(data.conversation_id), {
+        state: {
+          otherUserId: data.other_user_id || profile.user_id,
+          backgroundLocation: {
+            pathname: Paths.messages,
+            search: "",
+            hash: "",
+            key: "messages-bg",
+            state: null,
+          },
+        },
+      });
+    } catch (e) {
+      toast.error(
+        isDmDirectAccessDeniedError(e)
+          ? DM_MESSAGING_UNAVAILABLE_COPY
+          : getErrorMessage(e) || "Could not open direct conversation."
+      );
+    } finally {
+      setMessageBusy(false);
+    }
+  }, [profile?.user_id, messageBusy, navigate]);
 
   const handleUnblockUser = useCallback(async () => {
     if (!profile?.user_id) return;
@@ -422,7 +494,11 @@ export default function OtherProfilePage({
       // Show cached instantly
       const cached = getProfileCached(username);
       if (cached) {
-        setProfile(cached);
+        setProfile({
+          ...cached,
+          is_private: cached.is_private ?? undefined,
+          social_media_public: cached.social_media_public ?? undefined,
+        } as Profile);
         setLoading(false);
       } else {
         setLoading(true);
@@ -477,22 +553,17 @@ export default function OtherProfilePage({
             prof
               ? ({
                   ...prof,
+                  profile_photos: prof.profile_photos ?? [],
+                  echo_preset: prof.echo_preset ?? null,
                   is_private: prof.is_private ?? undefined,
                   social_media_public: prof.social_media_public ?? undefined,
                 } as Profile)
               : null
           )
         );
-        if (prof) {
-          // [OPTIMIZATION: Phase 1 - Cache] Cache profile data including privacy settings
-          // Why: Instant display of privacy status, prevents flicker on subsequent loads
-          primeProfileCache({
-            ...prof,
-            member_no: prof.member_no ?? null,
-            is_private: prof.is_private ?? null,
-            social_media_public: prof.social_media_public ?? null,
-          } as any);
-        }
+        // Full rows are written inside getProfileByIdOrUsername / getProfileByUserId.
+        // Do not re-prime here — that refreshed timestamps on thin/null hits and
+        // extended the incomplete-cache window.
       } catch (e) {
         // [OPTIMIZATION: Phase 7.1.3] Use user-friendly error handling
         // Why: Shows clear error messages, graceful degradation to cached data
@@ -503,7 +574,11 @@ export default function OtherProfilePage({
           // Why: User still sees profile even if network request fails
           const cached = getProfileCached(username);
           if (cached) {
-            setProfile(cached);
+            setProfile({
+              ...cached,
+              is_private: cached.is_private ?? undefined,
+              social_media_public: cached.social_media_public ?? undefined,
+            } as Profile);
             setLoading(false);
           } else {
             setProfile(null);
@@ -521,18 +596,42 @@ export default function OtherProfilePage({
   // Redirect to /profile if viewing own profile via /u/:username
   useEffect(() => {
     if (profile && viewerId && profile.user_id === viewerId) {
+      if (embedded) {
+        onEmbeddedClose?.();
+      }
       navigate(Paths.profile, { replace: true });
     }
-  }, [profile, viewerId, navigate]);
+  }, [profile, viewerId, navigate, embedded, onEmbeddedClose]);
 
   // Handle profile updates
   useEffect(() => {
     const onProfileUpdated = async (e: any) => {
       const changedId: string | undefined = e.detail?.id;
-      if (changedId) invalidateProfile(changedId);
+      const detailProfile = e.detail?.profile;
+      // Do not wipe cache on update — authoritative rows land via setCachedProfile /
+      // event detail. Invalidating here defeated soft-stale SWR.
 
       try {
         if (profile?.id && changedId === profile.id) {
+          if (
+            detailProfile &&
+            typeof detailProfile === "object" &&
+            detailProfile.id
+          ) {
+            primeProfileCache({
+              ...detailProfile,
+              member_no: detailProfile.member_no ?? null,
+              is_private: detailProfile.is_private ?? null,
+              social_media_public: detailProfile.social_media_public ?? null,
+            } as any);
+            setProfile({
+              ...detailProfile,
+              profile_photos: detailProfile.profile_photos ?? [],
+              echo_preset: detailProfile.echo_preset ?? null,
+            } as Profile);
+            return;
+          }
+
           // [PHASE 2.3 - OPTIMIZATION] Use getCachedProfile() first, then getProfileByIdOrUsername if needed
           // Why: Reuses cache, avoids unnecessary queries
           let p = getProfileCached(profile.id);
@@ -579,19 +678,15 @@ export default function OtherProfilePage({
       if (!ticking.current) {
         requestAnimationFrame(() => {
           const current = window.scrollY;
-          const delta = current - lastY.current;
-
-          if (Math.abs(delta) > 6) {
-            if (delta > 0 && current > 100) {
-              if (!profileSearchPinnedRef.current) {
-                setHeaderHidden(true);
-              }
-            } else {
-              setHeaderHidden(false);
-            }
+          const next = nextProfileHeaderHiddenFromScroll({
+            scrollY: current,
+            lastScrollY: lastY.current,
+            searchPinned: profileSearchPinnedRef.current,
+          });
+          if (next !== null) {
+            setHeaderHidden(next);
             lastY.current = current;
           }
-
           ticking.current = false;
         });
         ticking.current = true;
@@ -1050,7 +1145,18 @@ export default function OtherProfilePage({
         </div>
       ) : null}
       <PrimaryPageContainer capacitorNotchScrim>
-        <div className="relative">
+        {/* Atmosphere host: no overflow-x clip so -gutter can reach app-container edges */}
+        <div className="relative w-full max-w-full min-w-0">
+          <ProfileHeroAvatarAtmosphere
+            avatarPath={heroAtmospherePath ?? profile?.avatar_url}
+            active={!shellMode && !(blockCheckPending && !profile)}
+          />
+          {/*
+            No overflow-x clip here — Duo/Group shelf ::after must reach
+            `.app-container` (overflow-x: clip). Atmosphere sits outside this
+            layer and still uses -gutter insets.
+          */}
+          <div className="relative z-[1] w-full max-w-full min-w-0">
           <div
             className={[
               "fixed left-0 right-0 top-0 z-40 flex flex-col items-center",
@@ -1113,19 +1219,14 @@ export default function OtherProfilePage({
               [stableProfile, loading]
             )}
           >
-            <div className="relative w-full">
-              <ProfileHeroAvatarAtmosphere
-                avatarPath={profile?.avatar_url}
-                active={!shellMode && !blockCheckPending}
-              />
-              <div
-                className="relative z-[1]"
-                style={{
-                  paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
-                }}
-              >
+            <div
+              className="relative w-full max-w-full min-w-0"
+              style={{
+                paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
+              }}
+            >
               {/* INLINE HERO SECTION - Hardcoded for other profile */}
-              <section className="w-full px-1.5 pt-4 pb-6 border-b border-[var(--border)]">
+              <section className={PROFILE_OVERVIEW_SECTION_CLASS}>
                 {shellMode ? (
                   <div className="px-4 py-12 text-center max-w-sm mx-auto">
                     <p className="text-sm font-medium text-[var(--text)]/90">
@@ -1136,7 +1237,7 @@ export default function OtherProfilePage({
                       bar above to restore access.
                     </p>
                   </div>
-                ) : blockCheckPending ? (
+                ) : blockCheckPending && !profile ? (
                   <div className="px-4 py-12 text-center max-w-sm mx-auto">
                     <p className="text-sm text-[var(--text)]/60">Loading…</p>
                   </div>
@@ -1144,7 +1245,7 @@ export default function OtherProfilePage({
                   <>
                 {/* Lock icon on left - Private account indicator (only if viewer has access) */}
                 {!loading && profile?.is_private && hasAccess === true && (
-                  <div className="flex w-full justify-start mb-1">
+                  <div className="flex w-full max-w-full min-w-0 justify-start mb-1">
                     <div className="relative shrink-0">
                       <button
                         onClick={() => {
@@ -1168,22 +1269,22 @@ export default function OtherProfilePage({
                         />
                       </button>
 
-                      {/* Custom tooltip - appears next to lock icon */}
+                      {/* Below lock — stays inside narrow Profile column (no left-full / nowrap escape) */}
                       {showPrivateTooltip && (
                         <div
-                          className="absolute left-full ml-2 top-1/2 -translate-y-1/2 z-50"
+                          className="absolute left-0 top-full z-50 mt-1.5 w-max max-w-[14rem]"
                           style={{
                             animation: "fadeInSlide 0.2s ease-out",
                           }}
                         >
-                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                            <p className="text-sm text-[var(--text)]">
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 shadow-lg">
+                            <p className="text-sm leading-snug text-[var(--text)]">
                               This account is private
                             </p>
-                            {/* Arrow pointing to lock icon */}
-                            <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2">
-                              <div className="w-0 h-0 border-t-4 border-t-transparent border-r-4 border-r-[var(--border)] border-b-4 border-b-transparent"></div>
-                              <div className="absolute left-[1px] top-1/2 -translate-y-1/2 w-0 h-0 border-t-4 border-t-transparent border-r-4 border-r-[var(--surface)] border-b-4 border-b-transparent"></div>
+                            {/* Arrow pointing up toward lock icon */}
+                            <div className="absolute left-3 top-0 -translate-y-full">
+                              <div className="h-0 w-0 border-b-4 border-l-4 border-r-4 border-b-[var(--border)] border-l-transparent border-r-transparent" />
+                              <div className="absolute left-0 top-[1px] h-0 w-0 border-b-4 border-l-4 border-r-4 border-b-[var(--surface)] border-l-transparent border-r-transparent" />
                             </div>
                           </div>
                         </div>
@@ -1195,99 +1296,120 @@ export default function OtherProfilePage({
                 {loading ? (
                   <>
                     {/* Loading skeleton */}
-                    <div className="mx-auto mb-2 w-max px-6 py-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)]/50">
-                      <div className="h-3 w-24 bg-[var(--text)]/10 rounded animate-pulse" />
-                    </div>
-                    <div className="flex flex-col items-center mt-3">
-                      <div className="w-24 h-24 rounded-full bg-[var(--text)]/10 animate-pulse" />
-                      <div className="text-center mt-3 w-48">
-                        <div className="h-4 bg-[var(--text)]/10 rounded animate-pulse" />
-                        <div className="h-3 mt-2 bg-[var(--text)]/10 rounded animate-pulse" />
+                    <div className="flex flex-col items-center">
+                      <div
+                        className="rounded-[1.65rem] bg-[var(--text)]/10 animate-pulse"
+                        style={{
+                          width: "clamp(13.5rem, min(80vw, 40dvh), 19rem)",
+                          aspectRatio: "1 / 1.04",
+                        }}
+                      />
+                      <div className="mt-4 flex w-full min-w-0 max-w-[22rem] justify-center px-3">
+                        <div className="h-4 w-28 rounded bg-[var(--text)]/10 animate-pulse" />
+                        <div className="ml-2 h-3 w-16 self-center rounded bg-[var(--text)]/10 animate-pulse" />
                       </div>
-                      <div className="mt-3 w-60">
+                      <div className="mt-2 w-60">
                         <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse" />
-                        <div className="h-3 mt-2 bg-[var(--text)]/10 rounded animate-pulse" />
                       </div>
                       {/* Profile Stats - Always visible, even during loading */}
                       <ProfileStats
                         following={0}
                         followers={0}
-                        xp={0}
                         profileId=""
                         onOpenDrawer={setDrawerOpen}
                         loading={{
                           following: true,
                           followers: true,
-                          xp: true,
                         }}
                       />
                     </div>
                   </>
                 ) : profile ? (
                   <>
-                    {/* Member number pill */}
-                    {profile.member_no != null && (
-                      <MemberNumberPill memberNo={profile.member_no} />
-                    )}
-
-                    <div className="flex flex-col items-center mt-3">
-                      <div
-                        onClick={() => profile.avatar_url && setLightbox(true)}
-                        role="button"
-                        aria-label="Open avatar"
-                        className={
-                          profile.avatar_url ? "cursor-pointer" : undefined
+                    <div className="flex flex-col items-center">
+                      <ProfilePhotoHero
+                        key={profile.id}
+                        profilePhotos={profile.profile_photos}
+                        avatarUrl={profile.avatar_url}
+                        echoPreset={profile.echo_preset}
+                        userId={profile.user_id}
+                        profileId={profile.id}
+                        displayName={profile.display_name || profile.username}
+                        memberNo={profile.member_no ?? null}
+                        onActiveDisplayPathChange={setHeroAtmospherePath}
+                        lightboxActions={
+                          <>
+                            <AvatarPreviewLightboxAction
+                              label={avatarPreviewFollowLabel}
+                              icon={avatarPreviewFollowIcon}
+                              onClick={() => void onToggleFollow()}
+                              disabled={busy}
+                              busy={
+                                !!(followStatusLoading && followStatus === null)
+                              }
+                            />
+                            <AvatarPreviewLightboxAction
+                              label="Share"
+                              icon={
+                                <PiShareFat className="h-5 w-5" aria-hidden />
+                              }
+                              onClick={() =>
+                                void handleOtherAvatarPreviewShare()
+                              }
+                            />
+                          </>
                         }
-                      >
-                        <Avatar
-                          url={profile.avatar_url || undefined}
-                          name={
-                            profile.display_name || profile.username || "User"
-                          }
-                        />
-                      </div>
+                      />
 
-                      <div className="text-center mt-3">
-                        <div className="text-[15px] font-semibold leading-none">
-                          {profile.display_name || "Add your display name"}
-                        </div>
-                        <div className="text-xs text-[var(--text)]/60 mt-1">
-                          @{profile.username || "pick-a-username"}
-                        </div>
-                      </div>
+                      <ProfileIdentityRow
+                        displayName={
+                          profile.display_name?.trim() ||
+                          profile.username?.trim() ||
+                          "—"
+                        }
+                        username={
+                          profile.display_name?.trim() &&
+                          profile.username?.trim()
+                            ? profile.username.trim()
+                            : null
+                        }
+                        nameMuted={
+                          !profile.display_name?.trim() &&
+                          !profile.username?.trim()
+                        }
+                      />
 
-                      {/* Bio */}
-                      <div className="mt-3 text-center max-w-[36ch]">
-                        {profile.bio ? (
-                          <p className="text-[13px] leading-snug text-[var(--text)]/80">
-                            {profile.bio}
+                      {hasProfileOverviewBio(profile.bio) ? (
+                        <div className={PROFILE_OVERVIEW_BIO_WRAP_CLASS}>
+                          <p className={PROFILE_OVERVIEW_BIO_TEXT_CLASS}>
+                            {(profile.bio ?? "").trim()}
                           </p>
-                        ) : (
-                          <p className="text-[13px] leading-snug text-[var(--text)]/50">
-                            Add a short bio so people know what you're into.
-                          </p>
-                        )}
-                      </div>
+                        </div>
+                      ) : null}
 
                       {/* Social Media Links - Component handles privacy internally */}
-                      <SocialMediaLinks profile={profile} loading={loading} />
+                      <SocialMediaLinks
+                        profile={profile}
+                        loading={loading}
+                        showDividers={false}
+                      />
 
-                      {/* HARDCODED Follow button - Always visible for other profiles */}
-                      <div className="mt-3 w-full flex justify-center">
+                      {/* Follow + notification bell */}
+                      <div className={PROFILE_OVERVIEW_FOLLOW_ROW_CLASS}>
                         <div className="flex items-center gap-2">
                           <button
-                            disabled={busy}
+                            disabled={busy || blockCheckPending}
                             onClick={onToggleFollow}
-                            className={`h-6 px-2 rounded-md text-xs border transition-opacity inline-flex items-center justify-center ${
+                            className={`h-8 min-w-[88px] px-4 rounded-full text-xs font-semibold border transition-opacity inline-flex items-center justify-center ${
                               followStatus === "following" ||
                               followStatus === "friends"
                                 ? "bg-white text-black border-white"
                                 : followStatus === "pending"
                                 ? "bg-[var(--text)]/10 text-[var(--text)]/50 border-[var(--border)]"
                                 : "border-[var(--border)] text-[var(--text)]"
-                            } ${followStatusLoading ? "opacity-70" : ""} ${
-                              busy ? "cursor-wait" : "cursor-pointer"
-                            }`}
+                            } ${followStatusLoading || blockCheckPending ? "opacity-70" : ""} ${
+                              busy || blockCheckPending ? "cursor-wait" : "cursor-pointer"
+                            } focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]`}
                           >
                             {followStatusLoading && followStatus === null ? (
                               <span className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -1305,30 +1427,52 @@ export default function OtherProfilePage({
                             )}
                           </button>
 
-                          {/* Notification Bell - show if following or friends */}
                           {(followStatus === "following" ||
                             followStatus === "friends") && (
                             <NotificationBell
                               targetId={profile.id}
                               isFollowing={true}
+                              className="!h-9 !w-9 !rounded-full [&_svg]:!h-5 [&_svg]:!w-5"
                             />
                           )}
                         </div>
                       </div>
 
-                      {/* Profile Stats - Always visible, numbers load with animation */}
-                      <ProfileStats
-                        following={counts.following}
-                        followers={counts.followers}
-                        xp={profile.xp ?? 0}
-                        profileId={profile.id}
-                        onOpenDrawer={setDrawerOpen}
-                        loading={{
-                          following: countsLoading,
-                          followers: countsLoading,
-                          xp: false, // XP comes from profile, not async
-                        }}
-                      />
+                      {/* Social tiles: Following, Followers, Message */}
+                      <div className={PROFILE_OVERVIEW_OTHER_STATS_ROW_CLASS}>
+                        <ProfileStats
+                          embedded
+                          following={counts.following}
+                          followers={counts.followers}
+                          profileId={profile.id}
+                          onOpenDrawer={setDrawerOpen}
+                          loading={{
+                            following: countsLoading,
+                            followers: countsLoading,
+                          }}
+                        />
+                        <ProfileSocialTile
+                          label="Message"
+                          icon={<PiChatCircle className="h-5 w-5" aria-hidden />}
+                          fanPosition="right"
+                          ariaLabel="Message"
+                          loading={messageBusy}
+                          disabled={messageBusy || blockCheckPending}
+                          onClick={() => void handleMessage()}
+                        />
+                      </div>
+
+                      {hasAccess ? (
+                        <ProfileSocialOpportunityRail
+                          profileUserId={profile.user_id}
+                          enabled={
+                            !!profile.user_id &&
+                            !!viewerId &&
+                            profile.user_id !== viewerId &&
+                            !hideProfileContent
+                          }
+                        />
+                      ) : null}
                     </div>
                   </>
                 ) : (
@@ -1352,7 +1496,6 @@ export default function OtherProfilePage({
                   </>
                 )}
               </section>
-              </div>
             </div>
 
             {/* Posts Section - Pass hasAccess + visible (parent tab active) */}
@@ -1375,32 +1518,6 @@ export default function OtherProfilePage({
                     mode={drawerOpen}
                   />
                 )}
-                {profile.avatar_url && avatarDisplayUrl(profile.avatar_url) && (
-                  <AvatarPreviewLightbox
-                    src={avatarDisplayUrl(profile.avatar_url)!}
-                    alt={profile.display_name || ""}
-                    open={lightbox}
-                    onClose={() => setLightbox(false)}
-                    actions={
-                      <>
-                        <AvatarPreviewLightboxAction
-                          label={avatarPreviewFollowLabel}
-                          icon={avatarPreviewFollowIcon}
-                          onClick={() => void onToggleFollow()}
-                          disabled={busy}
-                          busy={!!(followStatusLoading && followStatus === null)}
-                        />
-                        <AvatarPreviewLightboxAction
-                          label="Share"
-                          icon={
-                            <PiShareFat className="h-5 w-5" aria-hidden />
-                          }
-                          onClick={() => void handleOtherAvatarPreviewShare()}
-                        />
-                      </>
-                    }
-                  />
-                )}
                 <ShareProfileModal
                   isOpen={showShareModal}
                   onClose={() => setShowShareModal(false)}
@@ -1410,6 +1527,7 @@ export default function OtherProfilePage({
               </>
             )}
           </ProfileProvider>
+          </div>
         </div>
       </PrimaryPageContainer>
 

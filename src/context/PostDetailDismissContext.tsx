@@ -19,6 +19,28 @@ export type PostDetailDismissContextValue = {
    * {@link useCreateKeyboardInset} — single subscription per modal.
    */
   modalKeyboardInsetPx: number;
+  /**
+   * PV2B.1: report PublishedMediaFullscreenViewer open/closed so Detail
+   * swipe/back/backdrop dismiss stay nested under fullscreen.
+   */
+  setPublishedMediaFullscreenOpen: (open: boolean) => void;
+  /**
+   * Register the active fullscreen close callback (local UI only — no route nav).
+   * Cleared when fullscreen unmounts / closes.
+   */
+  registerPublishedMediaFullscreenClose: (
+    close: (() => void) | null,
+  ) => void;
+  /**
+   * Arm a short same-gesture click-through guard after fullscreen closes so
+   * finishing pointer/click cannot dismiss Post Detail.
+   */
+  armPublishedMediaFullscreenClickThroughGuard: () => void;
+  /**
+   * Pass 3E: register sync capture that runs before Detail route close
+   * (while Detail player is still mounted).
+   */
+  registerFeedReturnPlaybackCapture: (capture: (() => void) | null) => void;
 };
 
 export const PostDetailDismissContext =

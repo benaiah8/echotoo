@@ -48,7 +48,7 @@ interface NotificationCountCacheEntry {
   count: number;
   /** Unread with type === 'invite' (for tab badge ring); absent on legacy cache rows */
   inviteUnread?: number;
-  /** Unread with type !== 'invite' (for tab badge ring) */
+  /** Unread with type !== 'invite' and !== 'saved' (Activities surface / Messages bell). */
   activityUnread?: number;
   timestamp: number;
   userId: string; // Auth user ID to prevent cross-user cache leakage

@@ -1,0 +1,293 @@
+-- =============================================================================
+-- STAGING ONLY — manual verification for owner_create_post post_media attachment
+-- =============================================================================
+-- Do NOT run in production.
+-- Do NOT execute automatically in CI.
+--
+-- Prerequisites:
+--   1. Migrations through 20260828015630_post_media_foundation applied.
+--   2. Migration 20260915120000_owner_create_post_attach_post_media applied.
+--   3. Two authenticated test users (User A = primary owner, User B = other user).
+--
+-- Test UUID namespace (staging only):
+--   00000000-0000-4000-8000-000000000101  no post_media (case A)
+--   00000000-0000-4000-8000-000000000102  ready video attach (case B)
+--   00000000-0000-4000-8000-000000000103  processing video attach (case C)
+--   00000000-0000-4000-8000-000000000104  pending video reject (case D)
+--   00000000-0000-4000-8000-000000000105  uploading video reject (case E)
+--   00000000-0000-4000-8000-000000000106  failed video reject (case F)
+--   00000000-0000-4000-8000-000000000107  foreign owner row ignored (case G)
+--   00000000-0000-4000-8000-000000000111  legacy draft INSERT (case H)
+--   00000000-0000-4000-8000-000000000112  published post, no media (case I)
+--   00000000-0000-4000-8000-000000000113  activity failure rollback (case J)
+--   00000000-0000-4000-8000-000000000108  media_order stored (case L)
+--   00000000-0000-4000-8000-000000000109  media_order omitted (case L)
+--   00000000-0000-4000-8000-000000000110  media_order validation (case L)
+--
+-- Seed post_media rows as service role (clients cannot INSERT post_media):
+--   INSERT INTO public.post_media (
+--     publish_post_id, owner_user_id, bunny_video_id, video_status, sort_order
+--   ) VALUES (...);
+--
+-- =============================================================================
+
+
+-- =============================================================================
+-- A. NO post_media ROWS — unchanged image/text publish
+-- Expected: created = true, zero post_media rows for publish id
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000101'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B A — no video",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": []
+--   }'::jsonb
+-- );
+-- -- expect: created = true
+--
+-- SELECT count(*) FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000101'::uuid;
+-- -- expect: 0
+
+
+-- =============================================================================
+-- B. ONE READY OWN VIDEO — attached on publish (via AFTER INSERT trigger)
+-- Seed (service role): ready row for User A at publish id 000102
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000102'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B B — ready video",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: created = true
+--
+-- SELECT post_id, video_status FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000102'::uuid;
+-- -- expect: post_id = 000102, video_status = ready
+
+
+-- =============================================================================
+-- C. ONE PROCESSING OWN VIDEO — publish allowed
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000103'::uuid,
+--   '{
+--     "type": "hangout",
+--     "caption": "V1B C — processing video",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: created = true
+--
+-- SELECT post_id, video_status FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000103'::uuid;
+-- -- expect: post_id = 000103, video_status = processing
+
+
+-- =============================================================================
+-- D. PENDING VIDEO — publish rejected before INSERT (no posts row, no attach)
+-- =============================================================================
+-- SELECT count(*) AS post_count_before FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000104'::uuid;
+-- -- expect: 0
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000104'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B D — pending should fail",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: ERROR Video upload is still in progress
+--
+-- SELECT count(*) AS post_count_after FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000104'::uuid;
+-- -- expect: 0
+
+
+-- =============================================================================
+-- E. UPLOADING VIDEO — publish rejected before INSERT
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000105'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B E — uploading should fail",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: ERROR Video upload is still in progress
+
+
+-- =============================================================================
+-- F. FAILED VIDEO — publish rejected before INSERT
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000106'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B F — failed should fail",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: ERROR Video upload failed
+
+
+-- =============================================================================
+-- G. FOREIGN USER ROW — never attached (trigger matches owner_user_id = author_id)
+-- Seed ready row owned by User B for publish id 000107; publish as User A.
+-- =============================================================================
+-- -- As User A:
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000107'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B G — foreign row ignored",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+--
+-- SELECT owner_user_id, post_id FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000107'::uuid
+--   ORDER BY owner_user_id;
+-- -- expect: User B row post_id NULL
+
+
+-- =============================================================================
+-- H. LEGACY DRAFT INSERT — trigger no-op (status != published)
+-- =============================================================================
+-- INSERT INTO public.posts (id, author_id, type, caption, status)
+-- VALUES (
+--   '00000000-0000-4000-8000-000000000111'::uuid,
+--   auth.uid(),
+--   'experience',
+--   'Draft seed — trigger should not attach',
+--   'draft'
+-- );
+--
+-- -- Seed ready post_media for same publish_post_id (service role if needed)
+-- SELECT post_id FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000111'::uuid;
+-- -- expect: post_id IS NULL (trigger did not attach)
+
+
+-- =============================================================================
+-- I. PUBLISHED POST WITH NO MEDIA — trigger no-op
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000112'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B I — no media rows",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+-- -- expect: created = true; zero post_media rows for publish id
+
+
+-- =============================================================================
+-- J. ACTIVITY FAILURE AFTER TRIGGER — full transaction rollback
+-- =============================================================================
+-- SELECT count(*) AS post_count_before FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000113'::uuid;
+-- -- expect: 0
+--
+-- -- Seed ready post_media for 000113 (service role)
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000113'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B J — rollback test",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "activities": [{ "title": "Bad stop", "order_idx": "not-an-integer" }]
+--   }'::jsonb
+-- );
+-- -- expect: ERROR (invalid input syntax for type integer)
+--
+-- SELECT count(*) AS post_count_after FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000113'::uuid;
+-- -- expect: 0
+--
+-- SELECT post_id FROM public.post_media
+--   WHERE publish_post_id = '00000000-0000-4000-8000-000000000113'::uuid;
+-- -- expect: post_id IS NULL (attachment rolled back with post insert)
+
+
+-- =============================================================================
+-- K. AUTHENTICATED CLIENT HAS NO DIRECT post_media UPDATE
+-- =============================================================================
+-- -- As authenticated User A:
+-- UPDATE public.post_media
+-- SET post_id = publish_post_id
+-- WHERE owner_user_id = auth.uid()
+--   AND post_id IS NULL;
+-- -- expect: ERROR permission denied for table post_media
+--
+-- -- Privilege check (service role / superuser):
+-- SELECT privilege_type
+-- FROM information_schema.column_privileges
+-- WHERE table_schema = 'public'
+--   AND table_name = 'post_media'
+--   AND grantee = 'authenticated'
+--   AND privilege_type = 'UPDATE';
+-- -- expect: zero rows
+
+
+-- =============================================================================
+-- L. media_order VALIDATION — unchanged
+-- =============================================================================
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000108'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B L — media_order",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "media_order": [{ "kind": "video", "id": "example" }]
+--   }'::jsonb
+-- );
+--
+-- SELECT media_order FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000108'::uuid;
+-- -- expect: JSON array with one object
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000109'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B L — no media_order",
+--     "is_recurring": false,
+--     "rating_enabled": false
+--   }'::jsonb
+-- );
+--
+-- SELECT media_order IS NULL AS media_order_null FROM public.posts
+--   WHERE id = '00000000-0000-4000-8000-000000000109'::uuid;
+-- -- expect: true
+--
+-- SELECT * FROM public.owner_create_post(
+--   '00000000-0000-4000-8000-000000000110'::uuid,
+--   '{
+--     "type": "experience",
+--     "caption": "V1B L — bad media_order",
+--     "is_recurring": false,
+--     "rating_enabled": false,
+--     "media_order": "not-an-array"
+--   }'::jsonb
+-- );
+-- -- expect: ERROR Invalid media_order: expected JSON array

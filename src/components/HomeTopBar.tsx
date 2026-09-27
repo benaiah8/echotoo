@@ -1,17 +1,16 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
-  PiFunnelSimple,
   PiMagnifyingGlass,
+  PiSlidersHorizontal,
   PiX,
 } from "react-icons/pi";
 import Logo from "./ui/Logo";
-import HomeCategorySection from "../sections/home/HomeCategorySection";
 import {
   HOME_DATE_FILTER_DRAWER_OPTIONS,
+  hasNonShortcutHomeFilters,
   isHomeDateFilterActive,
   isHomeTypeFilterActive,
   isTodayChipActive,
-  toggleHomeTypeFilter,
   type HomeDateFilter,
   type HomeDateFilterChip,
   type HomeViewMode,
@@ -25,9 +24,15 @@ const CHROME_SHOW_MS = 340;
 const CHROME_HIDE_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 const CHROME_SHOW_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
+/** Browse compact-pill (width / radius / fill / padding-top). Separate from hide/show. */
+const COMPACT_MS = 300;
+const COMPACT_EASING = "cubic-bezier(0.33, 1, 0.68, 1)";
+const COMPACT_RING_DELAY_MS = 100;
+
 /**
  * Solid chip pills for readability over feed imagery.
  * Inactive: dark (light theme) / near-white (dark theme). Selected: brand yellow + ink text.
+ * Height (18px) is the visual alignment target for capsule end-cap controls.
  */
 const chipButtonClass = (isSelected: boolean) =>
   [
@@ -48,6 +53,31 @@ const chipButtonClass = (isSelected: boolean) =>
           "app-dark:hover:bg-white",
         ].join(" "),
   ].join(" ");
+
+/** End-cap controls: same 18px height as shortcut chips; no heavy chrome border. */
+const shortcutEndCapClass = (opts?: {
+  active?: boolean;
+  destructive?: boolean;
+}) => {
+  const active = opts?.active === true;
+  const destructive = opts?.destructive === true;
+  return [
+    "relative shrink-0 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-0",
+    "transition-[transform,background-color,color] duration-200 active:scale-[0.96]",
+    destructive
+      ? [
+          "text-rose-700/70 hover:bg-rose-500/[0.10] hover:text-rose-700/90",
+          "app-dark:text-rose-300/65 app-dark:hover:bg-rose-400/[0.12] app-dark:hover:text-rose-200/85",
+        ].join(" ")
+      : active
+        ? "bg-[color-mix(in_oklab,var(--brand)_14%,transparent)] text-[var(--text)]"
+        : [
+            "bg-transparent text-[var(--text)]/75",
+            "hover:bg-[color-mix(in_oklab,var(--text)_8%,transparent)] hover:text-[var(--text)]",
+            "app-dark:text-white/72 app-dark:hover:bg-white/[0.08] app-dark:hover:text-white/90",
+          ].join(" "),
+  ].join(" ");
+};
 
 const drawerSectionLabelClass =
   "mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text)]/82";
@@ -104,32 +134,25 @@ export interface HomeTopBarProps {
   onSearchModeChange: (mode: "posts" | "users") => void;
   /** When true, show Posts / Users segmented toggle under the search field (legacy; keep false on Home). */
   showSearchKindToggle: boolean;
-  /** Home Phase 1: post search mode — hide browse quick chips; show dismiss control in search field. */
+  /** Home search shell: hide browse chips/logo; field + Posts funnel only. */
   homePostSearchActive: boolean;
-  /** Home Phase 1: dismiss post search (clear query, blur, close filters). */
-  onExitPostSearch: () => void;
   searchFieldPlaceholder: string;
   hasActiveFilters: boolean;
   filtersOpen: boolean;
-  selectedTags: string[];
-  onTagsChange: (tags: string[]) => void;
-  onClearFilters: () => void;
   viewMode: HomeViewMode;
-  setViewMode: (m: HomeViewMode) => void;
   dateFilter: HomeDateFilter;
   onToggleDateFilter: (target: HomeDateFilterChip) => void;
+  onToggleTypeFilter: (target: "hangouts" | "experiences") => void;
   friendsFilter: boolean;
-  onFriendsFilterDeactivate: () => void;
+  onToggleFriends: () => void;
   /** Fires when the main search field gains/loses focus (keyboard / IME). Used to pin the bar on native + web. */
   onSearchFocusChange?: (focused: boolean) => void;
-  /** Inline notice below quick chips when Friends preflight finds no matches (client-side). */
-  noFriendsInlineBannerVisible?: boolean;
-  /** Preflight before activating Friends (inactive chip only). Active Friends still uses onFilterChange to remove. */
-  onFriendsChipClick?: () => void;
-  /** Dim/disable Friends while preflight fetch runs */
-  friendsPreflightPending?: boolean;
-  /** Resets date, type, friends, tags, and search. */
+  /** Explicit pointer/touch on the search field — clears post-exit focus ignore. */
+  onSearchInputPointerDown?: () => void;
+  /** Resets date, type, friends, and search. */
   onClearAllFilters: () => void;
+  /** Optional; Home may omit while tags UI is unused (defaults to []). */
+  selectedTags?: readonly string[];
 }
 
 export default function HomeTopBar({
@@ -144,64 +167,98 @@ export default function HomeTopBar({
   onSearchModeChange,
   showSearchKindToggle,
   homePostSearchActive,
-  onExitPostSearch,
   searchFieldPlaceholder,
   hasActiveFilters,
   filtersOpen,
-  selectedTags,
-  onTagsChange,
-  onClearFilters,
   viewMode,
-  setViewMode,
   dateFilter,
   onToggleDateFilter,
+  onToggleTypeFilter,
   friendsFilter,
-  onFriendsFilterDeactivate,
+  onToggleFriends,
   onSearchFocusChange,
-  noFriendsInlineBannerVisible = false,
-  onFriendsChipClick,
-  friendsPreflightPending = false,
+  onSearchInputPointerDown,
   onClearAllFilters,
+  selectedTags = [],
 }: HomeTopBarProps) {
   const todayActive = isTodayChipActive(dateFilter);
-
-  /** Visual only: match banner during empty Friends preflight without activating friendsFilter. */
-  const friendsIsVisuallyActive =
-    friendsFilter || noFriendsInlineBannerVisible;
+  const eventsSelected =
+    isHomeTypeFilterActive(viewMode, "hangouts") && dateFilter === "none";
+  const placesSelected = isHomeTypeFilterActive(viewMode, "experiences");
+  /** Drawer-only / non-chip filters — subtle active on the in-pill funnel. */
+  const nonShortcutFiltersActive = hasNonShortcutHomeFilters({
+    dateFilter,
+    typeFilter: viewMode,
+    friendsFilter,
+    search,
+    selectedTags,
+  });
 
   const showPostFiltersChrome =
     !homePostSearchActive || searchMode === "posts";
   const filtersDrawerExpanded =
     filtersOpen && showPostFiltersChrome;
-  const filterButtonDisabled =
-    homePostSearchActive && searchMode === "users";
 
   const handleFriendsFilterClick = () => {
-    if (friendsFilter) {
-      onFriendsFilterDeactivate();
-      return;
-    }
-    if (friendsPreflightPending) return;
-    onFriendsChipClick?.();
+    onToggleFriends();
   };
 
   const hidden = isHidden;
   /** Duration/easing follow `hidden` so hiding uses a longer window than showing. */
   const chromeMs = hidden ? CHROME_HIDE_MS : CHROME_SHOW_MS;
   const chromeEase = hidden ? CHROME_HIDE_EASING : CHROME_SHOW_EASING;
-  const transformClass = hidden
-    ? "-translate-y-[110%] scale-[0.98] origin-top"
-    : "translate-y-0 scale-100 origin-top";
 
-  const chromeTransformTransition = {
-    transitionProperty: "transform" as const,
-    transitionDuration: `${chromeMs}ms`,
-    transitionTimingFunction: chromeEase,
-  };
+  /**
+   * Search shell: always the clean at-top presentation — ignore browse
+   * compact-pill / scroll-hide chrome so the still-mounted feed cannot bleed through.
+   */
+  const searchChrome = homePostSearchActive;
+  const [compactBlurActive, setCompactBlurActive] = useState(false);
+
+  useEffect(() => {
+    if (searchChrome || atTop) {
+      setCompactBlurActive(false);
+      return;
+    }
+    const id = window.setTimeout(() => setCompactBlurActive(true), COMPACT_MS);
+    return () => window.clearTimeout(id);
+  }, [searchChrome, atTop]);
+
+  const compactShellTransition = [
+    `width ${COMPACT_MS}ms ${COMPACT_EASING}`,
+    `max-width ${COMPACT_MS}ms ${COMPACT_EASING}`,
+  ].join(", ");
+  const compactVisualTransition = [
+    `border-radius ${COMPACT_MS}ms ${COMPACT_EASING}`,
+    `background-color ${COMPACT_MS}ms ${COMPACT_EASING}`,
+    `box-shadow ${COMPACT_MS}ms ${COMPACT_EASING} ${
+      atTop ? 0 : COMPACT_RING_DELAY_MS
+    }ms`,
+  ].join(", ");
+  const transformClass =
+    searchChrome || !hidden
+      ? "translate-y-0 scale-100 origin-top"
+      : "-translate-y-[110%] scale-[0.98] origin-top";
+
+  const chromeTransformTransition = searchChrome
+    ? {
+        transition: "none",
+        transitionProperty: "none" as const,
+        transitionDuration: "0ms",
+      }
+    : {
+        transitionProperty: "transform" as const,
+        transitionDuration: `${chromeMs}ms`,
+        transitionTimingFunction: chromeEase,
+      };
+
+  /** Opaque band under search field — matches overlay start (~58px + safe-area). */
+  const searchBandHeight = "calc(58px + var(--safe-area-top-layout))";
 
   return (
     <>
-      {/* Top gradient: solid at top → transparent (theme-aware via var) */}
+      {/* Top gradient: solid at top → transparent (theme-aware via var).
+          Search: solid --app-canvas band so browse feed cannot show through. */}
       <div
         className={[
           "fixed left-0 right-0 top-0 z-[30] pointer-events-none",
@@ -210,9 +267,13 @@ export default function HomeTopBar({
         style={{
           /* top: 0 — do not pull gradient above the viewport (negative inset read as under notch). */
           top: 0,
-          height: "calc(66px + var(--safe-area-top-layout))",
+          height: searchChrome
+            ? searchBandHeight
+            : "calc(66px + var(--safe-area-top-layout))",
           width: "100%",
-          background: "var(--gradient-from-top)",
+          background: searchChrome
+            ? "var(--app-canvas)"
+            : "var(--gradient-from-top)",
           ...chromeTransformTransition,
         }}
       />
@@ -225,44 +286,74 @@ export default function HomeTopBar({
           transformClass,
         ].join(" ")}
         style={{
-          paddingTop: atTop
+          paddingTop: searchChrome || atTop
             ? "var(--safe-area-top-layout)"
             : "calc(8px + var(--safe-area-top-layout))",
-          transitionProperty: "transform, padding-top",
-          transitionDuration: `${chromeMs}ms`,
-          transitionTimingFunction: chromeEase,
+          ...(searchChrome
+            ? {
+                transition: "none",
+                transitionProperty: "none" as const,
+                transitionDuration: "0ms",
+              }
+            : {
+                transitionProperty: "transform, padding-top",
+                transitionDuration: `${chromeMs}ms, ${COMPACT_MS}ms`,
+                transitionTimingFunction: `${chromeEase}, ${COMPACT_EASING}`,
+              }),
         }}
       >
-        {/* Main bar: at top = full-width flush; scrolled = pill (80%, rounded) */}
+        {/* Tour Step 2: smallest wrapper covering search + filter shortcut row */}
+        <div
+          data-tour-target="home-search-filters"
+          className="flex w-full flex-col items-center"
+        >
+        {/* Main bar: at top = full-width flush; scrolled = pill (80%, rounded).
+            Search: always full-width solid — snap, no compact→expanded animation. */}
         <div
           className="pointer-events-auto"
           style={{
-            width: atTop ? "100%" : "80%",
-            maxWidth: atTop ? "100vw" : TOP_BAR_MAX_WIDTH,
-            transition:
-              "width 300ms cubic-bezier(0.33, 1, 0.68, 1), max-width 300ms cubic-bezier(0.33, 1, 0.68, 1)",
+            width: searchChrome || atTop ? "100%" : "80%",
+            maxWidth: searchChrome || atTop ? "100vw" : TOP_BAR_MAX_WIDTH,
+            transition: searchChrome ? "none" : compactShellTransition,
             transform: "translateZ(0)",
             backfaceVisibility: "hidden",
           }}
         >
           <div
             className={[
-              "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-              /* Floating pill: same outer ring as bottom tab. Full-width at top: no outer ring. */
-              atTop
+              searchChrome
+                ? "bg-[var(--app-canvas)]"
+                : compactBlurActive
+                  ? "backdrop-blur-[var(--glass-blur)]"
+                  : "",
+              /* Floating pill: same outer ring as bottom tab. Full-width / search: no outer ring. */
+              searchChrome || atTop
                 ? "border border-transparent shadow-none"
                 : "border border-transparent shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
             ].join(" ")}
             style={{
               /* Full stadium pill when floated (radius ≥ half height); 24px was slightly shy on ~50px chrome. */
-              borderRadius: atTop ? 0 : 9999,
-              transition:
-                "border-radius 300ms cubic-bezier(0.33, 1, 0.68, 1), box-shadow 300ms cubic-bezier(0.33, 1, 0.68, 1)",
+              borderRadius: searchChrome || atTop ? 0 : 9999,
+              backgroundColor: searchChrome
+                ? "var(--app-canvas)"
+                : atTop
+                  ? "transparent"
+                  : "var(--glass-bg)",
+              transition: searchChrome ? "none" : compactVisualTransition,
+              ...(searchChrome
+                ? {
+                    backdropFilter: "none",
+                    WebkitBackdropFilter: "none",
+                    boxShadow: "none",
+                  }
+                : null),
               backfaceVisibility: "hidden",
             }}
           >
             <div className="py-[7px] px-[9px] flex items-center gap-2">
-              <Logo size={28} onClick={onLogoClick} className="shrink-0" />
+              {homePostSearchActive ? null : (
+                <Logo size={28} onClick={onLogoClick} className="shrink-0" />
+              )}
               <div className="relative flex items-center h-9 flex-1 rounded-full px-3 bg-transparent border border-[var(--border)] text-[var(--text)] focus-within:border-[color-mix(in_oklab,var(--text)_40%,transparent)] min-w-0">
                 <PiMagnifyingGlass size={18} className="shrink-0" />
                 <input
@@ -271,24 +362,19 @@ export default function HomeTopBar({
                   enterKeyHint="search"
                   autoComplete="off"
                   placeholder={searchFieldPlaceholder}
-                  className={`w-full pl-2 border-none text-[var(--text)] text-[10px] font-normal bg-transparent outline-none min-w-0 ${
-                    search.trim() || homePostSearchActive
-                      ? "pr-[2.125rem]"
-                      : "pr-2"
+                  className={`w-full pl-2 border-none text-[var(--text)] text-[16px] leading-none font-normal bg-transparent outline-none min-w-0 ${
+                    search.trim() ? "pr-[2.125rem]" : "pr-2"
                   }`}
                   value={search}
                   onChange={(e) => onSearch(e.target.value)}
+                  onPointerDown={() => onSearchInputPointerDown?.()}
                   onFocus={() => onSearchFocusChange?.(true)}
                   onBlur={() => onSearchFocusChange?.(false)}
                 />
-                {search.trim() || homePostSearchActive ? (
+                {search.trim() ? (
                   <button
                     type="button"
-                    aria-label={
-                      homePostSearchActive
-                        ? "Close search"
-                        : "Clear search"
-                    }
+                    aria-label="Clear search"
                     className={[
                       /* h-9 field (36px): h-6 chip + right-1.5 (6px) = equal ~6px inset top/right/bottom */
                       "absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full p-0.5",
@@ -307,35 +393,27 @@ export default function HomeTopBar({
                       ev.preventDefault();
                     }}
                     onClick={() => {
-                      onExitPostSearch();
+                      onSearch("");
                     }}
                   >
                     <PiX className="h-3 w-3 shrink-0" strokeWidth={2.25} aria-hidden />
                   </button>
                 ) : null}
               </div>
-              <button
-                type="button"
-                disabled={filterButtonDisabled}
-                aria-disabled={filterButtonDisabled || undefined}
-                aria-label={
-                  filterButtonDisabled
-                    ? "Filters unavailable while searching users"
-                    : "Open filters"
-                }
-                onClick={onToggleFilters}
-                className={[
-                  "relative shrink-0 w-9 h-9 rounded-full border flex items-center justify-center transition-opacity",
-                  filterButtonDisabled
-                    ? "border-[var(--border)]/45 text-[var(--text)]/35 cursor-not-allowed opacity-45"
-                    : "border-[var(--border)] text-[var(--text)] hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]",
-                ].join(" ")}
-              >
-                <PiFunnelSimple size={16} />
-                {!filterButtonDisabled && hasActiveFilters && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[var(--brand)]" />
-                )}
-              </button>
+              {showPostFiltersChrome ? (
+                <button
+                  type="button"
+                  aria-label="Open filters"
+                  data-tour-target="home-filter-trigger"
+                  onClick={onToggleFilters}
+                  className="relative shrink-0 w-9 h-9 rounded-full border border-[var(--border)] text-[var(--text)] flex items-center justify-center hover:bg-[color-mix(in_oklab,var(--text)_12%,transparent)]"
+                >
+                  <PiSlidersHorizontal size={16} className="block" aria-hidden />
+                  {hasActiveFilters && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[var(--brand)]" />
+                  )}
+                </button>
+              ) : null}
             </div>
             {showSearchKindToggle ? (
               <div className="flex justify-center px-[9px] pb-[6px] pt-0.5">
@@ -378,44 +456,17 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {homePostSearchActive ? (
-          <div
-            className={[
-              "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
-              "self-center",
-            ].join(" ")}
-          >
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() =>
-                onSearchModeChange(
-                  searchMode === "posts" ? "users" : "posts"
-                )
-              }
-              className={[
-                "rounded-full px-4 py-1.5 text-[11px] font-semibold leading-none transition-colors",
-                "border border-[var(--border)]",
-                "bg-[color-mix(in_oklab,var(--surface)_38%,transparent)]",
-                "text-[var(--text)]/90 hover:text-[var(--text)]",
-                "hover:bg-[color-mix(in_oklab,var(--text)_10%,transparent)]",
-                "active:scale-[0.97]",
-              ].join(" ")}
-            >
-              {searchMode === "posts" ? "Search users" : "Search posts"}
-            </button>
-          </div>
-        ) : null}
-
         {/* Quick chips + optional Today-empty banner (hidden during Home post search mode) */}
         {!homePostSearchActive ? (
         <div
+          data-tour-target="home-filter-shortcuts"
           className={[
             "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
             "self-center",
           ].join(" ")}
         >
           <div
+            data-tour-target="home-filters"
             className={[
               "inline-flex w-fit flex-nowrap items-stretch justify-center",
               "rounded-full",
@@ -425,7 +476,24 @@ export default function HomeTopBar({
               "app-dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)]",
             ].join(" ")}
           >
-            <div className="flex flex-nowrap items-center justify-center gap-0.5 px-1 py-1 min-w-0">
+            <div className="flex flex-nowrap items-center justify-center gap-1 p-1 min-w-0">
+              <button
+                type="button"
+                aria-label="Open filters"
+                aria-pressed={filtersOpen || undefined}
+                onClick={onToggleFilters}
+                className={shortcutEndCapClass({
+                  active: nonShortcutFiltersActive,
+                })}
+              >
+                <PiSlidersHorizontal size={11} className="block" aria-hidden />
+                {nonShortcutFiltersActive ? (
+                  <span
+                    className="absolute -top-px -right-px h-1.5 w-1.5 rounded-full bg-[var(--brand)]"
+                    aria-hidden
+                  />
+                ) : null}
+              </button>
               <button
                 type="button"
                 onClick={() => onToggleDateFilter("today")}
@@ -435,45 +503,38 @@ export default function HomeTopBar({
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setViewMode(toggleHomeTypeFilter(viewMode, "hangouts"))
-                }
-                className={chipButtonClass(viewMode === "hangouts")}
+                onClick={() => onToggleTypeFilter("hangouts")}
+                className={chipButtonClass(eventsSelected)}
               >
                 Events
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setViewMode(toggleHomeTypeFilter(viewMode, "experiences"))
-                }
-                className={chipButtonClass(viewMode === "experiences")}
+                onClick={() => onToggleTypeFilter("experiences")}
+                className={chipButtonClass(placesSelected)}
               >
-                Places
+                Posts
               </button>
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  aria-label="Clear filters"
+                  onClick={onClearAllFilters}
+                  className={shortcutEndCapClass({ destructive: true })}
+                >
+                  <PiX size={11} strokeWidth={2.25} className="block" aria-hidden />
+                </button>
+              ) : null}
             </div>
           </div>
-
-          {noFriendsInlineBannerVisible ? (
-            <div
-              className={[
-                "w-full rounded-xl px-3 py-1.5",
-                "bg-[var(--brand)] text-[var(--brand-ink)]",
-                "text-[10px] font-medium leading-snug text-center tracking-tight",
-                "shadow-[0_2px_10px_rgba(0,0,0,0.18)]",
-                "border border-[color-mix(in_oklab,var(--brand-ink)_18%,transparent)]",
-              ].join(" ")}
-              role="status"
-            >
-              No friends posts yet
-            </div>
-          ) : null}
         </div>
         ) : null}
+        </div>
 
         {/* Filter popout: appears below quick chips */}
         {/* When closed: no extra gap. When open: 8px gap from chips. */}
         <div
+          data-tour-target="home-filter-panel"
           className={[
             "w-[80%] pointer-events-auto overflow-hidden transition-all duration-300",
             "backdrop-blur-[var(--glass-blur)] backdrop-saturate-150",
@@ -493,7 +554,7 @@ export default function HomeTopBar({
           }}
         >
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-            <div>
+            <div data-tour-target="home-filter-dates">
               <p className={drawerSectionLabelClass}>Date / Time</p>
               <div className="flex flex-wrap gap-1.5">
                 {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
@@ -528,49 +589,25 @@ export default function HomeTopBar({
                 <button
                   type="button"
                   onClick={handleFriendsFilterClick}
-                  disabled={friendsPreflightPending}
-                  aria-busy={friendsPreflightPending || undefined}
-                  className={[
-                    drawerChipButtonClass(friendsIsVisuallyActive),
-                    friendsPreflightPending
-                      ? "opacity-60 pointer-events-none"
-                      : "",
-                  ].join(" ")}
+                  className={drawerChipButtonClass(friendsFilter)}
                 >
                   Friends
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setViewMode(toggleHomeTypeFilter(viewMode, "hangouts"))
-                  }
-                  className={drawerChipButtonClass(
-                    isHomeTypeFilterActive(viewMode, "hangouts")
-                  )}
+                  onClick={() => onToggleTypeFilter("hangouts")}
+                  className={drawerChipButtonClass(eventsSelected)}
                 >
                   Events
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setViewMode(toggleHomeTypeFilter(viewMode, "experiences"))
-                  }
-                  className={drawerChipButtonClass(
-                    isHomeTypeFilterActive(viewMode, "experiences")
-                  )}
+                  onClick={() => onToggleTypeFilter("experiences")}
+                  className={drawerChipButtonClass(placesSelected)}
                 >
-                  Places
+                  Posts
                 </button>
               </div>
-            </div>
-
-            <div>
-              <p className={drawerSectionLabelClass}>Popular Tags</p>
-              <HomeCategorySection
-                selected={selectedTags}
-                onTagsChange={onTagsChange}
-                onClear={onClearFilters}
-              />
             </div>
 
             <div className="pt-0.5">

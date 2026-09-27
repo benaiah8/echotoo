@@ -1,42 +1,40 @@
-import React, {
+import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import FrostedCenterModal, {
-  frostedModalPanelClassName,
-  frostedModalPanelStyle,
-} from "./FrostedCenterModal";
-import type { OwlMessageCategory } from "../../lib/owlMessages";
-import owlSvg from "../../assets/btmtabicon.svg";
+import { createPortal } from "react-dom";
+import { PiArrowLeft, PiX } from "react-icons/pi";
+import OwlGamesMenu from "./OwlGamesMenu";
+import NightWatchGame from "../games/NightWatchGame";
+import WhackAnOwlGame from "../games/WhackAnOwlGame";
+import OwlFlapGame from "../games/OwlFlapGame";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
+import type { GameId } from "../../lib/gameHighScores";
 
 export type OwlMessageModalProps = {
   open: boolean;
   onClose: () => void;
-  /** Current line to show (emoji-safe). */
-  message: string;
-  /** Optional category for subtle typography hooks on the message block. */
-  messageCategory?: OwlMessageCategory;
 };
 
-const OWL_PX = 60;
+type OwlModalView = "games" | GameId;
+
 /** Matches `.owl-message-modal-panel--exit` duration */
 const EXIT_MS = 320;
 
 /**
- * Center frosted card (same shell as ConfirmDialog): message on top, owl at bottom.
- * Close is deferred so exit animations can finish (backdrop + Escape).
+ * Full-screen owl games overlay. Opened from the bottom-tab peek owl.
+ * Close is deferred so the exit animation can finish.
  */
 export default function OwlMessageModal({
   open,
   onClose,
-  message,
-  messageCategory,
 }: OwlMessageModalProps) {
   const [exiting, setExiting] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [view, setView] = useState<OwlModalView>("games");
+  const [isOwlFlapPlaying, setIsOwlFlapPlaying] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -47,9 +45,13 @@ export default function OwlMessageModal({
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
+  useOverlayBackgroundScrollLock(open);
+
   useEffect(() => {
     if (!open) {
       setExiting(false);
+      setView("games");
+      setIsOwlFlapPlaying(false);
       if (closeTimerRef.current != null) {
         window.clearTimeout(closeTimerRef.current);
         closeTimerRef.current = null;
@@ -80,88 +82,114 @@ export default function OwlMessageModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, requestClose]);
 
-  const panelAnim = exiting
+  if (!open) return null;
+
+  const overlayAnim = exiting
     ? "owl-message-modal-panel--exit"
     : "owl-message-modal-panel";
-  const owlAnim = exiting
-    ? "owl-message-modal-owl--exit"
-    : "owl-message-modal-owl";
+  const isGame = view !== "games";
 
-  const { borderColor: _panelBorder, ...panelSurfaceStyle } =
-    frostedModalPanelStyle;
+  const chromeCircleClass =
+    "flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--glass-active-shadow)] transition-transform active:scale-90";
+  const chromeLabelClass =
+    "text-[11px] font-medium leading-none text-[var(--text)]/80";
 
-  const messageLines = useMemo(() => message.split(/\r?\n/), [message]);
-  const multiLine = messageLines.length > 1;
-
-  const bodyClass = [
-    "owl-message-body",
-    messageCategory ? `owl-message-body--cat-${messageCategory}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <FrostedCenterModal
-      open={open}
-      onBackdropClick={requestClose}
-      zTier="dialog"
-      aria-label="Owl message"
-      aria-modal
+  return createPortal(
+    <div
+      className={`fixed inset-0 z-[500] flex min-h-0 flex-col ${overlayAnim}`}
       role="dialog"
-      containerClassName="px-6 sm:px-10"
+      aria-modal
+      aria-label="Owl games"
+      style={{
+        backgroundColor: "var(--glass-bg)",
+        backdropFilter: "blur(var(--glass-blur))",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
+        overscrollBehavior: "contain",
+      }}
     >
       <div
-        className={`${frostedModalPanelClassName} ${panelAnim} flex max-h-[min(72vh,480px)] min-h-[180px] flex-col overflow-hidden !p-0 border border-[var(--owl-message-modal-border)] border-b-[3px] border-b-white`}
+        className="flex min-h-0 flex-1 flex-col"
         style={{
-          ...panelSurfaceStyle,
-          maxWidth: "min(320px, calc(100vw - 2rem))",
+          paddingTop: "max(1.25rem, var(--safe-area-top-layout))",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        {/* Single accent rule ~50% width — bolder gold gradient */}
-        <div
-          className="flex shrink-0 flex-col items-center px-4 pt-5 pb-0"
-          aria-hidden
-        >
-          <div
-            className="h-1 w-1/2 max-w-[160px] rounded-full"
-            style={{
-              background:
-                "linear-gradient(90deg, transparent, var(--owl-message-modal-deco-accent), transparent)",
-            }}
-          />
-        </div>
-
-        <div className="owl-message-text-well mx-4 mt-4 mb-3 min-h-0 flex-1 overflow-y-auto rounded-2xl px-4 py-5 text-center">
-          <div className={bodyClass}>
-            {messageLines.map((line, i) => (
-              <p
-                key={i}
-                className={[
-                  "owl-message-line",
-                  multiLine && i === 0 ? "owl-message-line--lead" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                {line.length > 0 ? line : "\u00a0"}
-              </p>
-            ))}
+        {isGame ? (
+          <div className="min-h-0 flex-1">
+            {view === "nightWatch" && <NightWatchGame />}
+            {view === "whackAnOwl" && <WhackAnOwlGame />}
+            {view === "owlFlap" && (
+              <OwlFlapGame onPhaseChange={setIsOwlFlapPlaying} />
+            )}
           </div>
-        </div>
-
-        <div className="mt-auto flex shrink-0 justify-center self-stretch overflow-hidden leading-none">
-          <img
-            src={owlSvg}
-            alt=""
-            width={OWL_PX}
-            height={OWL_PX}
-            className={`${owlAnim} block max-w-none select-none object-contain object-bottom pointer-events-none`}
-            style={{ width: OWL_PX, height: OWL_PX }}
-            draggable={false}
-          />
-        </div>
+        ) : (
+          <div
+            className="flex min-h-0 flex-1 flex-col items-center justify-center px-6"
+            style={{
+              paddingTop: "0.5rem",
+              paddingBottom:
+                "max(0.5rem, calc(0.5rem + var(--safe-area-bottom-layout)))",
+            }}
+          >
+            <div className="shrink-0 pb-4 text-center">
+              <p className="text-sm font-semibold text-[var(--text)]">
+                Mini-games
+              </p>
+              <p className="mt-1 text-[12px] text-[var(--text)]/60">
+                Pick one to play
+              </p>
+            </div>
+            <OwlGamesMenu onSelect={setView} />
+            <button
+              type="button"
+              onClick={requestClose}
+              aria-label="Close"
+              className="mt-5 flex flex-col items-center gap-1.5"
+            >
+              <span className={chromeCircleClass}>
+                <PiX className="h-5 w-5" aria-hidden />
+              </span>
+              <span className={chromeLabelClass}>Close</span>
+            </button>
+          </div>
+        )}
       </div>
-    </FrostedCenterModal>
+
+      {isGame && !(view === "owlFlap" && isOwlFlapPlaying) && (
+        <div
+          className="z-20 flex shrink-0 items-center justify-center gap-5 px-8 pt-1"
+          style={{
+            paddingBottom:
+              "max(1.25rem, calc(0.75rem + var(--safe-area-bottom-layout)))",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setIsOwlFlapPlaying(false);
+              setView("games");
+            }}
+            aria-label="Back to games"
+            className="flex flex-col items-center gap-1.5"
+          >
+            <span className={chromeCircleClass}>
+              <PiArrowLeft size={18} aria-hidden />
+            </span>
+            <span className={chromeLabelClass}>Back</span>
+          </button>
+          <button
+            type="button"
+            onClick={requestClose}
+            aria-label="Close"
+            className="flex flex-col items-center gap-1.5"
+          >
+            <span className={chromeCircleClass}>
+              <PiX className="h-5 w-5" aria-hidden />
+            </span>
+            <span className={chromeLabelClass}>Close</span>
+          </button>
+        </div>
+      )}
+    </div>,
+    document.body,
   );
 }

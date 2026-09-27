@@ -1,12 +1,16 @@
 import {
-  PiBell,
+  PiChatCircle,
+  PiChatCircleFill,
   PiHouseFill,
   PiPlusBold,
   PiPlusSquareFill,
+  PiSignOut,
   PiUserCircleFill,
+  PiUsers,
+  PiUsersFill,
 } from "react-icons/pi";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Paths } from "../router/Paths";
+import { Paths, isMessagesConversationPath } from "../router/Paths";
 import AuthModal from "./modal/AuthModal";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
@@ -19,29 +23,40 @@ import {
 } from "../lib/avatarCache";
 import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import { supabase } from "../lib/supabaseClient";
-import { getNotificationBadgeData } from "../api/services/notifications";
-import { countPendingInvitesForViewer } from "../api/services/invites";
 import { dbg } from "../lib/authDebug";
-import { isDraftDirty, discardAllDrafts, hasAnyDraftData } from "../lib/drafts";
+import { discardAllDrafts, discardOwnerPublishedEditLocalState } from "../lib/drafts";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import {
   HOME_TAB_REFRESH_EVENT,
   PROFILE_TAB_REFRESH_EVENT,
-  NOTIFICATIONS_TAB_REFRESH_EVENT,
+  PEOPLE_TAB_REFRESH_EVENT,
+  MESSAGES_TAB_REFRESH_EVENT,
 } from "../lib/homeRefreshEvents";
 import { useCreateChooser } from "../context/CreateChooserContext";
 import {
+  CREATE_FLOW_LEAVE_DIALOG_DISMISS_EVENT,
   CREATE_FLOW_REQUEST_LEAVE_EVENT,
+  dispatchCreateFlowPublishRequest,
+  setCreateFlowIntentionalLeaveBypass,
+  setCreateFlowLeaveDialogOpen,
   type CreateFlowRequestLeaveDetail,
 } from "../lib/createFlowLeaveRequest";
+import { shouldConfirmCreateFlowLeave, cleanupEmptyFreshCreateDraftIfNeeded } from "../lib/createFlowLeaveGuard";
 import { EDIT_POST_DATA_KEY } from "../lib/editPostBootstrap";
 import { isCreateFlowResumedLocalDraft } from "../lib/draftEntryGate";
 import BottomTabPeekOwl from "./BottomTabPeekOwl";
+import {
+  HOME_SEARCH_TAB_CHROME_EVENT,
+  getHomeSearchTabChromeHidden,
+  type HomeSearchTabChromeDetail,
+} from "../lib/homeSearchTabChrome";
 import {
   isAndroid,
   isIOS,
   isNativeApp,
 } from "../lib/storage/utils/capacitorDetection";
+import { useHasUnreadMessages } from "../lib/messagesUnreadStore";
+import { useHasNewActivities } from "../lib/messagesActivitiesAttentionStore";
 
 /**
  * When true, the bottom tab follows window scroll: hides on scroll-down, shows on scroll-up.
@@ -69,21 +84,11 @@ function BottomTab() {
   );
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  /** total unread + per-category unread split (activity dot + unread fallback for invite dot) */
-  const [notifBadge, setNotifBadge] = useState({
-    total: 0,
-    invite: 0,
-    activity: 0,
-  });
-  /** Pending rows in `invites` for blue dot; fallback uses invite unread when count fails */
-  const [pendingInviteCount, setPendingInviteCount] = useState(0);
-  const [inviteDotUsesUnreadFallback, setInviteDotUsesUnreadFallback] =
-    useState(false);
   const navTargetRef = useRef<null | (() => void)>(null);
   const {
     isOpen: createChooserOpen,
-    openChooser,
     closeChooser,
+    enterCreateAsDefaultPost,
   } = useCreateChooser();
   // [PHASE 1.2] Guard to prevent infinite loop in requireAuth
   const requireAuthCallCountRef = useRef(0);
@@ -114,6 +119,9 @@ function BottomTab() {
 
   // Whether Redux currently knows about a signed-in user
   const isAuthed = useSelector((s: any) => !!s.auth?.user);
+  const hasUnreadMessages = useHasUnreadMessages();
+  const hasNewActivities = useHasNewActivities();
+  const showMessagesAttention = hasUnreadMessages || hasNewActivities;
 
   // Modal state for AuthModal
   const { authModal } = useSelector((s: any) => s.modal);
@@ -142,83 +150,6 @@ function BottomTab() {
     (useSelector((s: any) => s.auth?.user?.id) as string | undefined) ??
     sessionUserId;
   const isAuthedFinal = !!authedId;
-
-  // Load notification count when user is authenticated
-  useEffect(() => {
-    let isActive = true;
-
-    const loadNotificationCount = async () => {
-      if (isAuthedFinal) {
-        try {
-          const [d, pc] = await Promise.all([
-            getNotificationBadgeData(),
-            countPendingInvitesForViewer(),
-          ]);
-          if (!isActive) return;
-          setNotifBadge({
-            total: d.total,
-            invite: d.inviteUnread,
-            activity: d.activityUnread,
-          });
-          if (pc.error) {
-            console.warn(
-              "[BottomTab] countPendingInvitesForViewer:",
-              pc.error
-            );
-            setInviteDotUsesUnreadFallback(true);
-            setPendingInviteCount(0);
-          } else {
-            setInviteDotUsesUnreadFallback(false);
-            setPendingInviteCount(pc.count);
-          }
-        } catch (error) {
-          console.error("Failed to load notification count:", error);
-          if (isActive) {
-            setInviteDotUsesUnreadFallback(true);
-            setPendingInviteCount(0);
-          }
-        }
-      } else {
-        if (isActive) {
-          setNotifBadge({ total: 0, invite: 0, activity: 0 });
-          setPendingInviteCount(0);
-          setInviteDotUsesUnreadFallback(false);
-        }
-      }
-    };
-
-    loadNotificationCount();
-
-    // Refresh count when tab becomes visible (user might have read notifications elsewhere)
-    // [OPTIMIZATION] getNotificationBadgeData() / cache: same as prior count TTL
-    const handleVisibilityChange = () => {
-      if (!document.hidden && isAuthedFinal) {
-        loadNotificationCount();
-      }
-    };
-
-    // Refresh count when notifications are updated (e.g., marked as read)
-    const handleNotificationsUpdated = () => {
-      if (isAuthedFinal) {
-        loadNotificationCount();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener(
-      "notifications:updated",
-      handleNotificationsUpdated
-    );
-
-    return () => {
-      isActive = false;
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener(
-        "notifications:updated",
-        handleNotificationsUpdated
-      );
-    };
-  }, [isAuthedFinal]);
 
   const inCreate = location.pathname.startsWith("/create");
 
@@ -349,6 +280,9 @@ function BottomTab() {
     !!authedId && (localStorage.getItem("my_user_id") || authedId);
 
   const [hidden, setHidden] = useState(false);
+  const [hideHomeSearchNav, setHideHomeSearchNav] = useState(
+    getHomeSearchTabChromeHidden
+  );
   const lastY = useRef<number>(
     typeof window !== "undefined" ? window.scrollY : 0
   );
@@ -457,6 +391,24 @@ function BottomTab() {
   }, [authedId]);
 
   useEffect(() => {
+    const onChrome = (e: Event) => {
+      const ce = e as CustomEvent<HomeSearchTabChromeDetail>;
+      if (!ce.detail) return;
+      setHideHomeSearchNav(ce.detail.hidden);
+    };
+    window.addEventListener(
+      HOME_SEARCH_TAB_CHROME_EVENT,
+      onChrome as EventListener
+    );
+    setHideHomeSearchNav(getHomeSearchTabChromeHidden());
+    return () =>
+      window.removeEventListener(
+        HOME_SEARCH_TAB_CHROME_EVENT,
+        onChrome as EventListener
+      );
+  }, []);
+
+  useEffect(() => {
     if (!BOTTOM_TAB_SCROLL_LINKED_VISIBILITY) {
       setHidden(false);
       return;
@@ -516,48 +468,75 @@ function BottomTab() {
     // Home icon (index 0)
     if (path === Paths.home || path === "/") return 0;
 
-    // Create icon (index 1)
-    if (path.startsWith("/create")) return 1;
+    // People icon (index 1)
+    if (path === Paths.people || path.startsWith("/people")) return 1;
 
-    // Notifications icon (index 2)
-    if (
-      path === Paths.notification ||
-      path.startsWith("/notifications") ||
-      path.startsWith("/notification")
-    )
-      return 2;
+    // Create icon (index 2)
+    if (path.startsWith("/create")) return 2;
 
-    // Profile icon (index 3)
+    // Messages icon (index 3) — inbox and conversation overlay
+    if (path === Paths.messages || isMessagesConversationPath(path)) return 3;
+
+    // Profile icon (index 4)
     if (
       path === Paths.profile ||
       path === Paths.profileMe ||
       path === "/u/me" ||
       path.startsWith("/u/")
     )
-      return 3;
+      return 4;
 
+    // Notifications stays routed but is not on the bar
     return null;
   };
 
-  /** When the create chooser overlay is open (still on e.g. Home), highlight + like Home/Notifs — not Home + Create both “active”. */
-  const activeIconIndex = createChooserOpen ? 1 : getActiveIconIndex();
+  /** When the create chooser overlay is open (still on e.g. Home), highlight Create — not Home + Create both “active”. */
+  const activeIconIndex = createChooserOpen ? 2 : getActiveIconIndex();
 
   const tryNavigateAwayFromCreate = useCallback(
     (go: () => void) => {
       const inCreate = location.pathname.startsWith("/create");
-      const editMode = localStorage.getItem(EDIT_POST_DATA_KEY) !== null;
-      const dirty = isDraftDirty() && hasAnyDraftData();
 
-      if (inCreate && (dirty || editMode)) {
-        setIsEditMode(editMode);
+      if (inCreate && shouldConfirmCreateFlowLeave()) {
+        setIsEditMode(localStorage.getItem(EDIT_POST_DATA_KEY) !== null);
         navTargetRef.current = go;
         setLeaveOpen(true);
         return;
+      }
+      if (inCreate) {
+        cleanupEmptyFreshCreateDraftIfNeeded();
       }
       go();
     },
     [location.pathname]
   );
+
+  const runStashedLeaveNavigation = useCallback(() => {
+    setCreateFlowIntentionalLeaveBypass(true);
+    const go = navTargetRef.current;
+    navTargetRef.current = null;
+    go?.();
+  }, []);
+
+  useEffect(() => {
+    setCreateFlowLeaveDialogOpen(leaveOpen);
+  }, [leaveOpen]);
+
+  useEffect(() => {
+    const onDismissDialog = () => {
+      setLeaveOpen(false);
+      navTargetRef.current = null;
+    };
+    window.addEventListener(
+      CREATE_FLOW_LEAVE_DIALOG_DISMISS_EVENT,
+      onDismissDialog
+    );
+    return () =>
+      window.removeEventListener(
+        CREATE_FLOW_LEAVE_DIALOG_DISMISS_EVENT,
+        onDismissDialog
+      );
+  }, []);
 
   useEffect(() => {
     const onRequestLeave = (e: Event) => {
@@ -608,6 +587,27 @@ function BottomTab() {
       },
     },
     {
+      icon: activeIconIndex === 1 ? <PiUsersFill /> : <PiUsers />,
+      onClick: () =>
+        handleProtectedClick(() =>
+          tryNavigateAwayFromCreate(() =>
+            requireAuth(() => {
+              closeChooser();
+              const p = location.pathname;
+              const onPeople = p === Paths.people || p.startsWith("/people");
+              if (onPeople) {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+                window.dispatchEvent(
+                  new CustomEvent(PEOPLE_TAB_REFRESH_EVENT)
+                );
+                return;
+              }
+              navigate(Paths.people);
+            })
+          )
+        ),
+    },
+    {
       // Rendered specially in tab map: inactive = square+plus, active = plus on inverted pill
       icon: <PiPlusSquareFill />,
       onClick: () =>
@@ -618,43 +618,28 @@ function BottomTab() {
                 closeChooser();
                 return;
               }
-              openChooser();
+              enterCreateAsDefaultPost();
             })
           )
         ),
     },
     {
-      icon: (() => {
-        const n = notifBadge.total;
-        return (
-          <div className="relative flex h-[26px] min-w-[36px] shrink-0 items-center justify-center">
-            <PiBell />
-            {n > 0 && (
-              <div className="absolute right-0 top-0 z-10 flex min-h-[1rem] min-w-[1rem] translate-x-[4px] -translate-y-[3px] items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white shadow-[0_1px_4px_rgba(0,0,0,0.38)]">
-                {n > 99 ? "99+" : n}
-              </div>
-            )}
-          </div>
-        );
-      })(),
+      icon:
+        activeIconIndex === 3 ? <PiChatCircleFill /> : <PiChatCircle />,
       onClick: () =>
         handleProtectedClick(() =>
           tryNavigateAwayFromCreate(() =>
             requireAuth(() => {
               closeChooser();
               const p = location.pathname;
-              const onNotif =
-                p === Paths.notification ||
-                p.startsWith("/notifications") ||
-                p.startsWith("/notification");
-              if (onNotif) {
+              if (p === Paths.messages) {
                 window.scrollTo({ top: 0, behavior: "smooth" });
                 window.dispatchEvent(
-                  new CustomEvent(NOTIFICATIONS_TAB_REFRESH_EVENT)
+                  new CustomEvent(MESSAGES_TAB_REFRESH_EVENT)
                 );
                 return;
               }
-              navigate(Paths.notification);
+              navigate(Paths.messages);
             })
           )
         ),
@@ -714,20 +699,41 @@ function BottomTab() {
         ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
         : "8px";
 
+  /** Immersive People: hide chrome + peek; keep BottomTab mounted. */
+  const hidePeopleNav =
+    location.pathname === Paths.people ||
+    location.pathname.startsWith(`${Paths.people}/`);
+  /** Create finalize covers the tab via shell z-index — do not hide chrome for Create. */
+  const hideTabChrome = hidePeopleNav || hideHomeSearchNav;
+  /**
+   * People entry glitch: BottomTab uses `transition-all` (show ease ~300ms).
+   * Applying only `invisible` lets visibility lag, so the global tab briefly
+   * paints over People chrome (same z-40). Instant opacity + no transition
+   * when hiding for People; Home search keeps prior hide class.
+   */
+  const composerNavHideClass = hideTabChrome
+    ? hidePeopleNav
+      ? "invisible pointer-events-none opacity-0 !transition-none"
+      : "invisible pointer-events-none"
+    : "";
+
   return (
     <>
       <AuthModal />
-      <BottomTabPeekOwl
-        location={location}
-        activeIconIndex={activeIconIndex}
-        createChooserOpen={createChooserOpen}
-      />
+      {hideTabChrome ? null : (
+        <BottomTabPeekOwl
+          location={location}
+          activeIconIndex={activeIconIndex}
+          createChooserOpen={createChooserOpen}
+        />
+      )}
       {/* Gradient: flush with physical screen bottom (1px overlap to eliminate subpixel gap) */}
       <div
         className={[
           "fixed left-0 right-0 z-[35] pointer-events-none",
           `transition-all ${transitionClass}`,
           transformClass,
+          composerNavHideClass,
         ].join(" ")}
         style={{
           bottom: "calc(-1px + -1 * var(--safe-area-bottom-layout))",
@@ -742,6 +748,7 @@ function BottomTab() {
           "fixed left-0 right-0 z-[37] pointer-events-none",
           `transition-all ${transitionClass}`,
           transformClass,
+          composerNavHideClass,
         ].join(" ")}
         style={{
           bottom: 0,
@@ -756,14 +763,17 @@ function BottomTab() {
           "fixed left-0 right-0 bottom-0 z-40 min-h-[80px] pointer-events-none flex flex-col justify-end",
           `transition-all ${transitionClass}`,
           transformClass,
+          composerNavHideClass,
         ].join(" ")}
+        aria-hidden={hideTabChrome}
       >
         {/* Tab pill: content-sized, full rounded pill, visible outline */}
         <div
           id="bottom-tab"
           data-bottomtab
           className={[
-            "absolute left-1/2 -translate-x-1/2 z-40 pointer-events-auto",
+            "absolute left-1/2 -translate-x-1/2 z-40",
+            hideTabChrome ? "pointer-events-none" : "pointer-events-auto",
             "rounded-full",
             "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
             /* Transparent 1px border keeps inner layout identical to before; ring is outside via shadow */
@@ -785,32 +795,37 @@ function BottomTab() {
                   key={index}
                   onClick={item.onClick}
                   className={`relative text-[var(--text)] transition-all flex items-center justify-center shrink-0 ${
-                    index === 3 ? "bottom-tab-profile-btn" : ""
+                    index === 4 ? "bottom-tab-profile-btn" : ""
                   }`}
                   aria-label={`tab-${index}`}
+                  data-tour-target={
+                    index === 1 ? "people" : index === 2 ? "create" : undefined
+                  }
                 >
                   {/* Same pill size for active and inactive - no shifting when switching tabs */}
                   <div
-                    className={`flex items-center justify-center h-10 min-w-[60px] px-4 rounded-full relative ${
-                      index === 2 ? "overflow-visible" : "overflow-hidden"
+                    className={`flex items-center justify-center h-10 min-w-[52px] px-3 rounded-full relative ${
+                      index === 2 || index === 3
+                        ? "overflow-visible"
+                        : "overflow-hidden"
                     } ${
-                      index === 1 ? "transition-none" : "transition-colors"
+                      index === 2 ? "transition-none" : "transition-colors"
                     }                     ${
                       isActive
-                        ? index === 1 && createRouteActive
+                        ? index === 2 && createRouteActive
                           ? "bg-[var(--bottom-tab-create-active-bg)] border border-[var(--bottom-tab-create-active-bg)] shadow-[var(--glass-active-shadow)]"
-                          : index === 1 && !createRouteActive
+                          : index === 2 && !createRouteActive
                           ? "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
-                          : index === 0 || index === 2
+                          : index === 0 || index === 1 || index === 3
                           ? "bg-[var(--bottom-tab-feed-notif-active-bg)] shadow-[var(--bottom-tab-feed-notif-active-shadow)] border border-[var(--bottom-tab-feed-notif-active-border)]"
-                          : index === 3 && avatarTabDisplayUrl
+                          : index === 4 && avatarTabDisplayUrl
                           ? "shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
                           : "bg-[var(--bottom-tab-active-bg)] shadow-[var(--glass-active-shadow)] border border-[var(--glass-active-border)]"
                         : "bg-transparent border border-transparent hover:bg-[rgba(255,255,255,0.08)]"
                     }`}
                   >
                     {/* Profile tab active: blurred avatar as faint "mirror" background. Same URL as Avatar img = browser cache reuse, no extra egress */}
-                    {isActive && index === 3 && avatarTabDisplayUrl && (
+                    {isActive && index === 4 && avatarTabDisplayUrl && (
                       <div
                         className="absolute inset-0 rounded-full"
                         style={{
@@ -824,18 +839,18 @@ function BottomTab() {
                       />
                     )}
                     {/* Profile tab active but no avatar: fallback to solid pill */}
-                    {isActive && index === 3 && !avatarTabDisplayUrl && (
+                    {isActive && index === 4 && !avatarTabDisplayUrl && (
                       <div
                         className="absolute inset-0 rounded-full bg-[var(--bottom-tab-active-bg)]"
                         aria-hidden
                       />
                     )}
                     <div className="relative z-10 flex items-center justify-center w-full h-full">
-                      {index === 3 && shouldShowAvatar ? (
+                      {index === 4 && shouldShowAvatar ? (
                         <div className="bottom-tab-avatar-wrapper bottom-tab-profile-avatar flex items-center justify-center w-full h-full">
                           {item.icon}
                         </div>
-                      ) : index === 1 ? (
+                      ) : index === 2 ? (
                         /* Create: route /create = inverted pill + bold plus; overlay open = same frosted pill as Home + bold plus */
                         <div
                           className={`flex items-center justify-center [&_svg]:w-[28px] [&_svg]:h-[28px] [&_svg]:shrink-0 [&_svg]:origin-center transition-transform duration-200 ease-out ${
@@ -852,7 +867,8 @@ function BottomTab() {
                         <div
                           className={[
                             "flex items-center justify-center [&_svg]:w-[28px] [&_svg]:h-[28px] [&_svg]:shrink-0",
-                            isActive && (index === 0 || index === 2)
+                            isActive &&
+                            (index === 0 || index === 1 || index === 3)
                               ? "text-[var(--bottom-tab-feed-notif-active-fg)]"
                               : "",
                           ]
@@ -863,40 +879,13 @@ function BottomTab() {
                         </div>
                       )}
                     </div>
-                    {index === 2 &&
-                      ((inviteDotUsesUnreadFallback
-                        ? notifBadge.invite > 0
-                        : pendingInviteCount > 0) ||
-                        notifBadge.activity > 0) && (
-                        <div
-                          className="pointer-events-none absolute bottom-[6px] left-1/2 z-[11] flex -translate-x-1/2 gap-[5px]"
-                          aria-hidden
-                        >
-                          {(inviteDotUsesUnreadFallback
-                            ? notifBadge.invite > 0
-                            : pendingInviteCount > 0) && (
-                            <span
-                              className={[
-                                "h-[5px] w-[5px] rounded-full bg-sky-500",
-                                isActive
-                                  ? "shadow-[0_0_10px_rgba(56,189,248,0.95),0_0_4px_rgba(14,165,233,0.6)]"
-                                  : "shadow-[0_0_9px_rgba(56,189,248,0.55)] opacity-95",
-                              ].join(" ")}
-                            />
-                          )}
-                          {notifBadge.activity > 0 && (
-                            <span
-                              className={[
-                                "h-[5px] w-[5px] rounded-full bg-rose-500",
-                                isActive
-                                  ? "shadow-[0_0_10px_rgba(251,113,133,0.92),0_0_4px_rgba(244,63,94,0.55)]"
-                                  : "shadow-[0_0_9px_rgba(251,113,133,0.52)] opacity-95",
-                              ].join(" ")}
-                            />
-                          )}
-                        </div>
-                      )}
                   </div>
+                  {index === 3 && isAuthedFinal && showMessagesAttention ? (
+                    <span
+                      className="pointer-events-none absolute top-[3px] right-[8px] z-20 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1.5px_var(--bg)]"
+                      aria-hidden
+                    />
+                  ) : null}
                 </button>
               );
             })}
@@ -905,7 +894,10 @@ function BottomTab() {
       </div>
       <ConfirmDialog
         open={leaveOpen}
-        onClose={() => setLeaveOpen(false)}
+        onClose={() => {
+          setLeaveOpen(false);
+          navTargetRef.current = null;
+        }}
         title={
           isEditMode
             ? "Discard edits?"
@@ -921,25 +913,37 @@ function BottomTab() {
             : "Your progress is saved on this device. Leave and keep your draft, discard it, or stay to keep editing."
         }
         cancelLabel="Stay"
+        pillButtons={isEditMode}
         {...(isEditMode
           ? {
-              confirmLabel: "Discard and exit",
-              confirmVariant: "dangerBlack" as const,
-              onConfirm: () => {
-                localStorage.removeItem(EDIT_POST_DATA_KEY);
+              secondaryLabel: "Republish",
+              onSecondary: () => {
                 setLeaveOpen(false);
-                const go = navTargetRef.current;
                 navTargetRef.current = null;
-                go?.();
+                dispatchCreateFlowPublishRequest();
+              },
+              secondaryVariant: "primary" as const,
+              confirmLabel: (
+                <span
+                  className="inline-flex items-center justify-center gap-1"
+                  title="Discard and exit"
+                >
+                  <span>Exit</span>
+                  <PiSignOut className="h-4 w-4 shrink-0" aria-hidden />
+                </span>
+              ),
+              confirmVariant: "orange" as const,
+              onConfirm: () => {
+                discardOwnerPublishedEditLocalState();
+                setLeaveOpen(false);
+                runStashedLeaveNavigation();
               },
             }
           : {
               secondaryLabel: "Save draft",
               onSecondary: () => {
                 setLeaveOpen(false);
-                const go = navTargetRef.current;
-                navTargetRef.current = null;
-                go?.();
+                runStashedLeaveNavigation();
               },
               secondaryVariant: "primary" as const,
               confirmLabel: "Discard",
@@ -947,9 +951,7 @@ function BottomTab() {
               onConfirm: () => {
                 discardAllDrafts();
                 setLeaveOpen(false);
-                const go = navTargetRef.current;
-                navTargetRef.current = null;
-                go?.();
+                runStashedLeaveNavigation();
               },
             })}
       />

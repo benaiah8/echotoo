@@ -87,7 +87,7 @@ export default function LocationPicker({
       <div className="absolute z-[1000] top-4 left-1/2 transform -translate-x-1/2 w-11/12 max-w-md">
         <input
           type="text"
-          className="w-full p-2 text-black placeholder-gray-500 rounded-t-md border border-gray-400 bg-white"
+          className="w-full p-2 text-[16px] text-black placeholder-gray-500 rounded-t-md border border-gray-400 bg-white"
           placeholder="Search for a place…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}

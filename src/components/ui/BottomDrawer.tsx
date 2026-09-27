@@ -3,7 +3,14 @@ import { createPortal } from "react-dom";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { blurActiveEditableFirst } from "../../lib/blurActiveEditableFirst";
 import { useCreateKeyboardInset } from "../../hooks/useCreateKeyboardInset";
+import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 import { isAndroid } from "../../lib/storage/utils/capacitorDetection";
+
+/**
+ * After `open` becomes false the portal stays mounted this long so callers can
+ * finish exit motion before the hook resets transforms.
+ */
+export const BOTTOM_DRAWER_CLOSE_UNMOUNT_MS = 300;
 
 /** Aligns with `useCreateKeyboardInset` — treat as “keyboard open” for layout. */
 const KEYBOARD_MAX_HEIGHT_THRESHOLD_PX = 48;
@@ -40,11 +47,50 @@ interface BottomDrawerProps {
    */
   portalClassName?: string;
   /**
+   * Optional style on the fixed portal root (backdrop + sheet). Used for
+   * overlay-level swipe motion. Defaults unchanged when omitted.
+   */
+  overlayStyle?: React.CSSProperties;
+  /**
+   * Optional capture-phase pointer handler on the portal root. Defaults unchanged
+   * when omitted. When set, backdrop pointerdown does not preventDefault so a
+   * coordinated overlay swipe can continue.
+   */
+  onOverlayPointerDownCapture?: React.PointerEventHandler<HTMLDivElement>;
+  /**
    * When true, does not set or clear `document.body` overflow/padding.
    * Use when a parent layer (e.g. another overlay) already locks body scroll,
    * so closing this drawer does not unlock the page underneath.
    */
   disableBodyScrollLock?: boolean;
+  /**
+   * Presentation-only: hide the default edge-to-edge sheet chrome so children
+   * can render an inset frosted panel (keyboard inset / lift unchanged).
+   */
+  transparentSheet?: boolean;
+  /**
+   * Backdrop dim. `strong` keeps `--drawer-backdrop` / blur tokens but mixes in
+   * extra opacity so chrome underneath (e.g. composer toolbar) reads as covered.
+   */
+  backdropVariant?: "default" | "strong";
+  /**
+   * Opt-in: lift the sheet with `useCreateKeyboardInset` on Android too.
+   * Default Android keeps `bottom: 0` and only shrinks `maxHeight` (correct when
+   * the WebView already resized for IME). Duo / Group editors should set this
+   * true — Android often overlays the keyboard without resizing (Capacitor
+   * `resize` is iOS-only; `resizeOnFullScreen` is unset), so shrink-alone leaves
+   * the action tray under the IME. The inset hook returns ~0 when layout already
+   * shrank, so this does not restore the old Android double-lift.
+   * iOS already lifts; this flag does not change iOS behavior.
+   * @default false
+   */
+  liftWithKeyboard?: boolean;
+  /**
+   * When false (with `shrinkSheetToContent`), the main body uses overflow-hidden
+   * so compact editors do not scroll the whole sheet; children own overflow.
+   * @default true
+   */
+  bodyScrollable?: boolean;
 }
 
 /**
@@ -83,22 +129,38 @@ export default function BottomDrawer({
   footer,
   shrinkSheetToContent = false,
   portalClassName,
+  overlayStyle,
+  onOverlayPointerDownCapture,
   disableBodyScrollLock = false,
+  transparentSheet = false,
+  backdropVariant = "default",
+  liftWithKeyboard = false,
+  bodyScrollable = true,
 }: BottomDrawerProps) {
   const [isMounted, setIsMounted] = useState(false);
   const blurBackdropClickRef = useRef(false);
   const { keyboardInsetPx } = useCreateKeyboardInset();
   const rawKeyboardOffsetPx = Math.round(keyboardInsetPx);
   /**
-   * Lift sheet from viewport bottom on keyboard (iOS). Android keeps 0 so we do not
-   * stack with WebView resize; instead we shrink `maxHeight` using the same inset below.
+   * Lift sheet from viewport bottom on keyboard (iOS always; Android when
+   * `liftWithKeyboard`). Default Android stays at 0 so we do not stack with
+   * WebView resize — hook inset is ~0 when layout already shrank.
    */
-  const drawerBottomOffsetPx = isAndroid() ? 0 : rawKeyboardOffsetPx;
+  const drawerBottomOffsetPx =
+    isAndroid() && !liftWithKeyboard ? 0 : rawKeyboardOffsetPx;
   const keyboardShrinksSheet =
     rawKeyboardOffsetPx > KEYBOARD_MAX_HEIGHT_THRESHOLD_PX;
+  /** Visible band above keyboard / resized viewport — keep whole sheet reachable. */
   const resolvedMaxHeight = keyboardShrinksSheet
     ? `min(${maxHeight}, calc(100dvh - ${rawKeyboardOffsetPx}px - env(safe-area-inset-top, 0px) - 0.75rem))`
     : maxHeight;
+
+  /** Avoid stacking home-indicator padding on top of an open keyboard inset. */
+  const sheetPaddingBottom = keyboardShrinksSheet
+    ? "0.75rem"
+    : transparentSheet
+      ? "max(0.75rem, calc(0.5rem + var(--safe-area-bottom-layout)))"
+      : "max(1.25rem, calc(0.75rem + var(--safe-area-bottom-layout)))";
 
   const shrinkContentBodyMaxHeight =
     footer != null && shrinkSheetToContent
@@ -107,35 +169,34 @@ export default function BottomDrawer({
         : "min(58vh, calc(100dvh - 13rem))"
       : undefined;
 
-  // Mount/unmount and body scroll lock
+  const shrinkBodyOverflowClass = bodyScrollable
+    ? "overflow-y-auto overflow-x-hidden overscroll-contain"
+    : "overflow-hidden overscroll-none";
+
+  /**
+   * Docked sheets: animate bottom only (max-height snaps) to avoid jump→snap
+   * from dual CSS transitions fighting mid-keyboard-animation insets.
+   */
+  const sheetTransition = liftWithKeyboard
+    ? "bottom 180ms ease-out"
+    : "bottom 220ms ease-out, max-height 220ms ease-out";
+
+  // Mount/unmount (animation) — scroll lock is owned by the canonical manager.
   useEffect(() => {
     if (open) {
       setIsMounted(true);
       /** Native WebViews: re-measure env(safe-area) + iOS/Android fallbacks so fixed bottom sheets clear nav / home. */
       syncAppSafeAreaBottom();
-      if (!disableBodyScrollLock) {
-        const scrollbarWidth =
-          window.innerWidth - document.documentElement.clientWidth;
-        document.body.style.overflow = "hidden";
-        document.body.style.paddingRight = `${scrollbarWidth}px`;
-      }
-    } else {
-      if (!disableBodyScrollLock) {
-        document.body.style.overflow = "";
-        document.body.style.paddingRight = "";
-      }
-      // Delay unmount for smooth close animation
-      const timer = setTimeout(() => setIsMounted(false), 300);
-      return () => clearTimeout(timer);
+      return;
     }
+    const timer = setTimeout(
+      () => setIsMounted(false),
+      BOTTOM_DRAWER_CLOSE_UNMOUNT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [open]);
 
-    return () => {
-      if (!disableBodyScrollLock) {
-        document.body.style.overflow = "";
-        document.body.style.paddingRight = "";
-      }
-    };
-  }, [open, disableBodyScrollLock]);
+  useOverlayBackgroundScrollLock(open && !disableBodyScrollLock);
 
   if (!isMounted) return null;
 
@@ -145,21 +206,36 @@ export default function BottomDrawer({
       : "z-[100]";
 
   return createPortal(
-    <div className={`fixed inset-0 ${portalZ}`}>
+    <div
+      className={`fixed inset-0 overscroll-none ${portalZ}`}
+      style={overlayStyle}
+      onPointerDownCapture={onOverlayPointerDownCapture}
+    >
       {/* Backdrop - very low opacity, no blur */}
       <div
-        className="absolute inset-0"
-        style={{
-          // Theme-aware via CSS variable; fallback darker with slight blur
-          backgroundColor: "var(--drawer-backdrop, rgba(0, 0, 0, 0.28))",
-          backdropFilter: "blur(var(--glass-blur))",
-          WebkitBackdropFilter: "blur(var(--glass-blur))",
-        }}
+        className="absolute inset-0 overscroll-none"
+        style={
+          backdropVariant === "strong"
+            ? {
+                backgroundColor:
+                  "color-mix(in srgb, var(--drawer-backdrop, rgba(0, 0, 0, 0.5)) 42%, rgba(0, 0, 0, 0.62))",
+                backdropFilter: "blur(12px)",
+                WebkitBackdropFilter: "blur(12px)",
+              }
+            : {
+                backgroundColor: "var(--drawer-backdrop, rgba(0, 0, 0, 0.28))",
+                backdropFilter: "blur(var(--glass-blur))",
+                WebkitBackdropFilter: "blur(var(--glass-blur))",
+              }
+        }
         onPointerDown={(e) => {
           if (!blurActiveEditableFirst()) return;
           blurBackdropClickRef.current = true;
           e.stopPropagation();
-          e.preventDefault();
+          // preventDefault cancels the pointer before overlay swipe can lock.
+          if (!onOverlayPointerDownCapture) {
+            e.preventDefault();
+          }
         }}
         onClick={(e) => {
           e.stopPropagation();
@@ -174,11 +250,11 @@ export default function BottomDrawer({
 
       {/* Drawer Sheet - with small solid sections at top and bottom, transparent middle (80-90%) */}
       <div
-        className={`absolute inset-x-0 rounded-t-2xl overflow-hidden ${className}`}
+        className={`absolute inset-x-0 overflow-hidden ${transparentSheet ? "" : "rounded-t-2xl"} ${className}`}
         style={{
           bottom: drawerBottomOffsetPx,
           maxHeight: resolvedMaxHeight,
-          transition: "bottom 220ms ease-out, max-height 220ms ease-out",
+          transition: sheetTransition,
           // With `footer` and full-height mode: fixed height so flex-1 middle works.
           // With `shrinkSheetToContent`, height comes from content (capped by maxHeight).
           ...(footer != null
@@ -186,13 +262,22 @@ export default function BottomDrawer({
               ? { minHeight: 0 as number }
               : { height: resolvedMaxHeight, minHeight: 0 as number }
             : {}),
-          // Apply top/left/right border on the container so the curve isn't clipped
-          borderTop:
-            "1px solid var(--glass-active-border-strong, rgba(255, 255, 255, 0.35))",
-          borderLeft: "1px solid var(--glass-active-border)",
-          borderRight: "1px solid var(--glass-active-border)",
-          // Gradient: small solid sections at top and bottom, transparent in middle (80-90%)
-          background: `linear-gradient(to bottom,
+          ...(transparentSheet
+            ? {
+                border: "none",
+                background: "transparent",
+                backdropFilter: "none",
+                WebkitBackdropFilter: "none",
+                paddingBottom: sheetPaddingBottom,
+              }
+            : {
+                // Apply top/left/right border on the container so the curve isn't clipped
+                borderTop:
+                  "1px solid var(--glass-active-border-strong, rgba(255, 255, 255, 0.35))",
+                borderLeft: "1px solid var(--glass-active-border)",
+                borderRight: "1px solid var(--glass-active-border)",
+                // Gradient: small solid sections at top and bottom, transparent in middle (80-90%)
+                background: `linear-gradient(to bottom,
             var(--bg) 0%,
             var(--bg) 3%,
             transparent 8%,
@@ -200,10 +285,10 @@ export default function BottomDrawer({
             var(--bg) 97%,
             var(--bg) 100%
           )`,
-          backdropFilter: "blur(var(--glass-blur))",
-          WebkitBackdropFilter: "blur(var(--glass-blur))",
-          paddingBottom:
-            "max(1.25rem, calc(0.75rem + var(--safe-area-bottom-layout)))",
+                backdropFilter: "blur(var(--glass-blur))",
+                WebkitBackdropFilter: "blur(var(--glass-blur))",
+                paddingBottom: sheetPaddingBottom,
+              }),
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -248,7 +333,7 @@ export default function BottomDrawer({
             <div
               className={
                 shrinkSheetToContent
-                  ? `min-h-0 min-w-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain ${contentClassName}`
+                  ? `min-h-0 min-w-0 w-full ${shrinkBodyOverflowClass} ${contentClassName}`
                   : `min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden ${contentClassName}`
               }
               style={
@@ -264,7 +349,11 @@ export default function BottomDrawer({
         ) : (
           /* Original: one scrollable column (header can stick). */
           <div
-            className="h-full max-h-full overflow-y-auto"
+            className={
+              bodyScrollable
+                ? "h-full max-h-full overflow-y-auto overscroll-contain"
+                : "h-full max-h-full overflow-hidden overscroll-none"
+            }
             style={{ maxHeight: resolvedMaxHeight }}
           >
             {header != null ? (

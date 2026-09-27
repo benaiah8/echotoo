@@ -7,78 +7,87 @@ import {
   type NotificationKind,
 } from "./notificationKinds";
 import type { InAppNotificationPayload } from "./inAppNotificationBus";
+import { formatInAppNotificationDisplay } from "./formatInAppNotificationDisplay";
+import { devLogInAppNotification } from "./inAppNotificationDevLog";
+import {
+  normalizePushRouteData,
+  pushRouteDataKeyMeta,
+} from "./normalizePushRouteData";
 import { resolveNotificationRoute } from "./notificationRouteResolver";
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
+import { isObsoleteGoingRsvpPushPayload } from "../activitiesNotificationEligibility";
 
 function inferKind(data: Record<string, unknown>): NotificationKind {
   const explicit = normalizeNotificationKind(data.type);
   if (explicit) return explicit;
-  const postId = asTrimmedString(data.postId);
-  const postType = asTrimmedString(data.postType);
+  const rawType = typeof data.type === "string" ? data.type.trim() : "";
+  if (rawType === "rsvp") return NOTIFICATION_KINDS.ACTIVITY_RSVP;
+  const postId =
+    typeof data.postId === "string" ? data.postId.trim() : "";
+  const postType =
+    typeof data.postType === "string" ? data.postType.trim() : "";
   if (postId && (postType === "hangout" || postType === "experience")) {
     return NOTIFICATION_KINDS.FOLLOWED_POST;
   }
   return NOTIFICATION_KINDS.FOLLOWED_POST;
 }
 
-function inferTitle(data: Record<string, unknown>, kind: NotificationKind): string {
-  const fromData = asTrimmedString(data.title);
-  if (fromData) return fromData;
-  const notificationTitle = asTrimmedString(
-    (data as { notification?: { title?: unknown } }).notification?.title
-  );
-  if (notificationTitle) return notificationTitle;
-  switch (kind) {
-    case NOTIFICATION_KINDS.INVITE:
-      return "New invite";
-    case NOTIFICATION_KINDS.EVENT_REMINDER:
-      return "Event reminder";
-    case NOTIFICATION_KINDS.ADMIN_CAMPAIGN:
-      return "Announcement";
-    default:
-      return "Notification";
-  }
-}
-
-function inferBody(data: Record<string, unknown>): string | undefined {
-  const fromData = asTrimmedString(data.body);
-  if (fromData) return fromData;
-  const notificationBody = asTrimmedString(
-    (data as { notification?: { body?: unknown } }).notification?.body
-  );
-  return notificationBody || undefined;
+function bannerIdFromRouteData(
+  routeData: Record<string, unknown>,
+  idPrefix: string
+): string {
+  const messageId =
+    typeof routeData.messageId === "string" ? routeData.messageId.trim() : "";
+  if (messageId) return messageId;
+  const requestId =
+    typeof routeData.requestId === "string" ? routeData.requestId.trim() : "";
+  if (requestId) return `open_plan_request:${requestId}`;
+  return `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /**
  * Build a banner payload from push `data`. Returns null when payload is empty/invalid.
+ * `routeData` preserves all normalized routing fields; display copy is formatted separately.
+ * When `messageId` is present it becomes the banner id (FG dedupe key).
  */
 export function inAppNotificationFromPushData(
   raw: unknown,
-  options?: { idPrefix?: string }
+  options?: {
+    idPrefix?: string;
+    notification?: { title?: string; body?: string } | null;
+  }
 ): InAppNotificationPayload | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const data = raw as Record<string, unknown>;
-  const kind = inferKind(data);
-  const route = resolveNotificationRoute(data);
-  const title = inferTitle(data, kind);
-  const body = inferBody(data);
-  const avatarUrl = asTrimmedString(data.avatarUrl) || undefined;
-  const id = `${options?.idPrefix ?? "push"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const routeData = normalizePushRouteData(raw, options?.notification);
+  if (Object.keys(routeData).length === 0) return null;
+  if (isObsoleteGoingRsvpPushPayload(routeData)) return null;
 
-  if (!title && !body) return null;
+  const kind = inferKind(routeData);
+  const display = formatInAppNotificationDisplay(kind, routeData);
+  const route = resolveNotificationRoute(routeData);
+  const id = bannerIdFromRouteData(
+    routeData,
+    options?.idPrefix ?? "push"
+  );
+
+  if (!display.title && !display.body) return null;
+
+  devLogInAppNotification("payload_built", {
+    kind,
+    ...pushRouteDataKeyMeta(routeData),
+    routeSupported: route.supported,
+    routeReason: route.supported ? undefined : route.reason,
+    bannerId: id,
+  });
 
   return {
     id,
     kind,
-    title,
-    body,
-    avatarUrl,
-    routeData: data,
+    title: display.title,
+    body: display.body,
+    avatarUrl: display.avatarUrl,
+    avatarInitial: display.avatarInitial,
+    showAvatar: display.showAvatar,
+    routeData,
     createdAt: Date.now(),
     durationMs: 4000,
-    ...(route.supported ? {} : {}),
   };
 }

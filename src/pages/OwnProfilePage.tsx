@@ -41,26 +41,38 @@ import {
   getCachedFollowCounts,
   setCachedFollowCounts,
 } from "../lib/followCountsCache";
-import { avatarDisplayUrl } from "../lib/avatarDisplayUrl";
 import FollowListDrawer from "../components/profile/FollowListDrawer";
 import BlockListDrawer from "../components/profile/BlockListDrawer";
-import AvatarPreviewLightbox, {
+import {
   AvatarPreviewLightboxAction,
 } from "../components/profile/AvatarPreviewLightbox";
-import Avatar from "../components/ui/Avatar";
 import FullScreenProfileCreation from "../components/profile/FullScreenProfileCreation";
+import ProfilePhotoHero from "../components/profile/ProfilePhotoHero";
+import ProfileIdentityRow from "../components/profile/ProfileIdentityRow";
+import ProfileCompletionCue from "../components/profile/ProfileCompletionCue";
+import ProfileCompletionChecklist from "../components/profile/ProfileCompletionChecklist";
+import AvatarCropModal from "../components/profile/AvatarCropModal";
 import SocialMediaLinks from "../components/profile/SocialMediaLinks";
+import MediaAcquisitionSheet from "../components/create/MediaAcquisitionSheet";
+import { useProfilePhotoAddPipeline } from "../hooks/useProfilePhotoAddPipeline";
+import { normalizeProfilePhotos } from "../lib/profilePhotos";
+import { deriveProfileCompletion } from "../lib/profileCompletion";
+import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import toast from "react-hot-toast";
 import OnboardingFlow from "../components/onboarding/OnboardingFlow";
 import ShareProfileModal from "../components/profile/ShareProfileModal";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ProfileHeroAvatarAtmosphere from "../components/profile/ProfileHeroAvatarAtmosphere";
 import ProfileStats from "../components/profile/ProfileStats";
-import MemberNumberPill from "../components/profile/MemberNumberPill";
-import { PiLock, PiPencilSimple, PiShareFat } from "react-icons/pi";
+import ProfileSocialOpportunityRail from "../components/profile/ProfileSocialOpportunityRail";
+import {
+  PROFILE_OVERVIEW_BIO_TEXT_CLASS,
+  PROFILE_OVERVIEW_BIO_WRAP_CLASS,
+  hasProfileOverviewBio,
+} from "../lib/profileOverviewPresentation";
+import { PiLock, PiPencilSimple } from "react-icons/pi";
 import { handleError } from "../lib/errorHandling";
 import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
-import { shareUrl } from "../lib/shareUrl";
-import toast from "react-hot-toast";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { PROFILE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
 import { SKIP_WELCOME_ONBOARDING } from "../lib/featureFlags";
@@ -71,6 +83,7 @@ import {
   isOwnProfilePublishNavigationState,
   scrollOwnProfileToTopAfterPublish,
 } from "../lib/profilePublishNavigation";
+import { nextProfileHeaderHiddenFromScroll } from "../lib/profileHeaderScrollChrome";
 
 /** Verbose profile-tab load instrumentation (PROFILEDBG). Off by default. */
 const DEBUG_PROFILE_LOAD = false;
@@ -126,6 +139,9 @@ export default function OwnProfilePage() {
       current.username !== profile.username ||
       current.display_name !== profile.display_name ||
       current.avatar_url !== profile.avatar_url ||
+      current.echo_preset !== profile.echo_preset ||
+      current.profile_photos.join("\0") !==
+        (profile.profile_photos ?? []).join("\0") ||
       current.is_private !== profile.is_private ||
       current.bio !== profile.bio ||
       current.member_no !== profile.member_no;
@@ -136,14 +152,20 @@ export default function OwnProfilePage() {
     }
 
     // Data changed - update ref and return new profile
-    stableProfileRef.current = profile;
-    return profile;
+    stableProfileRef.current = {
+      ...profile,
+      profile_photos: profile.profile_photos ?? [],
+      echo_preset: profile.echo_preset ?? null,
+    };
+    return stableProfileRef.current;
   }, [
     profile?.id,
     profile?.user_id,
     profile?.username,
     profile?.display_name,
     profile?.avatar_url,
+    profile?.echo_preset,
+    profile?.profile_photos,
     profile?.is_private,
     profile?.bio,
     profile?.member_no,
@@ -181,10 +203,81 @@ export default function OwnProfilePage() {
   const [drawerOpen, setDrawerOpen] = useState<
     false | "followers" | "following"
   >(false);
-  const [lightbox, setLightbox] = useState(false);
+  /** Atmosphere follows active Profile hero photo (presentation-only). */
+  const [heroAtmospherePath, setHeroAtmospherePath] = useState<string | null>(
+    null,
+  );
   const [fullScreenEditOpen, setFullScreenEditOpen] = useState(false);
+  const [completionChecklistOpen, setCompletionChecklistOpen] = useState(false);
+  const [editorFocusSection, setEditorFocusSection] = useState<
+    "bio" | "social" | null
+  >(null);
+
+  const ownHeroPhotos = useMemo(
+    () => normalizeProfilePhotos(profile?.profile_photos),
+    [profile?.profile_photos],
+  );
+  const heroPhotoAddPipeline = useProfilePhotoAddPipeline({
+    profileId: profile?.id ?? "",
+    userId: profile?.user_id ?? null,
+    photos: ownHeroPhotos,
+    onError: (message) => {
+      if (message) toast.error(message);
+    },
+  });
+  const heroAddCameraInputRef = useRef<HTMLInputElement>(null);
+  const heroAddGalleryInputRef = useRef<HTMLInputElement>(null);
+
+  const openOwnHeroAddPhotos = useCallback(() => {
+    if (!profile?.id || !heroPhotoAddPipeline.canAdd) return;
+    heroPhotoAddPipeline.openAddPhotos({ preferChooser: true });
+  }, [heroPhotoAddPipeline, profile?.id]);
+
+  const openOwnHeroWebGallery = useCallback(() => {
+    heroPhotoAddPipeline.setMediaChooserOpen(false);
+    heroAddGalleryInputRef.current?.click();
+  }, [heroPhotoAddPipeline]);
+
+  const openOwnHeroWebCamera = useCallback(() => {
+    heroPhotoAddPipeline.setMediaChooserOpen(false);
+    heroAddCameraInputRef.current?.click();
+  }, [heroPhotoAddPipeline]);
+
   const [focusDeleteAccountOnEditorOpen, setFocusDeleteAccountOnEditorOpen] =
     useState(false);
+
+  const profileCompletion = useMemo(
+    () => deriveProfileCompletion(profile),
+    [profile],
+  );
+
+  const openCompletionChecklist = useCallback(() => {
+    setCompletionChecklistOpen(true);
+  }, []);
+
+  const closeCompletionChecklist = useCallback(() => {
+    setCompletionChecklistOpen(false);
+  }, []);
+
+  const openEditorFromCompletion = useCallback(
+    (section: "bio" | "social" | null) => {
+      setCompletionChecklistOpen(false);
+      setEditorFocusSection(section);
+      setFocusDeleteAccountOnEditorOpen(false);
+      setFullScreenEditOpen(true);
+    },
+    [],
+  );
+
+  const handleInitialFocusSectionHandled = useCallback(() => {
+    setEditorFocusSection(null);
+  }, []);
+
+  /** Editor stacks above checklist — drop checklist so it does not reopen under the editor. */
+  useEffect(() => {
+    if (fullScreenEditOpen) setCompletionChecklistOpen(false);
+  }, [fullScreenEditOpen]);
+
   const [isFirstTimeUser, setIsFirstTimeUser] = useState(false);
   const [showOnboardingForTesting, setShowOnboardingForTesting] =
     useState(false);
@@ -251,6 +344,26 @@ export default function OwnProfilePage() {
         clearPersistedProfilePosts("created", createdOwnerId);
       }
 
+      // Explicit pull/tab refresh bypasses freshness and reloads the Profile row
+      void (async () => {
+        try {
+          const uid = await getViewerAuthUserId();
+          if (!uid) return;
+          const me = await getProfileByUserId(uid, { force: true });
+          if (me) {
+            setProfile(me as Profile);
+            if (me.avatar_url) {
+              setCachedAvatar(me.user_id, me.avatar_url);
+              preloadAvatar(me.avatar_url);
+            }
+            if (me.username) localStorage.setItem("my_username", me.username);
+            if (me.id) localStorage.setItem("my_profile_id", me.id);
+          }
+        } catch {
+          /* keep current Profile on refresh failure */
+        }
+      })();
+
       setProfileFeedRefreshEpoch((n) => n + 1);
     };
     window.addEventListener(PROFILE_TAB_REFRESH_EVENT, onTabRefresh);
@@ -316,8 +429,11 @@ export default function OwnProfilePage() {
         if (cached) {
           cachedProfile = {
             ...cached,
+            profile_photos: cached.profile_photos ?? [],
+            echo_preset: cached.echo_preset ?? null,
             is_private: cached.is_private ?? undefined,
             social_media_public: cached.social_media_public ?? undefined,
+            p2p_discover_enabled: cached.p2p_discover_enabled ?? undefined,
           } as Profile;
         }
       }
@@ -345,9 +461,13 @@ export default function OwnProfilePage() {
                   if (cached) {
                     cachedProfile = {
                       ...cached,
+                      profile_photos: cached.profile_photos ?? [],
+                      echo_preset: cached.echo_preset ?? null,
                       is_private: cached.is_private ?? undefined,
                       social_media_public:
                         cached.social_media_public ?? undefined,
+                      p2p_discover_enabled:
+                        cached.p2p_discover_enabled ?? undefined,
                     } as Profile;
                     break;
                   }
@@ -504,12 +624,20 @@ export default function OwnProfilePage() {
         ) {
           setCachedProfile({
             ...detailProfile,
+            profile_photos: detailProfile.profile_photos ?? [],
+            echo_preset: detailProfile.echo_preset ?? null,
             member_no: detailProfile.member_no ?? null,
             is_private: detailProfile.is_private ?? null,
             social_media_public: detailProfile.social_media_public ?? null,
+            p2p_discover_enabled:
+              detailProfile.p2p_discover_enabled ?? null,
           } as any);
 
-          setProfile(detailProfile as Profile);
+          setProfile({
+            ...detailProfile,
+            profile_photos: detailProfile.profile_photos ?? [],
+            echo_preset: detailProfile.echo_preset ?? null,
+          } as Profile);
 
           if (detailProfile.avatar_url) {
             setCachedAvatar(detailProfile.user_id, detailProfile.avatar_url);
@@ -557,6 +685,7 @@ export default function OwnProfilePage() {
             member_no: me.member_no ?? null,
             is_private: me.is_private ?? undefined,
             social_media_public: me.social_media_public ?? undefined,
+            p2p_discover_enabled: me.p2p_discover_enabled ?? undefined,
           } as any);
 
           // Update avatar cache
@@ -589,19 +718,15 @@ export default function OwnProfilePage() {
       if (!ticking.current) {
         requestAnimationFrame(() => {
           const current = window.scrollY;
-          const delta = current - lastY.current;
-
-          if (Math.abs(delta) > 6) {
-            if (delta > 0 && current > 100) {
-              if (!profileSearchPinnedRef.current) {
-                setHeaderHidden(true);
-              }
-            } else {
-              setHeaderHidden(false);
-            }
+          const next = nextProfileHeaderHiddenFromScroll({
+            scrollY: current,
+            lastScrollY: lastY.current,
+            searchPinned: profileSearchPinnedRef.current,
+          });
+          if (next !== null) {
+            setHeaderHidden(next);
             lastY.current = current;
           }
-
           ticking.current = false;
         });
         ticking.current = true;
@@ -777,12 +902,15 @@ export default function OwnProfilePage() {
             username: profile.username ?? null,
             bio: profile.bio ?? null,
             avatar_url: profile.avatar_url ?? null,
+            profile_photos: profile.profile_photos ?? [],
+            echo_preset: profile.echo_preset ?? null,
             instagram_url: profile.instagram_url ?? null,
             tiktok_url: profile.tiktok_url ?? null,
             telegram_url: profile.telegram_url ?? null,
             member_no: profile.member_no ?? null,
             is_private: profile.is_private ?? null,
             social_media_public: profile.social_media_public ?? null,
+            p2p_discover_enabled: profile.p2p_discover_enabled ?? null,
           }
         : undefined,
     [
@@ -791,35 +919,17 @@ export default function OwnProfilePage() {
       profile?.username,
       profile?.bio,
       profile?.avatar_url,
+      profile?.profile_photos,
+      profile?.echo_preset,
       profile?.instagram_url,
       profile?.tiktok_url,
       profile?.telegram_url,
       profile?.member_no,
       profile?.is_private,
       profile?.social_media_public,
+      profile?.p2p_discover_enabled,
     ]
   );
-
-  const handleAvatarPreviewShare = useCallback(async () => {
-    if (!profileUrl) return;
-    const nameBit = profile?.display_name || profile?.username;
-    const title = nameBit
-      ? `Check out ${nameBit}'s profile`
-      : "Check out this profile";
-    try {
-      const outcome = await shareUrl({ title, url: profileUrl });
-      if (outcome === "clipboard") {
-        toast.success("Profile link copied to clipboard!");
-      }
-    } catch {
-      toast.error("Could not share");
-    }
-  }, [profileUrl, profile?.display_name, profile?.username]);
-
-  const handleAvatarPreviewEdit = useCallback(() => {
-    setLightbox(false);
-    window.setTimeout(() => setFullScreenEditOpen(true), 0);
-  }, []);
 
   const handleRequestDeleteAccount = useCallback(() => {
     setFocusDeleteAccountOnEditorOpen(true);
@@ -864,6 +974,7 @@ export default function OwnProfilePage() {
 
   const handleProfileCreationComplete = () => {
     setFocusDeleteAccountOnEditorOpen(false);
+    setEditorFocusSection(null);
     setFullScreenEditOpen(false);
     if (isFirstTimeUser && !SKIP_WELCOME_ONBOARDING) {
       setShowOnboardingForTesting(true);
@@ -902,7 +1013,17 @@ export default function OwnProfilePage() {
         </div>
       ) : null}
       <PrimaryPageContainer capacitorNotchScrim>
-        <div className="relative">
+        {/* Atmosphere host: no overflow-x clip so -gutter can reach app-container edges */}
+        <div className="relative w-full max-w-full min-w-0">
+          <ProfileHeroAvatarAtmosphere
+            avatarPath={heroAtmospherePath ?? profile?.avatar_url}
+          />
+          {/*
+            No overflow-x clip here — Duo/Group shelf ::after must reach
+            `.app-container` (overflow-x: clip). Atmosphere sits outside this
+            layer and still uses -gutter insets.
+          */}
+          <div className="relative z-[1] w-full max-w-full min-w-0">
           <div
             className={[
               "fixed left-0 right-0 top-0 z-40 flex flex-col items-center",
@@ -951,18 +1072,17 @@ export default function OwnProfilePage() {
               [stableProfile, loading]
             )}
           >
-            <div className="relative w-full">
-              <ProfileHeroAvatarAtmosphere avatarPath={profile?.avatar_url} />
-              <div
-                className="relative z-[1]"
-                style={{
-                  paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
-                }}
-              >
-              {/* INLINE HERO SECTION - Hardcoded for own profile */}
-              <section className="w-full px-1.5 pt-4 pb-6 border-b border-[var(--border)]">
+            <div
+              className="group/own-overview relative w-full max-w-full min-w-0"
+              style={{
+                paddingTop: "calc(60px + env(safe-area-inset-top, 0px))",
+              }}
+            >
+              {/* pb-5 when rail is absent (stats → Created). pb-0 when rail is
+                  present so its bottom divider sits flush above Created/Saved. */}
+              <section className="w-full max-w-full min-w-0 px-1.5 pt-1.5 pb-5 group-has-[[data-profile-social-opportunity-rail]]/own-overview:pb-0">
                 {!loading && profile?.is_private && (
-                  <div className="flex w-full items-start gap-2 mb-1">
+                  <div className="flex w-full max-w-full min-w-0 items-start gap-2 mb-1">
                     <div className="relative shrink-0">
                       <button
                         onClick={() => {
@@ -986,22 +1106,22 @@ export default function OwnProfilePage() {
                         />
                       </button>
 
-                      {/* Custom tooltip - appears next to lock icon */}
+                      {/* Below lock — stays inside narrow Profile column (no left-full / nowrap escape) */}
                       {showPrivateTooltip && (
                         <div
-                          className="absolute left-full ml-2 top-1/2 -translate-y-1/2 z-50"
+                          className="absolute left-0 top-full z-50 mt-1.5 w-max max-w-[14rem]"
                           style={{
                             animation: "fadeInSlide 0.2s ease-out",
                           }}
                         >
-                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2 shadow-lg whitespace-nowrap">
-                            <p className="text-sm text-[var(--text)]">
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 shadow-lg">
+                            <p className="text-sm leading-snug text-[var(--text)]">
                               This account is private
                             </p>
-                            {/* Arrow pointing to lock icon */}
-                            <div className="absolute left-0 top-1/2 -translate-x-full -translate-y-1/2">
-                              <div className="w-0 h-0 border-t-4 border-t-transparent border-r-4 border-r-[var(--border)] border-b-4 border-b-transparent"></div>
-                              <div className="absolute left-[1px] top-1/2 -translate-y-1/2 w-0 h-0 border-t-4 border-t-transparent border-r-4 border-r-[var(--surface)] border-b-4 border-b-transparent"></div>
+                            {/* Arrow pointing up toward lock icon */}
+                            <div className="absolute left-3 top-0 -translate-y-full">
+                              <div className="h-0 w-0 border-b-4 border-l-4 border-r-4 border-b-[var(--border)] border-l-transparent border-r-transparent" />
+                              <div className="absolute left-0 top-[1px] h-0 w-0 border-b-4 border-l-4 border-r-4 border-b-[var(--surface)] border-l-transparent border-r-transparent" />
                             </div>
                           </div>
                         </div>
@@ -1013,114 +1133,170 @@ export default function OwnProfilePage() {
                 {showProfileHeroLoading ? (
                   <>
                     {/* Loading skeleton (profile fetch and/or Redux session hydrate) */}
-                    <div className="mx-auto mb-2 w-max px-6 py-1 rounded-full border border-[var(--border)] bg-[var(--surface-2)]/50">
-                      <div className="h-3 w-24 bg-[var(--text)]/10 rounded animate-pulse" />
-                    </div>
-                    <div className="flex flex-col items-center mt-3">
-                      <div className="w-24 h-24 rounded-full bg-[var(--text)]/10 animate-pulse" />
-                      <div className="text-center mt-3 w-48">
-                        <div className="h-4 bg-[var(--text)]/10 rounded animate-pulse" />
-                        <div className="h-3 mt-2 bg-[var(--text)]/10 rounded animate-pulse" />
+                    <div className="flex flex-col items-center">
+                      <div
+                        className="rounded-[1.65rem] bg-[var(--text)]/10 animate-pulse"
+                        style={{
+                          width: "clamp(13.5rem, min(80vw, 40dvh), 19rem)",
+                          aspectRatio: "1 / 1.04",
+                        }}
+                      />
+                      <div className="mt-4 flex w-full min-w-0 max-w-[22rem] justify-center px-3">
+                        <div className="h-4 w-28 rounded bg-[var(--text)]/10 animate-pulse" />
+                        <div className="ml-2 h-3 w-16 self-center rounded bg-[var(--text)]/10 animate-pulse" />
                       </div>
-                      <div className="mt-3 w-60">
+                      <div className="mt-2 w-60">
                         <div className="h-3 bg-[var(--text)]/10 rounded animate-pulse" />
-                        <div className="h-3 mt-2 bg-[var(--text)]/10 rounded animate-pulse" />
                       </div>
                       {/* Profile Stats - Always visible, even during loading */}
                       <ProfileStats
                         following={0}
                         followers={0}
-                        xp={0}
                         profileId=""
                         onOpenDrawer={setDrawerOpen}
                         loading={{
                           following: true,
                           followers: true,
-                          xp: true,
                         }}
                       />
                     </div>
                   </>
                 ) : profile ? (
                   <>
-                    {/* Member number pill */}
-                    {profile.member_no != null && (
-                      <MemberNumberPill memberNo={profile.member_no} />
-                    )}
-
-                    <div className="flex flex-col items-center mt-4">
-                      <div className="relative mx-auto w-fit overflow-visible">
-                        <div
-                          onClick={() =>
-                            profile.avatar_url && setLightbox(true)
-                          }
-                          role="button"
-                          aria-label="Open avatar"
-                          className={
-                            profile.avatar_url ? "cursor-pointer" : undefined
-                          }
-                        >
-                          <Avatar
-                            url={profile.avatar_url || undefined}
-                            name={
-                              profile.display_name || profile.username || "User"
+                    <div className="flex flex-col items-center">
+                      <ProfilePhotoHero
+                        key={profile.id}
+                        profilePhotos={profile.profile_photos}
+                        avatarUrl={profile.avatar_url}
+                        echoPreset={profile.echo_preset}
+                        userId={profile.user_id}
+                        profileId={profile.id}
+                        displayName={profile.display_name || profile.username}
+                        memberNo={profile.member_no ?? null}
+                        showEmptySlots
+                        onAddPhoto={openOwnHeroAddPhotos}
+                        addPhotoBusy={heroPhotoAddPipeline.busy}
+                        onEditProfile={() => setFullScreenEditOpen(true)}
+                        onEchoClick={() => setFullScreenEditOpen(true)}
+                        onActiveDisplayPathChange={setHeroAtmospherePath}
+                        lightboxActions={({ close }) => (
+                          <AvatarPreviewLightboxAction
+                            label="Edit"
+                            icon={
+                              <PiPencilSimple
+                                className="h-5 w-5"
+                                aria-hidden
+                              />
                             }
+                            onClick={() => {
+                              close();
+                              window.setTimeout(
+                                () => setFullScreenEditOpen(true),
+                                0,
+                              );
+                            }}
                           />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setFullScreenEditOpen(true);
-                          }}
-                          className="absolute left-1/2 -top-px z-10 flex h-[26px] w-[26px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] shadow-[0_2px_8px_rgba(0,0,0,0.26)] ring-1 ring-[var(--surface)] transition hover:bg-[var(--surface-2)]/90 active:scale-95 touch-manipulation"
-                          aria-label="Edit profile"
-                        >
-                          <PiPencilSimple
-                            className="h-[14px] w-[14px] opacity-95"
-                            aria-hidden
-                          />
-                        </button>
-                      </div>
+                        )}
+                      />
 
-                      <div className="text-center mt-3">
-                        <div className="text-[15px] font-semibold leading-none">
-                          {profile.display_name || "Add your display name"}
-                        </div>
-                        <div className="text-xs text-[var(--text)]/60 mt-1">
-                          @{profile.username || "pick-a-username"}
-                        </div>
-                      </div>
+                      <input
+                        ref={heroAddCameraInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        aria-hidden
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files ?? []);
+                          (e.target as HTMLInputElement).value = "";
+                          if (files.length === 0) return;
+                          heroPhotoAddPipeline.acceptWebFiles(files);
+                        }}
+                      />
+                      <input
+                        ref={heroAddGalleryInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        aria-hidden
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files ?? []);
+                          (e.target as HTMLInputElement).value = "";
+                          if (files.length === 0) return;
+                          heroPhotoAddPipeline.acceptWebFiles(files);
+                        }}
+                      />
+                      <MediaAcquisitionSheet
+                        variant="profilePhoto"
+                        open={heroPhotoAddPipeline.mediaChooserOpen}
+                        onClose={heroPhotoAddPipeline.closeMediaChooser}
+                        onTakePhoto={() => {
+                          if (isNativeApp()) {
+                            void heroPhotoAddPipeline.captureCamera();
+                            return;
+                          }
+                          openOwnHeroWebCamera();
+                        }}
+                        onPhotoLibrary={() => {
+                          if (isNativeApp()) {
+                            void heroPhotoAddPipeline.chooseLibrary();
+                            return;
+                          }
+                          openOwnHeroWebGallery();
+                        }}
+                        busy={heroPhotoAddPipeline.mediaNativeBusy}
+                      />
+                      <AvatarCropModal
+                        open={heroPhotoAddPipeline.cropOpen}
+                        imageSrc={heroPhotoAddPipeline.cropImageSrc}
+                        mode="profilePhoto"
+                        onCancel={heroPhotoAddPipeline.cancelCrop}
+                        onConfirm={heroPhotoAddPipeline.confirmCrop}
+                      />
 
-                      {/* Bio */}
-                      <div className="mt-3 text-center max-w-[36ch]">
-                        {profile.bio ? (
-                          <p className="text-[13px] leading-snug text-[var(--text)]/80">
+                      <ProfileIdentityRow
+                        displayName={
+                          profile.display_name || "Add your display name"
+                        }
+                        username={profile.username || "pick-a-username"}
+                      />
+
+                      {!profileCompletion.complete ? (
+                        <ProfileCompletionCue
+                          completion={profileCompletion}
+                          onOpen={openCompletionChecklist}
+                        />
+                      ) : null}
+
+                      {hasProfileOverviewBio(profile.bio) ? (
+                        <div className={PROFILE_OVERVIEW_BIO_WRAP_CLASS}>
+                          <p className={PROFILE_OVERVIEW_BIO_TEXT_CLASS}>
                             {profile.bio}
                           </p>
-                        ) : (
-                          <p className="text-[13px] leading-snug text-[var(--text)]/50">
-                            Add a short bio so people know what you're into.
-                          </p>
-                        )}
-                      </div>
+                        </div>
+                      ) : null}
 
                       {/* Social Media Links */}
-                      <SocialMediaLinks profile={profile} loading={loading} />
+                      <SocialMediaLinks
+                        profile={profile}
+                        loading={loading}
+                        showDividers={false}
+                      />
 
                       {/* Profile Stats - Always visible, numbers load with animation */}
                       <ProfileStats
                         following={counts.following}
                         followers={counts.followers}
-                        xp={profile.xp ?? 0}
                         profileId={profile.id}
                         onOpenDrawer={setDrawerOpen}
+                        className="mb-0"
                         loading={{
                           following: countsLoading,
                           followers: countsLoading,
-                          xp: false, // XP comes from profile, not async
                         }}
                       />
+
                       {isReportReviewer ? (
                         <div className="mt-4 flex justify-center">
                           <button
@@ -1157,7 +1333,14 @@ export default function OwnProfilePage() {
                   </div>
                 )}
               </section>
-              </div>
+
+              {/* Outside overview pb so rail bottom divider sits flush with tab band */}
+              {profile?.user_id ? (
+                <ProfileSocialOpportunityRail
+                  profileUserId={profile.user_id}
+                  enabled={!!profile.user_id}
+                />
+              ) : null}
             </div>
 
             {/* Posts Section - Always visible, even during loading */}
@@ -1174,6 +1357,7 @@ export default function OwnProfilePage() {
                   open={fullScreenEditOpen}
                   onClose={() => {
                     setFocusDeleteAccountOnEditorOpen(false);
+                    setEditorFocusSection(null);
                     setFullScreenEditOpen(false);
                   }}
                   profileId={profile.id}
@@ -1182,6 +1366,23 @@ export default function OwnProfilePage() {
                   initialProfileData={editModalInitialData}
                   focusDeleteAccountOnMount={focusDeleteAccountOnEditorOpen}
                   onFocusDeleteAccountHandled={handleFocusDeleteAccountHandled}
+                  initialFocusSection={editorFocusSection}
+                  onInitialFocusSectionHandled={handleInitialFocusSectionHandled}
+                />
+                <ProfileCompletionChecklist
+                  open={completionChecklistOpen}
+                  onClose={closeCompletionChecklist}
+                  completion={profileCompletion}
+                  onAddPhoto={() => {
+                    openOwnHeroAddPhotos();
+                  }}
+                  onAddBio={() => openEditorFromCompletion("bio")}
+                  onAddSocial={() => openEditorFromCompletion("social")}
+                  onEditProfile={() => openEditorFromCompletion(null)}
+                  dismissEnabled={
+                    !heroPhotoAddPipeline.mediaChooserOpen &&
+                    !heroPhotoAddPipeline.cropOpen
+                  }
                 />
                 {drawerOpen && (
                   <FollowListDrawer
@@ -1195,35 +1396,6 @@ export default function OwnProfilePage() {
                   open={blockListOpen}
                   onClose={() => setBlockListOpen(false)}
                 />
-                {profile.avatar_url && avatarDisplayUrl(profile.avatar_url) && (
-                  <AvatarPreviewLightbox
-                    src={avatarDisplayUrl(profile.avatar_url)!}
-                    alt={profile.display_name || ""}
-                    open={lightbox}
-                    onClose={() => setLightbox(false)}
-                    actions={
-                      <>
-                        <AvatarPreviewLightboxAction
-                          label="Edit"
-                          icon={
-                            <PiPencilSimple
-                              className="h-5 w-5"
-                              aria-hidden
-                            />
-                          }
-                          onClick={handleAvatarPreviewEdit}
-                        />
-                        <AvatarPreviewLightboxAction
-                          label="Share"
-                          icon={
-                            <PiShareFat className="h-5 w-5" aria-hidden />
-                          }
-                          onClick={() => void handleAvatarPreviewShare()}
-                        />
-                      </>
-                    }
-                  />
-                )}
                 {showOnboardingForTesting && (
                   <div className="fixed inset-0 z-50 bg-[var(--bg)]">
                     <OnboardingFlow
@@ -1267,6 +1439,7 @@ export default function OwnProfilePage() {
               isLoading={isLoggingOut}
             />
           </ProfileProvider>
+          </div>
         </div>
       </PrimaryPageContainer>
 

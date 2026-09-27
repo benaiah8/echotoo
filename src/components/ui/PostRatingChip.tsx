@@ -1,4 +1,4 @@
-import { PiStarFill } from "react-icons/pi";
+import { PiStar, PiStarFill } from "react-icons/pi";
 
 type Props = {
   ratingEnabled?: boolean | null;
@@ -8,6 +8,8 @@ type Props = {
   viewerRating?: number | null;
   onClick?: () => void;
   className?: string;
+  /** `compact`: vertical Feed star action. `default`: full chip (e.g. horizontal rail). */
+  variant?: "default" | "compact";
 };
 
 /**
@@ -21,6 +23,7 @@ export default function PostRatingChip({
   viewerRating,
   onClick,
   className = "",
+  variant = "default",
 }: Props) {
   if (!ratingEnabled) return null;
 
@@ -31,8 +34,9 @@ export default function PostRatingChip({
     typeof ratingAverage === "number" &&
     Number.isFinite(ratingAverage)
       ? ratingAverage
-      : 0;
-  const avgStr = avgNum.toFixed(1);
+      : null;
+  const avgStr =
+    avgNum != null && avgNum > 0 ? avgNum.toFixed(1) : null;
 
   const ratedByMe =
     typeof viewerRating === "number" &&
@@ -40,16 +44,66 @@ export default function PostRatingChip({
     viewerRating >= 1 &&
     viewerRating <= 5;
 
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick?.();
+  };
+
+  if (variant === "compact") {
+    const showAvg = avgStr != null;
+    const StarIcon = ratedByMe ? PiStarFill : PiStar;
+    const ariaLabel = ratedByMe
+      ? showAvg
+        ? `Edit rating, ${avgStr} average`
+        : "Edit rating"
+      : showAvg
+        ? `Rate post, ${avgStr} average`
+        : "Rate post";
+
+    return (
+      <button
+        type="button"
+        data-viewer-rated={ratedByMe ? "true" : undefined}
+        onClick={handleClick}
+        title={showAvg ? `${avgStr} average` : undefined}
+        aria-label={ariaLabel}
+        className={[
+          "flex min-h-9 shrink-0 items-center justify-center gap-0.5 rounded-full",
+          showAvg ? "px-0.5" : "min-w-9",
+          "transition active:scale-[0.97]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]/35",
+          ratedByMe
+            ? "text-amber-500 app-dark:text-amber-300"
+            : "text-[var(--text)]/75",
+          className,
+        ].join(" ")}
+      >
+        <StarIcon
+          size={18}
+          className={
+            ratedByMe
+              ? "text-amber-500 app-dark:text-amber-300"
+              : "text-[var(--text)]/75"
+          }
+          aria-hidden
+        />
+        {showAvg ? (
+          <span className="text-xs font-medium tabular-nums leading-none text-[var(--text)]/80">
+            {avgStr}
+          </span>
+        ) : null}
+      </button>
+    );
+  }
+
+  const avgDisplay = avgNum != null && avgNum > 0 ? avgNum.toFixed(1) : "0.0";
+
   return (
     <button
       type="button"
       data-viewer-rated={ratedByMe ? "true" : undefined}
-      onClick={(e) => {
-        // Display-only v1: keep tappable affordance without side effects.
-        e.preventDefault();
-        e.stopPropagation();
-        onClick?.();
-      }}
+      onClick={handleClick}
       className={[
         "inline-flex w-fit max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1",
         "text-[12px] font-semibold leading-none tabular-nums tracking-tight",
@@ -74,8 +128,8 @@ export default function PostRatingChip({
       ].join(" ")}
       aria-label={
         ratedByMe
-          ? `Your rating included: ${avgStr} (${count})`
-          : `Rating ${avgStr} (${count})`
+          ? `Your rating included: ${avgDisplay} (${count})`
+          : `Rating ${avgDisplay} (${count})`
       }
     >
       <PiStarFill
@@ -87,7 +141,7 @@ export default function PostRatingChip({
         ].join(" ")}
         aria-hidden
       />
-      <span>{avgStr}</span>
+      <span>{avgDisplay}</span>
       <span
         className={
           ratedByMe

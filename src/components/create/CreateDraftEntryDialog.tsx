@@ -11,18 +11,16 @@ type Props = {
   onDismiss: () => void;
   onContinueDraft: () => void;
   onStartNew: () => void;
-  onDeleteDraft: () => void;
 };
 
 /**
- * Three-way choice when a local (non-edit) draft exists at Create entry.
+ * Two-way choice when a local (non-edit) draft exists at Create entry.
  */
 export default function CreateDraftEntryDialog({
   open,
   onDismiss,
   onContinueDraft,
   onStartNew,
-  onDeleteDraft,
 }: Props) {
   return (
     <FrostedCenterModal
@@ -43,26 +41,19 @@ export default function CreateDraftEntryDialog({
           Saved draft
         </div>
         <p className="text-xs text-[var(--text)]/70 mb-3">
-          You have a local draft. Continue editing, start fresh, or delete it.
+          You have a local draft. Continue editing or start fresh.
         </p>
-        <div className="flex w-full gap-2 min-w-0 flex-wrap sm:flex-nowrap">
+        <div className="flex w-full gap-2 min-w-0">
           <button
             type="button"
-            className={getConfirmDialogButtonClass("default", "equalThree")}
-            onClick={onDeleteDraft}
-          >
-            Delete draft
-          </button>
-          <button
-            type="button"
-            className={getConfirmDialogButtonClass("default", "equalThree")}
+            className={getConfirmDialogButtonClass("default", "equal")}
             onClick={onStartNew}
           >
             Start new
           </button>
           <button
             type="button"
-            className={getConfirmDialogButtonClass("primary", "equalThree")}
+            className={getConfirmDialogButtonClass("primary", "equal")}
             onClick={onContinueDraft}
           >
             Continue draft

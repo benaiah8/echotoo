@@ -43,3 +43,28 @@ export function clearLightboxSwipeContentStyle(el: HTMLElement | null): void {
   el.style.transformOrigin = "";
   el.style.transition = "";
 }
+
+const SNAP_BACK_MS = 200;
+
+/**
+ * Soft snap-back after a short vertical dismiss drag (no animation library).
+ * Clears inline styles after the transition ends.
+ */
+export function snapBackLightboxSwipeContentStyle(
+  el: HTMLElement | null,
+  overlayEl?: HTMLElement | null,
+): void {
+  if (overlayEl) {
+    overlayEl.style.transition = "background-color 0.2s ease-out";
+    overlayEl.style.backgroundColor = "";
+  }
+  if (!el) return;
+  el.style.transition = "transform 0.2s ease-out, opacity 0.2s ease-out";
+  el.style.opacity = "1";
+  el.style.transform = "translateY(0px) scale(1)";
+  el.style.transformOrigin = "center center";
+  globalThis.setTimeout(() => {
+    if (overlayEl) overlayEl.style.transition = "";
+    clearLightboxSwipeContentStyle(el);
+  }, SNAP_BACK_MS);
+}

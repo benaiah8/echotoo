@@ -1,8 +1,15 @@
 import { Paths } from "../router/Paths";
+import { clearFreshCreateLeaveBaseline } from "./createFlowFreshLeaveBaseline";
 
 /** Query param: only when user chose “Continue draft” in the entry gate. */
 export const RESUME_DRAFT_SEARCH_PARAM = "resumeDraft";
 export const RESUME_DRAFT_SEARCH_VALUE = "1";
+
+/**
+ * Default type for Create (+) / direct entry without the Event/Place chooser.
+ * Maps to Place in product copy; future “normal Post” uses this same value.
+ */
+export const DEFAULT_CREATE_ENTRY_POST_TYPE = "experience" as const;
 
 /**
  * Set when the user has entered the local create flow in this tab so step-to-step
@@ -38,6 +45,8 @@ export function markCreateFlowResumedLocalDraft(): void {
   } catch {
     /* ignore */
   }
+  // Resume is never a "fresh empty" session — drop any prior leave baseline.
+  clearFreshCreateLeaveBaseline();
 }
 
 export function clearCreateFlowResumedLocalDraft(): void {
