@@ -83,6 +83,7 @@ import {
 import {
   getGroupUpOwnOpportunity,
   getGroupUpOwnStatus,
+  setOptimisticGroupUpOwnState,
   subscribeGroupUpOwnState,
 } from "../../lib/groupUpOwnStore";
 import { buildSocialCreateSchedule } from "../../lib/openPlanSchedule";
@@ -1142,6 +1143,7 @@ export default function GroupUpActiveOverlay() {
     if (!opp?.id) return;
     setCancelBusy(true);
     try {
+      setOptimisticGroupUpOwnState(opp.source_post_id, null);
       await cancelGroupUp(opp.id);
       toast.success(peopleUiCopy.groupUpCancelSuccess);
       closeGroupUpOverlay();

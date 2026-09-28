@@ -335,6 +335,22 @@ export function subscribeGroupUpOwnState(listener: () => void): () => void {
   };
 }
 
+/** Explicit create/cancel mutations — snapshots must not reverse these. */
+const localGroupMutation = new Map<string, { active: boolean; seq: number }>();
+let localGroupMutationSeq = 0;
+
+function noteLocalGroupUpMutation(postId: string, active: boolean): void {
+  if (!postId) return;
+  localGroupMutation.set(postId, {
+    active,
+    seq: ++localGroupMutationSeq,
+  });
+}
+
+function clearLocalGroupUpMutation(postId: string): void {
+  localGroupMutation.delete(postId);
+}
+
 export function setOptimisticGroupUpOwnState(
   postId: string,
   opportunity: GroupUpOpportunity | null
@@ -342,11 +358,18 @@ export function setOptimisticGroupUpOwnState(
   const viewer = effectiveUserId();
   if (!viewer || !postId) return null;
   const previous = getCachedGroupUpOwn(viewer, postId) ?? null;
+  const previousMutation = localGroupMutation.get(postId) ?? null;
+  noteLocalGroupUpMutation(postId, opportunity != null);
   setCachedGroupUpOwn(viewer, postId, opportunity);
   softRevalidate.delete(postId);
   loadFailed.delete(postId);
   return () => {
     setCachedGroupUpOwn(viewer, postId, previous);
+    if (previousMutation) {
+      localGroupMutation.set(postId, previousMutation);
+    } else {
+      clearLocalGroupUpMutation(postId);
+    }
   };
 }
 
@@ -384,8 +407,23 @@ export function seedGroupUpOwnFromSnapshot(
   if (typeof viewerId === "string" && viewerId !== userId) return;
   if (lastConfirmedUserId && lastConfirmedUserId !== userId) return;
 
+  const mutation = localGroupMutation.get(postId);
+  if (mutation && mutation.active !== active) {
+    softRevalidate.add(postId);
+    loadFailed.delete(postId);
+    return;
+  }
+  if (mutation && mutation.active === active) {
+    clearLocalGroupUpMutation(postId);
+  }
+
   const existing = getCachedGroupUpOwn(userId, postId);
   if (existing !== undefined && isHydratedGroupOpportunity(existing)) {
+    softRevalidate.add(postId);
+    loadFailed.delete(postId);
+    return;
+  }
+  if (existing != null && !active) {
     softRevalidate.add(postId);
     loadFailed.delete(postId);
     return;
@@ -418,6 +456,15 @@ export function seedGroupUpOwnFromSnapshot(
   loadFailed.delete(postId);
 }
 
+/** Surface knows viewer hosts Group — seed before Post Detail nav. */
+export function seedKnownActiveGroupUpBeforeDetail(
+  userId: string,
+  postId: string
+): void {
+  if (!userId || !postId) return;
+  seedGroupUpOwnFromSnapshot(userId, postId, true);
+}
+
 (function bootstrapSocialGroupOwnPersist(): void {
   try {
     const last = readSocialActionLastUserId();
@@ -445,6 +492,7 @@ export function __resetGroupUpOwnStoreForTests(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localGroupMutation.clear();
   subscribers.clear();
   if (flushTimer != null) {
     globalThis.clearTimeout(flushTimer);

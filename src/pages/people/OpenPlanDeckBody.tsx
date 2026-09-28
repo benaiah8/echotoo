@@ -10,6 +10,8 @@ import {
   withdrawOpenPlanRequest,
 } from "../../api/services/openPlans";
 import type { UseOpenPlanCandidatesResult } from "../../hooks/useOpenPlanCandidates";
+import { useCreateChooser } from "../../context/CreateChooserContext";
+import PeopleDeckEmptyCard from "../../components/people/PeopleDeckEmptyCard";
 import type { MatchDeckScopeSnapshot } from "../../lib/matchDeckSession";
 import {
   PEOPLE_DECK_PREFETCH_REMAINING,
@@ -115,6 +117,7 @@ export default function OpenPlanDeckBody({
     patchRequestStatus,
   } = deck;
 
+  const { enterCreateAsDefaultPost } = useCreateChooser();
   const [busyId, setBusyId] = useState<string | null>(null);
   const loadMoreInFlightRef = useRef(false);
   const [loadMoreInFlight, setLoadMoreInFlight] = useState(false);
@@ -686,8 +689,21 @@ export default function OpenPlanDeckBody({
     })
   ) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
-        {peopleUiCopy.openPlansEmpty}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <MineEdgeNavCards
+          canGoPrev={false}
+          canGoNext={false}
+          onPrev={() => {}}
+          onNext={() => {}}
+          fixedRailsGeometry
+        />
+        <PeopleDeckEmptyCard
+          kind="plans"
+          title={peopleUiCopy.openPlansEmpty}
+          body={peopleUiCopy.openPlansEmptyBody}
+          ctaLabel={peopleUiCopy.openPlansEmptyCta}
+          onCta={() => enterCreateAsDefaultPost()}
+        />
       </div>
     );
   }

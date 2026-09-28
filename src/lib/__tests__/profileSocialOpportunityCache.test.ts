@@ -5,6 +5,7 @@ import {
   invalidateProfileSocialOpportunities,
   invalidateProfileSocialOpportunitiesForViewer,
   patchCachedProfileSocialOpportunity,
+  removeCachedProfileSocialOpportunitySide,
   setCachedProfileSocialOpportunities,
 } from "../profileSocialOpportunityCache";
 import type { ProfileSocialOpportunity } from "../people/types";
@@ -132,6 +133,99 @@ describe("profileSocialOpportunityCache", () => {
 
     invalidateProfileSocialOpportunitiesForViewer("viewer");
     expect(getCachedProfileSocialOpportunities("viewer", "owner-b")).toBeNull();
+  });
+
+  it("1–5: side-aware Duo remove keeps Group; drops row when Duo-only; preserves order", () => {
+    setCachedProfileSocialOpportunities("me", "me", {
+      opportunities: [
+        sample({
+          source_post_id: "post-a",
+          duo: { opportunity_id: "duo-a", viewer_duo_joined: true },
+          group: null,
+        }),
+        sample({
+          source_post_id: "post-b",
+          duo: { opportunity_id: "duo-b", viewer_duo_joined: true },
+          group: {
+            opportunity_id: "grp-b",
+            group_title: "Keep",
+            occurs_at: null,
+            occurs_time_explicit: null,
+            viewer_group_state: "none",
+            request_id: null,
+          },
+        }),
+        sample({
+          source_post_id: "post-c",
+          duo: { opportunity_id: "duo-c", viewer_duo_joined: true },
+          group: null,
+        }),
+      ],
+    });
+
+    removeCachedProfileSocialOpportunitySide("me", "me", {
+      side: "duo",
+      sourcePostId: "post-a",
+      opportunityId: "duo-a",
+    });
+    removeCachedProfileSocialOpportunitySide("me", "me", {
+      side: "duo",
+      sourcePostId: "post-b",
+      opportunityId: "duo-b",
+    });
+
+    const rows = getCachedProfileSocialOpportunities("me", "me")?.opportunities;
+    expect(rows?.map((r) => r.source_post_id)).toEqual(["post-b", "post-c"]);
+    expect(rows?.[0]?.duo).toBeNull();
+    expect(rows?.[0]?.group?.opportunity_id).toBe("grp-b");
+    expect(rows?.[1]?.duo?.opportunity_id).toBe("duo-c");
+  });
+
+  it("6–7: Group cancel clears Group side only; retains Duo", () => {
+    setCachedProfileSocialOpportunities("me", "me", {
+      opportunities: [
+        sample({
+          source_post_id: "post-both",
+          duo: { opportunity_id: "duo-1", viewer_duo_joined: true },
+          group: {
+            opportunity_id: "grp-1",
+            group_title: "Hosted",
+            occurs_at: null,
+            occurs_time_explicit: null,
+            viewer_group_state: "none",
+            request_id: null,
+          },
+        }),
+      ],
+    });
+
+    removeCachedProfileSocialOpportunitySide("me", "me", {
+      side: "group",
+      sourcePostId: "post-both",
+      opportunityId: "grp-1",
+    });
+
+    const row = getCachedProfileSocialOpportunities("me", "me")
+      ?.opportunities[0];
+    expect(row?.duo?.opportunity_id).toBe("duo-1");
+    expect(row?.group).toBeNull();
+  });
+});
+
+describe("ownProfileSocialSync", () => {
+  beforeEach(() => {
+    __resetProfileSocialOpportunityCacheForTests();
+  });
+
+  it("20: activate invalidates Own Profile rail without fabricating rows", async () => {
+    const { syncCachesAfterOwnDuoActivate } = await import(
+      "../ownProfileSocialSync"
+    );
+    setCachedProfileSocialOpportunities("me", "me", {
+      opportunities: [sample()],
+    });
+    syncCachesAfterOwnDuoActivate("me", "post-new");
+    expect(getCachedProfileSocialOpportunities("me", "me")).toBeNull();
   });
 });
 

@@ -32,6 +32,10 @@ import {
   setCachedGroupUpOwn,
 } from "../../lib/groupUpCache";
 import {
+  syncCachesAfterOwnGroupCancel,
+  syncCachesAfterOwnGroupCreate,
+} from "../../lib/ownProfileSocialSync";
+import {
   getCachedGroupUpDeck,
   setCachedGroupUpDeck,
 } from "../../lib/groupUpCandidateCache";
@@ -672,6 +676,7 @@ export async function createGroupUp(input: {
     title: trimmedTitle,
     description: trimmed,
   });
+  syncCachesAfterOwnGroupCreate(userId, sourcePostId);
   return opportunity;
 }
 
@@ -696,6 +701,11 @@ export async function cancelGroupUp(
     "../../lib/groupUpLocalPatches"
   );
   applyLocalCancelGroupPatches(opportunity.source_post_id, opportunity.id);
+  syncCachesAfterOwnGroupCancel(
+    userId,
+    opportunity.source_post_id,
+    opportunity.id
+  );
   return opportunity;
 }
 

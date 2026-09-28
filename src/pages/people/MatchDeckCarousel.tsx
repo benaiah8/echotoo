@@ -278,6 +278,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   const mineButtonScrollJumpRef = useRef(false);
   /** Blocks Home-style pull-to-refresh while Embla owns the pointer. */
   const releasePtrBlockRef = useRef<(() => void) | null>(null);
+  /** True between Embla pointerDown and pointerUp — used to gate scroll→PTR block. */
+  const emblaPtrPointerDownRef = useRef(false);
   const mineEdgeNavCardsRefBox = useRef(mineEdgeNavCardsRef);
   mineEdgeNavCardsRefBox.current = mineEdgeNavCardsRef;
   /** Cached portrait nav wrappers — refreshed on layout/reInit, not per scroll. */
@@ -624,11 +626,20 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
         selectedSnap: snap,
         carouselRenderCount: peopleDebugGetRenderCount("matchDeckCarousel"),
       });
-      releasePtrBlockRef.current?.();
+      // Do NOT acquire PTR block here — vertical pull-to-refresh must be able
+      // to start on the card surface. Block only once Embla owns horizontal scroll.
+      emblaPtrPointerDownRef.current = true;
+    };
+
+    const onScroll = () => {
+      if (!emblaPtrPointerDownRef.current) return;
+      if (releasePtrBlockRef.current) return;
+      // Embla scrolled while pointer is down ⇒ horizontal drag owns the gesture.
       releasePtrBlockRef.current = acquirePullToRefreshBlock();
     };
 
     const onPointerUp = () => {
+      emblaPtrPointerDownRef.current = false;
       releasePtrBlockRef.current?.();
       releasePtrBlockRef.current = null;
       if (!isMinePresentationRef.current) return;
@@ -669,13 +680,16 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     emblaApi.on("select", onSelect);
     emblaApi.on("pointerDown", onPointerDown);
     emblaApi.on("pointerUp", onPointerUp);
+    emblaApi.on("scroll", onScroll);
     emblaApi.on("settle", onSettle);
 
     return () => {
       emblaApi.off("select", onSelect);
       emblaApi.off("pointerDown", onPointerDown);
       emblaApi.off("pointerUp", onPointerUp);
+      emblaApi.off("scroll", onScroll);
       emblaApi.off("settle", onSettle);
+      emblaPtrPointerDownRef.current = false;
       releasePtrBlockRef.current?.();
       releasePtrBlockRef.current = null;
     };

@@ -50,7 +50,13 @@ import {
   showProfileConnectToast,
   showProfileDisconnectedToast,
 } from "../../lib/showProfileConnectToast";
-import { setOptimisticPairUpJoinState } from "../../lib/pairUpJoinStore";
+import {
+  seedKnownActiveGroupUpBeforeDetail,
+} from "../../lib/groupUpOwnStore";
+import {
+  seedKnownActivePairUpBeforeDetail,
+  setOptimisticPairUpJoinState,
+} from "../../lib/pairUpJoinStore";
 import {
   patchCachedProfileSocialOpportunity,
   invalidateProfileSocialOpportunities,
@@ -449,13 +455,29 @@ export default function ProfileSocialOpportunityCard({
   );
 
   const openDetail = useCallback(() => {
+    if (viewerUserId) {
+      if (duoPayload) {
+        seedKnownActivePairUpBeforeDetail(viewerUserId, row.source_post_id);
+      }
+      if (groupPayload) {
+        seedKnownActiveGroupUpBeforeDetail(viewerUserId, row.source_post_id);
+      }
+    }
     navigateToPostDetailInApp(
       navigate,
       location,
       row.source_type,
       row.source_post_id
     );
-  }, [navigate, location, row.source_post_id, row.source_type]);
+  }, [
+    navigate,
+    location,
+    row.source_post_id,
+    row.source_type,
+    viewerUserId,
+    duoPayload,
+    groupPayload,
+  ]);
 
   const handleOwnDuo = useCallback(() => {
     if (!ensureAuthed()) return;

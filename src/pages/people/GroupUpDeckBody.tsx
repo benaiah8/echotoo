@@ -20,6 +20,8 @@ import {
 } from "../../api/services/groupUp";
 import type { UseGroupUpCandidatesResult } from "../../hooks/useGroupUpCandidates";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
+import PeopleDeckEmptyCard from "../../components/people/PeopleDeckEmptyCard";
+import { Paths } from "../../router/Paths";
 import type { RootState } from "../../app/store";
 import {
   GROUP_UP_JOIN_PHOTO_PROMPT_DESCRIPTION,
@@ -1200,6 +1202,26 @@ export default function GroupUpDeckBody({
     loadMoreInFlight,
   });
   if (trueCaughtUpBrowsable) {
+    if (browseTab === "new") {
+      return (
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <MineEdgeNavCards
+            canGoPrev={false}
+            canGoNext={false}
+            onPrev={() => {}}
+            onNext={() => {}}
+            fixedRailsGeometry
+          />
+          <PeopleDeckEmptyCard
+            kind="groups_new"
+            title={peopleUiCopy.groupUpBrowseNewEmpty}
+            body={peopleUiCopy.groupUpBrowseNewEmptyBody}
+            ctaLabel={peopleUiCopy.groupUpBrowseNewEmptyCta}
+            onCta={() => navigate(Paths.home)}
+          />
+        </div>
+      );
+    }
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
         {peopleUiCopy.groupUpBrowseEmpty}
@@ -1228,11 +1250,6 @@ export default function GroupUpDeckBody({
     }) ||
     (deckRows.length === 0 && !hasMore && !loadMoreInFlight && hasLoaded);
 
-  const tabEmptyCopy =
-    browseTab === "new"
-      ? peopleUiCopy.groupUpBrowseNewEmpty
-      : peopleUiCopy.groupUpBrowseYoursEmpty;
-
   if (tabEmpty || deckRows.length === 0) {
     if (deckRows.length === 0 && (hasMore || loadMoreInFlight)) {
       return (
@@ -1241,10 +1258,30 @@ export default function GroupUpDeckBody({
         </p>
       );
     }
+    if (browseTab === "yours") {
+      return (
+        <p className="m-auto px-6 text-center text-[15px] text-[var(--text)]/80">
+          {peopleUiCopy.groupUpBrowseYoursEmpty}
+        </p>
+      );
+    }
     return (
-      <p className="m-auto px-6 text-center text-[15px] text-[var(--text)]/80">
-        {tabEmptyCopy}
-      </p>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <MineEdgeNavCards
+          canGoPrev={false}
+          canGoNext={false}
+          onPrev={() => {}}
+          onNext={() => {}}
+          fixedRailsGeometry
+        />
+        <PeopleDeckEmptyCard
+          kind="groups_new"
+          title={peopleUiCopy.groupUpBrowseNewEmpty}
+          body={peopleUiCopy.groupUpBrowseNewEmptyBody}
+          ctaLabel={peopleUiCopy.groupUpBrowseNewEmptyCta}
+          onCta={() => navigate(Paths.home)}
+        />
+      </div>
     );
   }
 

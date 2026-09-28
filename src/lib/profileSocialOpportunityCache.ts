@@ -130,6 +130,82 @@ export function patchCachedProfileSocialOpportunity(
   emit();
 }
 
+export type ProfileSocialOpportunitySide = "duo" | "group";
+
+/**
+ * Clear one side of a post-centric Profile rail row. Drops the row only when
+ * both Duo and Group payloads are gone. Prefer opportunity_id when known;
+ * source_post_id is the post-centric fallback for own leave/cancel.
+ */
+export function removeCachedProfileSocialOpportunitySide(
+  viewerUserId: string,
+  profileUserId: string,
+  input: {
+    side: ProfileSocialOpportunitySide;
+    sourcePostId?: string | null;
+    opportunityId?: string | null;
+  }
+): boolean {
+  const sourcePostId = input.sourcePostId?.trim() || null;
+  const opportunityId = input.opportunityId?.trim() || null;
+  if (!sourcePostId && !opportunityId) return false;
+
+  const key = profileSocialOpportunityCacheKey(viewerUserId, profileUserId);
+  const entry = cache.get(key);
+  if (!entry) return false;
+
+  let changed = false;
+  const opportunities = entry.value.opportunities.flatMap((row) => {
+    const sideMatch =
+      input.side === "duo"
+        ? (opportunityId != null && row.duo?.opportunity_id === opportunityId) ||
+          (sourcePostId != null &&
+            row.source_post_id === sourcePostId &&
+            row.duo != null)
+        : (opportunityId != null &&
+            row.group?.opportunity_id === opportunityId) ||
+          (sourcePostId != null &&
+            row.source_post_id === sourcePostId &&
+            row.group != null);
+
+    if (!sideMatch) return [row];
+
+    changed = true;
+    const nextRow = {
+      ...row,
+      duo: input.side === "duo" ? null : row.duo,
+      group: input.side === "group" ? null : row.group,
+    };
+    if (nextRow.duo == null && nextRow.group == null) return [];
+    return [nextRow];
+  });
+
+  if (!changed) return false;
+
+  cache.set(key, {
+    // Keep immediate UI; mark soft-stale so hook revalidates against backend.
+    ts: Date.now() - SOFT_STALE_MS - 1,
+    value: { ...entry.value, opportunities },
+  });
+  emit();
+  return true;
+}
+
+/** Force soft-stale so the next load revalidates without wiping local rows. */
+export function markProfileSocialOpportunitiesSoftStale(
+  viewerUserId: string,
+  profileUserId: string
+): void {
+  const key = profileSocialOpportunityCacheKey(viewerUserId, profileUserId);
+  const entry = cache.get(key);
+  if (!entry) return;
+  cache.set(key, {
+    ts: Date.now() - SOFT_STALE_MS - 1,
+    value: entry.value,
+  });
+  emit();
+}
+
 /** Drop all Profile opportunity caches for a viewer (rare; prefer per-owner invalidate). */
 export function invalidateProfileSocialOpportunitiesForViewer(
   viewerUserId: string

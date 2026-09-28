@@ -75,6 +75,10 @@ import {
   setP2pDiscoverIntroSeen,
 } from "../../lib/p2pDiscoverIntroSeen";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
+import {
+  getPairUpJoinStatus,
+  seedKnownActivePairUpBeforeDetail,
+} from "../../lib/pairUpJoinStore";
 import { releaseAllPublishedListVideoOwnership } from "../../lib/publishedMedia";
 import { isPairUpPhotoPromptOpen, subscribePairUpPhotoPrompt } from "../../lib/pairUpPhotoPromptStore";
 import { getCachedProfile, primeProfileCache } from "../../lib/profileCache";
@@ -96,7 +100,9 @@ import {
 } from "../../lib/people/mineFrontPhotoPath";
 import {
   messagesConversationPath,
+  Paths,
 } from "../../router/Paths";
+import PeopleDeckEmptyCard from "../../components/people/PeopleDeckEmptyCard";
 import { useTabVisibility } from "../../router/PersistentTabContainer.new";
 import MatchDeckCarousel from "./MatchDeckCarousel";
 import PeopleDuoCandidateSlide from "./PeopleDuoCandidateSlide";
@@ -2299,6 +2305,14 @@ export default function MatchDeckOverlay({
       if (!canSeePostFor(row)) return;
       // Duo/Discover cards show person photos, not source-post PublishedMediaItem
       // keys — Detail opens without initialMediaKey (Detail resolves its own media).
+      if (authUserId) {
+        const ownDuoKnown =
+          contentScope === "my_plans" ||
+          getPairUpJoinStatus(row.source_post_id) === "joined";
+        if (ownDuoKnown) {
+          seedKnownActivePairUpBeforeDetail(authUserId, row.source_post_id);
+        }
+      }
       markSettledCurrentSeen();
       releaseAllPublishedListVideoOwnership();
       navigateToPostDetailInApp(
@@ -2308,7 +2322,14 @@ export default function MatchDeckOverlay({
         row.source_post_id
       );
     },
-    [canSeePostFor, location, markSettledCurrentSeen, navigate]
+    [
+      authUserId,
+      canSeePostFor,
+      contentScope,
+      location,
+      markSettledCurrentSeen,
+      navigate,
+    ]
   );
 
   const showLoading =
@@ -2340,16 +2361,15 @@ export default function MatchDeckOverlay({
     mode === "p2p" &&
     !showLoading &&
     !showError &&
+    !peoplePtrRefreshing &&
     !current &&
     deckRows.length === 0 &&
-    (trueCaughtUp || useDevMocks || !hasLoaded);
-  const emptyCopy = isDiscoverScope
-    ? peopleUiCopy.discoverEmpty
-    : trueCaughtUp
-      ? peopleUiCopy.deckCaughtUp
-      : hasLoaded
-        ? peopleUiCopy.deckEmpty
-        : peopleUiCopy.deckNoActive;
+    trueCaughtUp;
+  const emptyKind = isDiscoverScope ? ("discover" as const) : ("duo" as const);
+  const handleEmptyExploreHome = useCallback(() => {
+    onClose();
+    navigate(Paths.home);
+  }, [navigate, onClose]);
   const connectInteractionLocked =
     controlsLocked || connectResolving || photoPromptOpen;
 
@@ -2474,10 +2494,11 @@ export default function MatchDeckOverlay({
         />
       ) : null}
 
-      {isCanonicalPairUpScope && carouselItems.length > 0 ? (
+      {isCanonicalPairUpScope &&
+      (carouselItems.length > 0 || showEmpty) ? (
         <MineEdgeNavCards
-          canGoPrev={canMineGoPrev}
-          canGoNext={canMineGoNext}
+          canGoPrev={showEmpty ? false : canMineGoPrev}
+          canGoNext={showEmpty ? false : canMineGoNext}
           onPrev={goMinePrev}
           onNext={goMineNext}
           fixedRailsGeometry
@@ -2677,9 +2698,27 @@ export default function MatchDeckOverlay({
                   </button>
                 </div>
               ) : showEmpty ? (
-                <p className="m-auto px-4 text-center text-[15px] text-[var(--text)]/80">
-                  {emptyCopy}
-                </p>
+                <PeopleDeckEmptyCard
+                  kind={emptyKind}
+                  title={
+                    isDiscoverScope
+                      ? peopleUiCopy.discoverEmpty
+                      : peopleUiCopy.deckEmpty
+                  }
+                  body={
+                    isDiscoverScope
+                      ? peopleUiCopy.discoverEmptyBody
+                      : peopleUiCopy.deckEmptyBody
+                  }
+                  ctaLabel={
+                    isDiscoverScope
+                      ? undefined
+                      : peopleUiCopy.deckEmptyCtaExplore
+                  }
+                  onCta={
+                    isDiscoverScope ? undefined : handleEmptyExploreHome
+                  }
+                />
               ) : (
                 <>
                   {/* Mine + Discover: no flex spacers; note→Connect gap lives in

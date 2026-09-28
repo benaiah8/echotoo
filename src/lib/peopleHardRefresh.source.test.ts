@@ -249,10 +249,15 @@ describe("People hard refresh", () => {
     expect(ptr).toContain("COMMIT_DAMPED_PX = 52");
     expect(ptr).toContain("MIN_INTERVAL_MS = 1400");
     expect(ptr).toContain("Math.abs(dx) > dy");
+    expect(ptr).toContain("dy > Math.abs(dx) * 1.2");
 
     const carousel = read("pages/people/MatchDeckCarousel.tsx");
     expect(carousel).toContain("acquirePullToRefreshBlock");
-    expect(carousel).toContain("pointerDown");
+    expect(carousel).toContain("Do NOT acquire PTR block here");
+    expect(carousel).toContain("emblaPtrPointerDownRef");
+    expect(carousel).toMatch(
+      /const onScroll = \(\) => \{[\s\S]*acquirePullToRefreshBlock\(\)/
+    );
   });
 
   it("25–26: tab retap hard refresh; Groups Yours excluded", () => {

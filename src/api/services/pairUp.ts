@@ -34,6 +34,10 @@ import {
   normalizeEchoPreset,
   normalizeProfilePhotos,
 } from "../../lib/profilePhotos";
+import {
+  syncCachesAfterOwnDuoActivate,
+  syncCachesAfterOwnDuoLeave,
+} from "../../lib/ownProfileSocialSync";
 
 type OpportunityRpcResult = {
   opportunity?: PairUpOpportunity | null;
@@ -270,6 +274,7 @@ export async function joinPairUp(
 
   setCachedPairUp(userId, sourcePostId, opportunity);
   invalidatePairUpDeck(userId);
+  syncCachesAfterOwnDuoActivate(userId, sourcePostId);
   return opportunity;
 }
 
@@ -308,6 +313,16 @@ export async function leavePairUp(sourcePostId: string): Promise<void> {
   if (!sourcePostId) throw new Error("Missing source post");
 
   const userId = await requireSessionUserId();
+  const prior = getCachedPairUp(userId, sourcePostId);
+  const opportunityId =
+    prior &&
+    typeof prior.id === "string" &&
+    prior.id !== "optimistic" &&
+    prior.id !== "feed_snapshot" &&
+    !prior.id.startsWith("persist:")
+      ? prior.id
+      : null;
+
   const { error } = await supabase.rpc("leave_pair_up", {
     p_source_post_id: sourcePostId,
   });
@@ -316,6 +331,7 @@ export async function leavePairUp(sourcePostId: string): Promise<void> {
   invalidatePairUpForPost(sourcePostId);
   setCachedPairUp(userId, sourcePostId, null);
   invalidatePairUpDeck(userId);
+  syncCachesAfterOwnDuoLeave(userId, sourcePostId, opportunityId);
 }
 
 /** Max length for Pair Up notes (parity with invite notes). */

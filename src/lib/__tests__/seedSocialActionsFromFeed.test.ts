@@ -140,7 +140,7 @@ describe("seedSocialActionsFromFeedItems", () => {
     unsubCount();
   });
 
-  it("emits when a later snapshot changes known feed_snapshot / count", () => {
+  it("emits count updates; does not demote known-active duo/group via stale false snapshot", () => {
     seedSocialActionsFromFeedItems(
       [
         {
@@ -174,11 +174,12 @@ describe("seedSocialActionsFromFeedItems", () => {
       "u1"
     );
 
-    expect(duo).toHaveBeenCalled();
-    expect(group).toHaveBeenCalled();
+    // Stale false must not demote feed_snapshot known-active.
+    expect(duo).not.toHaveBeenCalled();
+    expect(group).not.toHaveBeenCalled();
     expect(count).toHaveBeenCalled();
-    expect(getPairUpJoinStatus("p5")).toBe("idle");
-    expect(getGroupUpOwnStatus("p5")).toBe("idle");
+    expect(getPairUpJoinStatus("p5")).toBe("joined");
+    expect(getGroupUpOwnStatus("p5")).toBe("active");
     expect(getGroupUpDiscoverableCount("p5")).toBe(4);
 
     unsubDuo();

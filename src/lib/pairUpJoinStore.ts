@@ -247,6 +247,12 @@ async function flush(): Promise<void> {
     for (const id of missing) {
       loadFailed.delete(id);
       softRevalidate.delete(id);
+      const cached = getCachedPairUp(viewer, id);
+      const mut = localPairMutation.get(id);
+      if (mut) {
+        const joined = cached != null;
+        if (mut.joined === joined) clearLocalPairUpMutation(id);
+      }
     }
   } catch (err) {
     if (import.meta.env.DEV) {
@@ -358,14 +364,38 @@ const FEED_SNAPSHOT_JOIN: Omit<PairUpOpportunity, "source_post_id" | "created_at
     discoverable_until: "",
   };
 
+/** Explicit join/leave mutations — snapshots must not reverse these. */
+const localPairMutation = new Map<string, { joined: boolean; seq: number }>();
+let localPairMutationSeq = 0;
+
+function noteLocalPairUpMutation(postId: string, joined: boolean): void {
+  if (!postId) return;
+  localPairMutation.set(postId, {
+    joined,
+    seq: ++localPairMutationSeq,
+  });
+}
+
+function clearLocalPairUpMutation(postId: string): void {
+  localPairMutation.delete(postId);
+}
+
 function isHydratedPairOpportunity(value: PairUpOpportunity | null): boolean {
   if (!value) return false;
   return value.id !== "optimistic" && value.id !== "feed_snapshot";
 }
 
+function isKnownActivePairOpportunity(
+  value: PairUpOpportunity | null | undefined
+): boolean {
+  return value != null && value !== undefined;
+}
+
 /**
  * First-paint seed from Feed/Detail snapshot. Keeps known face; marks SWR.
  * Does not clear on subsequent request*.
+ * Never demotes known-active / optimistic / hydrated by stale false.
+ * Never revives an explicit local leave with stale true.
  */
 export function seedPairUpJoinFromSnapshot(
   userId: string,
@@ -381,12 +411,30 @@ export function seedPairUpJoinFromSnapshot(
   if (typeof viewerId === "string" && viewerId !== userId) return;
   if (lastConfirmedUserId && lastConfirmedUserId !== userId) return;
 
+  const mutation = localPairMutation.get(postId);
+  if (mutation && mutation.joined !== active) {
+    softRevalidate.add(postId);
+    loadFailed.delete(postId);
+    return;
+  }
+  if (mutation && mutation.joined === active) {
+    clearLocalPairUpMutation(postId);
+  }
+
   const existing = getCachedPairUp(userId, postId);
   if (existing !== undefined && isHydratedPairOpportunity(existing)) {
     softRevalidate.add(postId);
     loadFailed.delete(postId);
     return;
   }
+  // Stale false must not demote optimistic / feed_snapshot / known active.
+  if (isKnownActivePairOpportunity(existing) && !active) {
+    softRevalidate.add(postId);
+    loadFailed.delete(postId);
+    return;
+  }
+  // Stale true must not revive explicit null after leave (mutation covers this;
+  // also protect bare null when mutation still present — handled above).
   const snapshotMatches =
     existing === null
       ? !active
@@ -414,6 +462,18 @@ export function seedPairUpJoinFromSnapshot(
   loadFailed.delete(postId);
 }
 
+/**
+ * Surface already knows viewer Duo is active — seed before Post Detail nav.
+ * Does not invent state when store already has an authoritative hydrate.
+ */
+export function seedKnownActivePairUpBeforeDetail(
+  userId: string,
+  postId: string
+): void {
+  if (!userId || !postId) return;
+  seedPairUpJoinFromSnapshot(userId, postId, true);
+}
+
 export function setOptimisticPairUpJoinState(
   postId: string,
   joined: boolean
@@ -421,6 +481,8 @@ export function setOptimisticPairUpJoinState(
   const viewer = effectiveUserId();
   if (!viewer || !postId) return null;
   const previous = getCachedPairUp(viewer, postId) ?? null;
+  const previousMutation = localPairMutation.get(postId) ?? null;
+  noteLocalPairUpMutation(postId, joined);
   setCachedPairUp(
     viewer,
     postId,
@@ -436,6 +498,11 @@ export function setOptimisticPairUpJoinState(
   loadFailed.delete(postId);
   return () => {
     setCachedPairUp(viewer, postId, previous);
+    if (previousMutation) {
+      localPairMutation.set(postId, previousMutation);
+    } else {
+      clearLocalPairUpMutation(postId);
+    }
   };
 }
 
@@ -487,6 +554,7 @@ export function __resetPairUpJoinStoreForTests(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localPairMutation.clear();
   subscribers.clear();
   if (flushTimer != null) {
     globalThis.clearTimeout(flushTimer);
