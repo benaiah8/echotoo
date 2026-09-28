@@ -11,6 +11,7 @@
 import { PiPlayFill } from "react-icons/pi";
 import type { PublishedMediaItem } from "../../lib/publishedMedia";
 import ProgressiveImage from "../ui/ProgressiveImage";
+import VideoPlaybackLoadingSpinner from "../ui/VideoPlaybackLoadingSpinner";
 import {
   GROUP_PUBLISHED_IMAGE_FIT,
   GROUP_PUBLISHED_IMAGE_LAYOUT,
@@ -24,12 +25,18 @@ export default function PeopleGroupPublishedMediaSurface({
   items,
   activeIndex,
   priority = false,
+  mediaPending = false,
   onOpenVideoPost,
 }: {
   items: readonly PublishedMediaItem[];
   activeIndex: number;
   /** Prefer eager decode for the current Groups card. */
   priority?: boolean;
+  /**
+   * Enrichment still in flight — show loading instead of authoritative no-media.
+   * Only for blank plates; ProgressiveImage keeps its own blur placeholder when URL exists.
+   */
+  mediaPending?: boolean;
   /** Video poster / play affordance → source Post Detail (no inline play). */
   onOpenVideoPost?: () => void;
 }) {
@@ -37,6 +44,7 @@ export default function PeopleGroupPublishedMediaSurface({
   const { item, url, isVideo } = groupPublishedActiveVisual(items, activeIndex);
   const videoItem = item?.kind === "video" ? item : null;
   const videoInteractive = Boolean(onOpenVideoPost && videoItem);
+  const showPendingLoading = mediaPending && !url && !videoItem;
 
   return (
     <div
@@ -45,6 +53,7 @@ export default function PeopleGroupPublishedMediaSurface({
       }`}
       data-people-group-published-media="true"
       data-people-group-published-kind={kind}
+      data-people-group-media-pending={mediaPending ? "true" : "false"}
       data-people-group-published-inner-swiper={
         GROUP_PUBLISHED_MEDIA_USES_INNER_SWIPER ? "true" : "false"
       }
@@ -134,6 +143,13 @@ export default function PeopleGroupPublishedMediaSurface({
             rootMargin="120px"
             priority={priority}
           />
+        </div>
+      ) : showPendingLoading ? (
+        <div
+          className="pointer-events-none absolute inset-0 bg-black"
+          data-people-group-media-loading="true"
+        >
+          <VideoPlaybackLoadingSpinner />
         </div>
       ) : (
         <div

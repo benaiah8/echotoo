@@ -20,6 +20,38 @@ export function collectGroupUpSourcePostIds(
   );
 }
 
+export type GroupPublishedMediaLookupStatus =
+  | "pending"
+  | "settled"
+  | "unavailable";
+
+export type GroupPublishedMediaLookup = {
+  status: GroupPublishedMediaLookupStatus;
+  items: readonly PublishedMediaItem[];
+};
+
+/**
+ * Distinguish enrichment pending (key absent) from settled empty ([]).
+ * Missing/unavailable source posts are settled empty — not "still loading".
+ */
+export function lookupGroupPublishedMedia(
+  byPostId: Readonly<Record<string, PublishedMediaItem[]>>,
+  sourcePostId: string | null | undefined,
+  sourceUnavailable?: boolean,
+): GroupPublishedMediaLookup {
+  if (sourceUnavailable === true) {
+    return { status: "unavailable", items: [] };
+  }
+  const id = typeof sourcePostId === "string" ? sourcePostId.trim() : "";
+  if (!id) {
+    return { status: "settled", items: [] };
+  }
+  if (!Object.prototype.hasOwnProperty.call(byPostId, id)) {
+    return { status: "pending", items: [] };
+  }
+  return { status: "settled", items: byPostId[id] ?? [] };
+}
+
 /** Sync snapshot of fresh cache entries for the given source posts. */
 export function readFreshGroupUpPublishedMediaMap(options: {
   postIds: readonly string[];

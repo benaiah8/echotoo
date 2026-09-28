@@ -16,12 +16,16 @@ import {
 const SEARCH_DOCK_CONTROL_PX = 40;
 /** Outer frosted wrap (~50px) + gap above results. */
 const SEARCH_DOCK_STACK_PX = 64;
+/** Gap between the dock and the keyboard top. Same on every platform. */
+const SEARCH_DOCK_KEYBOARD_OPEN_GAP_PX = 12;
 
 type HomeSearchDockProps = {
   searchMode: "posts" | "users";
   onSearchModeChange: (mode: "posts" | "users") => void;
   onBack: () => void;
   keyboardInsetPx: number;
+  /** From `useCreateKeyboardInset`. Open seat is inset + gap, even when inset is ~0. */
+  keyboardOpen?: boolean;
   /** One-shot hint on Search users when posts search settled empty. */
   hintUsersSearch?: boolean;
 };
@@ -37,9 +41,8 @@ function closedDockBottomOffset(): string {
 }
 
 /**
- * Keyboard-open lift — same math as invite/DM `composerBottomGap` and
- * `finalizeComposerFooterPadCss`. When the hook resolves ~0 (WebView already
- * resized), callers fall back to the closed safe-area seat.
+ * Legacy lift kept only for the keyboard-closed path when a positive inset is
+ * still reported. The keyboard-open seat does not use this.
  */
 function keyboardOpenBottomCss(keyboardInsetRoundedPx: number): string {
   if (isIOS()) {
@@ -52,7 +55,17 @@ function roundedKeyboardInsetPx(keyboardInsetPx: number): number {
   return Math.max(0, Math.round(keyboardInsetPx));
 }
 
-function getHomeSearchDockBottom(keyboardInsetPx: number): string {
+/** Open keyboard: inset plus a fixed gap. No safe-area subtraction, no platform branch. */
+function keyboardOpenDockBottom(keyboardInsetPx: number): string {
+  const kb = roundedKeyboardInsetPx(keyboardInsetPx);
+  return `calc(${kb}px + ${SEARCH_DOCK_KEYBOARD_OPEN_GAP_PX}px)`;
+}
+
+export function getHomeSearchDockBottom(
+  keyboardInsetPx: number,
+  keyboardOpen = false,
+): string {
+  if (keyboardOpen) return keyboardOpenDockBottom(keyboardInsetPx);
   const kb = roundedKeyboardInsetPx(keyboardInsetPx);
   if (kb <= 0) return closedDockBottomOffset();
   return keyboardOpenBottomCss(kb);
@@ -60,7 +73,11 @@ function getHomeSearchDockBottom(keyboardInsetPx: number): string {
 
 export function getHomeSearchOverlayPaddingBottom(
   keyboardInsetPx: number,
+  keyboardOpen = false,
 ): string {
+  if (keyboardOpen) {
+    return `calc(${SEARCH_DOCK_STACK_PX}px + ${keyboardOpenDockBottom(keyboardInsetPx)})`;
+  }
   const kb = roundedKeyboardInsetPx(keyboardInsetPx);
   if (kb <= 0) {
     return `calc(${SEARCH_DOCK_STACK_PX}px + var(--safe-area-bottom-layout, 0px))`;
@@ -82,9 +99,10 @@ export default function HomeSearchDock({
   onSearchModeChange,
   onBack,
   keyboardInsetPx,
+  keyboardOpen = false,
   hintUsersSearch = false,
 }: HomeSearchDockProps) {
-  const bottom = getHomeSearchDockBottom(keyboardInsetPx);
+  const bottom = getHomeSearchDockBottom(keyboardInsetPx, keyboardOpen);
   const [usersHintPlay, setUsersHintPlay] = useState(false);
 
   useEffect(() => {
@@ -213,7 +231,7 @@ export function HomeSearchLayer({
   onBack,
   hintUsersSearch = false,
 }: HomeSearchLayerProps) {
-  const { keyboardInsetPx } = useCreateKeyboardInset();
+  const { keyboardInsetPx, keyboardOpen } = useCreateKeyboardInset();
 
   return (
     <>
@@ -223,7 +241,10 @@ export function HomeSearchLayer({
         style={{
           top: scrollTop,
           bottom: 0,
-          paddingBottom: getHomeSearchOverlayPaddingBottom(keyboardInsetPx),
+          paddingBottom: getHomeSearchOverlayPaddingBottom(
+            keyboardInsetPx,
+            keyboardOpen,
+          ),
         }}
       >
         <div className="overflow-x-clip">
@@ -235,6 +256,7 @@ export function HomeSearchLayer({
         onSearchModeChange={onSearchModeChange}
         onBack={onBack}
         keyboardInsetPx={keyboardInsetPx}
+        keyboardOpen={keyboardOpen}
         hintUsersSearch={hintUsersSearch}
       />
     </>

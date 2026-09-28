@@ -12,24 +12,30 @@ import PeopleGroupUpCandidatePresentation from "./PeopleGroupUpCandidatePresenta
 export default function PeopleGroupUpCandidateSlide({
   candidate,
   mediaItems,
+  mediaPending = false,
   mediaIndex,
   onMediaIndexChange,
   isCurrent,
   withPhoto,
   scheduleLabel,
   scheduleLabelKind = null,
+  isUnseen = false,
   onSeePost,
   onOpenHostProfile,
   onAtmosphereChange,
 }: {
   candidate: GroupUpCandidate;
   mediaItems: readonly PublishedMediaItem[];
+  /** True while published-media enrichment has not settled for this source. */
+  mediaPending?: boolean;
   mediaIndex: number;
   onMediaIndexChange: (index: number) => void;
   isCurrent: boolean;
   withPhoto: boolean;
   scheduleLabel: string | null;
   scheduleLabelKind?: PostScheduleLabelKind | null;
+  /** Groups New unseen — brand photo-plate edge. */
+  isUnseen?: boolean;
   onSeePost?: () => void;
   onOpenHostProfile?: () => void;
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
@@ -45,6 +51,7 @@ export default function PeopleGroupUpCandidateSlide({
   return (
     <PeopleGroupUpCandidatePresentation
       mediaItems={mediaItems}
+      mediaPending={mediaPending}
       mediaIndex={mediaIndex}
       onMediaIndexChange={onMediaIndexChange}
       isCurrent={isCurrent}
@@ -60,6 +67,7 @@ export default function PeopleGroupUpCandidateSlide({
       hostAvatarUrl={candidate.organizer_avatar_url}
       onOpenHostProfile={onOpenHostProfile}
       onAtmosphereChange={onAtmosphereChange}
+      isUnseen={isUnseen}
     />
   );
 }

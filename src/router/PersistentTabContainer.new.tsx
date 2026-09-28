@@ -124,6 +124,17 @@ export function useTabActive(tab: TabId): boolean {
 }
 
 /**
+ * Raw tab visibility — distinguishes Create cover (`covered`) from leaving People.
+ * People seen-history must not mark on Create cover alone.
+ */
+export function useTabVisibility(): {
+  activeTab: TabId;
+  covered: boolean;
+} {
+  return useContext(TabVisibilityContext);
+}
+
+/**
  * Canonical path to reactivate after leaving People.
  * Prefers persistent bottom tabs; keeps other-profile pathnames for return only.
  */

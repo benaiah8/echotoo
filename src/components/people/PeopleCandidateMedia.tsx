@@ -30,6 +30,7 @@ import {
   PEOPLE_MINE_CARD_TRANSFORM_ORIGIN,
   PEOPLE_MINE_CARD_RADIUS,
   PEOPLE_MINE_FRONT_SHADOW,
+  PEOPLE_MINE_UNSEEN_FRONT_SHADOW,
   PEOPLE_PHOTO_CROSSFADE_EASE,
   PEOPLE_PHOTO_CROSSFADE_MS,
   PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX,
@@ -40,6 +41,7 @@ import {
   peopleMineCardTransform,
   peopleMineCardZIndex,
   peopleMineStackAssignments,
+  peopleMineUnseenEdgeRingStyle,
   peoplePhotoStackPeeks,
   prefersPeopleMotionReduce,
   shouldAcceptMountedFrontDecode,
@@ -91,6 +93,11 @@ export type PeopleCandidateMediaProps = {
    * Parent ignores stale identity keys after candidate change.
    */
   onMineAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
+  /**
+   * Duo/Discover: unseen opportunity uses brand-accent photo edge.
+   * Seen / default keeps the neutral edge. Geometry unchanged.
+   */
+  isUnseen?: boolean;
 };
 
 const PRESET_SHELL =
@@ -99,8 +106,6 @@ const PRESET_SHELL =
 const FACE_IN_FROM = "translateX(6px) scale(0.99)";
 const FACE_OUT_TO = "translateX(-5px) scale(0.99)";
 const FACE_SETTLED = "translateX(0) scale(1)";
-
-const FRONT_SHADOW = PEOPLE_MINE_FRONT_SHADOW;
 
 /**
  * People Duo portrait media — Profile-style fan for Discover;
@@ -119,8 +124,12 @@ export default function PeopleCandidateMedia({
   identityOverlay,
   tapIdentityKey,
   onMineAtmosphereChange,
+  isUnseen = false,
 }: PeopleCandidateMediaProps) {
   const isMine = presentation === "mine";
+  const frontShadow = isUnseen
+    ? PEOPLE_MINE_UNSEEN_FRONT_SHADOW
+    : PEOPLE_MINE_FRONT_SHADOW;
   const resolved = resolveProfileIdentityMedia(source);
   const photos = resolved.photos.slice(0, 3);
   const photoCount = photos.length;
@@ -337,6 +346,8 @@ export default function PeopleCandidateMedia({
         photos={photos}
         safeIndex={safeIndex}
         isCurrent={isCurrent}
+        frontShadow={frontShadow}
+        isUnseen={isUnseen}
         identityOverlay={identityOverlay}
         initial={initial}
         atmosphereIdentityKey={identityKey}
@@ -372,6 +383,8 @@ function MinePhotoStack({
   photos,
   safeIndex,
   isCurrent,
+  frontShadow,
+  isUnseen = false,
   identityOverlay,
   initial,
   atmosphereIdentityKey,
@@ -383,6 +396,8 @@ function MinePhotoStack({
   photos: string[];
   safeIndex: number;
   isCurrent: boolean;
+  frontShadow: string;
+  isUnseen?: boolean;
   identityOverlay?: ReactNode;
   initial: string;
   atmosphereIdentityKey: string;
@@ -848,7 +863,7 @@ function MinePhotoStack({
               opacity: 1,
               transformOrigin: PEOPLE_MINE_CARD_TRANSFORM_ORIGIN,
               transform: peopleMineCardTransform(role),
-              boxShadow: FRONT_SHADOW,
+              boxShadow: frontShadow,
               transition: reduceMotion
                 ? undefined
                 : `transform ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}`,
@@ -856,8 +871,17 @@ function MinePhotoStack({
             data-people-mine-card={role}
             data-people-mine-photo-index={photoIndex}
             data-people-mine-motion={motion}
+            data-people-mine-unseen={isUnseen ? "true" : "false"}
             aria-hidden
           >
+            {isUnseen ? (
+              <div
+                aria-hidden
+                data-people-mine-unseen-edge="true"
+                className="absolute inset-0 z-[2]"
+                style={peopleMineUnseenEdgeRingStyle(PEOPLE_MINE_CARD_RADIUS)}
+              />
+            ) : null}
             {src ? (
               <img
                 ref={(node) => setImgRef(photoIndex, node)}

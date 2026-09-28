@@ -1,4 +1,5 @@
 import useEmblaCarousel from "embla-carousel-react";
+import { acquirePullToRefreshBlock } from "../../lib/pullToRefreshBlock";
 import {
   useCallback,
   useEffect,
@@ -275,6 +276,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   mineProxyPrepareRefBox.current = mineProxyProgrammaticPrepareRef;
   /** Consumed by the index→scrollTo effect; set by prepare({ jump }). */
   const mineButtonScrollJumpRef = useRef(false);
+  /** Blocks Home-style pull-to-refresh while Embla owns the pointer. */
+  const releasePtrBlockRef = useRef<(() => void) | null>(null);
   const mineEdgeNavCardsRefBox = useRef(mineEdgeNavCardsRef);
   mineEdgeNavCardsRefBox.current = mineEdgeNavCardsRef;
   /** Cached portrait nav wrappers — refreshed on layout/reInit, not per scroll. */
@@ -621,9 +624,13 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
         selectedSnap: snap,
         carouselRenderCount: peopleDebugGetRenderCount("matchDeckCarousel"),
       });
+      releasePtrBlockRef.current?.();
+      releasePtrBlockRef.current = acquirePullToRefreshBlock();
     };
 
     const onPointerUp = () => {
+      releasePtrBlockRef.current?.();
+      releasePtrBlockRef.current = null;
       if (!isMinePresentationRef.current) return;
       const selected = emblaApi.selectedScrollSnap();
       claimMineMotionProbeFlightDestination(
@@ -669,6 +676,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       emblaApi.off("pointerDown", onPointerDown);
       emblaApi.off("pointerUp", onPointerUp);
       emblaApi.off("settle", onSettle);
+      releasePtrBlockRef.current?.();
+      releasePtrBlockRef.current = null;
     };
   }, [emblaApi, clearMineRealIncomingVisuals]);
 

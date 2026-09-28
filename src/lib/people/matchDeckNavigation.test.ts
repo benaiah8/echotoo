@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PEOPLE_DECK_PREFETCH_REMAINING,
   RECENT_BACK_LIMIT,
   RECENT_BACK_PRUNE_BUFFER,
   filterOrderedIdsToEligible,
@@ -11,6 +12,12 @@ import {
   shouldLoadMoreForEmptyWindow,
   shouldPruneActiveWindow,
 } from "./matchDeckNavigation";
+
+describe("PEOPLE_DECK_PREFETCH_REMAINING", () => {
+  it("is 8 for earlier next-page prefetch", () => {
+    expect(PEOPLE_DECK_PREFETCH_REMAINING).toBe(8);
+  });
+});
 
 describe("indexOfOpportunity", () => {
   it("returns -1 on miss, never 0", () => {

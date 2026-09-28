@@ -35,8 +35,46 @@ export type AppUpdateDecision = {
   reason: string;
 };
 
+export type AppUpdateDecisionLogSource = "cache" | "network";
+
+export type AppUpdateDecisionLogInput = {
+  platform: "android" | "ios";
+  installedVersion: string | null;
+  installedBuild: string | null;
+  source: AppUpdateDecisionLogSource;
+  config: AppUpdateDecisionConfig | null;
+  decision: AppUpdateDecision;
+};
+
 function hasStoreUrl(url: string | null | undefined): boolean {
   return Boolean(url?.trim());
+}
+
+/**
+ * Sparse universal decision diagnostic — one call per evaluation (not per render).
+ */
+export function logAppUpdateDecision(input: AppUpdateDecisionLogInput): void {
+  const config = input.config;
+  console.info("[AppUpdateDecision]", {
+    platform: input.platform,
+    installedVersion: input.installedVersion,
+    installedBuild: input.installedBuild,
+    source: input.source,
+    latestBuild: config?.latest_build ?? null,
+    minimumSupportedBuild: config?.minimum_supported_build ?? null,
+    updateMode: config?.update_mode ?? null,
+    configActive: config?.is_active ?? null,
+    storeReleaseReady:
+      config == null
+        ? null
+        : config.store_release_ready === undefined ||
+            config.store_release_ready === null
+          ? true
+          : Boolean(config.store_release_ready),
+    storeUrlAvailable: hasStoreUrl(config?.store_url),
+    prompt: input.decision.prompt,
+    reason: input.decision.reason,
+  });
 }
 
 /**
@@ -94,8 +132,7 @@ export function decideAppUpdatePrompt(
     targetBuild: config.latest_build,
   });
 
-  const canHard =
-    storeReady && hasStoreUrl(config.store_url);
+  const canHard = storeReady && hasStoreUrl(config.store_url);
 
   if (belowMin) {
     if (!canHard) {

@@ -324,6 +324,41 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     expect(otherActions).not.toContain("openGroupUpCreate");
   });
 
+  it("Other Connect uses a two-row grid; Own stays one row", () => {
+    const src = readSrc(
+      "src/components/profile/ProfileSocialOpportunityCard.tsx"
+    );
+    const otherStart = src.indexOf("data-profile-social-other-actions");
+    const ownStart = src.indexOf("data-profile-social-own-actions");
+    const other = src.slice(otherStart, src.indexOf("data-profile-social-own-actions") === -1 ? src.length : src.lastIndexOf("</article>"));
+    const own = src.slice(ownStart, otherStart);
+    expect(other).toContain("data-profile-social-other-action-rows");
+    expect(other).toContain(
+      "grid w-full grid-cols-[max-content_max-content_minmax(0,1fr)] items-center justify-start gap-x-2 gap-y-1.5"
+    );
+    expect(other).toContain("col-span-3");
+    expect(other).toContain("<SocialDuoPill");
+    expect(other).toContain("<SocialGroupPill");
+    expect(other).toContain("<ProfileConnectPill");
+    expect(other).toContain("<ProfileGroupRequestPill");
+    expect(other).toContain("groupRequest");
+    expect(other).toContain("groupRequested");
+    expect(other).toContain("groupUpBrowseMemberLabel");
+    expect(other).toContain("void handleConnect()");
+    expect(other).toContain("void handleGroupRequest()");
+    expect(other).toContain('size="compact"');
+    expect(other).not.toContain("flex-wrap");
+    expect(other).not.toContain('className="hidden"');
+    expect(own).toContain("socialRailBareRowClassName()");
+    expect(own).not.toContain("data-profile-social-other-action-rows");
+    expect(own).not.toContain("<ProfileConnectPill");
+    expect(src).not.toMatch(/iPhone|isIOS|isAndroid|window\.innerWidth/);
+    expect(src).toContain("joinPairUp");
+    expect(src).toContain("connectProfilePairUp");
+    expect(src).toContain("requestGroupUp");
+    expect(src).not.toContain("list_profile_social_opportunities");
+  });
+
   it("both facets render on one card; no single-facet fallback", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityCard.tsx"

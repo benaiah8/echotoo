@@ -425,13 +425,55 @@ export const PEOPLE_MINE_PHOTO_EDGE =
   "0 0 0 1px color-mix(in oklab, var(--text) 38%, transparent)";
 
 /**
+ * Unseen portrait edge — Echo blue → magenta → red (~2px apparent ring).
+ * Applied via {@link peopleMineUnseenEdgeRingStyle} (not box-shadow; shadows
+ * cannot paint multi-stop gradients).
+ */
+export const PEOPLE_MINE_UNSEEN_EDGE_WIDTH_PX = 2;
+export const PEOPLE_MINE_UNSEEN_EDGE_GRADIENT =
+  "linear-gradient(135deg, #2563EB 0%, #D946EF 50%, #EF4444 100%)";
+
+/**
+ * @deprecated Prefer {@link PEOPLE_MINE_UNSEEN_EDGE_GRADIENT} + ring style.
+ * Kept as a marker string for migration-era tests / greps.
+ */
+export const PEOPLE_MINE_UNSEEN_PHOTO_EDGE = PEOPLE_MINE_UNSEEN_EDGE_GRADIENT;
+
+/**
  * Static depth under each card (identical for all roles — no settle chrome snap).
  * Modestly stronger than the prior 3px/0.40 token so peek edges separate without
  * a broad glow or second outline. Ancestor Embla overflow can still clip outer
  * flare; an inner wrapper would not fix that.
  */
-export const PEOPLE_MINE_FRONT_SHADOW = `${PEOPLE_MINE_PHOTO_EDGE}, 0 4px 12px rgba(0,0,0,0.55)`;
+export const PEOPLE_MINE_DEPTH_SHADOW = "0 4px 12px rgba(0,0,0,0.55)";
+export const PEOPLE_MINE_FRONT_SHADOW = `${PEOPLE_MINE_PHOTO_EDGE}, ${PEOPLE_MINE_DEPTH_SHADOW}`;
+/** Unseen: depth only — colored edge comes from the gradient ring overlay. */
+export const PEOPLE_MINE_UNSEEN_FRONT_SHADOW = PEOPLE_MINE_DEPTH_SHADOW;
 export const PEOPLE_MINE_REAR_SHADOW = PEOPLE_MINE_FRONT_SHADOW;
+
+/** Absolute inset ring for unseen media frames (`pointer-events: none`). */
+export function peopleMineUnseenEdgeRingStyle(
+  borderRadius: string = PEOPLE_MINE_CARD_RADIUS
+): {
+  borderRadius: string;
+  padding: number;
+  background: string;
+  WebkitMask: string;
+  WebkitMaskComposite: string;
+  maskComposite: "exclude";
+  pointerEvents: "none";
+} {
+  return {
+    borderRadius,
+    padding: PEOPLE_MINE_UNSEEN_EDGE_WIDTH_PX,
+    background: PEOPLE_MINE_UNSEEN_EDGE_GRADIENT,
+    WebkitMask:
+      "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
+    WebkitMaskComposite: "xor",
+    maskComposite: "exclude",
+    pointerEvents: "none",
+  };
+}
 
 /**
  * Mine portrait OUTER width / host — retained for Plans tallFactor path + tests.

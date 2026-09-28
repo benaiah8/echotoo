@@ -37,3 +37,14 @@ Then apply **only** the explicitly approved migration — nothing adjacent, noth
 ## Source of truth
 
 When validating whether a local migration is safe to apply: **existing live production state** wins over assumptions from local file names or remote history rows alone.
+
+### Applied: People deck seen-state (cross-device browse history)
+
+| Fact | Detail |
+|------|--------|
+| Local migration file | `supabase/migrations/20260928140000_people_deck_seen.sql` |
+| Production version | `20260928054713` / `people_deck_seen` |
+| Live objects | `public.people_deck_seen`, `get_people_deck_seen(text)`, `mark_people_deck_seen(text, uuid[])` |
+| Verification | Catalog/RLS/grants/`pg_get_functiondef` verified post-apply (2026-09-28) |
+| Candidate RPCs | Unchanged (`list_pair_up_candidates`, `list_discover_pair_up_candidates`, `list_open_plan_candidates`, `list_group_up_candidates`) |
+| Note | Production version timestamp differs from local filename (Apply Migration assigned `20260928054713`). Do not rewrite history to force-match. |

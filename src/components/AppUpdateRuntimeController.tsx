@@ -1,5 +1,7 @@
 /**
- * Native-only: fetch update policy via RPC (cooldown), show soft/hard modals.
+ * Native-only: fetch update policy via RPC (network cooldown), show soft/hard modals.
+ * Cached config is evaluated immediately; cold mount always revalidates once;
+ * resume/visibility revalidate only when the ~10 min cooldown is due.
  * Web / non-native: renders nothing.
  */
 
@@ -12,8 +14,13 @@ import {
   getPlatform,
   isNativeApp,
 } from "../lib/storage/utils/capacitorDetection";
-import { decideAppUpdatePrompt } from "../lib/appUpdateDecision";
 import {
+  decideAppUpdatePrompt,
+  logAppUpdateDecision,
+  type AppUpdateDecisionLogSource,
+} from "../lib/appUpdateDecision";
+import {
+  clearCachedConfig,
   isCooldownExpired,
   readCachedConfig,
   writeCachedConfig,
@@ -21,6 +28,7 @@ import {
   isSoftDismissedFor,
   writeSoftDismissSignature,
 } from "../lib/appUpdateRuntimeStorage";
+import { resolveAppUpdateStoreUrl } from "../lib/appUpdateStoreUrl";
 import {
   previewModalTitle,
   previewModalMessage,
@@ -48,6 +56,15 @@ function runtimeToPreviewRow(
     updated_at: "",
     updated_by_user_id: null,
   };
+}
+
+function withResolvedStoreUrl(
+  platform: "android" | "ios",
+  config: AppUpdateRuntimeConfig
+): AppUpdateRuntimeConfig {
+  const { url } = resolveAppUpdateStoreUrl(platform, config.store_url);
+  if (url === (config.store_url ?? "").trim()) return config;
+  return { ...config, store_url: url };
 }
 
 async function getNativeAppIdentity(): Promise<{
@@ -80,46 +97,65 @@ export default function AppUpdateRuntimeController() {
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyDecision = useCallback(
-    async (config: AppUpdateRuntimeConfig | null, platform: "android" | "ios") => {
+    async (
+      config: AppUpdateRuntimeConfig | null,
+      platform: "android" | "ios",
+      source: AppUpdateDecisionLogSource
+    ) => {
       setSoftOpen(false);
       setHardOpen(false);
       setActiveConfig(null);
       setActivePlatform(null);
 
       const identity = await getNativeAppIdentity();
-      const softDismissed = config
+      const resolvedConfig = config
+        ? withResolvedStoreUrl(platform, config)
+        : null;
+
+      const softDismissed = resolvedConfig
         ? isSoftDismissedFor(
             platform,
-            config.latest_version,
-            config.latest_build
+            resolvedConfig.latest_version,
+            resolvedConfig.latest_build
           )
         : false;
 
+      const decisionConfig = resolvedConfig
+        ? {
+            is_active: resolvedConfig.is_active,
+            update_mode: resolvedConfig.update_mode,
+            latest_version: resolvedConfig.latest_version,
+            latest_build: resolvedConfig.latest_build,
+            minimum_supported_version: resolvedConfig.minimum_supported_version,
+            minimum_supported_build: resolvedConfig.minimum_supported_build,
+            store_release_ready: resolvedConfig.store_release_ready,
+            store_url: resolvedConfig.store_url,
+          }
+        : null;
+
       const decision = decideAppUpdatePrompt({
         isNative: true,
-        config: config
-          ? {
-              is_active: config.is_active,
-              update_mode: config.update_mode,
-              latest_version: config.latest_version,
-              latest_build: config.latest_build,
-              minimum_supported_version: config.minimum_supported_version,
-              minimum_supported_build: config.minimum_supported_build,
-              store_release_ready: config.store_release_ready,
-              store_url: config.store_url,
-            }
-          : null,
+        config: decisionConfig,
         installedVersion: identity.version,
         installedBuild: identity.build,
         softDismissed,
       });
 
-      if (decision.prompt === "none" || !config) {
+      logAppUpdateDecision({
+        platform,
+        installedVersion: identity.version,
+        installedBuild: identity.build,
+        source,
+        config: decisionConfig,
+        decision,
+      });
+
+      if (decision.prompt === "none" || !resolvedConfig) {
         return;
       }
 
       setActivePlatform(platform);
-      setActiveConfig(config);
+      setActiveConfig(resolvedConfig);
       if (decision.prompt === "soft") {
         setSoftOpen(true);
       } else if (decision.prompt === "hard") {
@@ -129,7 +165,7 @@ export default function AppUpdateRuntimeController() {
     []
   );
 
-  const runCheck = useCallback(async () => {
+  const runCheck = useCallback(async (options?: { forceNetwork?: boolean }) => {
     if (!isNativeApp()) return;
     const plat = getPlatform();
     if (plat !== "android" && plat !== "ios") return;
@@ -140,50 +176,54 @@ export default function AppUpdateRuntimeController() {
 
     try {
       const now = Date.now();
-      const cooldownExpired = isCooldownExpired(now);
-      let config: AppUpdateRuntimeConfig | null = null;
+      const forceNetwork = options?.forceNetwork === true;
+      const cached = readCachedConfig();
+      // Fast path: evaluate cache immediately (hard can show without waiting on network).
+      await applyDecision(cached, platform, "cache");
 
-      if (!cooldownExpired) {
-        config = readCachedConfig();
-        await applyDecision(config, platform);
+      // Cold launch always revalidates; resume/visibility keep the 10-minute cooldown.
+      if (!forceNetwork && !isCooldownExpired(now)) {
         return;
       }
 
       const online =
         typeof navigator !== "undefined" ? navigator.onLine !== false : true;
 
-      if (online) {
-        try {
-          const fresh = await fetchAppUpdateRuntimeConfig(platform);
-          writeLastCheckAtNow();
-          if (fresh) {
-            writeCachedConfig(fresh);
-            config = fresh;
-          } else {
-            config = readCachedConfig();
-          }
-        } catch {
-          config = readCachedConfig();
-        }
-      } else {
-        config = readCachedConfig();
+      if (!online) {
+        return;
       }
 
-      await applyDecision(config, platform);
+      try {
+        const fresh = await fetchAppUpdateRuntimeConfig(platform);
+        writeLastCheckAtNow();
+        if (fresh) {
+          writeCachedConfig(fresh);
+          await applyDecision(fresh, platform, "network");
+        } else {
+          // Admin disabled / no active row — do not keep a stale hard cache.
+          clearCachedConfig();
+          await applyDecision(null, platform, "network");
+        }
+      } catch {
+        // Keep previously applied cache decision; last_check stays unset so retry stays due.
+      }
     } finally {
       inFlightRef.current = false;
     }
   }, [applyDecision]);
 
-  const scheduleCheck = useCallback(() => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-    debounceTimerRef.current = setTimeout(() => {
-      debounceTimerRef.current = null;
-      void runCheck();
-    }, 400);
-  }, [runCheck]);
+  const scheduleCheck = useCallback(
+    (options?: { forceNetwork?: boolean }) => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        void runCheck(options);
+      }, 400);
+    },
+    [runCheck]
+  );
 
   useEffect(() => {
     return () => {
@@ -193,9 +233,10 @@ export default function AppUpdateRuntimeController() {
     };
   }, []);
 
+  // Native cold mount after splash: always one fresh RPC (ignore persisted cooldown).
   useEffect(() => {
     if (!isNativeApp()) return;
-    scheduleCheck();
+    scheduleCheck({ forceNetwork: true });
   }, [scheduleCheck]);
 
   useEffect(() => {

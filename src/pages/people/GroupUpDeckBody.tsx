@@ -37,6 +37,7 @@ import type {
   GroupUpDeckScopeSnapshot,
 } from "../../lib/matchDeckSession";
 import {
+  PEOPLE_DECK_PREFETCH_REMAINING,
   filterOrderedIdsToEligible,
   indexOfOpportunity,
   isTrueCaughtUpState,
@@ -44,8 +45,18 @@ import {
   resolveNearestOpportunityId,
   shouldLoadMoreForEmptyWindow,
 } from "../../lib/people/matchDeckNavigation";
+import {
+  firstUnseenOpportunityId,
+  getPairUpSeenOpportunityIdSet,
+  rebuildPairUpActiveOrderedIds,
+} from "../../lib/people/peoplePairUpSeenHistory";
+import {
+  isPeopleDeckSeenBootstrapReady,
+  markLocalPeopleDeckSeenAndEnqueue,
+} from "../../lib/people/peopleDeckSeenSync";
 import { groupUpRowMatchesBrowseTab } from "../../lib/groupUpBrowse";
 import { groupUpDeckRowId } from "../../lib/groupUpDeckRowId";
+import { lookupGroupPublishedMedia } from "../../lib/groupUpPublishedMedia";
 import { GROUP_ACTIVE_MEMBER_CAP } from "../../lib/groupActiveMemberCap";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
 import { ensurePublishedMediaCacheForDetailHandoff } from "../../lib/publishedMedia";
@@ -95,7 +106,6 @@ import {
   peopleDebugSetContext,
 } from "../../lib/people/peopleDeckDebug";
 
-const PREFETCH_REMAINING = 3;
 const EMPTY_GROUP_MEDIA: import("../../lib/publishedMedia").PublishedMediaItem[] =
   [];
 
@@ -168,6 +178,8 @@ export default function GroupUpDeckBody({
   onAtmosphereChange,
   onAtmosphereIdentityKeyChange,
   onOpenHostProfile,
+  seenEpoch = 0,
+  onSeenMarked,
 }: {
   deck: UseGroupUpCandidatesResult;
   scopeSnap: GroupUpDeckScopeSnapshot;
@@ -178,6 +190,8 @@ export default function GroupUpDeckBody({
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
   onAtmosphereIdentityKeyChange?: (identityKey: string | null) => void;
   onOpenHostProfile?: (candidate: GroupUpCandidate) => void;
+  seenEpoch?: number;
+  onSeenMarked?: () => void;
 }) {
   peopleDebugBumpRender("groupUpDeckBody");
 
@@ -233,6 +247,12 @@ export default function GroupUpDeckBody({
     () => new Set(scopeSnap.retiredIdsByTab[browseTab] ?? []),
     [browseTab, scopeSnap.retiredIdsByTab]
   );
+  /** Groups New only — Yours never participates in seen/unseen browsing. */
+  const groupsNewSeenIds = useMemo(() => {
+    void seenEpoch;
+    if (!authUserId || browseTab !== "new") return new Set<string>();
+    return getPairUpSeenOpportunityIdSet(authUserId, "groups_new");
+  }, [authUserId, browseTab, seenEpoch]);
 
   const browsable = useMemo(
     () => candidates.filter((row) => !removedIds.has(groupUpDeckRowId(row))),
@@ -350,17 +370,38 @@ export default function GroupUpDeckBody({
         ? snap.activeOrderedIdsByTab[browseTab]
         : orderedIdsRef.current[browseTab];
 
-    const nextActive = filterOrderedIdsToEligible(
-      snap.activeOrderedIdsByTab[browseTab] ?? [],
-      eligibleIds
-    );
-    const activeSet = new Set(nextActive);
-    const retired = new Set(snap.retiredIdsByTab[browseTab] ?? []);
-    for (const row of tabSourceRows) {
-      const id = groupUpDeckRowId(row);
-      if (activeSet.has(id) || retired.has(id)) continue;
-      nextActive.push(id);
-      activeSet.add(id);
+    let nextActive: string[];
+    if (browseTab === "new") {
+      if (
+        authUserId &&
+        (snap.activeOrderedIdsByTab.new ?? []).length === 0 &&
+        !isPeopleDeckSeenBootstrapReady(authUserId, "groups_new")
+      ) {
+        return;
+      }
+      const eligibleOrdered = tabSourceRows
+        .map((row) => groupUpDeckRowId(row))
+        .filter(Boolean);
+      nextActive = rebuildPairUpActiveOrderedIds({
+        eligibleOrdered,
+        previousActive: snap.activeOrderedIdsByTab.new ?? [],
+        currentId: snap.currentOpportunityIdByTab.new ?? null,
+        seenIds: groupsNewSeenIds,
+        retiredIds: snap.retiredIdsByTab.new ?? [],
+      });
+    } else {
+      nextActive = filterOrderedIdsToEligible(
+        snap.activeOrderedIdsByTab[browseTab] ?? [],
+        eligibleIds
+      );
+      const activeSet = new Set(nextActive);
+      const retired = new Set(snap.retiredIdsByTab[browseTab] ?? []);
+      for (const row of tabSourceRows) {
+        const id = groupUpDeckRowId(row);
+        if (activeSet.has(id) || retired.has(id)) continue;
+        nextActive.push(id);
+        activeSet.add(id);
+      }
     }
 
     let nextCurrent = snap.currentOpportunityIdByTab[browseTab] ?? null;
@@ -371,7 +412,14 @@ export default function GroupUpDeckBody({
         nextCurrent
       );
     } else if (nextCurrent == null && nextActive.length > 0) {
-      nextCurrent = nextActive[0] ?? null;
+      if (
+        browseTab === "new" &&
+        (snap.activeOrderedIdsByTab.new ?? []).length === 0
+      ) {
+        nextCurrent = firstUnseenOpportunityId(nextActive, groupsNewSeenIds);
+      } else {
+        nextCurrent = nextActive[0] ?? null;
+      }
     }
 
     const prevActive = snap.activeOrderedIdsByTab[browseTab] ?? [];
@@ -400,7 +448,7 @@ export default function GroupUpDeckBody({
           }
         : {}),
     });
-  }, [browseTab, patchScope, tabSourceRows]);
+  }, [authUserId, browseTab, groupsNewSeenIds, patchScope, seenEpoch, tabSourceRows]);
 
   useEffect(() => {
     const snap = scopeSnapRef.current;
@@ -453,10 +501,16 @@ export default function GroupUpDeckBody({
       hasMore,
       loadMoreInFlight,
     });
+    const allLoadedSeen =
+      browseTab === "new" &&
+      deckRows.length > 0 &&
+      deckRows.every((row) => groupsNewSeenIds.has(groupUpDeckRowId(row)));
     if (
       loadMoreInFlight ||
       !hasMore ||
-      (!emptyNeedsPage && remaining > PREFETCH_REMAINING)
+      (!emptyNeedsPage &&
+        remaining > PEOPLE_DECK_PREFETCH_REMAINING &&
+        !allLoadedSeen)
     ) {
       return;
     }
@@ -467,6 +521,7 @@ export default function GroupUpDeckBody({
       deck: "groupUpDeckBody",
       browseTab,
       emptyNeedsPage,
+      allLoadedSeen,
     });
     loadMoreInFlightRef.current = true;
     setLoadMoreInFlight(true);
@@ -478,7 +533,8 @@ export default function GroupUpDeckBody({
       });
   }, [
     browseTab,
-    deckRows.length,
+    deckRows,
+    groupsNewSeenIds,
     hasMore,
     index,
     loadMore,
@@ -491,9 +547,29 @@ export default function GroupUpDeckBody({
       const clamped = Math.max(0, Math.min(deckRows.length - 1, next));
       const row = deckRows[clamped];
       const id = row ? groupUpDeckRowId(row) : null;
+      const previousId =
+        scopeSnapRef.current.currentOpportunityIdByTab[browseTab] ?? null;
+      if (
+        browseTab === "new" &&
+        authUserId &&
+        previousId &&
+        id &&
+        previousId !== id
+      ) {
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, "groups_new", previousId);
+        onSeenMarked?.();
+      }
       patchTabOpportunity(browseTab, id || null);
     },
-    [browseTab, deckRows, joinResolving, patchTabOpportunity, photoPromptOpen]
+    [
+      authUserId,
+      browseTab,
+      deckRows,
+      joinResolving,
+      onSeenMarked,
+      patchTabOpportunity,
+      photoPromptOpen,
+    ]
   );
 
   const handleOpenGroup = useCallback(() => {
@@ -824,8 +900,12 @@ export default function GroupUpDeckBody({
     const sourceType = current.source_type;
     if (!sourcePostId || !sourceType) return;
     const deckId = groupUpDeckRowId(current);
-    const media =
-      publishedMediaByPostId[sourcePostId] ?? EMPTY_GROUP_MEDIA;
+    const mediaLookup = lookupGroupPublishedMedia(
+      publishedMediaByPostId,
+      sourcePostId,
+      current.source_unavailable
+    );
+    const media = mediaLookup.items;
     const idx = mediaIndexById[deckId] ?? 0;
     const initialMediaKey = resolveGroupSourcePostInitialMediaKey(media, idx);
 
@@ -1199,22 +1279,30 @@ export default function GroupUpDeckBody({
           renderItem={(item, meta) => {
             const row = item as GroupUpCandidate;
             const deckId = groupUpDeckRowId(row);
-            const sourcePostId = row.source_post_id?.trim() || "";
+            const mediaLookup = lookupGroupPublishedMedia(
+              publishedMediaByPostId,
+              row.source_post_id,
+              row.source_unavailable
+            );
             const media =
-              sourcePostId && !row.source_unavailable
-                ? (publishedMediaByPostId[sourcePostId] ?? EMPTY_GROUP_MEDIA)
-                : EMPTY_GROUP_MEDIA;
+              mediaLookup.status === "pending"
+                ? EMPTY_GROUP_MEDIA
+                : mediaLookup.items;
             const schedule = scheduleMetaFor(row);
             return (
               <PeopleGroupUpCandidateSlide
                 candidate={row}
                 mediaItems={media}
+                mediaPending={mediaLookup.status === "pending"}
                 mediaIndex={mediaIndexById[deckId] ?? 0}
                 onMediaIndexChange={(next) => setMediaIndexFor(deckId, next)}
                 isCurrent={meta.isCurrent}
                 withPhoto={meta.withPhoto}
                 scheduleLabel={schedule.label}
                 scheduleLabelKind={schedule.kind}
+                isUnseen={
+                  browseTab === "new" && !groupsNewSeenIds.has(deckId)
+                }
                 onSeePost={
                   meta.isCurrent && canOpenGroupSourcePost(row)
                     ? handleSeePost

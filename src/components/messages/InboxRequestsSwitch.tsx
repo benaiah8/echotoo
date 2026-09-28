@@ -2,6 +2,9 @@
  * Centered Messages controls under the top bar:
  * [Inbox] [Requests] [All] [DMs] [Groups]
  * Separate subtle pills — same height, no outer container.
+ *
+ * Visible chrome is 36px. The button is 44px tall and only as wide as that
+ * chrome, so the extra tap area is vertical and does not cross the 4px gap.
  */
 
 import { PiDotsNine, PiUser, PiUsers } from "react-icons/pi";
@@ -20,15 +23,22 @@ type Props = {
   requestsBadge?: number | boolean;
 };
 
-/** Shared compact height — text pills and icon circles match. */
-const CONTROL_H = "h-6";
+/** Visible pill / circle. */
+const VISIBLE_H = "h-9";
+/** Vertical tap target. Width stays on the visible control. */
+const HIT_H = "h-11";
 
-const tabPillBase = [
-  CONTROL_H,
-  "inline-flex shrink-0 items-center justify-center gap-0.5 rounded-full px-2.5",
-  "text-[10px] font-medium leading-none tracking-tight",
-  "border transition-[color,background-color,border-color,opacity]",
+const hitButtonBase = [
+  HIT_H,
+  "inline-flex shrink-0 items-center justify-center bg-transparent p-0",
   "outline-none focus-visible:ring-2 focus-visible:ring-[var(--text)]/20 focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)]",
+].join(" ");
+
+const tabPillVisual = [
+  VISIBLE_H,
+  "inline-flex items-center justify-center gap-0.5 rounded-full px-2.5",
+  "whitespace-nowrap text-[12px] font-medium leading-snug tracking-tight",
+  "border transition-[color,background-color,border-color,opacity]",
 ].join(" ");
 
 /** Active: soft elevated gray chip — no amber fill. */
@@ -39,10 +49,10 @@ const tabPillActive =
 const tabPillIdle =
   "border-[var(--text)]/16 bg-[var(--text)]/[0.04] text-[var(--text)]/58 hover:border-[var(--text)]/24 hover:bg-[var(--text)]/[0.08] hover:text-[var(--text)]/78 app-dark:border-white/18 app-dark:bg-white/[0.05] app-dark:text-white/58 app-dark:hover:border-white/26 app-dark:hover:bg-white/[0.10] app-dark:hover:text-white/80";
 
-const iconChipBase = [
-  CONTROL_H,
-  "flex w-6 shrink-0 items-center justify-center rounded-full border transition-[color,background-color,border-color,opacity] outline-none",
-  "outline-none focus-visible:ring-2 focus-visible:ring-[var(--text)]/20 focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg)]",
+const iconVisual = [
+  VISIBLE_H,
+  "flex w-9 shrink-0 items-center justify-center rounded-full border",
+  "transition-[color,background-color,border-color,opacity]",
 ].join(" ");
 
 const iconChipActive = tabPillActive;
@@ -78,31 +88,33 @@ export default function InboxRequestsSwitch({
       : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-lg items-center justify-center gap-1 pt-3">
+    <div className="mx-auto flex w-full max-w-lg flex-nowrap items-center justify-center gap-1 pt-3">
       <div
         role="tablist"
         aria-label="Messages views"
-        className="flex shrink-0 items-center gap-1 overflow-visible"
+        className="flex shrink-0 flex-nowrap items-center gap-1 overflow-visible"
       >
         <button
           type="button"
           role="tab"
           aria-selected={tab === "inbox"}
           onClick={() => onTabChange("inbox")}
-          className={`${tabPillBase} ${
-            tab === "inbox" ? tabPillActive : tabPillIdle
-          }`}
+          className={hitButtonBase}
         >
-          Inbox
+          <span
+            className={`${tabPillVisual} ${
+              tab === "inbox" ? tabPillActive : tabPillIdle
+            }`}
+          >
+            Inbox
+          </span>
         </button>
         <button
           type="button"
           role="tab"
           aria-selected={tab === "requests"}
           onClick={() => onTabChange("requests")}
-          className={`relative ${tabPillBase} ${
-            tab === "requests" ? tabPillActive : tabPillIdle
-          }`}
+          className={hitButtonBase}
           aria-label={
             showBadge && badgeLabel
               ? `Requests, ${badgeLabel} unread`
@@ -111,28 +123,34 @@ export default function InboxRequestsSwitch({
                 : undefined
           }
         >
-          Requests
-          {showBadge ? (
-            <span
-              className={[
-                "pointer-events-none absolute -right-0.5 -top-1 z-[1]",
-                "inline-flex h-[15px] min-w-[15px] items-center justify-center",
-                "rounded-full bg-amber-400 px-[3px]",
-                "text-[9px] font-bold leading-none tabular-nums text-neutral-900",
-                "ring-1 ring-[var(--bg)]",
-                "app-dark:bg-amber-400 app-dark:text-neutral-900",
-              ].join(" ")}
-              aria-hidden
-            >
-              {badgeLabel ?? ""}
-            </span>
-          ) : null}
+          <span
+            className={`relative ${tabPillVisual} ${
+              tab === "requests" ? tabPillActive : tabPillIdle
+            }`}
+          >
+            Requests
+            {showBadge ? (
+              <span
+                className={[
+                  "pointer-events-none absolute -right-0.5 -top-1 z-[1]",
+                  "inline-flex h-[15px] min-w-[15px] items-center justify-center",
+                  "rounded-full bg-amber-400 px-[3px]",
+                  "text-[9px] font-bold leading-none tabular-nums text-neutral-900",
+                  "ring-1 ring-[var(--bg)]",
+                  "app-dark:bg-amber-400 app-dark:text-neutral-900",
+                ].join(" ")}
+                aria-hidden
+              >
+                {badgeLabel ?? ""}
+              </span>
+            ) : null}
+          </span>
         </button>
       </div>
 
       <div
         className={[
-          "flex shrink-0 items-center gap-1",
+          "flex shrink-0 flex-nowrap items-center gap-1",
           kindFiltersDisabled ? "opacity-35" : "",
         ].join(" ")}
         role="toolbar"
@@ -153,12 +171,19 @@ export default function InboxRequestsSwitch({
                 if (!kindFiltersDisabled) onKindFilterChange(id);
               }}
               className={[
-                iconChipBase,
-                active ? iconChipActive : iconChipIdle,
+                hitButtonBase,
+                "w-9",
                 kindFiltersDisabled ? "pointer-events-none" : "",
               ].join(" ")}
             >
-              <Icon size={11} aria-hidden className="opacity-90" />
+              <span
+                className={[
+                  iconVisual,
+                  active ? iconChipActive : iconChipIdle,
+                ].join(" ")}
+              >
+                <Icon size={14} aria-hidden className="opacity-90" />
+              </span>
             </button>
           );
         })}

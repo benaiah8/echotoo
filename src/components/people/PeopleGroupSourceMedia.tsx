@@ -18,6 +18,8 @@ import { peopleIdentityMovedPastTapThreshold } from "../../lib/people/mineIdenti
 import {
   PEOPLE_MINE_CARD_RADIUS,
   PEOPLE_MINE_FRONT_SHADOW,
+  PEOPLE_MINE_UNSEEN_FRONT_SHADOW,
+  peopleMineUnseenEdgeRingStyle,
 } from "../../lib/people/peopleCandidateMediaPresentation";
 import {
   GROUP_MEDIA_NAV_BTN_HIT_PX,
@@ -40,6 +42,8 @@ function isolateMediaNavEvent(
 
 export default function PeopleGroupSourceMedia({
   items,
+  mediaPending = false,
+  isUnseen = false,
   activeIndex,
   onActiveIndexChange,
   isCurrent,
@@ -51,6 +55,10 @@ export default function PeopleGroupSourceMedia({
   onOpenSourcePost,
 }: {
   items: readonly PublishedMediaItem[];
+  /** True until published-media map has settled for this source post. */
+  mediaPending?: boolean;
+  /** Groups New unseen — brand-accent plate edge. */
+  isUnseen?: boolean;
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
   isCurrent: boolean;
@@ -74,13 +82,21 @@ export default function PeopleGroupSourceMedia({
 
   useEffect(() => {
     if (!onAtmosphereChange) return;
+    if (mediaPending) {
+      onAtmosphereChange({
+        identityKey,
+        path: null,
+        ready: false,
+      });
+      return;
+    }
     const path = groupAtmospherePathFromMedia(items);
     onAtmosphereChange({
       identityKey,
       path,
       ready: true,
     });
-  }, [identityKey, items, onAtmosphereChange]);
+  }, [identityKey, items, mediaPending, onAtmosphereChange]);
 
   const goPrev = useCallback(() => {
     if (count <= 1) return;
@@ -156,9 +172,12 @@ export default function PeopleGroupSourceMedia({
       className="relative h-full w-full overflow-hidden"
       style={{
         borderRadius: PEOPLE_MINE_CARD_RADIUS,
-        boxShadow: PEOPLE_MINE_FRONT_SHADOW,
+        boxShadow: isUnseen
+          ? PEOPLE_MINE_UNSEEN_FRONT_SHADOW
+          : PEOPLE_MINE_FRONT_SHADOW,
       }}
       data-people-group-source-media="true"
+      data-people-group-media-unseen={isUnseen ? "true" : "false"}
       data-people-group-media-count={count}
       data-people-group-media-index={safeIndex}
       data-people-group-media-inner-swiper="false"
@@ -169,10 +188,20 @@ export default function PeopleGroupSourceMedia({
         pointerRef.current = null;
       }}
     >
+      {isUnseen ? (
+        <div
+          aria-hidden
+          data-people-mine-unseen-edge="true"
+          data-people-group-media-unseen-edge="true"
+          className="absolute inset-0 z-[3]"
+          style={peopleMineUnseenEdgeRingStyle(PEOPLE_MINE_CARD_RADIUS)}
+        />
+      ) : null}
       <PeopleGroupPublishedMediaSurface
         items={items}
         activeIndex={safeIndex}
         priority={isCurrent}
+        mediaPending={mediaPending}
         onOpenVideoPost={
           isCurrent && activeItem?.kind === "video"
             ? onOpenSourcePost

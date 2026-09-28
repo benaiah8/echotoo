@@ -76,8 +76,9 @@ describe("Groups card polish (source)", () => {
 
   it("16–18: Groups media handoff; no per-card fetch; debug removed", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain("publishedMediaByPostId[sourcePostId]");
-    expect(body).toContain("!row.source_unavailable");
+    expect(body).toContain("lookupGroupPublishedMedia");
+    expect(body).toContain("publishedMediaByPostId");
+    expect(body).toContain("mediaPending");
     expect(body).not.toContain("getOrFetchPublishedMedia(");
     expect(body).not.toContain("ensureGroupUpPublishedMediaMap");
     expect(body).not.toContain("[GroupMediaDebug]");

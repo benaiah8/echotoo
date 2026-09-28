@@ -5,8 +5,14 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
 } from "react";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import {
+  decideEdgeSwipeTerminal,
+  writeOverlayTranslateRef,
+  type OverlaySwipeTerminalKind,
+} from "./overlaySwipeTerminal";
 
 /** If vertical movement exceeds this and beats horizontal, treat as scroll — cancel gesture. */
 const VERTICAL_SLOP_PX = 16;
@@ -208,6 +214,7 @@ export type OverlayEdgeSwipeDismissStripProps = {
   onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onLostPointerCapture: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onTouchCancel: (e: ReactTouchEvent<HTMLDivElement>) => void;
   "aria-hidden": boolean;
 };
 
@@ -270,6 +277,9 @@ export function useOverlayEdgeSwipeDismiss(
   const startClientYRef = useRef(0);
   const translateRef = useRef(0);
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Blocks re-entry from releasePointerCapture → lostpointercapture. */
+  const finishingRef = useRef(false);
+  const releasingCaptureRef = useRef(false);
   /** Strip element that holds provisional capture (released on vertical cancel). */
   const stripElRef = useRef<HTMLDivElement | null>(null);
   const activePointerIdRef = useRef<number | null>(null);
@@ -281,13 +291,15 @@ export function useOverlayEdgeSwipeDismiss(
   const onDismissCommitStartRef = useRef(options.onDismissCommitStart);
   onDismissCommitStartRef.current = options.onDismissCommitStart;
 
-  useEffect(() => {
-    translateRef.current = translateX;
-  }, [translateX]);
+  const assignTranslateX = useCallback((next: number) => {
+    writeOverlayTranslateRef(translateRef, next);
+    setTranslateX(next);
+  }, []);
 
   useEffect(() => {
     if (!options.active) {
-      setTranslateX(0);
+      assignTranslateX(0);
+      finishingRef.current = false;
       setTransitionMs(0);
       setIsDragging(false);
       setEdgeStripPointerSession(false);
@@ -300,11 +312,12 @@ export function useOverlayEdgeSwipeDismiss(
         commitTimerRef.current = null;
       }
     }
-  }, [options.active]);
+  }, [assignTranslateX, options.active]);
 
   useEffect(() => {
     // New conversation (or equivalent): never inherit prior exit translate.
-    setTranslateX(0);
+    assignTranslateX(0);
+    finishingRef.current = false;
     setTransitionMs(0);
     setIsDragging(false);
     setEdgeStripPointerSession(false);
@@ -316,7 +329,7 @@ export function useOverlayEdgeSwipeDismiss(
       clearTimeout(commitTimerRef.current);
       commitTimerRef.current = null;
     }
-  }, [options.resetToken]);
+  }, [assignTranslateX, options.resetToken]);
 
   useEffect(() => {
     return () => {
@@ -375,11 +388,12 @@ export function useOverlayEdgeSwipeDismiss(
       setIsDragging(false);
       setEdgeStripPointerSession(false);
       setTransitionMs(0);
-      setTranslateX(0);
+      assignTranslateX(0);
       if (stripEl != null) {
         // Immediate hit-through (do not wait for React re-render of pointer-events class).
         stripEl.style.pointerEvents = "none";
         if (pointerId != null) {
+          releasingCaptureRef.current = true;
           try {
             if (stripEl.hasPointerCapture(pointerId)) {
               stripEl.releasePointerCapture(pointerId);
@@ -387,6 +401,7 @@ export function useOverlayEdgeSwipeDismiss(
           } catch {
             /* already released */
           }
+          releasingCaptureRef.current = false;
         }
         // Restore interactivity after this finger lifts (strip may not receive pointerup).
         const restore = () => {
@@ -413,10 +428,11 @@ export function useOverlayEdgeSwipeDismiss(
     setIsDragging(false);
     setEdgeStripPointerSession(false);
 
+    finishingRef.current = true;
     onDismissCommitStartRef.current?.();
     const exitX = resolveExitTranslatePx();
     setTransitionMs(COMMIT_EXIT_MS);
-    setTranslateX(exitX);
+    assignTranslateX(exitX);
     if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
     commitTimerRef.current = setTimeout(() => {
       commitTimerRef.current = null;
@@ -425,77 +441,78 @@ export function useOverlayEdgeSwipeDismiss(
   }, [resolveExitTranslatePx]);
 
   const endPointerGesture = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
+    (
+      e: { pointerId?: number; currentTarget: HTMLDivElement },
+      kind: OverlaySwipeTerminalKind,
+    ) => {
+      if (finishingRef.current || commitTimerRef.current) return;
       if (!draggingRef.current) {
         setEdgeStripPointerSession(false);
         activePointerIdRef.current = null;
         e.currentTarget.style.pointerEvents = "";
         return;
       }
+
+      finishingRef.current = true;
+      const pointerId =
+        typeof e.pointerId === "number"
+          ? e.pointerId
+          : activePointerIdRef.current;
+      releasingCaptureRef.current = true;
       try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        if (pointerId != null) e.currentTarget.releasePointerCapture(pointerId);
       } catch {
         /* already released */
       }
+      releasingCaptureRef.current = false;
 
+      const mode = gestureModeRef.current;
+      const x = translateRef.current;
+      resetGestureState();
       setEdgeStripPointerSession(false);
       activePointerIdRef.current = null;
       e.currentTarget.style.pointerEvents = "";
 
-      const mode = gestureModeRef.current;
-      resetGestureState();
+      const decision = decideEdgeSwipeTerminal({
+        kind,
+        mode,
+        translateX: x,
+        commitThresholdPx: resolveCommitThresholdPx(),
+        commitRatio: COMMIT_THRESHOLD_RATIO,
+      });
 
-      if (mode === "cancelled" || mode === "undecided") {
-        const x = translateRef.current;
+      const snapOpen = () => {
         if (x <= 1) {
           setTransitionMs(0);
-          setTranslateX(0);
-          return;
-        }
-        setTransitionMs(SNAP_BACK_MS);
-        setTranslateX(0);
-        return;
-      }
-
-      const t = resolveCommitThresholdPx();
-      const x = translateRef.current;
-      if (x >= t * COMMIT_THRESHOLD_RATIO) {
-        const consumed = tryConsumeRef.current?.() === true;
-        if (consumed) {
-          if (x <= 1) {
-            setTransitionMs(0);
-            setTranslateX(0);
-            return;
-          }
+          assignTranslateX(0);
+        } else {
           setTransitionMs(SNAP_BACK_MS);
-          setTranslateX(0);
-          return;
+          assignTranslateX(0);
         }
-        onDismissCommitStartRef.current?.();
-        const exitX = resolveExitTranslatePx();
-        setTransitionMs(COMMIT_EXIT_MS);
-        setTranslateX(exitX);
-        if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
-        commitTimerRef.current = setTimeout(() => {
-          commitTimerRef.current = null;
-          onDismissRef.current();
-        }, COMMIT_NAV_DELAY_MS);
+        finishingRef.current = false;
+      };
+
+      if (decision === "snap") {
+        snapOpen();
         return;
       }
 
-      if (x <= 1) {
-        setTransitionMs(0);
-        setTranslateX(0);
+      if (tryConsumeRef.current?.() === true) {
+        snapOpen();
         return;
       }
-      setTransitionMs(SNAP_BACK_MS);
-      setTranslateX(0);
+
+      onDismissCommitStartRef.current?.();
+      const exitX = resolveExitTranslatePx();
+      setTransitionMs(COMMIT_EXIT_MS);
+      assignTranslateX(exitX);
+      if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = setTimeout(() => {
+        commitTimerRef.current = null;
+        onDismissRef.current();
+      }, COMMIT_NAV_DELAY_MS);
     },
-    [
-      resetGestureState,
-      resolveCommitThresholdPx,
-      resolveExitTranslatePx,
-    ],
+    [assignTranslateX, resetGestureState, resolveCommitThresholdPx, resolveExitTranslatePx],
   );
 
   const onPointerDown = useCallback(
@@ -503,6 +520,7 @@ export function useOverlayEdgeSwipeDismiss(
       if (!canStartSwipe) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
       if (commitTimerRef.current) return;
+      finishingRef.current = false;
 
       const target = e.target;
       if (
@@ -527,7 +545,7 @@ export function useOverlayEdgeSwipeDismiss(
       startClientXRef.current = e.clientX;
       startClientYRef.current = e.clientY;
       setTransitionMs(0);
-      setTranslateX(0);
+      assignTranslateX(0);
     },
     [canStartSwipe],
   );
@@ -571,7 +589,7 @@ export function useOverlayEdgeSwipeDismiss(
             /* ignore */
           }
           e.preventDefault();
-          setTranslateX(Math.max(0, Math.min(dx, cap)));
+          assignTranslateX(Math.max(0, Math.min(dx, cap)));
           return;
         }
 
@@ -579,19 +597,19 @@ export function useOverlayEdgeSwipeDismiss(
           dx >= HORIZONTAL_PREVIEW_MIN_DX &&
           dx >= Math.abs(dy) * HORIZONTAL_PREVIEW_DY_RATIO
         ) {
-          setTranslateX(Math.max(0, Math.min(dx, cap)));
+          assignTranslateX(Math.max(0, Math.min(dx, cap)));
           return;
         }
 
         setTransitionMs(0);
-        setTranslateX(0);
+        assignTranslateX(0);
         return;
       }
 
       if (gestureModeRef.current !== "horizontal") return;
       e.preventDefault();
       const cap = resolveMaxDragPx();
-      setTranslateX(Math.max(0, Math.min(dx, cap)));
+      assignTranslateX(Math.max(0, Math.min(dx, cap)));
     },
     [resolveMaxDragPx, abortStripGestureForNativeScroll],
   );
@@ -659,9 +677,14 @@ export function useOverlayEdgeSwipeDismiss(
     },
     onPointerDown,
     onPointerMove,
-    onPointerUp: endPointerGesture,
-    onPointerCancel: endPointerGesture,
-    onLostPointerCapture: endPointerGesture,
+    onPointerUp: (e) => endPointerGesture(e, "up"),
+    onPointerCancel: (e) => endPointerGesture(e, "interrupt"),
+    onLostPointerCapture: (e) => {
+      if (releasingCaptureRef.current) return;
+      endPointerGesture(e, "interrupt");
+    },
+    onTouchCancel: (e) =>
+      endPointerGesture({ currentTarget: e.currentTarget }, "interrupt"),
     "aria-hidden": true,
   };
 

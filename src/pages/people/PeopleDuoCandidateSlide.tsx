@@ -32,6 +32,7 @@ export default function PeopleDuoCandidateSlide({
   presentation: _presentation = "mine",
   onOpenProfile,
   onMineAtmosphereChange,
+  isUnseen = false,
 }: {
   candidate: PairUpCandidate;
   identitySource: ProfileIdentityMediaSource;
@@ -49,6 +50,8 @@ export default function PeopleDuoCandidateSlide({
   presentation?: PeopleDuoPresentationVariant;
   onOpenProfile?: () => void;
   onMineAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
+  /** Unseen opportunity — subtle brand photo edge. */
+  isUnseen?: boolean;
 }) {
   void _presentation;
   const name = candidate.display_name?.trim() || "Someone";
@@ -76,6 +79,7 @@ export default function PeopleDuoCandidateSlide({
       identityVisible
       onOpenProfile={onOpenProfile}
       onAtmosphereChange={onMineAtmosphereChange}
+      isUnseen={isUnseen}
     />
   );
 }

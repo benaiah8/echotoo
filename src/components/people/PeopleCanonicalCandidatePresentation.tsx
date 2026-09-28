@@ -40,7 +40,11 @@ const SOURCE_CAPTION_OPTICAL_PAD_TOP_PX = 2;
 const CAPTION_CLASS =
   // leading-tight (1.25): readable multi-line without growing chrome reserve.
   // Light: full --text over the atmosphere top fade; dark keeps soft /82.
-  `line-clamp-3 w-full max-w-[min(18rem,calc(100%-${SOURCE_PAD_LEFT_PX}px))] text-right text-[13px] leading-tight text-[var(--text)]/82 app-light:text-[var(--text)]`;
+  // min-h-0: flex item must shrink to the 3-line chrome slot (min-height:auto would not).
+  `line-clamp-3 min-h-0 overflow-hidden w-full max-w-[min(18rem,calc(100%-${SOURCE_PAD_LEFT_PX}px))] text-right text-[13px] leading-tight text-[var(--text)]/82 app-light:text-[var(--text)]`;
+
+/** Clamp lives on the inner span. `block` is omitted: it overrides line-clamp's display and the clamp does not hold. */
+const CAPTION_CLAMP_CLASS = "min-h-0 overflow-hidden line-clamp-3";
 
 const DATE_PILL_BASE =
   "inline-flex h-7 max-w-full items-center truncate rounded-full px-2.5 text-[12px] font-semibold leading-none tracking-tight";
@@ -104,6 +108,8 @@ export type PeopleCanonicalCandidatePresentationProps = {
   onOpenProfile?: () => void;
   /** Atmosphere report from current slide media (Mine shell consumes today). */
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
+  /** Duo/Discover unseen opportunity — brand-accent photo edge. */
+  isUnseen?: boolean;
 };
 
 /**
@@ -129,6 +135,7 @@ export default function PeopleCanonicalCandidatePresentation({
   identityVisible = true,
   onOpenProfile,
   onAtmosphereChange,
+  isUnseen = false,
 }: PeopleCanonicalCandidatePresentationProps) {
   const captionText = caption?.trim() || "";
   const dateText = scheduleLabel?.trim() || "";
@@ -185,14 +192,24 @@ export default function PeopleCanonicalCandidatePresentation({
           aria-label={`${peopleUiCopy.deckSeePost}: ${captionText}`}
           data-people-duo-source-hit="true"
         >
-          {captionText}
+          <span
+            className={CAPTION_CLAMP_CLASS}
+            data-people-source-caption-clamp="true"
+          >
+            {captionText}
+          </span>
         </button>
       ) : (
         <span
           className={`${CAPTION_CLASS} relative ${captionText ? "" : "min-h-[2.4em]"}`}
           aria-hidden={!captionText}
         >
-          {captionText}
+          <span
+            className={CAPTION_CLAMP_CLASS}
+            data-people-source-caption-clamp="true"
+          >
+            {captionText}
+          </span>
         </span>
       )}
       {dateRow}
@@ -246,6 +263,7 @@ export default function PeopleCanonicalCandidatePresentation({
           identityOverlay={identityOverlay}
           tapIdentityKey={`${noteResetKey}:${personKey}`}
           onMineAtmosphereChange={onAtmosphereChange}
+          isUnseen={isUnseen}
         />
       </div>
     </div>

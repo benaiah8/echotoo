@@ -12,13 +12,22 @@ import {
 import type { UseOpenPlanCandidatesResult } from "../../hooks/useOpenPlanCandidates";
 import type { MatchDeckScopeSnapshot } from "../../lib/matchDeckSession";
 import {
-  filterOrderedIdsToEligible,
+  PEOPLE_DECK_PREFETCH_REMAINING,
   indexOfOpportunity,
   isTrueCaughtUpState,
   pruneActiveOrderedIds,
   resolveNearestOpportunityId,
   shouldLoadMoreForEmptyWindow,
 } from "../../lib/people/matchDeckNavigation";
+import {
+  firstUnseenOpportunityId,
+  getPairUpSeenOpportunityIdSet,
+  rebuildPairUpActiveOrderedIds,
+} from "../../lib/people/peoplePairUpSeenHistory";
+import {
+  isPeopleDeckSeenBootstrapReady,
+  markLocalPeopleDeckSeenAndEnqueue,
+} from "../../lib/people/peopleDeckSeenSync";
 import type { OpenPlanCandidate } from "../../lib/people/types";
 import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
 import {
@@ -49,8 +58,6 @@ import {
   peopleDebugSetContext,
 } from "../../lib/people/peopleDeckDebug";
 
-const PREFETCH_REMAINING = 3;
-
 const secondaryControlClass = [
   "flex min-h-11 min-w-[7.5rem] items-center justify-center rounded-full px-4",
   "border border-[var(--text)]/18",
@@ -78,6 +85,9 @@ export default function OpenPlanDeckBody({
   onPrimaryActionChange,
   onAtmosphereChange,
   onAtmosphereIdentityKeyChange,
+  authUserId = null,
+  seenEpoch = 0,
+  onSeenMarked,
 }: {
   deck: UseOpenPlanCandidatesResult;
   scopeSnap: MatchDeckScopeSnapshot;
@@ -87,6 +97,10 @@ export default function OpenPlanDeckBody({
   onPrimaryActionChange?: (action: PeopleShellPrimaryAction | null) => void;
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
   onAtmosphereIdentityKeyChange?: (identityKey: string | null) => void;
+  authUserId?: string | null;
+  /** Shared People deck seen-history epoch (bumps on mark). */
+  seenEpoch?: number;
+  onSeenMarked?: () => void;
 }) {
   peopleDebugBumpRender("openPlanDeckBody");
 
@@ -121,6 +135,11 @@ export default function OpenPlanDeckBody({
     () => new Set(scopeSnap.retiredIds),
     [scopeSnap.retiredIds]
   );
+  const plansSeenIds = useMemo(() => {
+    void seenEpoch;
+    if (!authUserId) return new Set<string>();
+    return getPairUpSeenOpportunityIdSet(authUserId, "open_plans");
+  }, [authUserId, seenEpoch]);
   const photoIndexById = scopeSnap.photoIndexById;
 
   const sourceRows = useMemo(() => {
@@ -218,17 +237,24 @@ export default function OpenPlanDeckBody({
         ? snap.activeOrderedIds
         : orderedIdsRef.current;
 
-    const nextActive = filterOrderedIdsToEligible(
-      snap.activeOrderedIds,
-      eligibleIds
-    );
-    const activeSet = new Set(nextActive);
-    for (const row of sourceRows) {
-      const id = row.opportunity_id;
-      if (activeSet.has(id) || snap.retiredIds.includes(id)) continue;
-      nextActive.push(id);
-      activeSet.add(id);
+    if (
+      authUserId &&
+      snap.activeOrderedIds.length === 0 &&
+      !isPeopleDeckSeenBootstrapReady(authUserId, "open_plans")
+    ) {
+      return;
     }
+
+    const eligibleOrdered = sourceRows
+      .map((row) => row.opportunity_id)
+      .filter(Boolean);
+    const nextActive = rebuildPairUpActiveOrderedIds({
+      eligibleOrdered,
+      previousActive: snap.activeOrderedIds,
+      currentId: snap.currentOpportunityId,
+      seenIds: plansSeenIds,
+      retiredIds: snap.retiredIds,
+    });
 
     let nextCurrent = snap.currentOpportunityId;
     if (nextCurrent && !eligibleIds.has(nextCurrent)) {
@@ -238,7 +264,10 @@ export default function OpenPlanDeckBody({
         nextCurrent
       );
     } else if (nextCurrent == null && nextActive.length > 0) {
-      nextCurrent = nextActive[0] ?? null;
+      nextCurrent =
+        snap.activeOrderedIds.length === 0
+          ? firstUnseenOpportunityId(nextActive, plansSeenIds)
+          : (nextActive[0] ?? null);
     }
 
     const activeChanged =
@@ -251,7 +280,7 @@ export default function OpenPlanDeckBody({
       ...(activeChanged ? { activeOrderedIds: nextActive } : {}),
       ...(currentChanged ? { currentOpportunityId: nextCurrent } : {}),
     });
-  }, [patchScope, sourceRows]);
+  }, [authUserId, patchScope, plansSeenIds, seenEpoch, sourceRows]);
 
   useEffect(() => {
     const snap = scopeSnapRef.current;
@@ -296,10 +325,15 @@ export default function OpenPlanDeckBody({
       hasMore,
       loadMoreInFlight,
     });
+    const allLoadedSeen =
+      deckRows.length > 0 &&
+      deckRows.every((row) => plansSeenIds.has(row.opportunity_id));
     if (
       loadMoreInFlight ||
       !hasMore ||
-      (!emptyNeedsPage && remaining > PREFETCH_REMAINING)
+      (!emptyNeedsPage &&
+        remaining > PEOPLE_DECK_PREFETCH_REMAINING &&
+        !allLoadedSeen)
     ) {
       return;
     }
@@ -309,6 +343,7 @@ export default function OpenPlanDeckBody({
       deckRowsLen: deckRows.length,
       deck: "openPlanDeckBody",
       emptyNeedsPage,
+      allLoadedSeen,
     });
     loadMoreInFlightRef.current = true;
     setLoadMoreInFlight(true);
@@ -318,16 +353,28 @@ export default function OpenPlanDeckBody({
         loadMoreInFlightRef.current = false;
         setLoadMoreInFlight(false);
       });
-  }, [deckRows.length, hasMore, index, loadMore, loadMoreInFlight]);
+  }, [
+    deckRows,
+    hasMore,
+    index,
+    loadMore,
+    loadMoreInFlight,
+    plansSeenIds,
+  ]);
 
   const goToIndex = useCallback(
     (next: number) => {
       if (controlsLocked) return;
       const clamped = Math.max(0, Math.min(deckRows.length - 1, next));
       const id = deckRows[clamped]?.opportunity_id ?? null;
+      const previousId = scopeSnapRef.current.currentOpportunityId;
+      if (authUserId && previousId && id && previousId !== id) {
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, "open_plans", previousId);
+        onSeenMarked?.();
+      }
       patchScope({ currentOpportunityId: id });
     },
-    [controlsLocked, deckRows, patchScope]
+    [authUserId, controlsLocked, deckRows, onSeenMarked, patchScope]
   );
 
   const plansPrepareRef = useRef<
@@ -689,6 +736,7 @@ export default function OpenPlanDeckBody({
                 withPhoto={meta.withPhoto}
                 neighborSide={meta.neighborSide}
                 onAtmosphereChange={onAtmosphereChange}
+                isUnseen={!plansSeenIds.has(row.opportunity_id)}
               />
             );
           }}

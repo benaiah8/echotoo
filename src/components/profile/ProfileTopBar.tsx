@@ -399,8 +399,9 @@ export default function ProfileTopBar({
     "active:scale-[0.99] disabled:pointer-events-none disabled:opacity-40",
   ].join(" ");
 
+  /** Own Settings pills sit on the overlay scrim blur. No per-pill backdrop-filter. */
   const ownSheetGlassPill =
-    "rounded-full border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)] [-webkit-backdrop-filter:blur(var(--glass-blur))] shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_14px_color-mix(in_oklab,var(--brand)_12%,transparent)]";
+    "rounded-full border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)] shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_14px_color-mix(in_oklab,var(--brand)_12%,transparent)]";
 
   const ownSheetRowBase = [
     "flex w-full min-w-0 items-center justify-between gap-2 rounded-full",

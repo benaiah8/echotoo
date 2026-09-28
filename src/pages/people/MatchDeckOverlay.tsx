@@ -28,6 +28,7 @@ import {
   consumeMatchDeckSession,
   emptyGroupUpDeckScopeSnapshot,
   emptyMatchDeckScopeSnapshot,
+  invalidateMatchDeckSessionScopeAfterHardRefresh,
   suspendMatchDeckSession,
   type GroupUpDeckScopeSnapshot,
   type MatchDeckPairUpScope,
@@ -35,6 +36,7 @@ import {
   type MatchDeckSessionMode,
 } from "../../lib/matchDeckSession";
 import {
+  PEOPLE_DECK_PREFETCH_REMAINING,
   filterOrderedIdsToEligible,
   indexOfOpportunity,
   isTrueCaughtUpState,
@@ -42,6 +44,32 @@ import {
   resolveNearestOpportunityId,
   shouldLoadMoreForEmptyWindow,
 } from "../../lib/people/matchDeckNavigation";
+import {
+  firstUnseenOpportunityId,
+  getPairUpSeenOpportunityIdSet,
+  rebuildPairUpActiveOrderedIds,
+  type PairUpSeenScope,
+} from "../../lib/people/peoplePairUpSeenHistory";
+import {
+  awaitPeopleDeckSeenBootstrap,
+  bumpPeopleDeckSeenHydrateGeneration,
+  flushAllPeopleDeckSeenOutboxes,
+  flushPeopleDeckSeenOutbox,
+  forceHydratePeopleDeckSeen,
+  hydratePeopleDeckSeen,
+  isPeopleDeckSeenBootstrapReady,
+  markLocalPeopleDeckSeenAndEnqueue,
+} from "../../lib/people/peopleDeckSeenSync";
+import {
+  bumpPeopleHardRefreshGeneration,
+  isPeopleHardRefreshScope,
+  runPeopleDeckHardRefresh,
+  type PeopleHardRefreshScope,
+} from "../../lib/people/peopleDeckHardRefresh";
+import { PEOPLE_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
+import { useHomePullToRefresh } from "../../hooks/useHomePullToRefresh";
+import { acquirePullToRefreshBlock } from "../../lib/pullToRefreshBlock";
+import { supabase } from "../../lib/supabaseClient";
 import {
   hasP2pDiscoverIntroSeen,
   setP2pDiscoverIntroSeen,
@@ -69,6 +97,7 @@ import {
 import {
   messagesConversationPath,
 } from "../../router/Paths";
+import { useTabVisibility } from "../../router/PersistentTabContainer.new";
 import MatchDeckCarousel from "./MatchDeckCarousel";
 import PeopleDuoCandidateSlide from "./PeopleDuoCandidateSlide";
 import PeopleDuoModeTransition from "./PeopleDuoModeTransition";
@@ -213,8 +242,6 @@ function collectMineWarmFrontUrls(args: {
   return urls;
 }
 
-const PREFETCH_REMAINING = 3;
-
 type DeckMode = MatchDeckSessionMode;
 type ActionPhase = "idle" | "expressing" | "completing" | "completeFailed";
 type DiscoverDialog = null | "intro";
@@ -227,6 +254,7 @@ type DeckProps = Pick<
   | "error"
   | "hasLoaded"
   | "refresh"
+  | "hardRefresh"
   | "loadMore"
   | "express"
 >;
@@ -238,6 +266,7 @@ const EMPTY_PAIR_UP_DECK: DeckProps = {
   error: null,
   hasLoaded: false,
   refresh: async () => {},
+  hardRefresh: async () => {},
   loadMore: async () => {},
   express: async () => {
     throw new Error("Deck not ready");
@@ -327,6 +356,12 @@ export default function MatchDeckOverlay({
   const [discoverDialog, setDiscoverDialog] = useState<DiscoverDialog>(null);
   const [discoverEnableBusy, setDiscoverEnableBusy] = useState(false);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
+  /** Bumps when People seen history writes so visuals/order refresh. */
+  const [pairUpSeenEpoch, setPairUpSeenEpoch] = useState(0);
+  /** Bumps when fresh-device seen bootstrap settles for a scope. */
+  const [seenBootstrapEpoch, setSeenBootstrapEpoch] = useState(0);
+  const { activeTab: peopleShellActiveTab, covered: peopleTabsCovered } =
+    useTabVisibility();
   const [connectResolving, setConnectResolving] = useState(false);
   /** Single-flight: true from Connect tap until mutation settles or photo-gate dismiss. */
   const connectInFlightRef = useRef(false);
@@ -375,6 +410,16 @@ export default function MatchDeckOverlay({
     () => new Set(scopeSnap.retiredIds),
     [scopeSnap.retiredIds]
   );
+  const isPairUpSeenScope =
+    contentScope === "my_plans" || contentScope === "discover";
+  const pairUpSeenScope: PairUpSeenScope | null = isPairUpSeenScope
+    ? contentScope
+    : null;
+  const pairUpSeenIds = useMemo(() => {
+    void pairUpSeenEpoch;
+    if (!authUserId || !pairUpSeenScope) return new Set<string>();
+    return getPairUpSeenOpportunityIdSet(authUserId, pairUpSeenScope);
+  }, [authUserId, pairUpSeenScope, pairUpSeenEpoch]);
   const photoIndexByPersonKey = scopeSnap.photoIndexByPersonKey;
   const [loadMoreInFlight, setLoadMoreInFlight] = useState(false);
   const lastValidIndexRef = useRef(0);
@@ -451,9 +496,24 @@ export default function MatchDeckOverlay({
       }
     };
     window.addEventListener("profile:updated", onUpdated);
+    const { data: authSub } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (cancelled) return;
+        const next = session?.user?.id?.trim() || null;
+        setAuthUserId((prev) => {
+          if (prev !== next) {
+            // Invalidate in-flight hydrate/flush/hard-refresh for the previous account.
+            bumpPeopleDeckSeenHydrateGeneration();
+            bumpPeopleHardRefreshGeneration();
+          }
+          return next;
+        });
+      }
+    );
     return () => {
       cancelled = true;
       window.removeEventListener("profile:updated", onUpdated);
+      void authSub.subscription.unsubscribe();
     };
   }, []);
 
@@ -633,14 +693,382 @@ export default function MatchDeckOverlay({
     }
   }, []);
 
+  /**
+   * Mark the settled owned current for a browsing identity.
+   * Used on scope leave / People tab leave / Detail suspend — not Create cover.
+   */
+  const markSettledCurrentSeenForIdentity = useCallback(
+    (identity: string) => {
+      if (!authUserId) return false;
+      if (
+        identity === "my_plans" ||
+        identity === "discover" ||
+        identity === "open_plans"
+      ) {
+        const id =
+          scopeStateRef.current[identity as MatchDeckPairUpScope]
+            .currentOpportunityId;
+        if (!id) return false;
+        return markLocalPeopleDeckSeenAndEnqueue(authUserId, identity, id);
+      }
+      if (identity === "groups_new") {
+        const id =
+          groupUpScopeRef.current.currentOpportunityIdByTab.new ?? null;
+        if (!id) return false;
+        return markLocalPeopleDeckSeenAndEnqueue(authUserId, "groups_new", id);
+      }
+      return false;
+    },
+    [authUserId]
+  );
+
+  const markSettledCurrentSeen = useCallback(() => {
+    const identity =
+      modeRef.current === "groups"
+        ? groupUpScopeRef.current.browseTab === "new"
+          ? "groups_new"
+          : "groups_yours"
+        : activeScopeRef.current;
+    if (markSettledCurrentSeenForIdentity(identity)) {
+      setPairUpSeenEpoch((n) => n + 1);
+    }
+  }, [markSettledCurrentSeenForIdentity]);
+
+  const bumpPairUpSeenEpoch = useCallback(() => {
+    setPairUpSeenEpoch((n) => n + 1);
+  }, []);
+
+  /** People primary browsing identity — Groups Yours is never a seen scope. */
+  const peopleBrowsingIdentity =
+    mode === "groups"
+      ? groupUpScope.browseTab === "new"
+        ? "groups_new"
+        : "groups_yours"
+      : activeScope;
+
+  /** Active People seen scope for hydrate (null for Groups Yours). */
+  const hydrateSeenScope: PairUpSeenScope | null =
+    peopleBrowsingIdentity === "my_plans" ||
+    peopleBrowsingIdentity === "discover" ||
+    peopleBrowsingIdentity === "open_plans" ||
+    peopleBrowsingIdentity === "groups_new"
+      ? peopleBrowsingIdentity
+      : null;
+
+  const [peopleRefreshEpoch, setPeopleRefreshEpoch] = useState(0);
+  const [ptrSurfaceEl, setPtrSurfaceEl] = useState<HTMLDivElement | null>(
+    null
+  );
+  const hardRefreshScopeRef = useRef<PeopleHardRefreshScope | null>(null);
+  hardRefreshScopeRef.current = hydrateSeenScope;
+  const authUserIdRef = useRef(authUserId);
+  authUserIdRef.current = authUserId;
+  const peopleTabsCoveredRef = useRef(peopleTabsCovered);
+  peopleTabsCoveredRef.current = peopleTabsCovered;
+  /** True when People is the interactive surface (not Create-covered). */
+  const peopleHardRefreshActive =
+    peopleShellActiveTab === "people" && !peopleTabsCovered;
+  const peopleHardRefreshActiveRef = useRef(peopleHardRefreshActive);
+  peopleHardRefreshActiveRef.current = peopleHardRefreshActive;
+  const mineProfileOpenRef = useRef(mineProfileOpen);
+  mineProfileOpenRef.current = mineProfileOpen;
+
+  const applyHardRefreshDeckReset = useCallback(
+    (scope: PeopleHardRefreshScope) => {
+      if (scope === "groups_new") {
+        setGroupUpScope((prev) => ({
+          ...prev,
+          currentOpportunityIdByTab: {
+            ...prev.currentOpportunityIdByTab,
+            new: null,
+          },
+          activeOrderedIdsByTab: {
+            ...prev.activeOrderedIdsByTab,
+            new: [],
+          },
+          retiredIdsByTab: {
+            ...prev.retiredIdsByTab,
+            new: [],
+          },
+        }));
+        invalidateMatchDeckSessionScopeAfterHardRefresh({
+          kind: "groups_new",
+        });
+      } else {
+        setScopeState((prev) => ({
+          ...prev,
+          [scope]: emptyMatchDeckScopeSnapshot(),
+        }));
+        orderedIdsRef.current[scope] = [];
+        invalidateMatchDeckSessionScopeAfterHardRefresh({
+          kind: "pairUp",
+          scope,
+        });
+      }
+      setPairUpSeenEpoch((n) => n + 1);
+      setSeenBootstrapEpoch((n) => n + 1);
+    },
+    []
+  );
+
+  const hardRefreshPeopleDeckScope = useCallback(
+    async (scope: PeopleHardRefreshScope): Promise<void> => {
+      const uid = authUserIdRef.current;
+      if (!uid) return;
+      if (!peopleHardRefreshActiveRef.current) return;
+      if (peopleTabsCoveredRef.current) return;
+
+      const candidateRefresh = async () => {
+        if (scope === "my_plans") {
+          await myPlans.hardRefresh();
+          return;
+        }
+        if (scope === "discover") {
+          onRequestDiscoverMount();
+          const deck = discover;
+          if (!deck) throw new Error("Discover not ready");
+          await deck.hardRefresh();
+          return;
+        }
+        if (scope === "open_plans") {
+          onRequestOpenPlansMount();
+          const deck = openPlans;
+          if (!deck) throw new Error("Open Plans not ready");
+          await deck.hardRefresh();
+          return;
+        }
+        onRequestGroupUpsMount();
+        const deck = groupUps;
+        if (!deck) throw new Error("Groups not ready");
+        await deck.hardRefresh();
+      };
+
+      const result = await runPeopleDeckHardRefresh({
+        userId: uid,
+        scope,
+        flushOutbox: () =>
+          flushPeopleDeckSeenOutbox({ userId: uid, scope }),
+        forceHydrateSeen: () => forceHydratePeopleDeckSeen(uid, scope),
+        hardRefreshCandidates: candidateRefresh,
+        applyDeckReset: () => applyHardRefreshDeckReset(scope),
+        isStillActive: () =>
+          peopleHardRefreshActiveRef.current &&
+          !peopleTabsCoveredRef.current &&
+          authUserIdRef.current === uid &&
+          hardRefreshScopeRef.current === scope,
+      });
+
+      setPeopleRefreshEpoch((n) => n + 1);
+      if (result === "candidate_failed") {
+        // Keep old deck; seen may have merged. Soft toast only on hard fail.
+        toast.error(peopleUiCopy.deckLoadError);
+      }
+    },
+    [
+      applyHardRefreshDeckReset,
+      discover,
+      groupUps,
+      myPlans,
+      onRequestDiscoverMount,
+      onRequestGroupUpsMount,
+      onRequestOpenPlansMount,
+      openPlans,
+    ]
+  );
+
+  const hardRefreshPeopleDeckScopeRef = useRef(hardRefreshPeopleDeckScope);
+  hardRefreshPeopleDeckScopeRef.current = hardRefreshPeopleDeckScope;
+
+  /** People tab re-tap → same hard refresh as pull (active supported scope only). */
+  useEffect(() => {
+    const onTabRefresh = () => {
+      if (!peopleHardRefreshActiveRef.current) return;
+      const scope = hardRefreshScopeRef.current;
+      if (!scope || !isPeopleHardRefreshScope(scope)) return;
+      void hardRefreshPeopleDeckScopeRef.current(scope);
+    };
+    window.addEventListener(PEOPLE_TAB_REFRESH_EVENT, onTabRefresh);
+    return () => {
+      window.removeEventListener(PEOPLE_TAB_REFRESH_EVENT, onTabRefresh);
+    };
+  }, []);
+
+  const ptrEnabled =
+    peopleHardRefreshActive &&
+    Boolean(hydrateSeenScope) &&
+    !mineProfileOpen &&
+    !photoPromptOpen &&
+    !(mode === "p2p" && activeScope !== contentScope);
+
+  const {
+    pullPx: peoplePullPx,
+    pullProgress: peoplePullProgress,
+    isRefreshing: peoplePtrRefreshing,
+  } = useHomePullToRefresh({
+    enabled: ptrEnabled,
+    onCommit: () => {
+      const scope = hardRefreshScopeRef.current;
+      if (!scope) return;
+      return hardRefreshPeopleDeckScopeRef.current(scope);
+    },
+    refreshEpoch: peopleRefreshEpoch,
+    getScrollTop: () => 0,
+    touchTarget: ptrSurfaceEl,
+  });
+
+  useEffect(() => {
+    if (!mineProfileOpen && !photoPromptOpen) return;
+    return acquirePullToRefreshBlock();
+  }, [mineProfileOpen, photoPromptOpen]);
+
+  useEffect(() => {
+    if (peopleHardRefreshActive) return;
+    bumpPeopleHardRefreshGeneration();
+  }, [peopleHardRefreshActive]);
+
+  /** Scope open: bootstrap gate (fresh device) + hydrate (cooldown). */
+  useEffect(() => {
+    if (!authUserId || !hydrateSeenScope) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await awaitPeopleDeckSeenBootstrap({
+        userId: authUserId,
+        scope: hydrateSeenScope,
+      });
+      if (cancelled) return;
+      setSeenBootstrapEpoch((n) => n + 1);
+      if (result === "ready" || result === "local") {
+        setPairUpSeenEpoch((n) => n + 1);
+      }
+      if (result === "local") {
+        const late = await hydratePeopleDeckSeen({
+          userId: authUserId,
+          scope: hydrateSeenScope,
+          force: false,
+        });
+        if (cancelled) return;
+        if (late === "merged") setPairUpSeenEpoch((n) => n + 1);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId, hydrateSeenScope]);
+
+  /** Background / resume: best-effort flush; hydrate obeys cooldown. */
+  useEffect(() => {
+    if (!authUserId) return;
+    let cancelled = false;
+    const onHidden = () => {
+      if (document.hidden) {
+        void flushAllPeopleDeckSeenOutboxes(authUserId);
+      }
+    };
+    document.addEventListener("visibilitychange", onHidden);
+
+    let removeAppListener: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { App } = await import("@capacitor/app");
+        const handle = await App.addListener(
+          "appStateChange",
+          ({ isActive }) => {
+            if (cancelled) return;
+            if (!isActive) {
+              void flushAllPeopleDeckSeenOutboxes(authUserId);
+              return;
+            }
+            void flushAllPeopleDeckSeenOutboxes(authUserId);
+            if (hydrateSeenScope) {
+              void hydratePeopleDeckSeen({
+                userId: authUserId,
+                scope: hydrateSeenScope,
+                force: false,
+              }).then((r) => {
+                if (!cancelled && r === "merged") {
+                  setPairUpSeenEpoch((n) => n + 1);
+                }
+              });
+            }
+          }
+        );
+        removeAppListener = () => {
+          void handle.remove();
+        };
+      } catch {
+        /* web / no capacitor */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onHidden);
+      removeAppListener?.();
+    };
+  }, [authUserId, hydrateSeenScope]);
+
+  const prevPeopleBrowsingIdentityRef = useRef(peopleBrowsingIdentity);
+  useEffect(() => {
+    const prev = prevPeopleBrowsingIdentityRef.current;
+    if (prev === peopleBrowsingIdentity) return;
+    prevPeopleBrowsingIdentityRef.current = peopleBrowsingIdentity;
+    if (markSettledCurrentSeenForIdentity(prev)) {
+      setPairUpSeenEpoch((n) => n + 1);
+    }
+    // Flush outbox for the scope we left (not Groups Yours).
+    if (
+      authUserId &&
+      (prev === "my_plans" ||
+        prev === "discover" ||
+        prev === "open_plans" ||
+        prev === "groups_new")
+    ) {
+      void flushPeopleDeckSeenOutbox({
+        userId: authUserId,
+        scope: prev,
+      });
+    }
+  }, [authUserId, markSettledCurrentSeenForIdentity, peopleBrowsingIdentity]);
+
+  /**
+   * Leave People tab → mark settled current + flush all outboxes.
+   * Create cover keeps activeTab === "people" (`peopleTabsCovered`) — must NOT mark/flush-as-leave.
+   */
+  const prevPeopleTabActiveRef = useRef(peopleShellActiveTab === "people");
+  useEffect(() => {
+    const peopleTabActive = peopleShellActiveTab === "people";
+    const prev = prevPeopleTabActiveRef.current;
+    prevPeopleTabActiveRef.current = peopleTabActive;
+    // Create cover: activeTab stays "people" while covered — no leave mark.
+    if (peopleTabsCovered && peopleTabActive) return;
+    if (prev && !peopleTabActive) {
+      markSettledCurrentSeen();
+      void flushAllPeopleDeckSeenOutboxes(authUserId);
+    }
+  }, [
+    authUserId,
+    markSettledCurrentSeen,
+    peopleShellActiveTab,
+    peopleTabsCovered,
+  ]);
+
   const suspendDeckSession = useCallback(() => {
+    markSettledCurrentSeen();
+    void flushAllPeopleDeckSeenOutboxes(authUserId);
     suspendMatchDeckSession({
       mode,
       activeScope,
       scopes: scopeState,
       groupUp: groupUpScope,
     });
-  }, [activeScope, groupUpScope, mode, scopeState]);
+  }, [
+    activeScope,
+    authUserId,
+    groupUpScope,
+    markSettledCurrentSeen,
+    mode,
+    scopeState,
+  ]);
 
   /** One shared removal path: hook list + session removedIds stay in sync. */
   const handleRemoveGroupUpCandidate = useCallback((opportunityId: string) => {
@@ -889,17 +1317,46 @@ export default function MatchDeckOverlay({
         ? snap.activeOrderedIds
         : orderedIdsRef.current[contentScope];
 
-    const nextActive = filterOrderedIdsToEligible(
-      snap.activeOrderedIds,
-      eligibleIds
-    );
-    const activeSet = new Set(nextActive);
-    for (const row of sourceRows) {
-      const id = row.opportunity_id;
-      if (activeSet.has(id)) continue;
-      if (snap.retiredIds.includes(id)) continue;
-      nextActive.push(id);
-      activeSet.add(id);
+    // Fresh-device gate: do not establish first current before seen hydrate settles.
+    void seenBootstrapEpoch;
+    if (
+      (contentScope === "my_plans" || contentScope === "discover") &&
+      !useDevMocks &&
+      authUserId &&
+      snap.activeOrderedIds.length === 0 &&
+      !isPeopleDeckSeenBootstrapReady(authUserId, contentScope)
+    ) {
+      return;
+    }
+
+    let nextActive: string[];
+    if (
+      (contentScope === "my_plans" || contentScope === "discover") &&
+      !useDevMocks
+    ) {
+      const eligibleOrdered = sourceRows
+        .map((row) => row.opportunity_id)
+        .filter(Boolean);
+      nextActive = rebuildPairUpActiveOrderedIds({
+        eligibleOrdered,
+        previousActive: snap.activeOrderedIds,
+        currentId: snap.currentOpportunityId,
+        seenIds: pairUpSeenIds,
+        retiredIds: snap.retiredIds,
+      });
+    } else {
+      nextActive = filterOrderedIdsToEligible(
+        snap.activeOrderedIds,
+        eligibleIds
+      );
+      const activeSet = new Set(nextActive);
+      for (const row of sourceRows) {
+        const id = row.opportunity_id;
+        if (activeSet.has(id)) continue;
+        if (snap.retiredIds.includes(id)) continue;
+        nextActive.push(id);
+        activeSet.add(id);
+      }
     }
 
     let nextCurrent = snap.currentOpportunityId;
@@ -910,7 +1367,15 @@ export default function MatchDeckOverlay({
         nextCurrent
       );
     } else if (nextCurrent == null && nextActive.length > 0) {
-      nextCurrent = nextActive[0] ?? null;
+      if (
+        (contentScope === "my_plans" || contentScope === "discover") &&
+        !useDevMocks &&
+        snap.activeOrderedIds.length === 0
+      ) {
+        nextCurrent = firstUnseenOpportunityId(nextActive, pairUpSeenIds);
+      } else {
+        nextCurrent = nextActive[0] ?? null;
+      }
     }
 
     const activeChanged =
@@ -923,7 +1388,15 @@ export default function MatchDeckOverlay({
       ...(activeChanged ? { activeOrderedIds: nextActive } : {}),
       ...(currentChanged ? { currentOpportunityId: nextCurrent } : {}),
     });
-  }, [contentScope, patchScope, sourceRows]);
+  }, [
+    authUserId,
+    contentScope,
+    pairUpSeenIds,
+    patchScope,
+    seenBootstrapEpoch,
+    sourceRows,
+    useDevMocks,
+  ]);
 
   useEffect(() => {
     const snap = scopeStateRef.current[contentScope];
@@ -972,11 +1445,18 @@ export default function MatchDeckOverlay({
       hasMore: useDevMocks ? false : hasMore,
       loadMoreInFlight,
     });
+    const allLoadedSeen =
+      isPairUpSeenScope &&
+      !useDevMocks &&
+      deckRows.length > 0 &&
+      deckRows.every((row) => pairUpSeenIds.has(row.opportunity_id));
     if (
       useDevMocks ||
       loadMoreInFlight ||
       !hasMore ||
-      (!emptyNeedsPage && remaining > PREFETCH_REMAINING)
+      (!emptyNeedsPage &&
+        remaining > PEOPLE_DECK_PREFETCH_REMAINING &&
+        !allLoadedSeen)
     ) {
       return;
     }
@@ -986,6 +1466,7 @@ export default function MatchDeckOverlay({
       deckRowsLen: deckRows.length,
       scope: activeScope,
       emptyNeedsPage,
+      allLoadedSeen,
     });
     loadMoreInFlightRef.current = true;
     setLoadMoreInFlight(true);
@@ -999,11 +1480,13 @@ export default function MatchDeckOverlay({
       });
   }, [
     activeScope,
-    deckRows.length,
+    deckRows,
     hasMore,
     index,
+    isPairUpSeenScope,
     loadMore,
     loadMoreInFlight,
+    pairUpSeenIds,
     useDevMocks,
   ]);
 
@@ -1054,10 +1537,22 @@ export default function MatchDeckOverlay({
       }
       const clamped = Math.max(0, Math.min(carouselItems.length - 1, next));
       const id = carouselItems[clamped]?.opportunity_id ?? null;
+      const previousId = scopeStateRef.current[contentScope].currentOpportunityId;
+      if (
+        (contentScope === "my_plans" || contentScope === "discover") &&
+        authUserId &&
+        previousId &&
+        id &&
+        previousId !== id
+      ) {
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, contentScope, previousId);
+        setPairUpSeenEpoch((n) => n + 1);
+      }
       patchScope(contentScope, { currentOpportunityId: id });
       return true;
     },
     [
+      authUserId,
       contentScope,
       carouselItems,
       connectResolving,
@@ -1406,6 +1901,14 @@ export default function MatchDeckOverlay({
             });
           },
           applyMatchedAndComplete: async (leavingId) => {
+            if (
+              authUserId &&
+              leavingId &&
+              (scope === "my_plans" || scope === "discover")
+            ) {
+              markLocalPeopleDeckSeenAndEnqueue(authUserId, scope, leavingId);
+              setPairUpSeenEpoch((n) => n + 1);
+            }
             const snap = scopeStateRef.current[scope];
             const preOrder =
               snap.activeOrderedIds.length > 0
@@ -1796,6 +2299,7 @@ export default function MatchDeckOverlay({
       if (!canSeePostFor(row)) return;
       // Duo/Discover cards show person photos, not source-post PublishedMediaItem
       // keys — Detail opens without initialMediaKey (Detail resolves its own media).
+      markSettledCurrentSeen();
       releaseAllPublishedListVideoOwnership();
       navigateToPostDetailInApp(
         navigate,
@@ -1804,7 +2308,7 @@ export default function MatchDeckOverlay({
         row.source_post_id
       );
     },
-    [canSeePostFor, location, navigate]
+    [canSeePostFor, location, markSettledCurrentSeen, navigate]
   );
 
   const showLoading =
@@ -1813,7 +2317,14 @@ export default function MatchDeckOverlay({
       (deckRows.length === 0 &&
         !pinned &&
         !useDevMocks &&
-        (hasMore || loadMoreInFlight || (loading && !hasLoaded))));
+        (hasMore || loadMoreInFlight || (loading && !hasLoaded))) ||
+      ((contentScope === "my_plans" || contentScope === "discover") &&
+        !useDevMocks &&
+        Boolean(authUserId) &&
+        !isPeopleDeckSeenBootstrapReady(authUserId, contentScope) &&
+        scopeSnap.activeOrderedIds.length === 0 &&
+        interleaved.length > 0));
+  void seenBootstrapEpoch;
   const showError =
     mode === "p2p" && Boolean(error) && interleaved.length === 0 && !pinned;
   const trueCaughtUp =
@@ -1927,6 +2438,35 @@ export default function MatchDeckOverlay({
       aria-label={peopleUiCopy.matchDeck}
       data-people-match-deck-overlay="true"
     >
+      {ptrEnabled && (peoplePullPx > 2 || peoplePtrRefreshing) ? (
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(peoplePullProgress * 100)}
+          aria-label={
+            peoplePtrRefreshing ? "Refreshing People" : "Pull to refresh"
+          }
+          className="pointer-events-none absolute left-0 right-0 z-[40] flex justify-center"
+          style={{
+            top: "calc(var(--safe-area-top-layout, 0px) + 3.25rem)",
+            opacity: peoplePtrRefreshing
+              ? 1
+              : Math.min(1, 0.12 + peoplePullProgress * 0.88),
+            transition: peoplePtrRefreshing
+              ? undefined
+              : "opacity 80ms ease-out",
+          }}
+        >
+          <span
+            className={`inline-block h-7 w-7 rounded-full border-2 border-[#F7D047]/30 border-t-[#F7D047] ${
+              peoplePtrRefreshing ? "animate-spin" : ""
+            }`}
+            aria-hidden
+          />
+        </div>
+      ) : null}
+
       {isCanonicalPeopleScope ? (
         <MineAtmosphereCrossfade
           state={mineAtmosphere}
@@ -2050,8 +2590,10 @@ export default function MatchDeckOverlay({
       ) : null}
 
       <div
+        ref={setPtrSurfaceEl}
         className="relative z-[1] flex min-h-0 w-full flex-1 flex-col overflow-x-hidden"
         data-people-shell-content-pane="true"
+        data-people-ptr-surface="true"
         style={{
           // Mine + Discover + Plans: start at Back top so in-slide caption can share that Y.
           // Groups keep the Back-row reserve.
@@ -2088,6 +2630,8 @@ export default function MatchDeckOverlay({
                       setGroupsAtmosphereIdentityKey
                     }
                     onOpenHostProfile={openGroupHostProfile}
+                    seenEpoch={pairUpSeenEpoch}
+                    onSeenMarked={bumpPairUpSeenEpoch}
                   />
                 ) : (
                   <p className="m-auto text-[15px] text-[var(--text)]/60">
@@ -2106,6 +2650,9 @@ export default function MatchDeckOverlay({
                     onAtmosphereIdentityKeyChange={
                       setPlansAtmosphereIdentityKey
                     }
+                    authUserId={authUserId}
+                    seenEpoch={pairUpSeenEpoch}
+                    onSeenMarked={bumpPairUpSeenEpoch}
                   />
                 ) : (
                   <p className="m-auto text-[15px] text-[var(--text)]/60">
@@ -2199,6 +2746,10 @@ export default function MatchDeckOverlay({
                           }
                           onMineAtmosphereChange={
                             handleMineAtmosphereChange
+                          }
+                          isUnseen={
+                            isPairUpSeenScope &&
+                            !pairUpSeenIds.has(candidate.opportunity_id)
                           }
                         />
                       );

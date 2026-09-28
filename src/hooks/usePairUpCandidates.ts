@@ -18,7 +18,6 @@ import {
   subscribePairUpDeckCache,
   type PairUpDeckKind,
 } from "../lib/pairUpCache";
-import { PEOPLE_TAB_REFRESH_EVENT } from "../lib/homeRefreshEvents";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { peopleDebugRecord } from "../lib/people/peopleDeckDebug";
@@ -34,6 +33,11 @@ export type UsePairUpCandidatesResult = {
   /** True after cache hydration or a successful candidate request. */
   hasLoaded: boolean;
   refresh: () => Promise<void>;
+  /**
+   * Manual hard refresh: fetch page 0 and REPLACE the list (no Duo merge-tail).
+   * Bumps list generation so stale loadMore/soft results cannot append afterward.
+   */
+  hardRefresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   express: (toOpportunityId: string) => Promise<PairUpExpressResult>;
 };
@@ -115,6 +119,8 @@ export function usePairUpCandidates(options?: {
   const nextCursorRef = useRef(nextCursor);
   nextCursorRef.current = nextCursor;
   const inflightRef = useRef<Promise<void> | null>(null);
+  /** Bumped by hardRefresh; stale soft/loadMore applies are discarded. */
+  const listGenerationRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,6 +162,7 @@ export function usePairUpCandidates(options?: {
     }
     if (inflightRef.current) return inflightRef.current;
 
+    const genAtStart = listGenerationRef.current;
     const run = (async () => {
       const usable =
         candidatesRef.current.length > 0 || hasLoadedRef.current;
@@ -179,6 +186,7 @@ export function usePairUpCandidates(options?: {
           force,
           kind: kindRef.current,
         });
+        if (genAtStart !== listGenerationRef.current) return;
         if (kindRef.current === PAIR_UP_DECK_KIND_DISCOVER) {
           setCandidates(uniqueByOpportunityId(page.candidates));
           setNextCursor(page.next_cursor ?? null);
@@ -197,6 +205,7 @@ export function usePairUpCandidates(options?: {
           hasCursor: Boolean(page.next_cursor),
         });
       } catch (err) {
+        if (genAtStart !== listGenerationRef.current) return;
         const rpcErr = toPairUpRpcError(err);
         if (usable) {
           if (import.meta.env.DEV) {
@@ -227,6 +236,99 @@ export function usePairUpCandidates(options?: {
   const refresh = useCallback(async () => {
     await revalidate(true);
   }, [revalidate]);
+
+  /**
+   * Explicit manual hard refresh — always REPLACE page 0 (Duo included).
+   * Soft `revalidate`/`refresh` keep merge-tail for my_plans.
+   */
+  const hardRefresh = useCallback(async () => {
+    if (!enabledRef.current) return;
+    const uid = userIdRef.current;
+    if (uid === undefined) return;
+    if (!uid) {
+      setCandidates([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      setLoading(false);
+      setIsValidating(false);
+      return;
+    }
+    if (isDiscoverRef.current && isOwnP2pDiscoverDisabled()) {
+      setCandidates([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(true);
+      hasLoadedRef.current = true;
+      setLoading(false);
+      setIsValidating(false);
+      setError(null);
+      return;
+    }
+
+    const gen = ++listGenerationRef.current;
+    const usable =
+      candidatesRef.current.length > 0 || hasLoadedRef.current;
+    peopleDebugRecord("fetch:start", {
+      hook: "pairUp",
+      kind: kindRef.current,
+      force: true,
+      hard: true,
+      background: usable,
+    });
+    if (usable) {
+      setIsValidating(true);
+    } else {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const page = await listPairUpCandidates({
+        sourcePostId: sourcePostIdRef.current,
+        limit: limitRef.current,
+        offset: 0,
+        force: true,
+        kind: kindRef.current,
+      });
+      if (gen !== listGenerationRef.current) return;
+      setCandidates(uniqueByOpportunityId(page.candidates));
+      setNextCursor(page.next_cursor ?? null);
+      setHasMore(page.has_more);
+      setHasLoaded(true);
+      hasLoadedRef.current = true;
+      setError(null);
+      peopleDebugRecord("fetch:complete", {
+        hook: "pairUp",
+        kind: kindRef.current,
+        count: page.candidates.length,
+        hasMore: page.has_more,
+        hasCursor: Boolean(page.next_cursor),
+        hard: true,
+      });
+    } catch (err) {
+      if (gen !== listGenerationRef.current) return;
+      const rpcErr = toPairUpRpcError(err);
+      if (usable) {
+        if (import.meta.env.DEV) {
+          console.warn("[pair-up-deck] hard refresh failed", rpcErr);
+        }
+        throw rpcErr;
+      }
+      setError(rpcErr);
+      setCandidates([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      hasLoadedRef.current = false;
+      throw rpcErr;
+    } finally {
+      if (gen === listGenerationRef.current) {
+        setLoading(false);
+        setIsValidating(false);
+      }
+    }
+  }, []);
+
 
   useEffect(() => {
     if (!enabled) {
@@ -290,17 +392,6 @@ export function usePairUpCandidates(options?: {
       void revalidate(true);
     }
   }, [enabled, userId, sourcePostId, peopleActive, kind, isDiscover, revalidate]);
-
-  useEffect(() => {
-    const onRefresh = () => {
-      if (!peopleActiveRef.current) return;
-      void revalidate(true);
-    };
-    window.addEventListener(PEOPLE_TAB_REFRESH_EVENT, onRefresh);
-    return () => {
-      window.removeEventListener(PEOPLE_TAB_REFRESH_EVENT, onRefresh);
-    };
-  }, [revalidate]);
 
   useEffect(() => {
     const maybeRevalidateIfStale = () => {
@@ -396,6 +487,7 @@ export function usePairUpCandidates(options?: {
   const loadMore = useCallback(async () => {
     if (!enabledRef.current) return;
     if (!userId || !hasMore) return;
+    const gen = listGenerationRef.current;
     setError(null);
     peopleDebugRecord("loadMore:start", {
       hook: "pairUp",
@@ -412,6 +504,7 @@ export function usePairUpCandidates(options?: {
           limit,
           cursor,
         });
+        if (gen !== listGenerationRef.current) return;
         setCandidates((prev) => appendDiscoverPage(prev, page.candidates));
         setHasMore(page.has_more);
         setNextCursor(page.next_cursor ?? null);
@@ -429,6 +522,7 @@ export function usePairUpCandidates(options?: {
         offset: candidates.length,
         kind,
       });
+      if (gen !== listGenerationRef.current) return;
       setCandidates((prev) => [...prev, ...page.candidates]);
       setHasMore(page.has_more);
       peopleDebugRecord("loadMore:complete", {
@@ -438,6 +532,7 @@ export function usePairUpCandidates(options?: {
         hasMore: page.has_more,
       });
     } catch (err) {
+      if (gen !== listGenerationRef.current) return;
       setError(toPairUpRpcError(err));
       throw err;
     }
@@ -475,6 +570,7 @@ export function usePairUpCandidates(options?: {
     error,
     hasLoaded,
     refresh,
+    hardRefresh,
     loadMore,
     express,
   };

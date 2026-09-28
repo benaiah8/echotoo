@@ -3,6 +3,9 @@
  * Session/window only — not rejection, not server-side seen state.
  */
 
+/** Prefetch next page when this many candidates remain ahead of the current index. */
+export const PEOPLE_DECK_PREFETCH_REMAINING = 8;
+
 export const RECENT_BACK_LIMIT = 15;
 /** Prune only when behind-count exceeds limit + buffer (avoids reInit every card). */
 export const RECENT_BACK_PRUNE_BUFFER = 4;

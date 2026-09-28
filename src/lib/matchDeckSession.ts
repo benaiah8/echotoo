@@ -212,6 +212,50 @@ export function clearMatchDeckSession(): void {
   snapshot = null;
 }
 
+/**
+ * After a successful People hard refresh, clear that scope in the suspended
+ * session so an older snapshot cannot restore pre-refresh current/order.
+ * Groups New only clears the New tab window — Yours is preserved.
+ */
+export function invalidateMatchDeckSessionScopeAfterHardRefresh(
+  target:
+    | { kind: "pairUp"; scope: MatchDeckPairUpScope }
+    | { kind: "groups_new" }
+): void {
+  if (!snapshot) return;
+  if (target.kind === "pairUp") {
+    snapshot = {
+      ...snapshot,
+      scopes: {
+        ...snapshot.scopes,
+        [target.scope]: emptyScope(),
+      },
+      savedAt: Date.now(),
+    };
+    return;
+  }
+  const groupUp = normalizeGroupUpScope(snapshot.groupUp);
+  snapshot = {
+    ...snapshot,
+    groupUp: {
+      ...groupUp,
+      currentOpportunityIdByTab: {
+        ...groupUp.currentOpportunityIdByTab,
+        new: null,
+      },
+      activeOrderedIdsByTab: {
+        ...groupUp.activeOrderedIdsByTab,
+        new: [],
+      },
+      retiredIdsByTab: {
+        ...groupUp.retiredIdsByTab,
+        new: [],
+      },
+    },
+    savedAt: Date.now(),
+  };
+}
+
 export function emptyMatchDeckScopeSnapshot(): MatchDeckScopeSnapshot {
   return emptyScope();
 }

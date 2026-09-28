@@ -846,7 +846,13 @@ export default function ProfileSocialOpportunityCard({
             </button>
 
             <div
-              className="mt-2.5 flex min-w-0 items-center overflow-visible pr-8"
+              className={[
+                "mt-2.5 flex min-w-0 items-center overflow-visible",
+                /* Report control sits on the card's bottom edge. One-row
+                   actions keep the gutter. Connect's second row clears it
+                   itself so Duo+Group can use the full inner width. */
+                isSelf || !hasOwnerDuo ? "pr-8" : "",
+              ].join(" ")}
               data-profile-social-actions
               onClick={(e) => {
                 e.stopPropagation();
@@ -882,83 +888,117 @@ export default function ProfileSocialOpportunityCard({
                   </div>
                 ) : (
                   <div
-                    className={socialContrastShelfClusterClassName()}
+                    className={[
+                      socialContrastShelfClusterClassName(),
+                      hasOwnerDuo ? "w-full" : "",
+                    ].join(" ")}
                     data-profile-social-other-actions
                   >
-                    <div className={socialRailBareRowClassName()}>
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        {hasOwnerDuo ? (
-                          <>
-                            <SocialDuoPill
-                              active={otherDuoActive}
-                              resolving={duoBusy}
-                              onPress={() => {
-                                void handleOtherDuo();
-                              }}
-                              size="compact"
-                            />
-                            {/* Connect: compact secondary next to Duo (Other + owner Duo only). */}
-                            <ProfileConnectPill
-                              label={
-                                connectActive
-                                  ? peopleUiCopy.deckConnectedLabel
-                                  : peopleUiCopy.deckConnectLabel
-                              }
-                              icon={
-                                connectActive ? (
-                                  <PiCheck size={11} aria-hidden />
-                                ) : (
-                                  <PiHandPeace size={11} aria-hidden />
-                                )
-                              }
-                              active={connectActive}
-                              busy={connectBusy}
-                              onPress={() => {
-                                void handleConnect();
-                              }}
-                            />
-                          </>
+                    {hasOwnerDuo ? (
+                      <div
+                        className="grid w-full grid-cols-[max-content_max-content_minmax(0,1fr)] items-center justify-start gap-x-2 gap-y-1.5"
+                        data-profile-social-other-action-rows
+                      >
+                        <SocialDuoPill
+                          active={otherDuoActive}
+                          resolving={duoBusy}
+                          onPress={() => {
+                            void handleOtherDuo();
+                          }}
+                          size="compact"
+                        />
+                        {hasOwnerGroup ? (
+                          <ProfileGroupRequestPill
+                            label={
+                              groupMember
+                                ? peopleUiCopy.groupUpBrowseMemberLabel
+                                : groupPending
+                                  ? socialUiCopy.groupRequested
+                                  : socialUiCopy.groupRequest
+                            }
+                            active={groupPending}
+                            busy={groupBusy}
+                            disabled={groupMember}
+                            onPress={() => {
+                              void handleGroupRequest();
+                            }}
+                          />
                         ) : (
-                          <SocialDuoPill
+                          <SocialGroupPill
+                            displayCount={null}
                             active={false}
                             resolving={false}
                             onPress={() => {
-                              /* Owner has no Duo — inactive; no viewer create/manage. */
+                              /* Owner has no hosted Group — inactive; no viewer create/manage. */
+                            }}
+                            size="compact"
+                            className="pointer-events-none opacity-55"
+                          />
+                        )}
+                        {/* Connect sits on its own row, clear of the report control. */}
+                        <div className="col-span-3 flex min-w-0 justify-start pr-8">
+                          <ProfileConnectPill
+                            label={
+                              connectActive
+                                ? peopleUiCopy.deckConnectedLabel
+                                : peopleUiCopy.deckConnectLabel
+                            }
+                            icon={
+                              connectActive ? (
+                                <PiCheck size={11} aria-hidden />
+                              ) : (
+                                <PiHandPeace size={11} aria-hidden />
+                              )
+                            }
+                            active={connectActive}
+                            busy={connectBusy}
+                            onPress={() => {
+                              void handleConnect();
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={socialRailBareRowClassName()}>
+                        <SocialDuoPill
+                          active={false}
+                          resolving={false}
+                          onPress={() => {
+                            /* Owner has no Duo — inactive; no viewer create/manage. */
+                          }}
+                          size="compact"
+                          className="pointer-events-none opacity-55"
+                        />
+                        {hasOwnerGroup ? (
+                          <ProfileGroupRequestPill
+                            label={
+                              groupMember
+                                ? peopleUiCopy.groupUpBrowseMemberLabel
+                                : groupPending
+                                  ? socialUiCopy.groupRequested
+                                  : socialUiCopy.groupRequest
+                            }
+                            active={groupPending}
+                            busy={groupBusy}
+                            disabled={groupMember}
+                            onPress={() => {
+                              void handleGroupRequest();
+                            }}
+                          />
+                        ) : (
+                          <SocialGroupPill
+                            displayCount={null}
+                            active={false}
+                            resolving={false}
+                            onPress={() => {
+                              /* Owner has no hosted Group — inactive; no viewer create/manage. */
                             }}
                             size="compact"
                             className="pointer-events-none opacity-55"
                           />
                         )}
                       </div>
-                      {hasOwnerGroup ? (
-                        <ProfileGroupRequestPill
-                          label={
-                            groupMember
-                              ? peopleUiCopy.groupUpBrowseMemberLabel
-                              : groupPending
-                                ? socialUiCopy.groupRequested
-                                : socialUiCopy.groupRequest
-                          }
-                          active={groupPending}
-                          busy={groupBusy}
-                          disabled={groupMember}
-                          onPress={() => {
-                            void handleGroupRequest();
-                          }}
-                        />
-                      ) : (
-                        <SocialGroupPill
-                          displayCount={null}
-                          active={false}
-                          resolving={false}
-                          onPress={() => {
-                            /* Owner has no hosted Group — inactive; no viewer create/manage. */
-                          }}
-                          size="compact"
-                          className="pointer-events-none opacity-55"
-                        />
-                      )}
-                    </div>
+                    )}
                   </div>
                 )}
               </SocialShelfSurfaceProvider>

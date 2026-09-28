@@ -39,6 +39,8 @@ export type UseGroupUpCandidatesResult = {
   error: Error | null;
   hasLoaded: boolean;
   refresh: () => Promise<void>;
+  /** Manual hard refresh — replace browse page 0; invalidates in-flight loadMore. */
+  hardRefresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   patchViewerState: (
     opportunityId: string,
@@ -157,6 +159,7 @@ export function useGroupUpCandidates(options?: {
   const nextCursorRef = useRef(nextCursor);
   nextCursorRef.current = nextCursor;
   const inflightRef = useRef<Promise<void> | null>(null);
+  const listGenerationRef = useRef(0);
   const mediaEnrichGenRef = useRef(0);
 
   useEffect(() => {
@@ -189,6 +192,7 @@ export function useGroupUpCandidates(options?: {
     }
     if (inflightRef.current) return inflightRef.current;
 
+    const genAtStart = listGenerationRef.current;
     const run = (async () => {
       const beforeSnap = viewerSnapMap(candidatesRef.current);
       const usable =
@@ -219,6 +223,7 @@ export function useGroupUpCandidates(options?: {
           }),
         ]);
         const afterSnap = viewerSnapMap(candidatesRef.current);
+        if (genAtStart !== listGenerationRef.current) return;
         const browseMerged = uniqueByDeckRowId(
           mergeDeckViewerState(page.candidates, beforeSnap, afterSnap)
         );
@@ -245,6 +250,7 @@ export function useGroupUpCandidates(options?: {
           memberships: membershipsPage.memberships.length,
         });
       } catch (err) {
+        if (genAtStart !== listGenerationRef.current) return;
         setError(toError(err));
         if (!hasLoadedRef.current) {
           setHasLoaded(true);
@@ -267,6 +273,74 @@ export function useGroupUpCandidates(options?: {
   const refresh = useCallback(async () => {
     await revalidate(true);
   }, [revalidate]);
+
+  const hardRefresh = useCallback(async () => {
+    if (!enabledRef.current) return;
+    const uid = userIdRef.current;
+    if (uid === undefined) return;
+    if (!uid) {
+      setCandidates([]);
+      setPublishedMediaByPostId({});
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      setLoading(false);
+      setIsValidating(false);
+      return;
+    }
+    const gen = ++listGenerationRef.current;
+    const beforeSnap = viewerSnapMap(candidatesRef.current);
+    const usable =
+      candidatesRef.current.length > 0 || hasLoadedRef.current;
+    if (usable) setIsValidating(true);
+    else {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const [page, membershipsPage] = await Promise.all([
+        listGroupUpCandidates({
+          limit: limitRef.current,
+          cursor: null,
+          force: true,
+          writeCache: false,
+        }),
+        listMyGroupUpMemberships({
+          limit: 50,
+          cursor: null,
+          force: true,
+        }),
+      ]);
+      if (gen !== listGenerationRef.current) return;
+      const afterSnap = viewerSnapMap(candidatesRef.current);
+      const browseMerged = uniqueByDeckRowId(
+        mergeDeckViewerState(page.candidates, beforeSnap, afterSnap)
+      );
+      const mergedCandidates = mergeGroupUpBrowseAndMemberships(
+        browseMerged,
+        membershipsPage.memberships
+      );
+      writeCachedGroupUpDeckSilent(uid, {
+        ...page,
+        candidates: mergedCandidates,
+      });
+      setCandidates(mergedCandidates);
+      setHasMore(page.has_more);
+      setNextCursor(page.next_cursor ?? null);
+      setHasLoaded(true);
+      hasLoadedRef.current = true;
+      setError(null);
+    } catch (err) {
+      if (gen !== listGenerationRef.current) return;
+      setError(toError(err));
+      throw err;
+    } finally {
+      if (gen === listGenerationRef.current) {
+        setLoading(false);
+        setIsValidating(false);
+      }
+    }
+  }, []);
 
   const patchViewerState = useCallback(
     (
@@ -368,6 +442,7 @@ export function useGroupUpCandidates(options?: {
     const uid = userIdRef.current;
     if (!uid || !nextCursorRef.current) return;
     if (!hasMore) return;
+    const gen = listGenerationRef.current;
     setError(null);
     peopleDebugRecord("loadMore:start", {
       hook: "groupUp",
@@ -385,6 +460,7 @@ export function useGroupUpCandidates(options?: {
         cursor: null,
         force: false,
       });
+      if (gen !== listGenerationRef.current) return;
       setCandidates((prev) =>
         mergeGroupUpBrowseAndMemberships(
           appendPage(prev, page.candidates),
@@ -399,6 +475,7 @@ export function useGroupUpCandidates(options?: {
         hasMore: page.has_more,
       });
     } catch (err) {
+      if (gen !== listGenerationRef.current) return;
       setError(toError(err));
       throw err;
     }
@@ -477,6 +554,7 @@ export function useGroupUpCandidates(options?: {
     error,
     hasLoaded,
     refresh,
+    hardRefresh,
     loadMore,
     patchViewerState,
     removeCandidate,

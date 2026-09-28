@@ -17,6 +17,8 @@ export type UseOpenPlanCandidatesResult = {
   error: Error | null;
   hasLoaded: boolean;
   refresh: () => Promise<void>;
+  /** Manual hard refresh — replace page 0; invalidates in-flight loadMore. */
+  hardRefresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   /** Immediate local patch — does not invent Accepted card state. */
   patchRequestStatus: (
@@ -87,6 +89,7 @@ export function useOpenPlanCandidates(options?: {
   const nextCursorRef = useRef(nextCursor);
   nextCursorRef.current = nextCursor;
   const inflightRef = useRef<Promise<void> | null>(null);
+  const listGenerationRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +120,7 @@ export function useOpenPlanCandidates(options?: {
     }
     if (inflightRef.current) return inflightRef.current;
 
+    const genAtStart = listGenerationRef.current;
     const run = (async () => {
       const usable =
         candidatesRef.current.length > 0 || hasLoadedRef.current;
@@ -137,6 +141,7 @@ export function useOpenPlanCandidates(options?: {
           cursor: null,
           force,
         });
+        if (genAtStart !== listGenerationRef.current) return;
         setCandidates(uniqueByOpportunityId(page.candidates));
         setHasMore(page.has_more);
         setNextCursor(page.next_cursor ?? null);
@@ -150,6 +155,7 @@ export function useOpenPlanCandidates(options?: {
           hasCursor: Boolean(page.next_cursor),
         });
       } catch (err) {
+        if (genAtStart !== listGenerationRef.current) return;
         setError(toError(err));
         if (!hasLoadedRef.current) {
           setHasLoaded(true);
@@ -172,6 +178,53 @@ export function useOpenPlanCandidates(options?: {
   const refresh = useCallback(async () => {
     await revalidate(true);
   }, [revalidate]);
+
+  const hardRefresh = useCallback(async () => {
+    if (!enabledRef.current) return;
+    const uid = userIdRef.current;
+    if (uid === undefined) return;
+    if (!uid) {
+      setCandidates([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      setLoading(false);
+      setIsValidating(false);
+      return;
+    }
+    const gen = ++listGenerationRef.current;
+    const usable =
+      candidatesRef.current.length > 0 || hasLoadedRef.current;
+    if (usable) setIsValidating(true);
+    else {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const page = await listOpenPlanCandidates({
+        limit: limitRef.current,
+        cursor: null,
+        force: true,
+      });
+      if (gen !== listGenerationRef.current) return;
+      setCandidates(uniqueByOpportunityId(page.candidates));
+      setHasMore(page.has_more);
+      setNextCursor(page.next_cursor ?? null);
+      setHasLoaded(true);
+      hasLoadedRef.current = true;
+      setError(null);
+    } catch (err) {
+      if (gen !== listGenerationRef.current) return;
+      setError(toError(err));
+      if (!usable) throw err;
+      throw err;
+    } finally {
+      if (gen === listGenerationRef.current) {
+        setLoading(false);
+        setIsValidating(false);
+      }
+    }
+  }, []);
 
   const patchRequestStatus = useCallback(
     (opportunityId: string, status: "pending" | null) => {
@@ -263,6 +316,7 @@ export function useOpenPlanCandidates(options?: {
     const uid = userIdRef.current;
     if (!uid || !nextCursorRef.current) return;
     if (!hasMore) return;
+    const gen = listGenerationRef.current;
     setError(null);
     peopleDebugRecord("loadMore:start", {
       hook: "openPlan",
@@ -274,6 +328,7 @@ export function useOpenPlanCandidates(options?: {
         limit: limitRef.current,
         cursor: nextCursorRef.current,
       });
+      if (gen !== listGenerationRef.current) return;
       setCandidates((prev) => appendPage(prev, page.candidates));
       setHasMore(page.has_more);
       setNextCursor(page.next_cursor ?? null);
@@ -283,6 +338,7 @@ export function useOpenPlanCandidates(options?: {
         hasMore: page.has_more,
       });
     } catch (err) {
+      if (gen !== listGenerationRef.current) return;
       setError(toError(err));
       throw err;
     }
@@ -296,6 +352,7 @@ export function useOpenPlanCandidates(options?: {
     error,
     hasLoaded,
     refresh,
+    hardRefresh,
     loadMore,
     patchRequestStatus,
     removeCandidate,

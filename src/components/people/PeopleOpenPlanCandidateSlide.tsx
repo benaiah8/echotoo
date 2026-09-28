@@ -19,6 +19,7 @@ export default function PeopleOpenPlanCandidateSlide({
   isCurrent,
   withPhoto,
   onAtmosphereChange,
+  isUnseen = false,
 }: {
   candidate: OpenPlanCandidate;
   identitySource: ProfileIdentityMediaSource;
@@ -31,6 +32,8 @@ export default function PeopleOpenPlanCandidateSlide({
   /** @deprecated Prefer schedule from occurs_at inside this adapter. */
   occursLabel?: string | null;
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
+  /** Unseen plan opportunity — subtle brand photo edge. */
+  isUnseen?: boolean;
 }) {
   const note = candidate.description?.trim() || null;
   const caption = candidate.source_caption?.trim() || null;
@@ -61,6 +64,7 @@ export default function PeopleOpenPlanCandidateSlide({
       identityVisible={false}
       onOpenProfile={undefined}
       onAtmosphereChange={onAtmosphereChange}
+      isUnseen={isUnseen}
     />
   );
 }
