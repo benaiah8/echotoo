@@ -138,10 +138,10 @@ export default function SourceGroupCard({
                   ].join(" ")
                 : [
                     "border border-[color-mix(in_oklab,var(--brand)_42%,transparent)]",
-                    "bg-[color-mix(in_oklab,var(--brand)_62%,var(--surface))]",
-                    "app-dark:bg-[color-mix(in_oklab,var(--brand)_48%,var(--surface-2))]",
+                    /* Solid brand CTA yellow — no surface mix (avoids muddy olive/brown). */
+                    "bg-[var(--brand)]",
                     "text-[var(--brand-ink)]",
-                    "hover:bg-[color-mix(in_oklab,var(--brand)_72%,var(--surface))]",
+                    "hover:brightness-[1.04]",
                     "motion-safe:active:brightness-[0.97]",
                   ].join(" "),
             ].join(" ")}
