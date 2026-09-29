@@ -481,7 +481,8 @@ export default function ProfileSocialOpportunityCard({
 
   const handleOwnDuo = useCallback(() => {
     if (!ensureAuthed()) return;
-    if (hasOwnerDuo || duoAction.active) {
+    // Hosted Own Duo only — never reopen Manage from stale duoAction.active.
+    if (hasOwnerDuo) {
       openPairUpManage(row.source_post_id);
       return;
     }
@@ -490,7 +491,8 @@ export default function ProfileSocialOpportunityCard({
 
   const handleOwnGroup = useCallback(() => {
     if (!ensureAuthed()) return;
-    if (hasOwnerGroup || groupAction.ownsActive) {
+    // Hosted Own Group only — ignore stale ownsActive after cancel.
+    if (hasOwnerGroup) {
       openGroupUpManage(
         row.source_post_id,
         groupTitle || row.source_caption,
@@ -808,8 +810,9 @@ export default function ProfileSocialOpportunityCard({
       : railLabelClassName,
   ].join(" ");
 
-  const ownDuoActive = hasOwnerDuo || duoAction.active;
-  const ownGroupActive = hasOwnerGroup || groupAction.ownsActive;
+  // Own Profile hosted pills follow rail payload only — never stale join/own stores.
+  const ownDuoActive = hasOwnerDuo;
+  const ownGroupActive = hasOwnerGroup;
   const otherDuoActive = hasOwnerDuo ? duoJoined : false;
 
   return (

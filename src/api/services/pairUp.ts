@@ -106,8 +106,11 @@ export async function getMyPairUpForSource(
 
   if (result.error) throw result.error;
   const opportunity = result.data ?? null;
-  setCachedPairUp(userId, sourcePostId, opportunity);
-  return opportunity;
+  const { applyFetchedPairUpJoinState } = await import(
+    "../../lib/pairUpJoinStore"
+  );
+  const applied = applyFetchedPairUpJoinState(userId, sourcePostId, opportunity);
+  return applied ? opportunity : (getCachedPairUp(userId, sourcePostId) ?? null);
 }
 
 /** Per-RPC bound; matches the SQL DoS guardrail. Never truncate the caller list. */
@@ -188,10 +191,16 @@ export async function getMyPairUpsForSources(
       foundBySource.set(opportunity.source_post_id, opportunity);
     }
 
+    const { applyFetchedPairUpJoinState } = await import(
+      "../../lib/pairUpJoinStore"
+    );
     for (const id of chunk) {
       const opportunity = foundBySource.get(id) ?? null;
-      setCachedPairUp(userId, id, opportunity);
-      out.set(id, opportunity);
+      const applied = applyFetchedPairUpJoinState(userId, id, opportunity);
+      out.set(
+        id,
+        applied ? opportunity : (getCachedPairUp(userId, id) ?? null)
+      );
     }
   }
 
@@ -272,6 +281,8 @@ export async function joinPairUp(
   );
   if (!opportunity) throw new Error("Join failed");
 
+  const { markLocalPairUpMutation } = await import("../../lib/pairUpJoinStore");
+  markLocalPairUpMutation(sourcePostId, true);
   setCachedPairUp(userId, sourcePostId, opportunity);
   invalidatePairUpDeck(userId);
   syncCachesAfterOwnDuoActivate(userId, sourcePostId);
@@ -329,6 +340,8 @@ export async function leavePairUp(sourcePostId: string): Promise<void> {
   if (error) throw error;
 
   invalidatePairUpForPost(sourcePostId);
+  const { markLocalPairUpMutation } = await import("../../lib/pairUpJoinStore");
+  markLocalPairUpMutation(sourcePostId, false);
   setCachedPairUp(userId, sourcePostId, null);
   invalidatePairUpDeck(userId);
   syncCachesAfterOwnDuoLeave(userId, sourcePostId, opportunityId);

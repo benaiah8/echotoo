@@ -220,27 +220,70 @@ export function PersistentTabContainer({
 
   const peopleCanPopRef = useRef(false);
   const closingPeopleRef = useRef(false);
+  const peopleExitAttemptRef = useRef(0);
+  const peopleExitFallbackTimerRef = useRef<number | null>(null);
+
+  const clearPeopleExitAttempt = useCallback((attemptId?: number) => {
+    if (
+      attemptId != null &&
+      peopleExitAttemptRef.current !== attemptId
+    ) {
+      return;
+    }
+    closingPeopleRef.current = false;
+    if (peopleExitFallbackTimerRef.current != null) {
+      globalThis.clearTimeout(peopleExitFallbackTimerRef.current);
+      peopleExitFallbackTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (activeTab !== "people" || tabsCovered) {
       peopleCanPopRef.current = false;
-      closingPeopleRef.current = false;
+      // Successful leave / Create cover — drop latch + cancel stale fallback.
+      peopleExitAttemptRef.current += 1;
+      clearPeopleExitAttempt();
       return;
     }
     peopleCanPopRef.current = navigationType === "PUSH";
-  }, [activeTab, navigationType, tabsCovered]);
+  }, [activeTab, navigationType, tabsCovered, clearPeopleExitAttempt]);
+
+  useEffect(() => {
+    return () => {
+      peopleExitAttemptRef.current += 1;
+      clearPeopleExitAttempt();
+    };
+  }, [clearPeopleExitAttempt]);
 
   const closePeople = useCallback(() => {
     if (closingPeopleRef.current) return;
     if (getTabFromPath(location.pathname) !== "people") return;
+
+    const exitAttempt = ++peopleExitAttemptRef.current;
     closingPeopleRef.current = true;
     const origin = lastNonPeoplePathRef.current || Paths.home;
+
+    if (peopleExitFallbackTimerRef.current != null) {
+      globalThis.clearTimeout(peopleExitFallbackTimerRef.current);
+      peopleExitFallbackTimerRef.current = null;
+    }
+
     if (peopleCanPopRef.current) {
       peopleCanPopRef.current = false;
       navigate(-1);
-      return;
+    } else {
+      navigate(origin, { replace: true });
     }
-    navigate(origin, { replace: true });
+
+    // Fail-safe: latch cannot stick if pop is a no-op.
+    peopleExitFallbackTimerRef.current = globalThis.setTimeout(() => {
+      peopleExitFallbackTimerRef.current = null;
+      if (peopleExitAttemptRef.current !== exitAttempt) return;
+      if (getTabFromPath(window.location.pathname) === "people") {
+        navigate(origin, { replace: true });
+      }
+      closingPeopleRef.current = false;
+    }, 400) as unknown as number;
   }, [location.pathname, navigate]);
 
   const peopleExitApi = useMemo<PeopleExitApi>(

@@ -105,6 +105,12 @@ export default function PeopleFluidNav(props: PeopleFluidNavProps) {
 
   const onClickCapture = (e: MouseEvent) => {
     if (!suppressClickRef.current) return;
+    const target = e.target as HTMLElement | null;
+    // Back is an exit control — never swallow after a prior carousel swipe.
+    if (target?.closest?.("[data-people-back]")) {
+      suppressClickRef.current = false;
+      return;
+    }
     suppressClickRef.current = false;
     e.preventDefault();
     e.stopPropagation();

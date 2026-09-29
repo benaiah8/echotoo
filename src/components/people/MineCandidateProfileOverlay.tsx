@@ -16,6 +16,7 @@ import {
   MINE_CANDIDATE_PROFILE_HISTORY_MARKER,
   notifyMineCandidateProfileClosed,
   notifyMineCandidateProfileOpened,
+  releaseMineCandidateProfileBackOwnership,
 } from "../../lib/people/mineCandidateProfileOverlayBackGuard";
 import type { PeopleEmbeddedProfileOpen } from "../../lib/people/groupHostProfileOpenContext";
 import { glassActionSheetPillClass } from "../../lib/glassActionSheetStyles";
@@ -102,7 +103,11 @@ export default function MineCandidateProfileOverlay({
   });
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      // Already closed — drop ownership but keep post-close suppress grace.
+      releaseMineCandidateProfileBackOwnership();
+      return;
+    }
     notifyMineCandidateProfileOpened();
     const t = window.setTimeout(() => {
       try {

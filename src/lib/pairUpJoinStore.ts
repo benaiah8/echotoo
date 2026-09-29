@@ -376,6 +376,11 @@ function noteLocalPairUpMutation(postId: string, joined: boolean): void {
   });
 }
 
+/** Successful join/leave — stamps local mutation so in-flight fetches cannot reverse it. */
+export function markLocalPairUpMutation(postId: string, joined: boolean): void {
+  noteLocalPairUpMutation(postId, joined);
+}
+
 function clearLocalPairUpMutation(postId: string): void {
   localPairMutation.delete(postId);
 }
@@ -472,6 +477,31 @@ export function seedKnownActivePairUpBeforeDetail(
 ): void {
   if (!userId || !postId) return;
   seedPairUpJoinFromSnapshot(userId, postId, true);
+}
+
+/**
+ * Apply a Pair Up batch/hydrate result. Explicit local join/leave mutations win
+ * over older in-flight fetches that disagree.
+ */
+export function applyFetchedPairUpJoinState(
+  userId: string,
+  postId: string,
+  opportunity: PairUpOpportunity | null
+): boolean {
+  if (!userId || !postId) return false;
+  const joined = opportunity != null;
+  const mut = localPairMutation.get(postId);
+  if (mut && mut.joined !== joined) {
+    // Newer explicit local mutation — ignore conflicting server write.
+    return false;
+  }
+  if (mut && mut.joined === joined) {
+    clearLocalPairUpMutation(postId);
+  }
+  setCachedPairUp(userId, postId, opportunity);
+  softRevalidate.delete(postId);
+  loadFailed.delete(postId);
+  return true;
 }
 
 export function setOptimisticPairUpJoinState(

@@ -3,7 +3,10 @@ import { subscribeAndroidHardwareBack } from "../../lib/androidPostDetailModalBa
 import { resetPeoplePhotoPromptSession } from "../../lib/peoplePhotoPromptSession";
 import { shouldSuppressUnderlyingBackForPhotoPrompt } from "../../lib/pairUpPhotoPromptStore";
 import { shouldSuppressUnderlyingBackForMediaGalleryLightbox } from "../../lib/mediaGalleryLightboxBackGuard";
-import { shouldSuppressUnderlyingBackForMineCandidateProfile } from "../../lib/people/mineCandidateProfileOverlayBackGuard";
+import {
+  resetMineCandidateProfileBackGuard,
+  shouldSuppressUnderlyingBackForMineCandidateProfile,
+} from "../../lib/people/mineCandidateProfileOverlayBackGuard";
 import { syncAppSafeAreaBottom } from "../../lib/appSafeAreaBottom";
 import { PAIR_UP_DECK_KIND_DISCOVER } from "../../lib/pairUpCache";
 import { useOpenPlanCandidates } from "../../hooks/useOpenPlanCandidates";
@@ -57,6 +60,7 @@ function PeoplePage() {
   useEffect(() => {
     if (!isPeopleVisible) {
       resetPeoplePhotoPromptSession();
+      resetMineCandidateProfileBackGuard();
       return;
     }
     syncAppSafeAreaBottom();
