@@ -11,12 +11,21 @@ export type GroupUpSourceScheduleContext = {
   recurrenceDays?: string[] | null;
 };
 
+/** Known hosted identity when opening manage (e.g. Own Profile rail). */
+export type GroupUpManageIdentityHint = {
+  opportunityId?: string | null;
+  conversationId?: string | null;
+};
+
 type GroupUpActiveOverlayState = {
   postId: string | null;
   sourceCaption: string | null;
   sourceSchedule: GroupUpSourceScheduleContext | null;
   mode: GroupUpOverlayMode | null;
   cancelConfirmOpen: boolean;
+  /** Real opportunity id when known at open (Profile rail). Not a stub. */
+  knownOpportunityId: string | null;
+  knownConversationId: string | null;
 };
 
 const EMPTY: GroupUpActiveOverlayState = {
@@ -25,6 +34,8 @@ const EMPTY: GroupUpActiveOverlayState = {
   sourceSchedule: null,
   mode: null,
   cancelConfirmOpen: false,
+  knownOpportunityId: null,
+  knownConversationId: null,
 };
 
 let state: GroupUpActiveOverlayState = { ...EMPTY };
@@ -74,21 +85,28 @@ export function openGroupUpCreate(
     sourceSchedule: sourceSchedule ?? null,
     mode: "create",
     cancelConfirmOpen: false,
+    knownOpportunityId: null,
+    knownConversationId: null,
   });
 }
 
 export function openGroupUpManage(
   postId: string,
   sourceCaption?: string | null,
-  sourceSchedule?: GroupUpSourceScheduleContext | null
+  sourceSchedule?: GroupUpSourceScheduleContext | null,
+  identity?: GroupUpManageIdentityHint | null
 ): void {
   if (!postId) return;
+  const opportunityId = identity?.opportunityId?.trim() || null;
+  const conversationId = identity?.conversationId?.trim() || null;
   setState({
     postId,
     sourceCaption: sourceCaption?.trim() || null,
     sourceSchedule: sourceSchedule ?? null,
     mode: "manage",
     cancelConfirmOpen: false,
+    knownOpportunityId: opportunityId,
+    knownConversationId: conversationId,
   });
 }
 

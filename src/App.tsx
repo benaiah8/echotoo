@@ -90,30 +90,22 @@ function App() {
     let authDbgOrder = 0;
     supabase.auth.getSession().then(({ data }) => {
       const u = data.session?.user;
-      dbg("getSession", {
-        hasSession: !!data.session,
-        userId: u?.id,
-        email: u?.email,
-      });
-      console.log("[AUTHDBG] App bootstrap getSession", {
-        t: Date.now(),
+      dbg("App:bootstrap_getSession", {
         order: ++authDbgOrder,
         source: "initial_getSession",
         hasSession: !!data.session,
-        sessionUserId: u?.id ?? null,
+        hasUserId: !!u?.id,
       });
       dispatch(setAuthUser(u ? { id: u.id, email: u.email } : (null as any)));
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       const u = session?.user;
-      dbg("onAuthStateChange", { event, hasSession: !!session, userId: u?.id });
-      console.log("[AUTHDBG] App onAuthStateChange", {
-        t: Date.now(),
+      dbg("App:onAuthStateChange", {
         order: ++authDbgOrder,
         event,
         hasSession: !!session,
-        sessionUserId: u?.id ?? null,
+        hasUserId: !!u?.id,
       });
 
       // [PHASE 2.3 - FIX] Only clear feed cache on explicit logout (SIGNED_OUT)

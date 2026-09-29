@@ -4,7 +4,6 @@
  * KNOWN STALE stays visible (never → UNKNOWN solely from soft TTL).
  */
 
-import toast from "react-hot-toast";
 import { supabase } from "./supabaseClient";
 import { getMyGroupUpsForSources } from "../api/services/groupUp";
 import {
@@ -104,6 +103,7 @@ function clearMemoryControlSets(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localGroupMutation.clear();
 }
 
 function applyConfirmedUser(next: string): void {
@@ -241,7 +241,7 @@ async function flush(): Promise<void> {
         loadFailed.add(id);
       }
     }
-    toast.error("Couldn't load Group Up status.");
+    // Background hydrate/revalidate: keep cache / loadFailed; no global toast.
   } finally {
     for (const id of missing) inflight.delete(id);
     emit();
@@ -336,19 +336,73 @@ export function subscribeGroupUpOwnState(listener: () => void): () => void {
 }
 
 /** Explicit create/cancel mutations — snapshots must not reverse these. */
-const localGroupMutation = new Map<string, { active: boolean; seq: number }>();
+const localGroupMutation = new Map<
+  string,
+  { active: boolean; seq: number }
+>();
 let localGroupMutationSeq = 0;
+
+function localGroupMutationKey(userId: string, postId: string): string {
+  return `${userId}:${postId}`;
+}
 
 function noteLocalGroupUpMutation(postId: string, active: boolean): void {
   if (!postId) return;
-  localGroupMutation.set(postId, {
+  const viewer = effectiveUserId();
+  if (!viewer) return;
+  localGroupMutation.set(localGroupMutationKey(viewer, postId), {
     active,
     seq: ++localGroupMutationSeq,
   });
 }
 
 function clearLocalGroupUpMutation(postId: string): void {
-  localGroupMutation.delete(postId);
+  const viewer = effectiveUserId();
+  if (!viewer || !postId) return;
+  localGroupMutation.delete(localGroupMutationKey(viewer, postId));
+}
+
+/** Successful create/cancel — stamps local mutation so in-flight hydrates cannot reverse it. */
+export function markLocalGroupUpMutation(postId: string, active: boolean): void {
+  noteLocalGroupUpMutation(postId, active);
+}
+
+/**
+ * True when id is a real server opportunity UUID — not feed_snapshot / persist / optimistic.
+ */
+export function isRealGroupUpOpportunityId(id: string | null | undefined): boolean {
+  if (!id || typeof id !== "string") return false;
+  const trimmed = id.trim();
+  if (!trimmed) return false;
+  if (trimmed === "feed_snapshot" || trimmed === "optimistic") return false;
+  if (trimmed.startsWith("persist:")) return false;
+  if (trimmed.startsWith("persist-conv:")) return false;
+  return true;
+}
+
+/**
+ * Apply a Group Up batch/hydrate result. Explicit local create/cancel mutations
+ * win over older in-flight fetches that disagree.
+ */
+export function applyFetchedGroupUpOwnState(
+  userId: string,
+  postId: string,
+  opportunity: GroupUpOpportunity | null
+): boolean {
+  if (!userId || !postId) return false;
+  const active = opportunity != null;
+  const mut = localGroupMutation.get(localGroupMutationKey(userId, postId));
+  if (mut && mut.active !== active) {
+    // Newer explicit local mutation — ignore conflicting server write.
+    return false;
+  }
+  if (mut && mut.active === active) {
+    localGroupMutation.delete(localGroupMutationKey(userId, postId));
+  }
+  setCachedGroupUpOwn(userId, postId, opportunity);
+  softRevalidate.delete(postId);
+  loadFailed.delete(postId);
+  return true;
 }
 
 export function setOptimisticGroupUpOwnState(
@@ -358,7 +412,8 @@ export function setOptimisticGroupUpOwnState(
   const viewer = effectiveUserId();
   if (!viewer || !postId) return null;
   const previous = getCachedGroupUpOwn(viewer, postId) ?? null;
-  const previousMutation = localGroupMutation.get(postId) ?? null;
+  const mutKey = localGroupMutationKey(viewer, postId);
+  const previousMutation = localGroupMutation.get(mutKey) ?? null;
   noteLocalGroupUpMutation(postId, opportunity != null);
   setCachedGroupUpOwn(viewer, postId, opportunity);
   softRevalidate.delete(postId);
@@ -366,7 +421,7 @@ export function setOptimisticGroupUpOwnState(
   return () => {
     setCachedGroupUpOwn(viewer, postId, previous);
     if (previousMutation) {
-      localGroupMutation.set(postId, previousMutation);
+      localGroupMutation.set(mutKey, previousMutation);
     } else {
       clearLocalGroupUpMutation(postId);
     }
@@ -390,7 +445,7 @@ const FEED_SNAPSHOT_GROUP: Omit<
 
 function isHydratedGroupOpportunity(value: GroupUpOpportunity | null): boolean {
   if (!value) return false;
-  return value.id !== "feed_snapshot" && value.id !== "optimistic";
+  return isRealGroupUpOpportunityId(value.id);
 }
 
 export function seedGroupUpOwnFromSnapshot(
@@ -407,14 +462,14 @@ export function seedGroupUpOwnFromSnapshot(
   if (typeof viewerId === "string" && viewerId !== userId) return;
   if (lastConfirmedUserId && lastConfirmedUserId !== userId) return;
 
-  const mutation = localGroupMutation.get(postId);
+  const mutation = localGroupMutation.get(localGroupMutationKey(userId, postId));
   if (mutation && mutation.active !== active) {
     softRevalidate.add(postId);
     loadFailed.delete(postId);
     return;
   }
   if (mutation && mutation.active === active) {
-    clearLocalGroupUpMutation(postId);
+    localGroupMutation.delete(localGroupMutationKey(userId, postId));
   }
 
   const existing = getCachedGroupUpOwn(userId, postId);

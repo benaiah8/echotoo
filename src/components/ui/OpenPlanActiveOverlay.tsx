@@ -21,7 +21,7 @@ import {
   PiStarFill,
   PiThumbsUp,
 } from "react-icons/pi";
-import { cancelOpenPlan, createOpenPlan } from "../../api/services/openPlans";
+import { cancelOpenPlan, createOpenPlan, getMyOpenPlansForSources } from "../../api/services/openPlans";
 import FutureDateTimePanel, {
   type FutureDatePickerSurface,
   type FutureDateTimeSegment,
@@ -46,6 +46,8 @@ import {
 } from "../../lib/openPlanActiveOverlayStore";
 import {
   getOpenPlanOwnOpportunity,
+  isRealOpenPlanOpportunityId,
+  requestOpenPlanOwnState,
   subscribeOpenPlanOwnState,
 } from "../../lib/openPlanOwnStore";
 import {
@@ -149,6 +151,10 @@ export default function OpenPlanActiveOverlay() {
   const opportunity = useSyncExternalStore(subscribeOpenPlanOwnState, () =>
     overlay.postId ? getOpenPlanOwnOpportunity(overlay.postId) : null,
   );
+  const realOpportunityId =
+    opportunity && isRealOpenPlanOpportunityId(opportunity.id)
+      ? opportunity.id
+      : null;
 
   const postId = overlay.postId;
   const mode = overlay.mode;
@@ -163,6 +169,8 @@ export default function OpenPlanActiveOverlay() {
   const [noteDraft, setNoteDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [manageHydrateBusy, setManageHydrateBusy] = useState(false);
+  const [manageHydrateFailed, setManageHydrateFailed] = useState(false);
   const [calendarResetToken, setCalendarResetToken] = useState(0);
   const [showDatePanel, setShowDatePanel] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
@@ -237,8 +245,47 @@ export default function OpenPlanActiveOverlay() {
   useEffect(() => {
     if (!manageOpen) {
       setCancelBusy(false);
+      setManageHydrateBusy(false);
+      setManageHydrateFailed(false);
     }
   }, [manageOpen, postId]);
+
+  /** Resolve a real opportunity before Cancel is enabled (stubs are not cancellable). */
+  useEffect(() => {
+    if (!manageOpen || !postId) {
+      setManageHydrateBusy(false);
+      setManageHydrateFailed(false);
+      return;
+    }
+    if (realOpportunityId) {
+      setManageHydrateBusy(false);
+      setManageHydrateFailed(false);
+      return;
+    }
+
+    let cancelled = false;
+    setManageHydrateBusy(true);
+    setManageHydrateFailed(false);
+    requestOpenPlanOwnState(postId);
+    void (async () => {
+      try {
+        await getMyOpenPlansForSources([postId], { bypassCache: true });
+        if (cancelled) return;
+        setManageHydrateBusy(false);
+        const next = getOpenPlanOwnOpportunity(postId);
+        if (!next || !isRealOpenPlanOpportunityId(next.id)) {
+          setManageHydrateFailed(true);
+        }
+      } catch {
+        if (cancelled) return;
+        setManageHydrateBusy(false);
+        setManageHydrateFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [manageOpen, postId, realOpportunityId]);
 
   useLayoutEffect(() => {
     if (!createOpen) return;
@@ -532,10 +579,34 @@ export default function OpenPlanActiveOverlay() {
   };
 
   const handleCancelConfirm = async () => {
-    if (!opportunity?.id || cancelBusy) return;
+    if (cancelBusy) return;
+    const cancelId = opportunity?.id;
+    if (!cancelId || !isRealOpenPlanOpportunityId(cancelId)) {
+      if (postId) {
+        requestOpenPlanOwnState(postId);
+        setManageHydrateBusy(true);
+        setManageHydrateFailed(false);
+        void (async () => {
+          try {
+            await getMyOpenPlansForSources([postId], { bypassCache: true });
+            setManageHydrateBusy(false);
+            const next = getOpenPlanOwnOpportunity(postId);
+            if (!next || !isRealOpenPlanOpportunityId(next.id)) {
+              setManageHydrateFailed(true);
+            }
+          } catch {
+            setManageHydrateBusy(false);
+            setManageHydrateFailed(true);
+          }
+        })();
+      }
+      toast.error(peopleUiCopy.openPlanCancelError);
+      return;
+    }
     setCancelBusy(true);
     try {
-      await cancelOpenPlan(opportunity.id);
+      // Non-optimistic: keep prior own state until cancel RPC succeeds.
+      await cancelOpenPlan(cancelId);
       toast.success(peopleUiCopy.openPlanCancelSuccess);
       closeOpenPlanOverlay();
     } catch {
@@ -830,6 +901,11 @@ export default function OpenPlanActiveOverlay() {
         opportunity.occurs_time_explicit !== false,
       )
     : null;
+  const manageIdentityReady = Boolean(realOpportunityId);
+  /** Disable Leave while resolving identity; allow retry after hydrate failure. */
+  const leaveDisabled =
+    (!manageIdentityReady && (manageHydrateBusy || !manageHydrateFailed)) ||
+    cancelBusy;
 
   const manageSheetVisible = sheetOpen && manageOpen;
   const cancelConfirmOpen = Boolean(overlay.cancelConfirmOpen && manageOpen);
@@ -903,11 +979,42 @@ export default function OpenPlanActiveOverlay() {
               placeDuoActionBase,
               "border-red-500/20 bg-red-500/[0.07]",
               "text-red-700/85 dark:text-red-300/80",
+              "disabled:opacity-50",
             ].join(" ")}
-            disabled={cancelBusy}
-            onClick={() => openOpenPlanCancelConfirm()}
+            disabled={leaveDisabled}
+            aria-busy={leaveDisabled}
+            onClick={() => {
+              if (!manageIdentityReady) {
+                if (postId) {
+                  requestOpenPlanOwnState(postId);
+                  setManageHydrateBusy(true);
+                  setManageHydrateFailed(false);
+                  void (async () => {
+                    try {
+                      await getMyOpenPlansForSources([postId], {
+                        bypassCache: true,
+                      });
+                      setManageHydrateBusy(false);
+                      const next = getOpenPlanOwnOpportunity(postId);
+                      if (!next || !isRealOpenPlanOpportunityId(next.id)) {
+                        setManageHydrateFailed(true);
+                        toast.error(peopleUiCopy.openPlanCancelError);
+                      }
+                    } catch {
+                      setManageHydrateBusy(false);
+                      setManageHydrateFailed(true);
+                      toast.error(peopleUiCopy.openPlanCancelError);
+                    }
+                  })();
+                } else {
+                  toast.error(peopleUiCopy.openPlanCancelError);
+                }
+                return;
+              }
+              openOpenPlanCancelConfirm();
+            }}
           >
-            {cancelBusy ? "…" : peopleUiCopy.manageLeave}
+            {leaveDisabled ? "…" : peopleUiCopy.manageLeave}
           </button>
           <button
             type="button"

@@ -38,6 +38,7 @@ export default function CreateFinalizeComposerShell({
           : "visible opacity-100",
       ].join(" ")}
       aria-hidden={exiting || undefined}
+      data-create-finalize-shell
       data-create-finalize-exiting={exiting ? "1" : undefined}
     >
       <div

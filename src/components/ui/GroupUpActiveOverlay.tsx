@@ -30,6 +30,7 @@ import {
   cancelGroupUp,
   createGroupUp,
   getMyGroupUpForConversation,
+  getMyGroupUpsForSources,
   GROUP_UP_DESCRIPTION_MAX,
   GROUP_UP_TITLE_MAX,
   updateGroupUpSchedule,
@@ -83,6 +84,8 @@ import {
 import {
   getGroupUpOwnOpportunity,
   getGroupUpOwnStatus,
+  isRealGroupUpOpportunityId,
+  requestGroupUpOwnState,
   setOptimisticGroupUpOwnState,
   subscribeGroupUpOwnState,
 } from "../../lib/groupUpOwnStore";
@@ -216,6 +219,20 @@ export default function GroupUpActiveOverlay() {
   const ownsActive = ownStatus === "active";
   const isEventSource = overlay.sourceSchedule?.postType === "hangout";
   const isPlaceSource = createOpen && !isEventSource;
+
+  const realOpportunity =
+    opportunity && isRealGroupUpOpportunityId(opportunity.id)
+      ? opportunity
+      : null;
+  const knownOpportunityId = isRealGroupUpOpportunityId(
+    overlay.knownOpportunityId
+  )
+    ? overlay.knownOpportunityId
+    : null;
+  const cancelOpportunityId = realOpportunity?.id ?? knownOpportunityId;
+  const manageIdentityReady = Boolean(cancelOpportunityId);
+  const [manageHydrateBusy, setManageHydrateBusy] = useState(false);
+  const [manageHydrateFailed, setManageHydrateFailed] = useState(false);
 
   const [manageIdentity, setManageIdentity] = useState<GroupManageIdentity>({
     title: null,
@@ -482,6 +499,43 @@ export default function GroupUpActiveOverlay() {
     overlay.sourceCaption,
     overlay.sourceSchedule?.postType,
   ]);
+
+  /** Resolve a real opportunity before Cancel is enabled (Profile may open with id hint only). */
+  useEffect(() => {
+    if (!manageOpen || !postId) {
+      setManageHydrateBusy(false);
+      setManageHydrateFailed(false);
+      return;
+    }
+    if (realOpportunity) {
+      setManageHydrateBusy(false);
+      setManageHydrateFailed(false);
+      return;
+    }
+
+    let cancelled = false;
+    setManageHydrateBusy(true);
+    setManageHydrateFailed(false);
+    requestGroupUpOwnState(postId);
+    void (async () => {
+      try {
+        await getMyGroupUpsForSources([postId], { bypassCache: true });
+        if (cancelled) return;
+        setManageHydrateBusy(false);
+        const next = getGroupUpOwnOpportunity(postId);
+        if (!next || !isRealGroupUpOpportunityId(next.id)) {
+          setManageHydrateFailed(true);
+        }
+      } catch {
+        if (cancelled) return;
+        setManageHydrateBusy(false);
+        setManageHydrateFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [manageOpen, postId, realOpportunity]);
 
   useLayoutEffect(() => {
     if (!createOpen) return;
@@ -1139,15 +1193,26 @@ export default function GroupUpActiveOverlay() {
   };
 
   const handleCancelConfirm = async () => {
-    const opp = opportunity;
-    if (!opp?.id) return;
+    const cancelId = cancelOpportunityId;
+    if (!cancelId || !isRealGroupUpOpportunityId(cancelId)) {
+      toast.error(peopleUiCopy.groupUpCancelError);
+      return;
+    }
+
+    const sourcePostId = realOpportunity?.source_post_id ?? postId ?? "";
+    if (!sourcePostId) {
+      toast.error(peopleUiCopy.groupUpCancelError);
+      return;
+    }
+
     setCancelBusy(true);
+    const revert = setOptimisticGroupUpOwnState(sourcePostId, null);
     try {
-      setOptimisticGroupUpOwnState(opp.source_post_id, null);
-      await cancelGroupUp(opp.id);
+      await cancelGroupUp(cancelId);
       toast.success(peopleUiCopy.groupUpCancelSuccess);
       closeGroupUpOverlay();
     } catch {
+      revert?.();
       toast.error(peopleUiCopy.groupUpCancelError);
     } finally {
       setCancelBusy(false);
@@ -1386,16 +1451,50 @@ export default function GroupUpActiveOverlay() {
       {manageUtility.showCancelGroup ? (
         <button
           type="button"
-          onClick={() => openGroupUpCancelConfirm()}
+          onClick={() => {
+            if (!manageIdentityReady) {
+              if (manageHydrateBusy) return;
+              if (manageHydrateFailed && postId) {
+                setManageHydrateBusy(true);
+                setManageHydrateFailed(false);
+                void getMyGroupUpsForSources([postId], { bypassCache: true })
+                  .then(() => {
+                    const next = getGroupUpOwnOpportunity(postId);
+                    if (next && isRealGroupUpOpportunityId(next.id)) {
+                      openGroupUpCancelConfirm();
+                    } else {
+                      setManageHydrateFailed(true);
+                      toast.error(peopleUiCopy.groupUpCancelError);
+                    }
+                  })
+                  .catch(() => {
+                    setManageHydrateFailed(true);
+                    toast.error(peopleUiCopy.groupUpCancelError);
+                  })
+                  .finally(() => setManageHydrateBusy(false));
+                return;
+              }
+              toast.error(peopleUiCopy.groupUpCancelError);
+              return;
+            }
+            openGroupUpCancelConfirm();
+          }}
+          disabled={(!manageIdentityReady && manageHydrateBusy) || cancelBusy}
+          aria-busy={(!manageIdentityReady && manageHydrateBusy) || cancelBusy}
           className={[
             "inline-flex min-h-9 items-center px-2 py-2",
             "bg-transparent text-[12px] font-semibold",
             "text-red-600 dark:text-red-400",
             "motion-safe:active:opacity-70",
+            (!manageIdentityReady && manageHydrateBusy) || cancelBusy
+              ? "opacity-50"
+              : "",
           ].join(" ")}
           data-group-cancel
         >
-          {peopleUiCopy.groupUpCancelCta}
+          {!manageIdentityReady && manageHydrateBusy
+            ? "…"
+            : peopleUiCopy.groupUpCancelCta}
         </button>
       ) : null}
     </div>

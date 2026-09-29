@@ -405,8 +405,17 @@ export async function getMyOpenPlanForSource(
   const opportunity = parseOpenPlanOpportunity(
     (data as OpportunityRpcResult | null)?.opportunity
   );
-  setCachedOpenPlanOwn(userId, sourcePostId, opportunity);
-  return opportunity;
+  const { applyFetchedOpenPlanOwnState } = await import(
+    "../../lib/openPlanOwnStore"
+  );
+  const applied = applyFetchedOpenPlanOwnState(
+    userId,
+    sourcePostId,
+    opportunity
+  );
+  return applied
+    ? opportunity
+    : (getCachedOpenPlanOwn(userId, sourcePostId) ?? null);
 }
 
 /** Per-RPC bound; matches the SQL DoS guardrail. Never truncate the caller list. */
@@ -488,10 +497,16 @@ export async function getMyOpenPlansForSources(
     }
 
     // Sparse RPC: omitted IDs are known-null (idle), never left loading.
+    const { applyFetchedOpenPlanOwnState } = await import(
+      "../../lib/openPlanOwnStore"
+    );
     for (const id of chunk) {
       const opportunity = foundBySource.get(id) ?? null;
-      setCachedOpenPlanOwn(userId, id, opportunity);
-      out.set(id, opportunity);
+      const applied = applyFetchedOpenPlanOwnState(userId, id, opportunity);
+      out.set(
+        id,
+        applied ? opportunity : (getCachedOpenPlanOwn(userId, id) ?? null)
+      );
     }
   }
 
@@ -532,6 +547,10 @@ export async function createOpenPlan(input: {
   );
   if (!opportunity) throw new Error("Create Open Plan failed");
   setCachedOpenPlanOwn(userId, sourcePostId, opportunity);
+  const { markLocalOpenPlanMutation } = await import(
+    "../../lib/openPlanOwnStore"
+  );
+  markLocalOpenPlanMutation(sourcePostId, true);
   invalidateOpenPlanDeck(userId);
   return opportunity;
 }
@@ -540,6 +559,12 @@ export async function cancelOpenPlan(
   opportunityId: string
 ): Promise<OpenPlanOpportunity> {
   if (!opportunityId) throw new Error("Missing opportunity");
+
+  const { isRealOpenPlanOpportunityId, markLocalOpenPlanMutation } =
+    await import("../../lib/openPlanOwnStore");
+  if (!isRealOpenPlanOpportunityId(opportunityId)) {
+    throw new Error("Missing opportunity");
+  }
 
   const userId = await requireSessionUserId();
 
@@ -553,6 +578,7 @@ export async function cancelOpenPlan(
   );
   if (!opportunity) throw new Error("Cancel Open Plan failed");
   setCachedOpenPlanOwn(userId, opportunity.source_post_id, null);
+  markLocalOpenPlanMutation(opportunity.source_post_id, false);
   invalidateOpenPlanDeck(userId);
   invalidateOpenPlanIncoming(userId);
   invalidateOpenPlanRequestGroups(userId);

@@ -14,7 +14,7 @@ import { Paths, isMessagesConversationPath } from "../router/Paths";
 import AuthModal from "./modal/AuthModal";
 import { useDispatch, useSelector } from "react-redux";
 import { setAuthModal } from "../reducers/modalReducer";
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useRef } from "react";
 import Avatar from "./ui/Avatar";
 import {
   getCachedAvatar,
@@ -50,6 +50,7 @@ import {
   getHomeSearchTabChromeHidden,
   type HomeSearchTabChromeDetail,
 } from "../lib/homeSearchTabChrome";
+import { blurFocusedDescendant } from "../lib/blurFocusedDescendant";
 import {
   isAndroid,
   isIOS,
@@ -283,6 +284,8 @@ function BottomTab() {
   const [hideHomeSearchNav, setHideHomeSearchNav] = useState(
     getHomeSearchTabChromeHidden
   );
+  /** Root that receives aria-hidden when tab chrome is hidden (People / Home search). */
+  const tabChromeHideRootRef = useRef<HTMLDivElement | null>(null);
   const lastY = useRef<number>(
     typeof window !== "undefined" ? window.scrollY : 0
   );
@@ -602,6 +605,8 @@ function BottomTab() {
                 );
                 return;
               }
+              // Blur tab focus before route makes this tree aria-hidden.
+              blurFocusedDescendant(tabChromeHideRootRef.current);
               navigate(Paths.people);
             })
           )
@@ -705,6 +710,17 @@ function BottomTab() {
     location.pathname.startsWith(`${Paths.people}/`);
   /** Create finalize covers the tab via shell z-index — do not hide chrome for Create. */
   const hideTabChrome = hidePeopleNav || hideHomeSearchNav;
+
+  /**
+   * Before paint: if tab chrome is (or becomes) aria-hidden, clear focus that
+   * still sits inside it (e.g. People tab button after tap → route change).
+   * No-op when chrome stays visible or focus is elsewhere.
+   */
+  useLayoutEffect(() => {
+    if (!hideTabChrome) return;
+    blurFocusedDescendant(tabChromeHideRootRef.current);
+  }, [hideTabChrome]);
+
   /**
    * People entry glitch: BottomTab uses `transition-all` (show ease ~300ms).
    * Applying only `invisible` lets visibility lag, so the global tab briefly
@@ -759,6 +775,7 @@ function BottomTab() {
       />
       {/* Wrapper: tab pill only. Hide: instant + scale. Show: smooth ease-out. */}
       <div
+        ref={tabChromeHideRootRef}
         className={[
           "fixed left-0 right-0 bottom-0 z-40 min-h-[80px] pointer-events-none flex flex-col justify-end",
           `transition-all ${transitionClass}`,

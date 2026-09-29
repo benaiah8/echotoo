@@ -4,6 +4,7 @@
  */
 
 import { dismissOpenPlanJoinToast } from "./showOpenPlanJoinToast";
+import { supabase } from "./supabaseClient";
 
 export type OpenPlanOverlayMode = "create" | "manage";
 
@@ -21,6 +22,9 @@ const EMPTY: OpenPlanActiveOverlayState = {
 
 let state: OpenPlanActiveOverlayState = { ...EMPTY };
 const listeners = new Set<() => void>();
+/** Last confirmed auth user — closes overlay on switch / sign-out. */
+let overlayViewerId: string | null | undefined;
+let overlayAuthSubscribed = false;
 
 function emit(): void {
   for (const listener of Array.from(listeners)) {
@@ -37,13 +41,41 @@ function setState(next: OpenPlanActiveOverlayState): void {
   emit();
 }
 
+function ensureOverlayAuthSubscription(): void {
+  if (overlayAuthSubscribed) return;
+  overlayAuthSubscribed = true;
+  supabase.auth.onAuthStateChange((event, session) => {
+    const next = session?.user?.id ?? null;
+    if (next) {
+      if (
+        typeof overlayViewerId === "string" &&
+        overlayViewerId !== next
+      ) {
+        if (state.postId || state.mode) {
+          setState({ ...EMPTY });
+        }
+      }
+      overlayViewerId = next;
+      return;
+    }
+    if (event === "SIGNED_OUT") {
+      if (state.postId || state.mode) {
+        setState({ ...EMPTY });
+      }
+      overlayViewerId = null;
+    }
+  });
+}
+
 export function getOpenPlanActiveOverlayState(): OpenPlanActiveOverlayState {
+  ensureOverlayAuthSubscription();
   return state;
 }
 
 export function subscribeOpenPlanActiveOverlay(
   listener: () => void
 ): () => void {
+  ensureOverlayAuthSubscription();
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -58,6 +90,7 @@ export function isOpenPlanActiveOverlayStackOpen(
 
 export function openOpenPlanCreate(postId: string): void {
   if (!postId) return;
+  ensureOverlayAuthSubscription();
   /* Parity with Pair Up: opening the sheet dismisses the create-success toast. */
   dismissOpenPlanJoinToast(postId);
   setState({
@@ -69,6 +102,7 @@ export function openOpenPlanCreate(postId: string): void {
 
 export function openOpenPlanManage(postId: string): void {
   if (!postId) return;
+  ensureOverlayAuthSubscription();
   dismissOpenPlanJoinToast(postId);
   setState({
     postId,
@@ -101,4 +135,31 @@ export function closeOpenPlanOverlayTop(): void {
   if (state.mode) {
     closeOpenPlanOverlay();
   }
+}
+
+/** Simulate auth change for account-isolation tests. */
+export function __applyOpenPlanOverlayAuthForTests(
+  next: string | null
+): void {
+  ensureOverlayAuthSubscription();
+  if (next) {
+    if (typeof overlayViewerId === "string" && overlayViewerId !== next) {
+      if (state.postId || state.mode) {
+        setState({ ...EMPTY });
+      }
+    }
+    overlayViewerId = next;
+    return;
+  }
+  if (state.postId || state.mode) {
+    setState({ ...EMPTY });
+  }
+  overlayViewerId = null;
+}
+
+export function __resetOpenPlanActiveOverlayForTests(): void {
+  state = { ...EMPTY };
+  overlayViewerId = undefined;
+  overlayAuthSubscribed = false;
+  listeners.clear();
 }

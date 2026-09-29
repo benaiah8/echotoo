@@ -1,7 +1,10 @@
 /**
  * Privacy-safe Post Detail media fetch (media_order + attached post_media +
- * legacy image URL sources used by Feed/Profile/Detail).
+ * legacy activities images used by Feed/Profile/Detail).
  * Uses anon client + RLS (owner OR can_view_post).
+ *
+ * Note: feed/list RPC JSON may include a computed `first_image_url`, but that
+ * is not a `posts` column — do not select it from `.from("posts")`.
  */
 
 import { supabase } from "../supabaseClient";
@@ -22,7 +25,8 @@ export type PublishedPostMediaForDetail = {
   postMedia: PublishedPostMediaRow[];
   /**
    * Gallery image URLs — same resolvePublishedPostImageUrls priority as
-   * Feed seed / Post Detail handoff (media_order → activities.images → first_image_url).
+   * Feed seed / Post Detail handoff (media_order → activities.images;
+   * optional first_image_url only when feed-seeded callers supply it).
    */
   imageUrls: string[];
 };
@@ -114,7 +118,7 @@ export async function getPublishedPostMediaForPosts(
   const [postsResult, mediaResult, activitiesResult] = await Promise.all([
     supabase
       .from("posts")
-      .select("id, media_order, first_image_url")
+      .select("id, media_order")
       .in("id", ids),
     supabase
       .from("post_media")
@@ -147,7 +151,6 @@ export async function getPublishedPostMediaForPosts(
     );
   }
 
-  const firstImageByPost = new Map<string, string | null>();
   const mediaOrderByPost = new Map<string, unknown>();
 
   const posts = Array.isArray(postsResult.data) ? postsResult.data : [];
@@ -161,11 +164,6 @@ export async function getPublishedPostMediaForPosts(
       ? mediaOrderRaw
       : mediaOrderRaw;
     mediaOrderByPost.set(id, mediaOrder);
-    const first =
-      typeof rec.first_image_url === "string" && rec.first_image_url.trim()
-        ? rec.first_image_url.trim()
-        : null;
-    firstImageByPost.set(id, first);
     const prev = out.get(id)!;
     out.set(id, { ...prev, mediaOrder });
   }
@@ -213,7 +211,7 @@ export async function getPublishedPostMediaForPosts(
     const imageUrls = resolvePublishedPostImageUrls({
       media_order: mediaOrder,
       activities: activitiesByPost.get(id) ?? [],
-      first_image_url: firstImageByPost.get(id) ?? null,
+      first_image_url: null,
     });
     out.set(id, {
       mediaOrder: mediaOrder ?? null,

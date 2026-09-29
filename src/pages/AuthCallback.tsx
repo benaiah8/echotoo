@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
-import { dbg, dumpAuthEnv } from "../lib/authDebug";
+import { dbg, dumpAuthEnv, summarizeAuthUrl } from "../lib/authDebug";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { persistProviderProfileDefaultsAfterSignIn } from "../lib/persistProviderProfileDefaults";
 
@@ -16,12 +16,7 @@ async function authCallbackPollObservableSession(
     if (data.session?.user?.id) {
       dbg("AuthCallback:poll_session_hit", {
         attempt: i + 1,
-        userId: data.session.user.id,
-      });
-      console.log("[AUTHDBG] poll observable session hit", {
-        attempt: i + 1,
-        sessionUserId: data.session.user.id,
-        t: Date.now(),
+        hasUserId: true,
       });
       return true;
     }
@@ -33,18 +28,13 @@ async function authCallbackPollObservableSession(
 /** Native: idempotent backup if OAuth in-app browser is still open after successful sign-in. */
 async function closeNativeOAuthBrowserBackup(): Promise<void> {
   if (!isNativeApp()) return;
-  console.log("[DBG:OAUTH] authcallback_backup_close_start", {
-    t: Date.now(),
-  });
+  dbg("oauth:authcallback_backup_close_start", {});
   try {
     const { Browser } = await import("@capacitor/browser");
     await Browser.close();
-    console.log("[DBG:OAUTH] authcallback_backup_close_ok", {
-      t: Date.now(),
-    });
+    dbg("oauth:authcallback_backup_close_ok", {});
   } catch (e) {
-    console.warn("[DBG:OAUTH] authcallback_backup_close_throw", {
-      t: Date.now(),
+    dbg("oauth:authcallback_backup_close_throw", {
       err: e instanceof Error ? e.message : String(e),
     });
     /* noop — safe if already closed */
@@ -71,18 +61,11 @@ export default function AuthCallback() {
     };
 
     const finish = (path = "/", reason = "unspecified") => {
-      console.log("[AUTHDBG] finish() called", {
-        path,
-        navigateReplace: path,
-        t: Date.now(),
-        skippedAlreadyFinished: finished,
-        cancelled,
-      });
-      console.log("[DBG:OAUTH] authcallback_finish", {
-        t: Date.now(),
+      dbg("AuthCallback:finish", {
         path,
         reason,
         skippedAlreadyFinished: finished,
+        cancelled,
       });
       if (cancelled || finished) return;
       window.history.replaceState({}, "", "/"); // clean address bar
@@ -91,23 +74,12 @@ export default function AuthCallback() {
     };
 
     const run = async () => {
-      console.log("[AUTHDBG] AuthCallback entry", {
-        t: Date.now(),
+      dbg("AuthCallback:entry", {
         pathname: window.location.pathname,
         hasSearch: !!window.location.search?.length,
         hasHash: !!window.location.hash?.length,
       });
       dumpAuthEnv();
-
-      // Log the actual URL being used for debugging
-      console.log("[AuthCallback] Current URL:", {
-        href: window.location.href,
-        origin: window.location.origin,
-        pathname: window.location.pathname,
-        search: window.location.search,
-        hash: window.location.hash,
-        isPWA: window.matchMedia("(display-mode: standalone)").matches,
-      });
 
       // Parse URL for provider errors (both search params and hash)
       const url = new URL(window.location.href);
@@ -123,17 +95,12 @@ export default function AuthCallback() {
           "error_description"
         );
       if (err || errCode || errDesc) {
-        console.log("[AUTHDBG] provider_error → finish / in 3s", {
-          err,
-          errCode,
-          t: Date.now(),
-        });
         const errorMsg = errDesc || err || "Authentication failed";
         dbg("AuthCallback:provider_error", {
           err,
           errCode,
-          errDesc,
-          href: window.location.href,
+          hasErrDesc: !!errDesc,
+          ...summarizeAuthUrl(window.location.href),
         });
         if (!cancelled) setError(errorMsg);
         schedule(() => finish("/", "provider_error_delayed"), 3000);
@@ -144,16 +111,11 @@ export default function AuthCallback() {
       const { data: s0 } = await supabase.auth.getSession();
       if (cancelled) return;
       dbg("AuthCallback:getSession", {
-        has: !!s0.session,
-        user: s0.session?.user?.id,
-      });
-      console.log("[AUTHDBG] AuthCallback initial getSession", {
-        t: Date.now(),
         hasSession: !!s0.session,
-        sessionUserId: s0.session?.user?.id ?? null,
+        hasUserId: !!s0.session?.user?.id,
       });
       if (s0.session) {
-        console.log("[AUTHDBG] AuthCallback branch session_already_present → finish()");
+        dbg("AuthCallback:branch_session_already_present", {});
         await persistProviderProfileDefaultsAfterSignIn(s0.session.user);
         if (cancelled) return;
         void closeNativeOAuthBrowserBackup();
@@ -165,37 +127,28 @@ export default function AuthCallback() {
         const hashParams = new URLSearchParams(loc.hash.replace(/^#/, ""));
         const access_token = hashParams.get("access_token");
         const refresh_token = hashParams.get("refresh_token");
-        console.log("[AUTHDBG] native hash branch", {
-          t: Date.now(),
+        dbg("AuthCallback:native_hash_branch", {
           hashLen: loc.hash?.length ?? 0,
           hasAccessToken: !!access_token,
           hasRefreshToken: !!refresh_token,
         });
         if (access_token && refresh_token) {
-          console.log("[AUTHDBG] before setSession(hash tokens)", {
-            t: Date.now(),
-          });
-          console.log("Setting session from hash tokens");
+          dbg("AuthCallback:before_setSession_hash", {});
           try {
             const { data, error } = await supabase.auth.setSession({
               access_token,
               refresh_token,
             });
             if (cancelled) return;
-            console.log("[AUTHDBG] after setSession(hash tokens)", {
-              t: Date.now(),
+            dbg("AuthCallback:after_setSession_hash", {
               ok: !error && !!data?.session,
-              sessionUserId: data?.session?.user?.id ?? null,
+              hasUserId: !!data?.session?.user?.id,
               errorMessage: error?.message ?? null,
             });
             if (!error && data?.session) {
               dbg("AuthCallback:hash_session_success", {
-                userId: data.session.user?.id,
+                hasUserId: !!data.session.user?.id,
               });
-              console.log(
-                "[AUTHDBG] hash_session_success → finish()",
-                data.session.user?.id
-              );
               await persistProviderProfileDefaultsAfterSignIn(data.session.user);
               if (cancelled) return;
               void closeNativeOAuthBrowserBackup();
@@ -209,18 +162,11 @@ export default function AuthCallback() {
               access_token &&
               refresh_token
             ) {
-              console.log(
-                "[AUTHDBG] hash setSession missing session payload; polling getSession",
-                { t: Date.now() }
-              );
+              dbg("AuthCallback:hash_setSession_missing_payload_poll", {});
               const observed = await authCallbackPollObservableSession(20, 160);
               if (cancelled) return;
               if (observed) {
-                dbg("AuthCallback:hash_session_observed_after_poll");
-                console.log(
-                  "[AUTHDBG] observable session after hash setSession → finish()",
-                  { t: Date.now() }
-                );
+                dbg("AuthCallback:hash_session_observed_after_poll", {});
                 const { data: polSession } = await supabase.auth.getSession();
                 if (polSession.session?.user) {
                   await persistProviderProfileDefaultsAfterSignIn(
@@ -235,14 +181,17 @@ export default function AuthCallback() {
             if (error) {
               console.error(
                 "[AuthCallback] setSession from hash failed:",
-                error
+                error.message
               );
               if (!cancelled) setError(`Sign-in error: ${error.message}`);
               schedule(() => finish("/", "hash_setSession_error"), 5000);
               return;
             }
           } catch (e: unknown) {
-            console.error("[AuthCallback] setSession exception:", e);
+            console.error(
+              "[AuthCallback] setSession exception:",
+              e instanceof Error ? e.message : String(e)
+            );
             const msg = e instanceof Error ? e.message : "Unknown error";
             if (!cancelled) setError(`Sign-in error: ${msg}`);
             schedule(() => finish("/", "hash_setSession_exception"), 3000);
@@ -253,42 +202,29 @@ export default function AuthCallback() {
 
       // 2b) If PKCE code present (query or hash), try manual exchange (web + native WebView).
       if (loc.search.includes("code=") || loc.hash.includes("code=")) {
-        console.log("[AUTHDBG] PKCE/code exchange branch", {
-          t: Date.now(),
+        dbg("AuthCallback:pkce_exchange_branch", {
           hasCodeInSearch: loc.search.includes("code="),
           hasCodeInHash: loc.hash.includes("code="),
         });
         try {
           const exchangeUrl = window.location.href;
-          console.log("[AuthCallback] EXCHANGE DEBUG:", {
-            locSearch: loc.search,
-            locHash: loc.hash,
-            exchangeUrl,
+          dbg("AuthCallback:exchange_start", {
+            ...summarizeAuthUrl(exchangeUrl),
             isNativeApp: isNativeApp(),
           });
-          console.log(
-            "[AuthCallback] Calling exchangeCodeForSession with:",
-            exchangeUrl
-          );
           const { data, error } = await supabase.auth.exchangeCodeForSession(
             exchangeUrl
           );
           if (cancelled) return;
-          console.log("EXCHANGE RESULT", data, error);
-          if (error) {
-            console.log(
-              "[AuthCallback] exchange error.message:",
-              error.message
-            );
-            console.log("[AuthCallback] exchange error.status:", error.status);
-          }
+          dbg("AuthCallback:exchange_result", {
+            hasSession: !!data?.session,
+            hasUserId: !!data?.session?.user?.id,
+            errorMessage: error?.message ?? null,
+            errorStatus: error?.status ?? null,
+          });
           if (!error && data?.session) {
             dbg("AuthCallback:exchange_success", {
-              userId: data.session.user?.id,
-            });
-            console.log("[AUTHDBG] exchange_success → finish()", {
-              t: Date.now(),
-              sessionUserId: data.session.user?.id ?? null,
+              hasUserId: !!data.session.user?.id,
             });
             await persistProviderProfileDefaultsAfterSignIn(data.session.user);
             if (cancelled) return;
@@ -297,18 +233,25 @@ export default function AuthCallback() {
           }
           if (error) {
             const suggestedRedirect = `${window.location.origin}/auth/callback`;
-            console.error("[AuthCallback] exchange failed:", error);
-            console.error("[AuthCallback] URL used for exchange:", exchangeUrl);
             console.error(
-              "[AuthCallback] Make sure this redirect URL is in Supabase:",
-              suggestedRedirect
+              "[AuthCallback] exchange failed:",
+              error.message,
+              error.status ?? ""
             );
             dbg("AuthCallback:exchange_error", {
               message: error.message,
               status: error.status,
-              exchangeUrlUsed: exchangeUrl,
-              redirectUrl: suggestedRedirect,
+              ...summarizeAuthUrl(exchangeUrl),
+              suggestedRedirectPath: "/auth/callback",
+              suggestedOriginPresent: Boolean(window.location.origin),
             });
+            // Keep redirect hint for local debugging without printing raw callback URL.
+            if (import.meta.env.DEV) {
+              console.error(
+                "[AuthCallback] Ensure Supabase redirect allowlist includes origin + /auth/callback",
+                suggestedRedirect
+              );
+            }
             if (!cancelled) {
               setError(
                 `Sign-in error: ${error.message}. Check console for redirect URL to add to Supabase.`
@@ -318,7 +261,10 @@ export default function AuthCallback() {
             return;
           }
         } catch (e: unknown) {
-          console.error("[AuthCallback] exchange exception:", e);
+          console.error(
+            "[AuthCallback] exchange exception:",
+            e instanceof Error ? e.message : String(e)
+          );
           const msg = e instanceof Error ? e.message : "Unknown error";
           if (!cancelled) setError(`Sign-in error: ${msg}`);
           schedule(() => finish("/", "exchange_exception_delayed"), 3000);
@@ -327,21 +273,13 @@ export default function AuthCallback() {
       }
 
       // 3) Otherwise rely on automatic parsing (implicit flow).
-      console.log("[AUTHDBG] AuthCallback subscribe onAuthStateChange (implicit wait)", {
-        t: Date.now(),
-      });
+      dbg("AuthCallback:subscribe_onAuthStateChange_implicit_wait", {});
       const { data: sub } = supabase.auth.onAuthStateChange((authEvent, session) => {
         if (cancelled) return;
         dbg("AuthCallback:onAuthStateChange", {
           event: authEvent,
-          has: !!session,
-          user: session?.user?.id,
-        });
-        console.log("[AUTHDBG] AuthCallback inner onAuthStateChange", {
-          t: Date.now(),
-          event: authEvent,
           hasSession: !!session,
-          sessionUserId: session?.user?.id ?? null,
+          hasUserId: !!session?.user?.id,
         });
         if (authEvent === "SIGNED_IN" && session?.user) {
           void persistProviderProfileDefaultsAfterSignIn(
@@ -361,10 +299,7 @@ export default function AuthCallback() {
 
       // 4) Hard stop after 5s to avoid spinner purgatory.
       schedule(() => {
-        dbg("AuthCallback:timeoutFallback");
-        console.warn("[AUTHDBG] AuthCallback timeoutFallback (5s) → error + finish in 2s", {
-          t: Date.now(),
-        });
+        dbg("AuthCallback:timeoutFallback", {});
         if (!cancelled) {
           setError("Sign-in is taking longer than expected. Redirecting...");
         }

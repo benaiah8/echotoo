@@ -35,14 +35,17 @@ describe("Groups host notch slot + media recovery (source)", () => {
     expect(overlay).toContain("openGroupHostProfile");
   });
 
-  it("7: batch fetch includes first_image_url + activities images", () => {
+  it("7: batch fetch uses posts.media_order + activities; no posts.first_image_url", () => {
     const batch = read(
       "lib/publishedMedia/getPublishedPostMediaForDetail.ts",
     );
-    expect(batch).toContain("first_image_url");
+    expect(batch).toContain('.select("id, media_order")');
+    expect(batch).not.toContain('.select("id, media_order, first_image_url")');
+    expect(batch).toContain('from("post_media")');
     expect(batch).toContain('from("activities")');
     expect(batch).toContain("resolvePublishedPostImageUrls");
     expect(batch).toContain("imageUrls");
+    expect(batch).toContain("first_image_url: null");
   });
 
   it("8–12: seed uses detail.imageUrls; stale empty miss; loader rev", () => {

@@ -20,6 +20,7 @@ import {
 } from "./showGroupUpRequestToast";
 import { socialUiCopy } from "./social/socialUiCopy";
 import type { SourceGroupRow } from "./social/sourceGroupTypes";
+import { supabase } from "./supabaseClient";
 import toast from "react-hot-toast";
 
 export type SourceGroupRequestFlight =
@@ -29,6 +30,9 @@ export type SourceGroupRequestFlight =
 const flights = new Map<string, SourceGroupRequestFlight>();
 const listeners = new Set<() => void>();
 let flightsEpoch = 0;
+/** Last confirmed auth user for this module — clears flights on switch/sign-out. */
+let flightsViewerId: string | null | undefined;
+let flightsAuthSubscribed = false;
 
 function emitFlights(): void {
   flightsEpoch += 1;
@@ -41,10 +45,56 @@ function emitFlights(): void {
   }
 }
 
+function clearSourceGroupRequestFlights(): void {
+  if (flights.size === 0) return;
+  flights.clear();
+  emitFlights();
+}
+
+function ensureSourceGroupRequestFlightsAuth(): void {
+  if (flightsAuthSubscribed) return;
+  flightsAuthSubscribed = true;
+  supabase.auth.onAuthStateChange((event, session) => {
+    const next = session?.user?.id ?? null;
+    if (next) {
+      if (
+        typeof flightsViewerId === "string" &&
+        flightsViewerId !== next
+      ) {
+        clearSourceGroupRequestFlights();
+      }
+      flightsViewerId = next;
+      return;
+    }
+    if (event === "SIGNED_OUT") {
+      clearSourceGroupRequestFlights();
+      flightsViewerId = null;
+    }
+  });
+}
+
 /** Test / overlay reset helper. */
 export function __resetSourceGroupRequestFlightsForTests(): void {
   flights.clear();
+  flightsViewerId = undefined;
+  flightsAuthSubscribed = false;
   emitFlights();
+}
+
+/** Simulate auth user change for account-isolation tests. */
+export function __applySourceGroupRequestAuthForTests(
+  next: string | null
+): void {
+  ensureSourceGroupRequestFlightsAuth();
+  if (next) {
+    if (typeof flightsViewerId === "string" && flightsViewerId !== next) {
+      clearSourceGroupRequestFlights();
+    }
+    flightsViewerId = next;
+    return;
+  }
+  clearSourceGroupRequestFlights();
+  flightsViewerId = null;
 }
 
 export function subscribeSourceGroupRequestFlights(
@@ -82,6 +132,7 @@ type RequestCtx = {
  * If withdraw is requested before the RPC returns, withdraws once request_id exists.
  */
 export async function runSourceGroupRequest(ctx: RequestCtx): Promise<void> {
+  ensureSourceGroupRequestFlightsAuth();
   const { sourcePostId, row, reloadSourceList } = ctx;
   const id = row.opportunity_id;
   if (!sourcePostId || !id) return;
@@ -179,6 +230,7 @@ type WithdrawCtx = {
  * If a request is still in flight (no request_id yet), marks undoAfter instead.
  */
 export async function runSourceGroupWithdraw(ctx: WithdrawCtx): Promise<void> {
+  ensureSourceGroupRequestFlightsAuth();
   const {
     sourcePostId,
     opportunityId: id,

@@ -554,8 +554,17 @@ export async function getMyGroupUpForSource(
   const opportunity = parseGroupUpOpportunity(
     (data as OpportunityRpcResult | null)?.opportunity
   );
-  setCachedGroupUpOwn(userId, sourcePostId, opportunity);
-  return opportunity;
+  const { applyFetchedGroupUpOwnState } = await import(
+    "../../lib/groupUpOwnStore"
+  );
+  const applied = applyFetchedGroupUpOwnState(
+    userId,
+    sourcePostId,
+    opportunity
+  );
+  return applied
+    ? opportunity
+    : (getCachedGroupUpOwn(userId, sourcePostId) ?? null);
 }
 
 export async function getMyGroupUpsForSources(
@@ -582,6 +591,10 @@ export async function getMyGroupUpsForSources(
 
   if (missing.length === 0) return out;
 
+  const { applyFetchedGroupUpOwnState } = await import(
+    "../../lib/groupUpOwnStore"
+  );
+
   for (let i = 0; i < missing.length; i += GROUP_UP_BATCH_MAX_IDS) {
     const chunk = missing.slice(i, i + GROUP_UP_BATCH_MAX_IDS);
     const result = await requestManager.execute(
@@ -606,8 +619,11 @@ export async function getMyGroupUpsForSources(
 
     for (const id of chunk) {
       const opportunity = foundBySource.get(id) ?? null;
-      setCachedGroupUpOwn(userId, id, opportunity);
-      out.set(id, opportunity);
+      const applied = applyFetchedGroupUpOwnState(userId, id, opportunity);
+      out.set(
+        id,
+        applied ? opportunity : (getCachedGroupUpOwn(userId, id) ?? null)
+      );
     }
   }
 
@@ -667,6 +683,8 @@ export async function createGroupUp(input: {
     (data as OpportunityRpcResult | null)?.opportunity
   );
   if (!opportunity) throw new Error("Create Group Up failed");
+  const { markLocalGroupUpMutation } = await import("../../lib/groupUpOwnStore");
+  markLocalGroupUpMutation(sourcePostId, true);
   setCachedGroupUpOwn(userId, sourcePostId, opportunity);
   clearDmInboxCache();
   const { applyLocalCreateGroupPatches } = await import(
@@ -685,6 +703,13 @@ export async function cancelGroupUp(
 ): Promise<GroupUpOpportunity> {
   if (!opportunityId) throw new Error("Missing opportunity");
 
+  const { isRealGroupUpOpportunityId, markLocalGroupUpMutation } = await import(
+    "../../lib/groupUpOwnStore"
+  );
+  if (!isRealGroupUpOpportunityId(opportunityId)) {
+    throw new Error("Invalid Group Up opportunity");
+  }
+
   const userId = await requireSessionUserId();
 
   const { data, error } = await supabase.rpc("cancel_group_up", {
@@ -696,6 +721,7 @@ export async function cancelGroupUp(
     (data as OpportunityRpcResult | null)?.opportunity
   );
   if (!opportunity) throw new Error("Cancel Group Up failed");
+  markLocalGroupUpMutation(opportunity.source_post_id, false);
   setCachedGroupUpOwn(userId, opportunity.source_post_id, null);
   const { applyLocalCancelGroupPatches } = await import(
     "../../lib/groupUpLocalPatches"

@@ -9,6 +9,9 @@ import GroupUpRequestersOverlay from "./messages/GroupUpRequestersOverlay";
 import OpenPlanRequestersOverlay from "./messages/OpenPlanRequestersOverlay";
 import SourceGroupsOverlay from "./social/SourceGroupsOverlay";
 import PairUpPhotoPromptMount from "./profile/PairUpPhotoPromptMount";
+import OrdinaryErrorToastBar, {
+  ORDINARY_ERROR_TOAST_DURATION_MS,
+} from "./OrdinaryErrorToastBar";
 import { useIsDesktopLayout } from "../lib/desktopLayoutDetection";
 import { SOCIAL_ACTION_TOASTER_ID } from "../lib/showSocialActionToast";
 import {
@@ -50,8 +53,13 @@ export default function AppFloatingChrome() {
           success: {
             iconTheme: { primary: "#F7D047", secondary: "#111" },
           },
+          error: {
+            duration: ORDINARY_ERROR_TOAST_DURATION_MS,
+          },
         }}
-      />
+      >
+        {(t) => <OrdinaryErrorToastBar toast={t} />}
+      </Toaster>
 
       {/* Discover preference status only — top, below notch/status bar */}
       <Toaster

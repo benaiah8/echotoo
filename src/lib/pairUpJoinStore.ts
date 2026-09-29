@@ -8,7 +8,6 @@
  * KNOWN STALE stays visible (never → UNKNOWN solely from soft TTL).
  */
 
-import toast from "react-hot-toast";
 import { supabase } from "./supabaseClient";
 import { getMyPairUpsForSources } from "../api/services/pairUp";
 import {
@@ -44,7 +43,14 @@ const loadFailed = new Set<string>();
 /** Post ids with hydrated/persisted UI that still need a network refresh. */
 const softRevalidate = new Set<string>();
 const subscribers = new Set<() => void>();
+/** Explicit join/leave mutations — snapshots must not reverse these. */
+const localPairMutation = new Map<string, { joined: boolean; seq: number }>();
+let localPairMutationSeq = 0;
 let flushTimer: number | null = null;
+
+function localPairMutationKey(userId: string, postId: string): string {
+  return `${userId}:${postId}`;
+}
 
 function emit(): void {
   for (const listener of Array.from(subscribers)) {
@@ -109,6 +115,7 @@ function clearMemoryControlSets(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localPairMutation.clear();
 }
 
 function applyConfirmedUser(next: string): void {
@@ -248,7 +255,7 @@ async function flush(): Promise<void> {
       loadFailed.delete(id);
       softRevalidate.delete(id);
       const cached = getCachedPairUp(viewer, id);
-      const mut = localPairMutation.get(id);
+      const mut = localPairMutation.get(localPairMutationKey(viewer, id));
       if (mut) {
         const joined = cached != null;
         if (mut.joined === joined) clearLocalPairUpMutation(id);
@@ -273,7 +280,7 @@ async function flush(): Promise<void> {
         loadFailed.add(id);
       }
     }
-    toast.error("Couldn't load P2P status.");
+    // Background hydrate/revalidate: keep cache / loadFailed; no global toast.
   } finally {
     for (const id of missing) inflight.delete(id);
     emit();
@@ -365,12 +372,11 @@ const FEED_SNAPSHOT_JOIN: Omit<PairUpOpportunity, "source_post_id" | "created_at
   };
 
 /** Explicit join/leave mutations — snapshots must not reverse these. */
-const localPairMutation = new Map<string, { joined: boolean; seq: number }>();
-let localPairMutationSeq = 0;
-
 function noteLocalPairUpMutation(postId: string, joined: boolean): void {
   if (!postId) return;
-  localPairMutation.set(postId, {
+  const viewer = effectiveUserId();
+  if (!viewer) return;
+  localPairMutation.set(localPairMutationKey(viewer, postId), {
     joined,
     seq: ++localPairMutationSeq,
   });
@@ -382,7 +388,9 @@ export function markLocalPairUpMutation(postId: string, joined: boolean): void {
 }
 
 function clearLocalPairUpMutation(postId: string): void {
-  localPairMutation.delete(postId);
+  const viewer = effectiveUserId();
+  if (!viewer || !postId) return;
+  localPairMutation.delete(localPairMutationKey(viewer, postId));
 }
 
 function isHydratedPairOpportunity(value: PairUpOpportunity | null): boolean {
@@ -416,14 +424,14 @@ export function seedPairUpJoinFromSnapshot(
   if (typeof viewerId === "string" && viewerId !== userId) return;
   if (lastConfirmedUserId && lastConfirmedUserId !== userId) return;
 
-  const mutation = localPairMutation.get(postId);
+  const mutation = localPairMutation.get(localPairMutationKey(userId, postId));
   if (mutation && mutation.joined !== active) {
     softRevalidate.add(postId);
     loadFailed.delete(postId);
     return;
   }
   if (mutation && mutation.joined === active) {
-    clearLocalPairUpMutation(postId);
+    localPairMutation.delete(localPairMutationKey(userId, postId));
   }
 
   const existing = getCachedPairUp(userId, postId);
@@ -490,13 +498,14 @@ export function applyFetchedPairUpJoinState(
 ): boolean {
   if (!userId || !postId) return false;
   const joined = opportunity != null;
-  const mut = localPairMutation.get(postId);
+  const mutKey = localPairMutationKey(userId, postId);
+  const mut = localPairMutation.get(mutKey);
   if (mut && mut.joined !== joined) {
     // Newer explicit local mutation — ignore conflicting server write.
     return false;
   }
   if (mut && mut.joined === joined) {
-    clearLocalPairUpMutation(postId);
+    localPairMutation.delete(mutKey);
   }
   setCachedPairUp(userId, postId, opportunity);
   softRevalidate.delete(postId);
@@ -510,8 +519,9 @@ export function setOptimisticPairUpJoinState(
 ): (() => void) | null {
   const viewer = effectiveUserId();
   if (!viewer || !postId) return null;
+  const mutKey = localPairMutationKey(viewer, postId);
   const previous = getCachedPairUp(viewer, postId) ?? null;
-  const previousMutation = localPairMutation.get(postId) ?? null;
+  const previousMutation = localPairMutation.get(mutKey) ?? null;
   noteLocalPairUpMutation(postId, joined);
   setCachedPairUp(
     viewer,
@@ -529,9 +539,9 @@ export function setOptimisticPairUpJoinState(
   return () => {
     setCachedPairUp(viewer, postId, previous);
     if (previousMutation) {
-      localPairMutation.set(postId, previousMutation);
+      localPairMutation.set(mutKey, previousMutation);
     } else {
-      clearLocalPairUpMutation(postId);
+      localPairMutation.delete(mutKey);
     }
   };
 }

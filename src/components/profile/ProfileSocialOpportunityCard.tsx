@@ -496,7 +496,10 @@ export default function ProfileSocialOpportunityCard({
       openGroupUpManage(
         row.source_post_id,
         groupTitle || row.source_caption,
-        sourceSchedule
+        sourceSchedule,
+        {
+          opportunityId: groupPayload?.opportunity_id ?? null,
+        }
       );
       return;
     }
@@ -509,6 +512,7 @@ export default function ProfileSocialOpportunityCard({
     row.source_caption,
     groupTitle,
     sourceSchedule,
+    groupPayload?.opportunity_id,
   ]);
 
   const handleOtherDuo = useCallback(async () => {
@@ -813,6 +817,10 @@ export default function ProfileSocialOpportunityCard({
   // Own Profile hosted pills follow rail payload only — never stale join/own stores.
   const ownDuoActive = hasOwnerDuo;
   const ownGroupActive = hasOwnerGroup;
+  // Profile row.group ⇒ discoverable hosted Group ⇒ count truth ≥ 1.
+  const ownGroupDisplayCount = hasOwnerGroup
+    ? (groupAction.displayCount ?? 1)
+    : groupAction.displayCount;
   const otherDuoActive = hasOwnerDuo ? duoJoined : false;
 
   return (
@@ -898,14 +906,15 @@ export default function ProfileSocialOpportunityCard({
                     <div className={socialRailBareRowClassName()}>
                       <SocialDuoPill
                         active={ownDuoActive}
-                        resolving={duoAction.resolving}
+                        resolving={hasOwnerDuo ? false : duoAction.resolving}
                         onPress={handleOwnDuo}
                         size="compact"
                       />
                       <SocialGroupPill
-                        displayCount={groupAction.displayCount}
+                        displayCount={ownGroupDisplayCount}
                         active={ownGroupActive}
-                        resolving={groupAction.resolving}
+                        // Hosted Own Group must remain tappable while count hydrates.
+                        resolving={hasOwnerGroup ? false : groupAction.resolving}
                         onPress={handleOwnGroup}
                         size="compact"
                       />

@@ -163,6 +163,7 @@ import { useCreateDraftActivitiesState } from "../hooks/useCreateDraftActivities
 import { useCreateFinalizeStructuralHistory } from "../hooks/useCreateFinalizeStructuralHistory";
 import { useCreatePostMediaPicker } from "../hooks/useCreatePostMediaPicker";
 import { blurActiveEditableFirst } from "../lib/blurActiveEditableFirst";
+import { blurFocusedDescendant } from "../lib/blurFocusedDescendant";
 import {
   classifyTextInputType,
   inferTextEditOperationKind,
@@ -2996,6 +2997,11 @@ export default function CreateFinalizePage() {
    */
   const handleLeaveCreateFlow = useCallback(() => {
     dispatchCreateFlowLeaveRequest(() => {
+      // Blur any focused control inside the shell before aria-hidden={exiting}.
+      const shell = document.querySelector<HTMLElement>(
+        "[data-create-finalize-shell]",
+      );
+      blurFocusedDescendant(shell);
       flushSync(() => {
         setIsExiting(true);
       });

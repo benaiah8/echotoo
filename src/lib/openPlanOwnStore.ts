@@ -8,7 +8,6 @@
  * KNOWN STALE stays visible (never → UNKNOWN solely from soft TTL).
  */
 
-import toast from "react-hot-toast";
 import { supabase } from "./supabaseClient";
 import { getMyOpenPlansForSources } from "../api/services/openPlans";
 import {
@@ -40,7 +39,14 @@ const inflight = new Set<string>();
 const loadFailed = new Set<string>();
 const softRevalidate = new Set<string>();
 const subscribers = new Set<() => void>();
+/** Explicit create/cancel mutations — hydrates must not reverse these. */
+const localOpenPlanMutation = new Map<string, { active: boolean; seq: number }>();
+let localOpenPlanMutationSeq = 0;
 let flushTimer: number | null = null;
+
+function localOpenPlanMutationKey(userId: string, postId: string): string {
+  return `${userId}:${postId}`;
+}
 
 function emit(): void {
   for (const listener of Array.from(subscribers)) {
@@ -110,6 +116,7 @@ function clearMemoryControlSets(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localOpenPlanMutation.clear();
 }
 
 function applyConfirmedUser(next: string): void {
@@ -260,7 +267,7 @@ async function flush(): Promise<void> {
         loadFailed.add(id);
       }
     }
-    toast.error("Couldn't load Open Plan status.");
+    // Background hydrate/revalidate: keep cache / loadFailed; no global toast.
   } finally {
     for (const id of missing) inflight.delete(id);
     emit();
@@ -357,13 +364,92 @@ export function setOptimisticOpenPlanOwnState(
 ): (() => void) | null {
   const viewer = effectiveUserId();
   if (!viewer || !postId) return null;
+  const mutKey = localOpenPlanMutationKey(viewer, postId);
   const previous = getCachedOpenPlanOwn(viewer, postId) ?? null;
+  const previousMutation = localOpenPlanMutation.get(mutKey) ?? null;
+  noteLocalOpenPlanMutation(postId, opportunity != null);
   setCachedOpenPlanOwn(viewer, postId, opportunity);
   softRevalidate.delete(postId);
   loadFailed.delete(postId);
   return () => {
     setCachedOpenPlanOwn(viewer, postId, previous);
+    if (previousMutation) {
+      localOpenPlanMutation.set(mutKey, previousMutation);
+    } else {
+      localOpenPlanMutation.delete(mutKey);
+    }
   };
+}
+
+/**
+ * True when id is a real server opportunity UUID — not feed_snapshot / persist / optimistic.
+ */
+export function isRealOpenPlanOpportunityId(
+  id: string | null | undefined
+): boolean {
+  if (!id || typeof id !== "string") return false;
+  const trimmed = id.trim();
+  if (!trimmed) return false;
+  if (trimmed === "feed_snapshot" || trimmed === "optimistic") return false;
+  if (trimmed.startsWith("persist:")) return false;
+  return true;
+}
+
+function noteLocalOpenPlanMutation(postId: string, active: boolean): void {
+  if (!postId) return;
+  const viewer = effectiveUserId();
+  if (!viewer) return;
+  localOpenPlanMutation.set(localOpenPlanMutationKey(viewer, postId), {
+    active,
+    seq: ++localOpenPlanMutationSeq,
+  });
+}
+
+/** Successful create/cancel — stamps local mutation so in-flight hydrates cannot reverse it. */
+export function markLocalOpenPlanMutation(
+  postId: string,
+  active: boolean
+): void {
+  noteLocalOpenPlanMutation(postId, active);
+}
+
+/**
+ * Apply a get-mine / batch hydrate result. Explicit local create/cancel mutations
+ * win over older in-flight fetches that disagree.
+ */
+export function applyFetchedOpenPlanOwnState(
+  userId: string,
+  postId: string,
+  opportunity: OpenPlanOpportunity | null
+): boolean {
+  if (!userId || !postId) return false;
+  const active = opportunity != null;
+  const mutKey = localOpenPlanMutationKey(userId, postId);
+  const mut = localOpenPlanMutation.get(mutKey);
+  if (mut && mut.active !== active) {
+    // Newer explicit local mutation — ignore conflicting server write.
+    return false;
+  }
+  if (mut && mut.active && opportunity) {
+    // Create/recreate stamp: ignore a different active opportunity id
+    // (stale pre-recreate or older plan for the same source).
+    const existing = getCachedOpenPlanOwn(userId, postId);
+    if (
+      existing &&
+      isRealOpenPlanOpportunityId(existing.id) &&
+      isRealOpenPlanOpportunityId(opportunity.id) &&
+      existing.id !== opportunity.id
+    ) {
+      return false;
+    }
+  }
+  if (mut && mut.active === active) {
+    localOpenPlanMutation.delete(mutKey);
+  }
+  setCachedOpenPlanOwn(userId, postId, opportunity);
+  softRevalidate.delete(postId);
+  loadFailed.delete(postId);
+  return true;
 }
 
 const FEED_SNAPSHOT_OPEN_PLAN: Omit<
@@ -381,7 +467,7 @@ const FEED_SNAPSHOT_OPEN_PLAN: Omit<
 
 function isHydratedOpenPlan(value: OpenPlanOpportunity | null): boolean {
   if (!value) return false;
-  return value.id !== "feed_snapshot" && value.id !== "optimistic";
+  return isRealOpenPlanOpportunityId(value.id);
 }
 
 export function seedOpenPlanOwnFromSnapshot(
@@ -397,6 +483,18 @@ export function seedOpenPlanOwnFromSnapshot(
   }
   if (typeof viewerId === "string" && viewerId !== userId) return;
   if (lastConfirmedUserId && lastConfirmedUserId !== userId) return;
+
+  const mutation = localOpenPlanMutation.get(
+    localOpenPlanMutationKey(userId, postId)
+  );
+  if (mutation && mutation.active !== active) {
+    softRevalidate.add(postId);
+    loadFailed.delete(postId);
+    return;
+  }
+  if (mutation && mutation.active === active) {
+    localOpenPlanMutation.delete(localOpenPlanMutationKey(userId, postId));
+  }
 
   const existing = getCachedOpenPlanOwn(userId, postId);
   if (existing !== undefined && isHydratedOpenPlan(existing)) {
@@ -459,6 +557,7 @@ export function __resetOpenPlanOwnStoreForTests(): void {
   requested.clear();
   inflight.clear();
   loadFailed.clear();
+  localOpenPlanMutation.clear();
   subscribers.clear();
   if (flushTimer != null) {
     globalThis.clearTimeout(flushTimer);
