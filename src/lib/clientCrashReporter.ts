@@ -92,6 +92,20 @@ async function nativeVersion(): Promise<{
   }
 }
 
+/** Shared platform / app identity for crash + video-publish reporters. */
+export async function resolveClientCrashRuntimeEnv(): Promise<{
+  platform: ClientCrashPlatform;
+  appVersion: string | null;
+  appBuild: string | null;
+}> {
+  const native = await nativeVersion();
+  return {
+    platform: resolvePlatform(),
+    appVersion: native.version,
+    appBuild: native.build,
+  };
+}
+
 export function buildClientCrashPayload(
   input: CaptureInput,
   extras?: {

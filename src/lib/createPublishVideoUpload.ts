@@ -24,6 +24,10 @@ import {
   waitForPostMediaPublishReady,
 } from "./postMediaPublishReady";
 import { shouldStartTusForInit } from "./createPostVideoUpload";
+import {
+  mapPublishFailureStageToAdmin,
+  reportVideoPublishFailure,
+} from "./reportVideoPublishFailure";
 
 /** Web/legacy: full File (tus-js). */
 export type PublishVideoFileBytes = {
@@ -77,20 +81,47 @@ function logPublish(event: string, detail?: Record<string, unknown>): void {
   console.info(PUBLISH_DIAG_PREFIX, event, detail ?? "");
 }
 
-/**
- * Always-on concise failure outcome (production + DEV).
- * Safe fields only — never tokens, URLs, paths, or media bytes.
- */
-export function logPublishFailureOutcome(payload: {
+export type PublishFailureOutcomeContext = {
   stage: PublishFailureStage;
   errorCode: string;
   recoverable: boolean;
-}): void {
+  mediaId?: string | null;
+  bunnyVideoId?: string | null;
+  sizeBucket?: string | null;
+  durationBucket?: string | null;
+  width?: number | null;
+  height?: number | null;
+};
+
+/**
+ * Always-on concise failure outcome (production + DEV).
+ * Safe fields only — never tokens, URLs, paths, or media bytes.
+ * Also fire-and-forgets a video_publish crash report (skips cancels).
+ */
+export function logPublishFailureOutcome(
+  payload: PublishFailureOutcomeContext,
+): void {
+  const errorCode = String(payload.errorCode || "unknown").slice(0, 64);
   console.info(`${PUBLISH_DIAG_PREFIX} PUBLISH_FAILURE_OUTCOME`, {
     stage: payload.stage,
-    errorCode: String(payload.errorCode || "unknown").slice(0, 64),
+    errorCode,
     recoverable: payload.recoverable,
   });
+  try {
+    reportVideoPublishFailure({
+      stage: mapPublishFailureStageToAdmin(payload.stage),
+      errorCode,
+      recoverable: payload.recoverable,
+      mediaId: payload.mediaId,
+      bunnyVideoId: payload.bunnyVideoId,
+      sizeBucket: payload.sizeBucket,
+      durationBucket: payload.durationBucket,
+      width: payload.width,
+      height: payload.height,
+    });
+  } catch {
+    /* telemetry must never affect Publish */
+  }
 }
 
 function isAbortError(error: unknown): boolean {
@@ -158,6 +189,7 @@ async function awaitPublishProcessingGate(
       stage: "processing",
       errorCode: mapped.code,
       recoverable: true,
+      mediaId,
     });
     return { ok: false, error: mapped.error };
   }
@@ -282,6 +314,8 @@ async function createPublishVideoUploadInner(
           stage: "processing",
           errorCode: "processing_failed",
           recoverable: true,
+          mediaId: existingMediaId,
+          bunnyVideoId: options.draftVideo?.remoteVideoId ?? null,
         });
       }
       return skip;
@@ -402,6 +436,8 @@ async function createPublishVideoUploadInner(
       stage: "tus",
       errorCode: mapped.errorCode,
       recoverable: mapped.recoverable,
+      mediaId: init.data.mediaId,
+      bunnyVideoId: videoId,
     });
     logPublish("publish failed stage", {
       stage: "tus_upload",

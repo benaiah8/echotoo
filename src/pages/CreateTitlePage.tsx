@@ -115,7 +115,7 @@ export default function CreateTitlePage() {
           <PrimaryInput
             label="Caption"
             value={caption}
-            placeholder="Say what this experience is about..."
+            placeholder="Say what this post is about..."
             onChange={(e) => setCaption(e.target.value)}
           />
         </div>

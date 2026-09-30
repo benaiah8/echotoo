@@ -14,7 +14,7 @@ export const HOME_FEED_LIST_CACHE_KEY_PREFIX = "home_feed_v1:";
 /** In-memory display/hydration snapshot — must not share the RPC first-page `feed:` key. */
 export const HOME_FEED_DISPLAY_CACHE_KEY_PREFIX = "home_display_v1:";
 export const HOME_FEED_LIST_CACHE_SCHEMA_VERSION = 1 as const;
-const HOME_FEED_DISPLAY_TTL_MS = 10 * 60 * 1000;
+export const HOME_FEED_DISPLAY_TTL_MS = 10 * 60 * 1000;
 
 export type HomeFeedPersistedPayload = {
   version: typeof HOME_FEED_LIST_CACHE_SCHEMA_VERSION;

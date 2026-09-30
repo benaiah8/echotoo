@@ -29,6 +29,7 @@ import {
   isPublishedVideoOnly,
   isPublishedSingleImage,
   mergePublishedVideoDimensions,
+  preservePublishedVideoMetadataAcrossItems,
   requestPublishedListVideoOwnership,
   requestPublishedListVideoWarmOwnership,
   shouldAllowPublishedListVideoSpeculativeWarm,
@@ -304,7 +305,6 @@ function PublishedMediaListSurface({
   }, [postId, mode]);
 
   useEffect(() => {
-    setMediaItems(items);
     setIndex((prev) =>
       remapPublishedMediaActiveIndex({
         previousKey: mediaItemsRef.current[prev]?.key,
@@ -312,6 +312,12 @@ function PublishedMediaListSurface({
         nextKeys: items.map((i) => i.key),
       }),
     );
+    const merged = preservePublishedVideoMetadataAcrossItems(
+      mediaItemsRef.current,
+      items,
+    );
+    mediaItemsRef.current = merged;
+    setMediaItems(merged);
   }, [items]);
 
   useEffect(() => {

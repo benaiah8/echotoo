@@ -143,7 +143,8 @@ export default function AppUpdatesHelpModal({ open, onClose }: Props) {
           <Section title="Store release ready">
             <p>
               Only turn this on after the new build is actually available for
-              users to download from the relevant Play Store/App Store location.
+              users to download from the relevant{" "}
+              {__ECHOTOO_IOS_BUILD__ ? "store" : "Play Store/App Store"} location.
               This prevents showing or enforcing an update before the release can
               actually be installed.
             </p>

@@ -3,6 +3,7 @@
  * Durable local storage + preview resolver. Does not change eager upload yet.
  */
 
+import { createRandomUuid } from "../createRandomUuid";
 import { imgUrlPublic } from "../img";
 import { isNativeApp } from "../storage/utils/capacitorDetection";
 import {
@@ -134,7 +135,7 @@ export async function persistDraftImage(
     throw new Error("DRAFT_IMAGE_EMPTY_BLOB");
   }
 
-  const localId = (input.localId?.trim() || crypto.randomUUID()).trim();
+  const localId = (input.localId?.trim() || createRandomUuid()).trim();
   const mimeType = (
     input.mimeType?.trim() || mimeFromBlob(input.blob, input.fileName)
   ).trim();

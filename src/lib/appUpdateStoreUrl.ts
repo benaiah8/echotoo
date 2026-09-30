@@ -5,8 +5,10 @@
 
 export const ECHOTOO_ANDROID_PACKAGE_ID = "com.echotoo.app";
 
-export const ECHOTOO_ANDROID_PLAY_STORE_FALLBACK_URL =
-  `https://play.google.com/store/apps/details?id=${ECHOTOO_ANDROID_PACKAGE_ID}`;
+/** Empty in the iOS App Store build (__ECHOTOO_IOS_BUILD__); iOS never uses it. */
+export const ECHOTOO_ANDROID_PLAY_STORE_FALLBACK_URL = __ECHOTOO_IOS_BUILD__
+  ? ""
+  : `https://play.google.com/store/apps/details?id=${ECHOTOO_ANDROID_PACKAGE_ID}`;
 
 export function resolveAppUpdateStoreUrl(
   platform: "android" | "ios",

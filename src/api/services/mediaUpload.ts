@@ -10,6 +10,7 @@ import {
 } from "../../lib/isMediaUploadRetryable";
 import { retry } from "../../lib/retry";
 import { uploadToCloudinary, uploadToCloudinaryRaw } from "./cloudinaryUpload";
+import { createRandomUuid } from "../../lib/createRandomUuid";
 import { supabase } from "../../lib/supabaseClient";
 import {
   decideProfilePhotoStorageDeletion,
@@ -354,7 +355,7 @@ export async function uploadImage(
     );
   }
 
-  const path = `${opts.userId}/${opts.kind}/${crypto.randomUUID()}.${
+  const path = `${opts.userId}/${opts.kind}/${createRandomUuid()}.${
     prepared.extension
   }`;
 
@@ -387,7 +388,7 @@ export async function uploadNormalizedPostImage(
 
   if (provider === "cloudinary") {
     const safeExt = extension === "jpeg" ? "jpg" : extension;
-    const file = new File([blob], `post-${crypto.randomUUID()}.${safeExt}`, {
+    const file = new File([blob], `post-${createRandomUuid()}.${safeExt}`, {
       type: contentType,
       lastModified: Date.now(),
     });
@@ -402,7 +403,7 @@ export async function uploadNormalizedPostImage(
     );
   }
 
-  const path = `${opts.userId}/post/${crypto.randomUUID()}.${extension}`;
+  const path = `${opts.userId}/post/${createRandomUuid()}.${extension}`;
 
   try {
     return await uploadBlobToSupabaseStorage(path, blob, contentType, kind);
@@ -431,7 +432,7 @@ export async function uploadPreparedProfilePhoto(
   if (provider === "cloudinary") {
     const file = new File(
       [blob],
-      `profile-photo-${crypto.randomUUID()}.${safeExt}`,
+      `profile-photo-${createRandomUuid()}.${safeExt}`,
       {
         type: contentType,
         lastModified: Date.now(),
@@ -448,7 +449,7 @@ export async function uploadPreparedProfilePhoto(
     );
   }
 
-  const path = `${opts.userId}/avatar/${crypto.randomUUID()}.${safeExt}`;
+  const path = `${opts.userId}/avatar/${createRandomUuid()}.${safeExt}`;
 
   try {
     return await uploadBlobToSupabaseStorage(path, blob, contentType, kind);

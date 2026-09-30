@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isIgnorableOperationalError } from "./clientCrashFilters";
+import {
+  isIgnorableOperationalError,
+  matchesClientCrashSourceFilter,
+} from "./clientCrashFilters";
 
 describe("isIgnorableOperationalError", () => {
   it("ignores abort, network, and chunk load failures", () => {
@@ -50,5 +53,23 @@ describe("isIgnorableOperationalError", () => {
     expect(isIgnorableOperationalError(new ReferenceError("x is not defined"))).toBe(
       false
     );
+  });
+});
+
+describe("matchesClientCrashSourceFilter", () => {
+  it("groups app crashes vs video_publish", () => {
+    expect(matchesClientCrashSourceFilter("react_boundary", "app_crashes")).toBe(
+      true,
+    );
+    expect(
+      matchesClientCrashSourceFilter("unhandled_rejection", "app_crashes"),
+    ).toBe(true);
+    expect(matchesClientCrashSourceFilter("video_publish", "app_crashes")).toBe(
+      false,
+    );
+    expect(
+      matchesClientCrashSourceFilter("video_publish", "video_publish"),
+    ).toBe(true);
+    expect(matchesClientCrashSourceFilter("window_error", "all")).toBe(true);
   });
 });

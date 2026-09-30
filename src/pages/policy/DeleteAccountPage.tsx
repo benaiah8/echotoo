@@ -4,8 +4,12 @@ import {
   SUPPORT_EMAIL,
   getAccountDeletionMailto,
 } from "../../lib/supportConfig";
+import { isIOS, isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 
 export default function DeleteAccountPage() {
+  const deletionPurpose = __ECHOTOO_IOS_BUILD__ || (isNativeApp() && isIOS())
+    ? "This page is intended for account deletion requests."
+    : "This page is intended for account deletion requests and Google Play compliance.";
   return (
     <PolicyPageLayout>
       <PolicyPage
@@ -16,9 +20,8 @@ export default function DeleteAccountPage() {
         <p>Last updated: April 13, 2026</p>
 
         <p>
-          This page is intended for account deletion requests and Google Play
-          compliance. It explains how to delete your account and what happens
-          when you do.
+          {deletionPurpose} It explains how to delete your account and what
+          happens when you do.
         </p>
 
         <h3>Account deletion information (in the app)</h3>

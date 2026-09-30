@@ -41,6 +41,13 @@ import {
   markVideoCrashDraftFileState,
   setVideoCrashCheckpoint,
 } from "../videoCrashDiagnostics";
+import {
+  PREPARE_WATCHDOG_ABSOLUTE_MS,
+  PREPARE_WATCHDOG_STALL_MS,
+  PREPARE_WATCHDOG_START_MS,
+  createNativeOperationWatchdog,
+  isMeaningfulPrepareProgress,
+} from "./nativeOperationWatchdog";
 
 export type PrepareDraftVideoInput = {
   draftVideo: DraftVideo;
@@ -210,8 +217,9 @@ export async function prepareDraftVideo(
       | { kind: "completed"; event: PrepareCompletedEvent }
       | { kind: "failed"; code: string; message?: string }
       | { kind: "cancelled" }
-    >(async (resolve, reject) => {
+    >( (resolve) => {
       let settled = false;
+      let lastMeaningfulProgress: number | null = null;
       const settle = (
         value:
           | { kind: "completed"; event: PrepareCompletedEvent }
@@ -220,8 +228,23 @@ export async function prepareDraftVideo(
       ) => {
         if (settled) return;
         settled = true;
+        watchdog.dispose();
         resolve(value);
       };
+      const watchdog = createNativeOperationWatchdog({
+        startTimeoutMs: PREPARE_WATCHDOG_START_MS,
+        stallTimeoutMs: PREPARE_WATCHDOG_STALL_MS,
+        absoluteTimeoutMs: PREPARE_WATCHDOG_ABSOLUTE_MS,
+        onTimeout: () => {
+          void EchoVideoPrepare.cancelPreparation({ jobId }).catch(
+            () => undefined,
+          );
+          settle({
+            kind: "failed",
+            code: ECHO_VIDEO_PREPARE_ERROR.prepare_timeout,
+          });
+        },
+      });
 
       const onAbort = () => {
         void EchoVideoPrepare.cancelPreparation({ jobId }).catch(() => undefined);
@@ -236,75 +259,93 @@ export async function prepareDraftVideo(
         input.signal.addEventListener("abort", onAbort, { once: true });
       }
 
-      handles.push(
-        await EchoVideoPrepare.addListener(
-          "prepareProgress",
-          (event: PrepareProgressEvent) => {
-            if (event.jobId !== jobId) return;
-            markVideoCrashCheckpoint("prepare-progress");
-            const progress =
-              typeof event.progress === "number" &&
-              Number.isFinite(event.progress)
-                ? Math.max(0, Math.min(1, event.progress))
-                : null;
-            input.onProgress?.(progress);
-          },
-        ),
-      );
-      handles.push(
-        await EchoVideoPrepare.addListener(
-          "prepareCompleted",
-          (event: PrepareCompletedEvent) => {
-            if (event.jobId !== jobId) return;
-            settle({ kind: "completed", event });
-          },
-        ),
-      );
-      handles.push(
-        await EchoVideoPrepare.addListener(
-          "prepareFailed",
-          (event: PrepareFailedEvent) => {
-            if (event.jobId !== jobId) return;
+      void (async () => {
+        try {
+          handles.push(
+            await EchoVideoPrepare.addListener(
+              "prepareProgress",
+              (event: PrepareProgressEvent) => {
+                if (event.jobId !== jobId) return;
+                markVideoCrashCheckpoint("prepare-progress");
+                const progress =
+                  typeof event.progress === "number" &&
+                  Number.isFinite(event.progress)
+                    ? Math.max(0, Math.min(1, event.progress))
+                    : null;
+                if (
+                  isMeaningfulPrepareProgress(progress, lastMeaningfulProgress)
+                ) {
+                  lastMeaningfulProgress = progress as number;
+                  watchdog.markActivity();
+                }
+                input.onProgress?.(progress);
+              },
+            ),
+          );
+          handles.push(
+            await EchoVideoPrepare.addListener(
+              "prepareCompleted",
+              (event: PrepareCompletedEvent) => {
+                if (event.jobId !== jobId) return;
+                settle({ kind: "completed", event });
+              },
+            ),
+          );
+          handles.push(
+            await EchoVideoPrepare.addListener(
+              "prepareFailed",
+              (event: PrepareFailedEvent) => {
+                if (event.jobId !== jobId) return;
+                settle({
+                  kind: "failed",
+                  code: event.code || ECHO_VIDEO_PREPARE_ERROR.encode_failed,
+                  message: event.message,
+                });
+              },
+            ),
+          );
+          handles.push(
+            await EchoVideoPrepare.addListener("prepareCancelled", (event) => {
+              if (event.jobId !== jobId) return;
+              settle({ kind: "cancelled" });
+            }),
+          );
+
+          markVideoCrashCheckpoint("prepare-listeners-ready");
+
+          // CRITICAL: persist before crossing into native Media3 / MediaCodec.
+          await setVideoCrashCheckpoint("prepare-start");
+
+          try {
+            await EchoVideoPrepare.prepareVideo({
+              jobId,
+              sourcePath: draft.localReference,
+              destinationPath,
+              temporaryPath,
+              targetLongEdge: settings.targetLongEdge,
+              targetVideoBitrate: settings.targetVideoBitrate,
+              targetFps: settings.targetFps,
+              audioBitrate: settings.audioBitrate,
+            });
+            markVideoCrashCheckpoint("prepare-accepted");
+            watchdog.markAccepted();
+          } catch (err) {
+            const e = err as { code?: string; message?: string };
             settle({
               kind: "failed",
-              code: event.code || ECHO_VIDEO_PREPARE_ERROR.encode_failed,
-              message: event.message,
+              code: e.code || ECHO_VIDEO_PREPARE_ERROR.encode_failed,
+              message: e.message,
             });
-          },
-        ),
-      );
-      handles.push(
-        await EchoVideoPrepare.addListener("prepareCancelled", (event) => {
-          if (event.jobId !== jobId) return;
-          settle({ kind: "cancelled" });
-        }),
-      );
-
-      markVideoCrashCheckpoint("prepare-listeners-ready");
-
-      // CRITICAL: persist before crossing into native Media3 / MediaCodec.
-      await setVideoCrashCheckpoint("prepare-start");
-
-      try {
-        await EchoVideoPrepare.prepareVideo({
-          jobId,
-          sourcePath: draft.localReference,
-          destinationPath,
-          temporaryPath,
-          targetLongEdge: settings.targetLongEdge,
-          targetVideoBitrate: settings.targetVideoBitrate,
-          targetFps: settings.targetFps,
-          audioBitrate: settings.audioBitrate,
-        });
-        markVideoCrashCheckpoint("prepare-accepted");
-      } catch (err) {
-        const e = err as { code?: string; message?: string };
-        settle({
-          kind: "failed",
-          code: e.code || ECHO_VIDEO_PREPARE_ERROR.encode_failed,
-          message: e.message,
-        });
-      }
+          }
+        } catch (err) {
+          const e = err as { code?: string; message?: string };
+          settle({
+            kind: "failed",
+            code: e.code || ECHO_VIDEO_PREPARE_ERROR.encode_failed,
+            message: e.message,
+          });
+        }
+      })();
     });
 
     await removeListeners();

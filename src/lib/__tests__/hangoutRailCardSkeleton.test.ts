@@ -21,6 +21,11 @@ describe("HangoutRailCardSkeleton (Home Event rail)", () => {
     expect(src).toContain("max-w-[240px]");
     expect(src).toContain("SkeletonCircle");
     expect(src).toContain("SkeletonLine");
+    expect(src).toContain("HOME_EVENT_RAIL_CARD_BORDER_BOX_PX");
+    expect(src).toContain("HOME_EVENT_RAIL_CAPTION_SLOT_PX");
+    expect(src).toContain("min-h-9");
+    expect(src).toContain("mt-2.5");
+    expect(src).not.toContain("min-h-[40px]");
 
     const captionBlock = src.slice(
       src.indexOf("data-hangout-rail-skeleton-caption"),

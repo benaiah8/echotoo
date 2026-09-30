@@ -65,6 +65,9 @@ import {
   getPublishedVideoPreferredMuted,
   isPublishedVideoPlaybackSnapshotForMedia,
   mergePublishedVideoDimensions,
+  isPublishedVideoProcessingStatus,
+  shouldApplyPosterProvisionalVideoDimensions,
+  posterProvisionalDimensionsAlreadyApplied,
   resolvePublishedVideoHandoffLatchUi,
   resolvePublishedVideoHandoffPlayMute,
   resolvePublishedVideoPlayback,
@@ -230,6 +233,7 @@ export default function PublishedVideoPlayer({
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const posterImgRef = useRef<HTMLImageElement | null>(null);
   const contentRotateStageRef = useRef<HTMLDivElement | null>(null);
   const hlsAttachCountRef = useRef(0);
   const hlsRef = useRef<HlsInstance | null>(null);
@@ -687,6 +691,72 @@ export default function PublishedVideoPlayer({
       cancelled = true;
     };
   }, [isActive, isWarm, status]);
+
+  const applyPosterProvisionalDimensions = useCallback(
+    (img: HTMLImageElement) => {
+      if (!onVideoUpdated) return;
+      const naturalWidth = img.naturalWidth;
+      const naturalHeight = img.naturalHeight;
+      if (
+        !shouldApplyPosterProvisionalVideoDimensions({
+          status,
+          videoWidth: item.width,
+          videoHeight: item.height,
+          naturalWidth,
+          naturalHeight,
+        })
+      ) {
+        return;
+      }
+      if (
+        posterProvisionalDimensionsAlreadyApplied({
+          videoWidth: item.width,
+          videoHeight: item.height,
+          naturalWidth,
+          naturalHeight,
+        })
+      ) {
+        return;
+      }
+      onVideoUpdated({
+        kind: "video",
+        key: item.key,
+        mediaId: item.mediaId,
+        videoId,
+        status,
+        posterUrl,
+        width: naturalWidth,
+        height: naturalHeight,
+        durationSec: item.durationSec,
+      });
+    },
+    [
+      item.durationSec,
+      item.height,
+      item.key,
+      item.mediaId,
+      item.width,
+      onVideoUpdated,
+      posterUrl,
+      status,
+      videoId,
+    ],
+  );
+
+  // Cached posters may never fire onLoad — apply provisional dims when already complete.
+  useEffect(() => {
+    if (!posterUrl) return;
+    if (!isPublishedVideoProcessingStatus(status)) return;
+    const img = posterImgRef.current;
+    if (!img || !img.complete) return;
+    applyPosterProvisionalDimensions(img);
+  }, [
+    applyPosterProvisionalDimensions,
+    posterUrl,
+    status,
+    item.width,
+    item.height,
+  ]);
 
   // Processing poll while active — Detail/fullscreen only (no per-card Feed storms).
   useEffect(() => {
@@ -2400,6 +2470,8 @@ export default function PublishedVideoPlayer({
   });
   const showUnavailable =
     status === "failed" || (!videoId.trim() && status !== "ready");
+  const showProcessingLabel =
+    isPublishedVideoProcessingStatus(status) && !showUnavailable;
   const hasPlayableSource = Boolean(videoId.trim());
   const awaitingFirstFrame = resolvePublishedVideoAwaitingFirstFrame({
     statusReady: status === "ready",
@@ -2547,10 +2619,14 @@ export default function PublishedVideoPlayer({
 
             {showPoster ? (
               <img
+                ref={posterImgRef}
                 src={posterUrl!}
                 alt=""
                 className="pointer-events-none absolute inset-0 h-full w-full object-contain bg-black"
                 draggable={false}
+                onLoad={(e) => {
+                  applyPosterProvisionalDimensions(e.currentTarget);
+                }}
               />
             ) : null}
           </div>
@@ -2588,6 +2664,17 @@ export default function PublishedVideoPlayer({
         <div className="pointer-events-none absolute inset-0 z-[2] flex items-end justify-center pb-8">
           <span className="rounded-full border border-white/20 bg-black/45 px-3 py-1 text-[11px] font-medium text-white/90 backdrop-blur-sm">
             Video unavailable
+          </span>
+        </div>
+      ) : null}
+
+      {showProcessingLabel ? (
+        <div
+          className="pointer-events-none absolute inset-0 z-[2] flex items-end justify-center pb-8"
+          data-published-video-processing
+        >
+          <span className="rounded-full border border-white/15 bg-black/35 px-3 py-1 text-[11px] font-medium text-white/80 backdrop-blur-sm">
+            Processing video…
           </span>
         </div>
       ) : null}

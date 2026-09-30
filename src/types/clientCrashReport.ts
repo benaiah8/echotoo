@@ -3,7 +3,14 @@ export type ClientCrashStatus = "open" | "resolved" | "ignored";
 export type ClientCrashSource =
   | "react_boundary"
   | "window_error"
-  | "unhandled_rejection";
+  | "unhandled_rejection"
+  | "video_publish";
+
+/** Admin list filter groups — not a DB column. */
+export type ClientCrashSourceFilter =
+  | "all"
+  | "app_crashes"
+  | "video_publish";
 
 export type ClientCrashPlatform = "web" | "android" | "ios";
 
@@ -48,5 +55,6 @@ export type ReportClientCrashInput = {
 export type ListClientCrashReportsFilters = {
   status?: ClientCrashStatus | "all";
   platform?: ClientCrashPlatform | "all";
+  source?: ClientCrashSourceFilter;
   limit?: number;
 };

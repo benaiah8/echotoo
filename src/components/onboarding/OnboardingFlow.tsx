@@ -72,8 +72,7 @@ export default function OnboardingFlow({
               <div className="text-6xl mb-6">🎉</div>
               <h1 className="text-3xl font-bold mb-4">Welcome to Echotoo!</h1>
               <p className="text-lg text-[var(--text)]/70 mb-8">
-                You're all set! Let's start exploring amazing experiences and
-                hangouts.
+                You're all set! Let's start exploring events and posts.
               </p>
               <div className="w-8 h-8 border-4 border-[var(--brand)] border-t-transparent rounded-full animate-spin mx-auto"></div>
             </div>

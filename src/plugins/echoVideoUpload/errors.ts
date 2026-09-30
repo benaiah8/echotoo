@@ -20,6 +20,8 @@ export const ECHO_VIDEO_UPLOAD_ERROR = {
   job_conflict: "job_conflict",
   not_implemented: "not_implemented",
   native_video_upload_unavailable: "native_video_upload_unavailable",
+  /** JS watchdog: native TUS accepted but bytes/activity stalled. */
+  upload_stalled: "upload_stalled",
 } as const;
 
 export type EchoVideoUploadErrorCode =

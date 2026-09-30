@@ -10,6 +10,7 @@ import {
 } from "react";
 import toast from "react-hot-toast";
 import { uploadNormalizedPostImage } from "../../api/services/mediaUpload";
+import { createRandomUuid } from "../../lib/createRandomUuid";
 import {
   buildLocalDraftImageUrl,
   CREATE_LOCAL_FIRST_IMAGES_ENABLED,
@@ -26,8 +27,8 @@ import {
   formatAndroidVideoDiagFailure,
   classifyAndroidVideoUriScheme,
   logAndroidVideoDiagnostic,
-  logAndroidVideoIngestOutcome,
 } from "../../lib/devAndroidVideoDiagnostics";
+import { logVideoIngestOutcome } from "../../lib/logVideoIngestOutcome";
 import {
   bumpVideoCrashDraftGeneration,
   markVideoCrashCheckpoint,
@@ -82,6 +83,7 @@ import { markPrepareFailed } from "../../lib/createDraftVideo/videoPreparationSt
 import { ECHO_VIDEO_PREPARE_ERROR } from "../../plugins/echoVideoPrepare/errors";
 import { EchoVideoUpload } from "../../plugins/echoVideoUpload";
 import { createPublishVideoUpload, logPublishFailureOutcome } from "../../lib/createPublishVideoUpload";
+import { resolvePrepPublishFailureErrorCode } from "../../lib/reportVideoPublishFailure";
 import { ensurePublishVideoPoster } from "../../lib/createDraftVideo/publishVideoPoster";
 import { resolvePublishVideoBytesSource } from "../../lib/resolvePublishVideoBytesSource";
 import {
@@ -1006,7 +1008,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
     let outcomeReason: string | null = null;
 
     const emitOutcome = (ok: boolean) => {
-      logAndroidVideoIngestOutcome({
+      logVideoIngestOutcome({
         stage: outcomeStage,
         ok,
         reasonCode: outcomeReason,
@@ -1551,10 +1553,17 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
         callbacks: preparationCallbacks,
       });
       if (!prep.ok) {
+        const latestDraft = readDraftVideoMeta();
         logPublishFailureOutcome({
           stage: "prep",
-          errorCode: abortController.signal.aborted ? "cancelled" : "prep_failed",
+          errorCode: resolvePrepPublishFailureErrorCode({
+            aborted: abortController.signal.aborted,
+            prepareErrorCode:
+              latestDraft?.prepareErrorCode ?? draftVideo.prepareErrorCode,
+          }),
           recoverable: true,
+          width: latestDraft?.width ?? draftVideo.width ?? null,
+          height: latestDraft?.height ?? draftVideo.height ?? null,
         });
         setPublishVideoUploadProgress(null);
         return { ok: false, error: prep.error };
@@ -1931,7 +1940,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
 
         const uploadedInBatch: string[] = [];
       const batchJobs: PostImageUploadJob[] = toUpload.map((file) => ({
-        id: crypto.randomUUID(),
+        id: createRandomUuid(),
         activityIndex,
         fileName: file.name,
         status: "uploading" as const,
@@ -2002,7 +2011,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
 
       const persistedInBatch: string[] = [];
       const batchJobs: PostImageUploadJob[] = toUpload.map((file) => ({
-        id: crypto.randomUUID(),
+        id: createRandomUuid(),
         activityIndex,
         fileName: file.name,
         status: "uploading" as const,
@@ -2012,7 +2021,7 @@ export function CreatePostMediaProvider({ children }: { children: ReactNode }) {
       for (let i = 0; i < toUpload.length; i++) {
         const file = toUpload[i];
         const id = batchJobs[i].id;
-        const localId = crypto.randomUUID();
+        const localId = createRandomUuid();
 
         try {
           let normalized;

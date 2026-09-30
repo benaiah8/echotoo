@@ -75,6 +75,11 @@ import { setHomeSearchTabChromeHidden } from "../lib/homeSearchTabChrome";
 import { moveFocusOutOfHomeSearchHiddenTrees } from "../lib/moveFocusOutOfHomeSearchHiddenTrees";
 import { subscribeAndroidHardwareBack } from "../lib/androidPostDetailModalBack";
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
+import {
+  createHomeRecoveryState,
+  reduceHomeRecovery,
+  type HomeRecoveryPublish,
+} from "../lib/homeFeedRecovery";
 import { isPostDetailRoutePath } from "../lib/inviteOverlayHistory";
 import {
   applyHomeFilterTransition,
@@ -645,8 +650,10 @@ export default function HomePage() {
 
   /** Bumps when user taps Home while already on home — remounts rail; default-All posts replace in place */
   const [homeRefreshEpoch, setHomeRefreshEpoch] = useState(0);
-  /** In-place Home feed soft refresh (native resume) without remounting ProgressiveFeed */
+  /** In-place Home feed soft refresh (filtered resume past the display TTL) */
   const [homeFeedSoftRefreshEpoch, setHomeFeedSoftRefreshEpoch] = useState(1);
+  /** Empty-error automatic recovery. Manual Retry does not use this. */
+  const [homeRecoveryEpoch, setHomeRecoveryEpoch] = useState(0);
   const [homeListReplaceRevision, setHomeListReplaceRevision] = useState(0);
   const [homeListReplaceItems, setHomeListReplaceItems] = useState<
     FeedItem[] | null
@@ -665,6 +672,13 @@ export default function HomePage() {
   isHomeTabActiveRef.current = isHomeTabActive;
 
   const browseIsTrueDefaultAll = isTrueDefaultAllVerticalFeed(browseFilterCtx);
+  const browseIsTrueDefaultAllRef = useRef(browseIsTrueDefaultAll);
+  browseIsTrueDefaultAllRef.current = browseIsTrueDefaultAll;
+  const recoveryRef = useRef(
+    createHomeRecoveryState(
+      typeof navigator === "undefined" ? true : navigator.onLine,
+    ),
+  );
   const cycleViewerKey = homeFeedCycleViewerKey(viewerProfileId);
   const homeCycleReplacedThisCycle = useMemo(
     () => getHomeFeedCycle(cycleViewerKey).replacedThisCycle,
@@ -839,35 +853,123 @@ export default function HomePage() {
   ]);
 
   useEffect(() => {
-    if (!isNativeApp()) return;
+    const commit = (publish: HomeRecoveryPublish | null) => {
+      if (!publish || !isHomeTabActiveRef.current) {
+        return { filteredSoftRefresh: false };
+      }
+      if (publish.emptyErrorRetry) setHomeRecoveryEpoch(publish.epoch);
+      return {
+        filteredSoftRefresh:
+          publish.filteredSoftRefresh && !browseIsTrueDefaultAllRef.current,
+      };
+    };
+
+    const onOffline = () => {
+      recoveryRef.current = reduceHomeRecovery(recoveryRef.current, {
+        type: "offline",
+      }).state;
+    };
+    const onOnline = () => {
+      const step = reduceHomeRecovery(recoveryRef.current, {
+        type: "online",
+        now: Date.now(),
+        homeVisible: isHomeTabActiveRef.current,
+      });
+      recoveryRef.current = step.state;
+      if (commit(step.publish).filteredSoftRefresh) {
+        setHomeFeedSoftRefreshEpoch((n) => n + 1);
+      }
+    };
+    const onVisibility = () => {
+      if (document.hidden) {
+        recoveryRef.current = reduceHomeRecovery(recoveryRef.current, {
+          type: "background-start",
+          now: Date.now(),
+        }).state;
+        return;
+      }
+      if (isNativeApp()) return;
+      const step = reduceHomeRecovery(recoveryRef.current, {
+        type: "foreground",
+        now: Date.now(),
+        homeVisible: isHomeTabActiveRef.current,
+      });
+      recoveryRef.current = step.state;
+      if (commit(step.publish).filteredSoftRefresh) {
+        setHomeFeedSoftRefreshEpoch((n) => n + 1);
+      }
+    };
+
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisibility);
 
     let cancelled = false;
     let removeResume: (() => void) | undefined;
+    let removeAppState: (() => void) | undefined;
 
-    void (async () => {
-      try {
-        const { App } = await import("@capacitor/app");
-        const handle = await App.addListener("resume", () => {
-          if (!isHomeTabActiveRef.current) return;
-          setHomeFeedSoftRefreshEpoch((n) => n + 1);
-        });
-        if (!cancelled) {
-          removeResume = () => {
+    if (isNativeApp()) {
+      void (async () => {
+        try {
+          const { App } = await import("@capacitor/app");
+          const handle = await App.addListener("resume", () => {
+            const step = reduceHomeRecovery(recoveryRef.current, { type: "foreground", now: Date.now(), homeVisible: isHomeTabActiveRef.current });
+            recoveryRef.current = step.state;
+            if (commit(step.publish).filteredSoftRefresh) setHomeFeedSoftRefreshEpoch((n) => n + 1);
+          });
+          const appState = await App.addListener(
+            "appStateChange",
+            ({ isActive }) => {
+              if (isActive) return;
+              recoveryRef.current = reduceHomeRecovery(recoveryRef.current, {
+                type: "background-start",
+                now: Date.now(),
+              }).state;
+            },
+          );
+          if (!cancelled) {
+            removeResume = () => {
+              void handle.remove();
+            };
+            removeAppState = () => {
+              void appState.remove();
+            };
+          } else {
             void handle.remove();
-          };
-        } else {
-          void handle.remove();
+            void appState.remove();
+          }
+        } catch {
+          /* noop */
         }
-      } catch {
-        /* noop */
-      }
-    })();
+      })();
+    }
 
     return () => {
       cancelled = true;
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisibility);
       removeResume?.();
+      removeAppState?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isHomeTabActive) return;
+    const step = reduceHomeRecovery(recoveryRef.current, {
+      type: "home-visible",
+      now: Date.now(),
+    });
+    recoveryRef.current = step.state;
+    if (!step.publish) return;
+    if (step.publish.emptyErrorRetry) setHomeRecoveryEpoch(step.publish.epoch);
+    if (
+      step.publish.filteredSoftRefresh &&
+      !browseIsTrueDefaultAllRef.current
+    ) {
+      setHomeFeedSoftRefreshEpoch((n) => n + 1);
+    }
+  }, [isHomeTabActive]);
 
   const {
     pullPx,
@@ -1620,6 +1722,7 @@ export default function HomePage() {
               batchedData={null}
               useProgressiveLoading={true}
               isVisible={isHomeVisible}
+              homeRecoveryEpoch={homePostSearchActive ? 0 : homeRecoveryEpoch}
               tabId="home"
               hasActiveFilters={false}
               loadItems={topRailLoadItems}
@@ -1679,6 +1782,7 @@ export default function HomePage() {
                   : undefined
               }
               softRefreshEpoch={homeFeedSoftRefreshEpoch}
+              homeRecoveryEpoch={homePostSearchActive ? 0 : homeRecoveryEpoch}
               dateFilter={dateFilter}
               explicitContentFilters={explicitContentFilters}
               onHomeFilterAction={applyHomeFilterAction}

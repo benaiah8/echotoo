@@ -3,6 +3,7 @@
  * Tables: conversations / conversation_members / messages (Phase 0).
  */
 
+import { createRandomUuid } from "../../lib/createRandomUuid";
 import { supabase } from "../../lib/supabaseClient";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 
@@ -440,7 +441,7 @@ function parseDirectConversation(raw: unknown): DirectConversation | null {
 
 /** Browser-safe UUID for send idempotency (`client_message_id`). */
 export function createClientMessageId(): string {
-  return crypto.randomUUID();
+  return createRandomUuid();
 }
 
 /**

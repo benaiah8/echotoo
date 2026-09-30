@@ -59,7 +59,9 @@ import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 import {
   getProgressiveFeedErrorCopy,
   isBrowserOffline,
+  shouldSurfaceFeedLoadError,
 } from "../lib/progressiveFeedErrorCopy";
+import { loadGenerationStillOwns } from "../lib/homeFeedRecovery";
 
 /** TEMP — paste target post UUID; remove after RSVP feed diagnosis */
 const DEBUG_RSVP_POST_ID = "";
@@ -138,6 +140,16 @@ export interface ProgressiveFeedProps<T> {
   // Loading states
   loading?: boolean;
   error?: string | null;
+  /**
+   * Home vertical feed uses classified empty-state copy.
+   * Other callers keep the historical shared copy.
+   */
+  errorPresentation?: "default" | "home";
+  /**
+   * Home-only automatic recovery cycle. Profile and other feeds omit this.
+   * Manual Retry does not go through this epoch.
+   */
+  homeRecoveryEpoch?: number;
   emptyMessage?: string;
   /** Optional zero-results surface; defaults to `emptyMessage`. */
   emptySurface?: React.ReactNode;
@@ -252,6 +264,8 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   scrollStopDelay: _scrollStopDelay = undefined, // [STEP 2] Ignored - removed
   loading: externalLoading = false,
   error: externalError = null,
+  errorPresentation = "default",
+  homeRecoveryEpoch = 0,
   emptyMessage = "No items to display",
   emptySurface,
   exhaustedSurface,
@@ -344,7 +358,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   const [hasMore, setHasMore] = useState(
     () => !Boolean(authoritativeHydratedSeed?.length)
   );
-  const [error, setError] = useState<string | null>(externalError);
+  const [error, setError] = useState<unknown>(externalError);
 
   /**
    * When false and items are empty (no error), we are still awaiting the first cache hydrate or
@@ -380,6 +394,9 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
   // [STEP 1] New refs for visibility gating and deduplication
   // [FIX C] Track in-flight offsets with pageSize to prevent duplicate requests
   const inFlightOffsetsRef = useRef<Set<string>>(new Set());
+  /** Bumped when a load starts so a superseded abort cannot paint an error. */
+  const loadGenerationRef = useRef(0);
+  const consumedRecoveryEpochRef = useRef(0);
   // [FIX B] Use refs for stable dependencies in loadMore
   const hasMoreRef = useRef(!Boolean(authoritativeHydratedSeed?.length));
   const hasMorePrevRef = useRef<boolean | null>(null);
@@ -1074,6 +1091,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
     loadingRef.current = true;
     setIsLoadingMore(true);
     setError(null);
+    const loadGeneration = ++loadGenerationRef.current;
 
     // [PWA FIX] Detect PWA context for longer timeout
     const isPWAValue = (() => {
@@ -1139,6 +1157,15 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
       };
 
       const loadResult = await loadWithRetry();
+      if (
+        !loadGenerationStillOwns(
+          loadGeneration,
+          loadGenerationRef.current,
+          mountedRef.current,
+        )
+      ) {
+        return;
+      }
 
       // [PAGINATION FIX] Normalize result - offset/hasMore use backend rows only, never client dedupe
       let {
@@ -1331,8 +1358,23 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
       // Rule 4 — No probe requests: end inferred from count/limit above
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(errorMessage);
+      if (
+        !loadGenerationStillOwns(
+          loadGeneration,
+          loadGenerationRef.current,
+          mountedRef.current,
+        )
+      ) {
+        return;
+      }
+      if (
+        shouldSurfaceFeedLoadError(err, {
+          superseded: loadGeneration !== loadGenerationRef.current,
+          cancelled: !mountedRef.current,
+        })
+      ) {
+        setError(err);
+      }
       console.error("[ProgressiveFeed] Failed to load items:", err);
       // Reset loading state on error
       loadingRef.current = false;
@@ -1375,6 +1417,18 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
   // Store loadMore in ref for use in other hooks
   loadMoreRef.current = loadMore;
+
+  // home-recovery-retry: same path as manual Retry. One attempt per epoch.
+  useEffect(() => {
+    if (errorPresentation !== "home") return;
+    if (!homeRecoveryEpoch) return;
+    if (homeRecoveryEpoch === consumedRecoveryEpochRef.current) return;
+    if (!isVisible) return;
+    if (items.length > 0 || !error) return;
+    consumedRecoveryEpochRef.current = homeRecoveryEpoch;
+    setError(null);
+    void loadMoreRef.current?.();
+  }, [homeRecoveryEpoch, isVisible, items.length, error, errorPresentation]);
 
   // Virtual scrolling
   const virtualScrolling = useVirtualScrolling({
@@ -1510,6 +1564,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
       // PWA FIX: Add small delay for PWA to ensure DOM is ready
       const performInitialLoad = () => {
         const initialLoadSize = calculateInitialLoadSize();
+        const loadGeneration = ++loadGenerationRef.current;
 
         loadingRef.current = true;
         setIsLoadingMore(true);
@@ -1517,6 +1572,15 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
         logFetchStart("ProgressiveFeed", tabId, isVisible, undefined);
         loadItems(0, initialLoadSize)
           .then((loadResult) => {
+            if (
+              !loadGenerationStillOwns(
+                loadGeneration,
+                loadGenerationRef.current,
+                mountedRef.current,
+              )
+            ) {
+              return;
+            }
             const {
               items: fetchedItems,
               consumedOffset,
@@ -1661,6 +1725,15 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
             }
           })
           .catch((err) => {
+            if (
+              !loadGenerationStillOwns(
+                loadGeneration,
+                loadGenerationRef.current,
+                mountedRef.current,
+              )
+            ) {
+              return;
+            }
             const errorMessage =
               err instanceof Error ? err.message : String(err);
 
@@ -1678,7 +1751,14 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
               }
             }
 
-            setError(errorMessage);
+            if (
+              shouldSurfaceFeedLoadError(err, {
+                superseded: loadGeneration !== loadGenerationRef.current,
+                cancelled: !mountedRef.current,
+              })
+            ) {
+              setError(err);
+            }
             console.error("[ProgressiveFeed] Initial load failed:", err);
             // On error, reset loading state immediately
             loadingRef.current = false;
@@ -1750,6 +1830,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
     let cancelled = false;
     softRefreshInFlightRef.current = true;
+    const loadGeneration = ++loadGenerationRef.current;
 
     const runLimit = calculateInitialLoadSize();
 
@@ -1767,7 +1848,16 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
         const loadResult = await loadItems(0, runLimit);
 
-        if (cancelled || !mountedRef.current) return;
+        if (
+          cancelled ||
+          !loadGenerationStillOwns(
+            loadGeneration,
+            loadGenerationRef.current,
+            mountedRef.current,
+          )
+        ) {
+          return;
+        }
 
         const normalized = normalizeLoadResult(loadResult);
         const fetchedItems = normalized.items;
@@ -1943,13 +2033,26 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
           firstPostId: firstPublished?.id ?? null,
         });
       } catch (e) {
-        const errorMessage = e instanceof Error ? e.message : String(e);
         console.error("[ProgressiveFeed] Soft refresh failed:", e);
-        if (itemsRef.current.length > 0) {
-          setError(errorMessage);
+        if (
+          itemsRef.current.length > 0 &&
+          shouldSurfaceFeedLoadError(e, {
+            superseded: loadGeneration !== loadGenerationRef.current,
+            cancelled: cancelled || !mountedRef.current,
+          })
+        ) {
+          setError(e);
         }
       } finally {
-        softRefreshInFlightRef.current = false;
+        if (
+          loadGenerationStillOwns(
+            loadGeneration,
+            loadGenerationRef.current,
+            true,
+          )
+        ) {
+          softRefreshInFlightRef.current = false;
+        }
       }
     })();
 
@@ -2145,7 +2248,12 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
 
   // Error display (copy only — loading/cache/retry mechanics unchanged)
   if (error && items.length === 0) {
-    const emptyErrorCopy = getProgressiveFeedErrorCopy({ hasItems: false });
+    const emptyErrorCopy = getProgressiveFeedErrorCopy({
+      hasItems: false,
+      isOffline: isBrowserOffline(),
+      error,
+      surface: errorPresentation === "home" ? "home" : "default",
+    });
     return (
       <FeedLoadErrorState
         title={emptyErrorCopy.title}
@@ -2183,7 +2291,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
       ref={containerRef as React.RefObject<HTMLDivElement>}
       className="w-full"
     >
-      {error && items.length > 0 && itemsErrorCopy && (
+      {itemsErrorCopy ? (
         <FeedLoadErrorState
           compact
           title={itemsErrorCopy.title}
@@ -2193,7 +2301,7 @@ export default function ProgressiveFeed<T extends { id: string; author_id?: stri
             loadMore();
           }}
         />
-      )}
+      ) : null}
 
       {/* Items */}
       {enableVirtualScrolling && items.length > 50 ? (

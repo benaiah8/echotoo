@@ -19,6 +19,7 @@ import {
 } from "../../api/services/inviteThreads";
 import { getViewerAuthUserId } from "../../api/services/follows";
 import { Paths } from "../../router/Paths";
+import { postTypeCompactLabel } from "../../lib/postTypeLabels";
 
 /** Glass textarea — compact footer variant; matches InviteDrawer message box tokens. */
 const glassInputStyle: CSSProperties = {
@@ -393,11 +394,7 @@ export default function PersonalInviteThreadDrawer({
             }}
           >
             <div className="text-[10px] uppercase tracking-wide text-[var(--text)]/45">
-              {bundle.post_peek.post_type === "hangout"
-                ? "Event"
-                : bundle.post_peek.post_type === "experience"
-                ? "Experience"
-                : "Post"}
+              {postTypeCompactLabel(bundle.post_peek.post_type)}
             </div>
             <p className="mt-1 line-clamp-2 text-sm text-[var(--text)]">
               {bundle.post_peek.post_caption?.trim() || "Untitled"}

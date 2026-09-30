@@ -17,6 +17,11 @@ import type {
   BunnyUploadInitUploadRequired,
 } from "./types";
 import { assertUploadRequiredInit } from "./bunnyTusUpload";
+import {
+  TUS_WATCHDOG_STALL_MS,
+  TUS_WATCHDOG_START_MS,
+  createNativeOperationWatchdog,
+} from "../createDraftVideo/nativeOperationWatchdog";
 
 export type NativeBunnyTusUploadParams = {
   jobId: string;
@@ -74,7 +79,12 @@ export function classifyEchoVideoUploadErrorCode(
   const c = (code ?? "").trim();
   if (!c) return "unknown";
   if (c === ECHO_VIDEO_UPLOAD_ERROR.cancelled) return "cancelled";
-  if (c === ECHO_VIDEO_UPLOAD_ERROR.network_failed) return "network";
+  if (
+    c === ECHO_VIDEO_UPLOAD_ERROR.network_failed ||
+    c === ECHO_VIDEO_UPLOAD_ERROR.upload_stalled
+  ) {
+    return "network";
+  }
   if (c === ECHO_VIDEO_UPLOAD_ERROR.auth_failed) return "auth_failed";
   if (c === ECHO_VIDEO_UPLOAD_ERROR.native_video_upload_unavailable) {
     return "unavailable";
@@ -138,11 +148,25 @@ async function runNativeTusOnce(
 
   const outcome = await new Promise<Outcome>((resolve) => {
     let settled = false;
+    let lastBytesUploaded = -1;
     const settle = (value: Outcome) => {
       if (settled) return;
       settled = true;
+      watchdog.dispose();
       resolve(value);
     };
+    const watchdog = createNativeOperationWatchdog({
+      startTimeoutMs: TUS_WATCHDOG_START_MS,
+      stallTimeoutMs: TUS_WATCHDOG_STALL_MS,
+      absoluteTimeoutMs: null,
+      onTimeout: () => {
+        void EchoVideoUpload.cancelVideoUpload({ jobId }).catch(() => undefined);
+        settle({
+          kind: "failed",
+          code: ECHO_VIDEO_UPLOAD_ERROR.upload_stalled,
+        });
+      },
+    });
 
     const onAbort = () => {
       void EchoVideoUpload.cancelVideoUpload({ jobId }).catch(() => undefined);
@@ -165,6 +189,15 @@ async function runNativeTusOnce(
             (event: UploadProgressEvent) => {
               if (event.jobId !== jobId) return;
               if (event.bytesTotal <= 0) return;
+              const bytes = event.bytesUploaded;
+              if (
+                typeof bytes === "number" &&
+                Number.isFinite(bytes) &&
+                bytes > lastBytesUploaded
+              ) {
+                lastBytesUploaded = bytes;
+                watchdog.markActivity();
+              }
               const percent = Math.round(
                 Math.max(0, Math.min(1, event.progress)) * 100,
               );
@@ -178,6 +211,7 @@ async function runNativeTusOnce(
             (event: UploadCreatedEvent) => {
               if (event.jobId !== jobId) return;
               logNativeUpload("upload created", { resumed: false });
+              watchdog.markActivity();
               params.onUploadCreated?.(event.uploadUrl);
             },
           ),
@@ -237,6 +271,7 @@ async function runNativeTusOnce(
           },
           uploadUrl: existingUrl,
         });
+        watchdog.markAccepted();
       } catch (err) {
         const e = err as { code?: string };
         settle({

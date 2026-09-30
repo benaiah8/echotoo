@@ -32,6 +32,12 @@ import {
 import { getPostDeleteExitDurationMs } from "../lib/postDeleteExitAnimation";
 import { logFetchStart } from "../lib/tabVisibilityDebug";
 import FeedLoadErrorState from "./ui/FeedLoadErrorState";
+import {
+  getProgressiveFeedErrorCopy,
+  isBrowserOffline,
+  shouldSurfaceFeedLoadError,
+} from "../lib/progressiveFeedErrorCopy";
+import { loadGenerationStillOwns } from "../lib/homeFeedRecovery";
 
 export interface ProgressiveHorizontalRailProps<T> {
   // Data loading
@@ -70,6 +76,8 @@ export interface ProgressiveHorizontalRailProps<T> {
   loadMoreThreshold?: number; // Pixels from right edge to trigger load (default: 200px)
   /** When false (e.g. Home tab hidden on /u/me), initial-load effect does not run */
   isVisible?: boolean;
+  /** Home empty-error recovery cycle. Omitted outside Home. */
+  homeRecoveryEpoch?: number;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
   /** When true, skip prepending emptyComponent for filteredCount === 0 (e.g. transient inline banner elsewhere). */
@@ -110,6 +118,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
   maxItems = 0,
   loadMoreThreshold = 200,
   isVisible = true,
+  homeRecoveryEpoch = 0,
   tabId = "unknown",
   suppressFilteredEmptyCard = false,
 }: ProgressiveHorizontalRailProps<T>) {
@@ -192,7 +201,9 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
     initialItemsArray.length === 0
   );
   const [hasMore, setHasMore] = useState(true);
-  const [error, setError] = useState<string | null>(externalError);
+  const [error, setError] = useState<unknown>(externalError);
+  const loadGenerationRef = useRef(0);
+  const consumedRecoveryEpochRef = useRef(0);
 
   // Refs
   const internalContainerRef = useRef<HTMLDivElement>(null);
@@ -346,12 +357,22 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
     loadingRef.current = true;
     setIsLoadingMore(true);
     setError(null);
+    const loadGeneration = ++loadGenerationRef.current;
 
     try {
       logFetchStart("ProgressiveHorizontalRail", tabId, isVisible, undefined);
       const newItems = await loadItems(offsetRef.current, pageSize);
 
-      if (!aliveRef.current || !isVisibleRef.current) return;
+      if (
+        !loadGenerationStillOwns(
+          loadGeneration,
+          loadGenerationRef.current,
+          aliveRef.current,
+        ) ||
+        !isVisibleRef.current
+      ) {
+        return;
+      }
 
       if (newItems.length === 0) {
         setHasMore(false);
@@ -390,9 +411,23 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
         }
       }
     } catch (err) {
-      if (!aliveRef.current) return;
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(errorMessage);
+      if (
+        !loadGenerationStillOwns(
+          loadGeneration,
+          loadGenerationRef.current,
+          aliveRef.current,
+        )
+      ) {
+        return;
+      }
+      if (
+        shouldSurfaceFeedLoadError(err, {
+          superseded: loadGeneration !== loadGenerationRef.current,
+          cancelled: !aliveRef.current,
+        })
+      ) {
+        setError(err);
+      }
       console.error("[ProgressiveHorizontalRail] Failed to load items:", err);
     } finally {
       loadingRef.current = false;
@@ -413,6 +448,24 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
   // Store loadMore in ref for use in other hooks
   loadMoreRef.current = loadMore;
 
+  // home-recovery-retry: after the vertical feed's synchronous retry, not the same turn.
+  useEffect(() => {
+    if (!homeRecoveryEpoch) return;
+    if (homeRecoveryEpoch === consumedRecoveryEpochRef.current) return;
+    if (!isVisible) return;
+    if (items.length > 0 || !error) return;
+    const timer = window.setTimeout(() => {
+      if (!aliveRef.current || !isVisibleRef.current) return;
+      if (itemsRef.current.length > 0) return;
+      if (homeRecoveryEpoch === consumedRecoveryEpochRef.current) return;
+      consumedRecoveryEpochRef.current = homeRecoveryEpoch;
+      setError(null);
+      shouldLoadRef.current = true;
+      void loadMoreRef.current?.();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [homeRecoveryEpoch, isVisible, items.length, error]);
+
   // [FIX] Initial load - check cache ONCE on mount (or when isVisible turns true), not during render
   // When isVisible is false (e.g. Home tab hidden on /u/me), skip to avoid duplicate get_feed_with_related_data
   useEffect(() => {
@@ -422,6 +475,7 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
     let cancelled = false;
 
     const loadInitial = async () => {
+      const loadGeneration = ++loadGenerationRef.current;
       loadingRef.current = true;
       setIsLoadingMore(true);
 
@@ -464,7 +518,16 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
         // Step 3: No cache, load from API
         logFetchStart("ProgressiveHorizontalRail", tabId, isVisible, undefined);
         const loadedItems = await loadItems(0, initialLoadSize);
-        if (cancelled || !aliveRef.current) return;
+        if (
+          cancelled ||
+          !loadGenerationStillOwns(
+            loadGeneration,
+            loadGenerationRef.current,
+            aliveRef.current,
+          )
+        ) {
+          return;
+        }
         offsetRef.current = loadedItems.length;
 
         // Deduplicate by ID
@@ -483,9 +546,15 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
           setHasMore(false);
         }
       } catch (err) {
-        if (!cancelled && aliveRef.current) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          setError(errorMessage);
+        if (
+          !cancelled &&
+          aliveRef.current &&
+          shouldSurfaceFeedLoadError(err, {
+            superseded: loadGeneration !== loadGenerationRef.current,
+            cancelled,
+          })
+        ) {
+          setError(err);
           console.error(
             "[ProgressiveHorizontalRail] Failed to load initial items:",
             err
@@ -580,9 +649,17 @@ export default function ProgressiveHorizontalRail<T extends { id: string; author
 
   // Error display
   if (error && items.length === 0) {
+    const railErrorCopy = getProgressiveFeedErrorCopy({
+      hasItems: false,
+      isOffline: isBrowserOffline(),
+      error,
+      surface: "events",
+    });
     return (
       <FeedLoadErrorState
         compact
+        title={railErrorCopy.title}
+        body={railErrorCopy.body}
         onRetry={() => {
           setError(null);
           shouldLoadRef.current = true;

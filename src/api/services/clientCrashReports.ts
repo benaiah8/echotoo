@@ -2,10 +2,12 @@ import { supabase } from "../../lib/supabaseClient";
 import type {
   ClientCrashPlatform,
   ClientCrashReportRow,
+  ClientCrashSourceFilter,
   ClientCrashStatus,
   ListClientCrashReportsFilters,
   ReportClientCrashInput,
 } from "../../types/clientCrashReport";
+import { matchesClientCrashSourceFilter } from "../../lib/clientCrashFilters";
 
 const REPORT_SELECT =
   "id,fingerprint,first_seen_at,last_seen_at,occurrence_count,status,source,error_name,message,stack,component_stack,route,page_label,platform,app_version,app_build,runtime_summary,last_user_id,resolved_at,resolved_by_user_id,created_at";
@@ -51,10 +53,23 @@ export async function listClientCrashReports(
   if (filters.platform && filters.platform !== "all") {
     query = query.eq("platform", filters.platform);
   }
+  if (filters.source === "video_publish") {
+    query = query.eq("source", "video_publish");
+  } else if (filters.source === "app_crashes") {
+    query = query.in("source", [
+      "react_boundary",
+      "window_error",
+      "unhandled_rejection",
+    ]);
+  }
 
   const { data, error } = await query;
   if (error) throw error;
-  return (data ?? []) as ClientCrashReportRow[];
+  const rows = (data ?? []) as ClientCrashReportRow[];
+  if (!filters.source || filters.source === "all") return rows;
+  return rows.filter((r) =>
+    matchesClientCrashSourceFilter(r.source, filters.source as ClientCrashSourceFilter)
+  );
 }
 
 export async function setClientCrashReportStatus(

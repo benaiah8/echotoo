@@ -450,7 +450,7 @@ export default function AppUpdatesPage() {
                 {selectedPlatform === "android" ? (
                   <label className="block">
                     <span className="text-[11px] font-medium text-[var(--text)]">
-                      Google Play URL
+                      {__ECHOTOO_IOS_BUILD__ ? "Android store URL" : "Google Play URL"}
                     </span>
                     <input
                       type="url"
@@ -463,7 +463,9 @@ export default function AppUpdatesPage() {
                       disabled={busy}
                       className={inputClass}
                       autoComplete="off"
-                      placeholder="https://play.google.com/..."
+                      placeholder={
+                        __ECHOTOO_IOS_BUILD__ ? "https://" : "https://play.google.com/..."
+                      }
                     />
                   </label>
                 ) : (

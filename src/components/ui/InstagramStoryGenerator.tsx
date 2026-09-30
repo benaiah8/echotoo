@@ -197,7 +197,7 @@ export default function InstagramStoryGenerator({
     caption?.trim() ||
     (postType === "hangout"
       ? "Check out this event!"
-      : "Check out this experience!");
+      : "Check out this post!");
 
   const safeCreatorName = creatorName || "";
   const safeCreatorHandle = creatorHandle || "";

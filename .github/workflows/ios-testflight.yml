@@ -138,11 +138,26 @@ jobs:
           warn_optional_missing VITE_ALLOW_CLOUDINARY
           warn_optional_missing VITE_SUPPORT_EMAIL
 
-      - name: Build web assets
+      # ECHOTOO_BUILD_TARGET=ios compiles out Google Play copy/links (App Review 2.3.10).
+      # See vite.config.ts and capacitor.config.ts. Android/web builds do not set it.
+      - name: Build web assets (iOS target)
+        env:
+          ECHOTOO_BUILD_TARGET: ios
         run: npm run build
 
       - name: Sync Capacitor iOS
+        env:
+          ECHOTOO_BUILD_TARGET: ios
         run: npx cap sync ios
+
+      - name: Verify no Google Play references in iOS web assets
+        run: |
+          set -eo pipefail
+          if grep -RniE "google ?play|play store|play\.google" ios/App/App/public ios/App/App/capacitor.config.json; then
+            echo "::error::Google Play references found in iOS web assets"
+            exit 1
+          fi
+          echo "No Google Play references in iOS web assets."
 
       - name: CocoaPods install
         run: |

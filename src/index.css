@@ -782,6 +782,59 @@ body,
   opacity: 0.9;
 }
 
+/* Continue with Apple on every platform. Official Design Resources logos
+   (public/sign-in-with-apple-logo-*.svg).
+   Same outer height as Continue with Google (--auth-control-height).
+   Dark auth surface: white button, black logo, black title.
+   Light auth surface (html.theme-light): black button, white logo, white title.
+   SVG height equals the button height; Apple's own padding stays inside the file. */
+.ui-btn.auth-apple-btn.auth-apple-btn--ios {
+  box-sizing: border-box;
+  height: var(--auth-control-height, 34px);
+  min-height: var(--auth-control-height, 34px);
+  padding-top: 0;
+  padding-bottom: 0;
+  background: #ffffff !important;
+  color: #000000 !important;
+  border: none !important;
+  box-shadow: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+    sans-serif;
+}
+html.theme-light .ui-btn.auth-apple-btn.auth-apple-btn--ios {
+  background: #000000 !important;
+  color: #ffffff !important;
+}
+.ui-btn.auth-apple-btn.auth-apple-btn--ios .auth-apple-logo {
+  display: block;
+  height: var(--auth-control-height, 34px);
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  align-self: center;
+}
+.ui-btn.auth-apple-btn.auth-apple-btn--ios .auth-apple-logo--on-black-btn {
+  display: none;
+}
+html.theme-light .ui-btn.auth-apple-btn.auth-apple-btn--ios .auth-apple-logo--on-white-btn {
+  display: none;
+}
+html.theme-light .ui-btn.auth-apple-btn.auth-apple-btn--ios .auth-apple-logo--on-black-btn {
+  display: block;
+}
+
+/* Auth legal links: brand yellow on dark, existing light-theme blue on light. */
+.auth-policy-link {
+  color: var(--brand);
+  text-decoration-color: color-mix(in oklab, var(--brand) 50%, transparent);
+}
+html.theme-light .auth-policy-link {
+  color: var(--blue-text);
+  text-decoration-color: color-mix(in oklab, var(--blue-text) 50%, transparent);
+}
+
 /* Auth modal: Continue as guest - clearly clickable link-style */
 .auth-guest-link {
   display: flex;

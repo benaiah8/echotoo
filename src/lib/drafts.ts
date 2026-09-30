@@ -1,3 +1,4 @@
+import { createRandomUuid } from "./createRandomUuid";
 import { clearCreateFlowResumedLocalDraft } from "./draftEntryGate";
 import { clearFreshCreateLeaveBaseline } from "./createFlowFreshLeaveBaseline";
 import { dispatchCreateFlowDraftContentChanged } from "./createFlowLeaveRequest";
@@ -201,7 +202,7 @@ export function ensureDraftPublishPostId(options?: {
       return prev.publishPostId!;
     }
 
-    const publishPostId = crypto.randomUUID();
+    const publishPostId = createRandomUuid();
     const next: DraftMeta = { ...prev, publishPostId };
     if (options?.ownerUserId) {
       next.ownerUserId = options.ownerUserId;

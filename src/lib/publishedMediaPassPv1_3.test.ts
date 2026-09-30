@@ -88,12 +88,12 @@ describe("PASS PV1.3 — scrubber position", () => {
 });
 
 describe("PASS PV1.3 — processing + HLS guards", () => {
-  it("K/L: processing shows poster/black only (no visible ready copy)", () => {
+  it("K/L: processing shows poster + quiet Processing label (no ready copy)", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
     expect(player).not.toContain("Getting video ready…");
-    expect(player).not.toContain("data-published-video-processing");
-    expect(player).not.toContain("Processing video…");
     expect(player).not.toContain("Loading video…");
+    expect(player).toContain("data-published-video-processing");
+    expect(player).toContain("Processing video…");
     expect(player).toContain("showPoster");
     expect(player).toMatch(/posterUrl/);
   });

@@ -115,8 +115,9 @@ describe("PASS IOS3 — native-only Capacitor video publish", () => {
     expect(resolveDraft).toContain('localStorageKind === "native-fs"');
     expect(resolveDraft).toContain("return null");
     const storage = read("src/lib/createDraftVideo/nativeDraftVideoStorage.ts");
-    expect(storage).toContain("Poster / frame-extract compatibility only");
+    expect(storage).toContain("native publish poster generation");
     expect(storage).toContain("loadNativeDraftVideoFile");
+    expect(storage).toContain("Must NOT be used for");
   });
 
   it("J/K: prepared + original remain native-path", () => {
@@ -144,13 +145,15 @@ describe("PASS IOS3 — native-only Capacitor video publish", () => {
     expect(types).toContain("remoteMediaId");
   });
 
-  it("N/O: poster + image upload unchanged", () => {
+  it("N/O: poster optional + no native full-video poster read (R2); image upload unchanged", () => {
     const poster = read("src/lib/createDraftVideo/publishVideoPoster.ts");
-    expect(poster).toContain("loadNativeDraftVideoFile");
+    expect(poster).not.toContain("loadNativeDraftVideoFile");
     expect(poster).toContain("ensurePublishVideoPoster");
+    expect(poster).toContain("loadWebDraftVideoFile");
     const provider = read("src/components/create/CreatePostMediaProvider.tsx");
     expect(provider).toContain("startPostImageUploads");
     expect(provider).toContain("uploadNormalizedPostImage");
+    expect(provider).toContain("posterStoragePath: poster?.storagePath ?? null");
   });
 
   it("capabilities failure also typed unavailable", async () => {

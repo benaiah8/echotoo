@@ -33,6 +33,15 @@ describe("Home Event rail Hangout social UI polish", () => {
     expect(src).not.toContain("SaveButton");
   });
 
+  it("does not render rating / Follow on Hangout rail cards", () => {
+    const src = read("src/components/Hangout.tsx");
+    expect(src).not.toContain("PostRatingChip");
+    expect(src).not.toContain("PostRatingModal");
+    expect(src).not.toContain("ratingEnabled");
+    expect(src).not.toContain("FollowButton");
+    expect(src).not.toContain("showRatingModal");
+  });
+
   it("shows owl social-purpose row with italic Social pick (no creator avatar row)", () => {
     const src = read("src/components/Hangout.tsx");
     expect(src).toContain("data-hangout-rail-social-purpose");

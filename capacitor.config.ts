@@ -4,6 +4,13 @@ const config: CapacitorConfig = {
   appId: "com.echotoo.app",
   appName: "Echo Too",
   webDir: "dist",
+  android: {
+    minWebViewVersion: 87,
+  },
+  // Android WebView fallback page; not shipped in iOS builds (ECHOTOO_BUILD_TARGET=ios).
+  ...(process.env.ECHOTOO_BUILD_TARGET === "ios"
+    ? {}
+    : { server: { errorPath: "unsupported-webview.html" } }),
   plugins: {
     PushNotifications: {
       /**

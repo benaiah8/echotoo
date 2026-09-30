@@ -35,6 +35,8 @@ type Props = {
   hasActiveFilters?: boolean; // Whether filters are active
   /** When false (e.g. Home tab hidden on /u/me), rail initial-load effect does not run */
   isVisible?: boolean;
+  /** Home empty-error recovery cycle. Top rail only. */
+  homeRecoveryEpoch?: number;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
   /** Hide filtered empty rail card while an inline notice covers that case (e.g. no Today matches). */
@@ -55,6 +57,7 @@ export default function HomeHangoutSection({
   filteredCount,
   hasActiveFilters = false,
   isVisible = true,
+  homeRecoveryEpoch = 0,
   tabId = "unknown",
   suppressFilteredEmptyCard = false,
 }: Props) {
@@ -124,6 +127,7 @@ export default function HomeHangoutSection({
         setCachedItems={setCachedItems}
         loading={loading}
         isVisible={isVisible}
+        homeRecoveryEpoch={homeRecoveryEpoch}
         tabId={tabId}
         suppressFilteredEmptyCard={suppressFilteredEmptyCard}
         filteredCount={filteredCount}

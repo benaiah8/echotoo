@@ -146,6 +146,11 @@ export {
   preservePositiveVideoDimensions,
 } from "./mergePublishedVideoMetadata";
 export {
+  isPublishedVideoProcessingStatus,
+  shouldApplyPosterProvisionalVideoDimensions,
+  posterProvisionalDimensionsAlreadyApplied,
+} from "./posterProvisionalVideoDimensions";
+export {
   resolvePublishedMultiMediaFrame,
   resolvePublishedImageOnlyAspectRatio,
   findPrimaryPublishedVideoAspectRatio,

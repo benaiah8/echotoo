@@ -47,6 +47,7 @@ import {
 import type { InviteThreadParticipant } from "../../api/services/inviteThreads";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
+import { postTypeNotificationPhrase } from "../../lib/postTypeLabels";
 import { getMyGroupUpForConversation } from "../../api/services/groupUp";
 import type { GroupUpSourceContext } from "../../lib/people/types";
 import {
@@ -309,8 +310,7 @@ function inboxPreviewFromMessage(m: MessageRow): string {
       snap && "post_type" in snap && snap.post_type === "experience"
         ? "experience"
         : "hangout";
-    const label =
-      kind === "experience" ? "Shared an experience" : "Shared a hangout";
+    const label = `Shared ${postTypeNotificationPhrase(kind)}`;
     if (note.length > 0) return `${label} · ${note}`.slice(0, 200);
     return label;
   }

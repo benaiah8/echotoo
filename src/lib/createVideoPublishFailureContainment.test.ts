@@ -16,6 +16,16 @@ import {
   VIDEO_PROCESSING_TIMEOUT_USER_MESSAGE,
   waitForPostMediaPublishReadySettled,
 } from "./postMediaPublishReady";
+
+vi.mock("./reportVideoPublishFailure", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./reportVideoPublishFailure")>();
+  return {
+    ...actual,
+    reportVideoPublishFailure: vi.fn(),
+  };
+});
+
 import {
   createPublishVideoUpload,
   logPublishFailureOutcome,

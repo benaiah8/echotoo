@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EchoToo needs an update</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f4ef;
+        --text: #1c1917;
+        --muted: #57534e;
+        --card: #ffffff;
+        --line: #e7e5e4;
+        --accent: #b8860b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #12110f;
+          --text: #f5f2ea;
+          --muted: #d6d3cd;
+          --card: #1c1b19;
+          --line: #3f3a34;
+          --accent: #e6c35c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: Georgia, "Times New Roman", serif;
+      }
+      main {
+        max-width: 28rem;
+        margin: 0 auto;
+        padding: 18vh 1.5rem 2.5rem;
+      }
+      .mark {
+        margin: 0 0 1.25rem;
+        font-family: system-ui, sans-serif;
+        font-size: 0.8rem;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      h1 {
+        margin: 0 0 0.85rem;
+        font-size: 1.75rem;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+      p {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        font-size: 1.05rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="mark">EchoToo</p>
+      <h1>EchoToo needs an update</h1>
+      <p>
+        Your Android System WebView or Chrome is out of date. Update it from
+        Google Play, then reopen EchoToo.
+      </p>
+    </main>
+  </body>
+</html>

@@ -1960,8 +1960,8 @@ export default function FullScreenProfileCreation({
               </p>
               <p className="text-[13px] leading-snug text-[var(--text)]/75">
                 It&apos;s pronounced &quot;Echo Too&quot; BTW. Create your
-                profile and start discovering hangouts, experiences, and ideas
-                worth sharing.
+                profile and start discovering events, posts, and ideas worth
+                sharing.
               </p>
             </div>
           ) : null}

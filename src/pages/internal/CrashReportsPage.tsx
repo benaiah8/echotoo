@@ -8,11 +8,17 @@ import {
   listClientCrashReports,
   setClientCrashReportStatus,
 } from "../../api/services/clientCrashReports";
+import {
+  clientCrashSourceDisplayLabel,
+  clientCrashSourceFilterLabel,
+  matchesClientCrashSourceFilter,
+} from "../../lib/clientCrashFilters";
 import { showErrorToast } from "../../lib/errorHandling";
 import { Paths } from "../../router/Paths";
 import type {
   ClientCrashPlatform,
   ClientCrashReportRow,
+  ClientCrashSourceFilter,
   ClientCrashStatus,
 } from "../../types/clientCrashReport";
 
@@ -28,6 +34,12 @@ const PLATFORM_FILTERS: Array<ClientCrashPlatform | "all"> = [
   "android",
   "ios",
   "web",
+];
+
+const SOURCE_FILTERS: ClientCrashSourceFilter[] = [
+  "all",
+  "app_crashes",
+  "video_publish",
 ];
 
 function statusLabel(status: ClientCrashStatus | "all"): string {
@@ -61,33 +73,42 @@ function shortMessage(message: string): string {
 function matchesFilters(
   row: ClientCrashReportRow,
   status: ClientCrashStatus | "all",
-  platform: ClientCrashPlatform | "all"
+  platform: ClientCrashPlatform | "all",
+  source: ClientCrashSourceFilter
 ): boolean {
   if (status !== "all" && row.status !== status) return false;
   if (platform !== "all" && row.platform !== platform) return false;
+  if (!matchesClientCrashSourceFilter(row.source, source)) return false;
   return true;
 }
 
 function buildCopyText(row: ClientCrashReportRow): string {
+  const isVideo = row.source === "video_publish";
   return [
     `EchoToo crash report`,
     `status: ${row.status}`,
-    `source: ${row.source}`,
+    `source: ${clientCrashSourceDisplayLabel(row.source)}`,
+    ...(isVideo
+      ? [`stage: ${row.error_name}`, `code: ${row.message}`]
+      : [`error: ${row.error_name}`, `message: ${row.message}`]),
     `platform: ${row.platform}`,
     `page: ${row.page_label ?? "—"}`,
     `route: ${row.route ?? "—"}`,
-    `error: ${row.error_name}`,
-    `message: ${row.message}`,
     `app: ${row.app_version ?? "—"} (${row.app_build ?? "—"})`,
     `count: ${row.occurrence_count}`,
     `first: ${row.first_seen_at}`,
     `last: ${row.last_seen_at}`,
-    ``,
-    `stack:`,
-    row.stack ?? "(none)",
-    ``,
-    `component stack:`,
-    row.component_stack ?? "(none)",
+    `runtime: ${row.runtime_summary ?? "(none)"}`,
+    ...(isVideo
+      ? []
+      : [
+          ``,
+          `stack:`,
+          row.stack ?? "(none)",
+          ``,
+          `component stack:`,
+          row.component_stack ?? "(none)",
+        ]),
   ].join("\n");
 }
 
@@ -107,6 +128,8 @@ export default function CrashReportsPage() {
   const [platformFilter, setPlatformFilter] = useState<
     ClientCrashPlatform | "all"
   >("all");
+  const [sourceFilter, setSourceFilter] =
+    useState<ClientCrashSourceFilter>("all");
   const [rows, setRows] = useState<ClientCrashReportRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -118,6 +141,7 @@ export default function CrashReportsPage() {
       const data = await listClientCrashReports({
         status: statusFilter,
         platform: platformFilter,
+        source: sourceFilter,
         limit: 100,
       });
       setRows(data);
@@ -128,7 +152,7 @@ export default function CrashReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, platformFilter]);
+  }, [statusFilter, platformFilter, sourceFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,7 +199,12 @@ export default function CrashReportsPage() {
           status === "open" ? null : new Date().toISOString(),
         resolved_by_user_id: status === "open" ? null : row.resolved_by_user_id,
       };
-      const keep = matchesFilters(next, statusFilter, platformFilter);
+      const keep = matchesFilters(
+        next,
+        statusFilter,
+        platformFilter,
+        sourceFilter
+      );
       setRows((prev) => {
         if (!keep) return prev.filter((r) => r.id !== row.id);
         return prev.map((r) => (r.id === row.id ? next : r));
@@ -276,7 +305,7 @@ export default function CrashReportsPage() {
           </h1>
         </div>
         <p className="text-[11px] text-[var(--text)]/60 mb-4">
-          Reviewer queue —{" "}
+          Reviewer route —{" "}
           <span className="font-mono text-[10px]">
             {Paths.internalCrashReports}
           </span>
@@ -319,6 +348,30 @@ export default function CrashReportsPage() {
             </div>
 
             <p className="text-[10px] font-medium text-[var(--text)]/45 uppercase tracking-wide mb-1.5">
+              Source
+            </p>
+            <div
+              className="flex rounded-xl border border-[var(--border)] p-1 bg-[var(--bg)] app-light:bg-white/80 mb-3"
+              role="tablist"
+              aria-label="Source filter"
+            >
+              {SOURCE_FILTERS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  role="tab"
+                  aria-selected={sourceFilter === s}
+                  onClick={() => setSourceFilter(s)}
+                  className={`${chipBase} ${
+                    sourceFilter === s ? chipOn : chipOff
+                  }`}
+                >
+                  {clientCrashSourceFilterLabel(s)}
+                </button>
+              ))}
+            </div>
+
+            <p className="text-[10px] font-medium text-[var(--text)]/45 uppercase tracking-wide mb-1.5">
               Platform
             </p>
             <div
@@ -352,38 +405,56 @@ export default function CrashReportsPage() {
               </p>
             ) : (
               <ul className="flex flex-col gap-3">
-                {rows.map((r) => (
-                  <li key={r.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(r)}
-                      className="w-full text-left rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 p-3 text-xs text-[var(--text)] active:opacity-90 touch-manipulation"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                        <span className="font-semibold text-[12px]">
-                          {r.page_label || "Other"}
-                        </span>
-                        <span className="text-[10px] text-[var(--text)]/55 tabular-nums">
-                          {formatWhen(r.last_seen_at)}
-                        </span>
-                      </div>
-                      <div className="text-[11px] font-medium">
-                        {r.error_name}
-                      </div>
-                      <div className="text-[11px] text-[var(--text)]/70 mt-0.5 break-words">
-                        {shortMessage(r.message)}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--text)]/55">
-                        <span>{platformLabel(r.platform)}</span>
-                        <span>{r.app_version?.trim() || "—"}</span>
-                        <span>×{r.occurrence_count}</span>
-                        <span className="uppercase tracking-wide">
-                          {r.status}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                ))}
+                {rows.map((r) => {
+                  const isVideo = r.source === "video_publish";
+                  return (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(r)}
+                        className="w-full text-left rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 p-3 text-xs text-[var(--text)] active:opacity-90 touch-manipulation"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                          <span className="font-semibold text-[12px]">
+                            {isVideo
+                              ? "Video publish"
+                              : r.page_label || "Other"}
+                          </span>
+                          <span className="text-[10px] text-[var(--text)]/55 tabular-nums">
+                            {formatWhen(r.last_seen_at)}
+                          </span>
+                        </div>
+                        {isVideo ? (
+                          <>
+                            <div className="text-[11px] font-medium">
+                              Stage: {r.error_name}
+                            </div>
+                            <div className="text-[11px] text-[var(--text)]/70 mt-0.5 break-words">
+                              Code: {shortMessage(r.message)}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-[11px] font-medium">
+                              {r.error_name}
+                            </div>
+                            <div className="text-[11px] text-[var(--text)]/70 mt-0.5 break-words">
+                              {shortMessage(r.message)}
+                            </div>
+                          </>
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--text)]/55">
+                          <span>{platformLabel(r.platform)}</span>
+                          <span>{r.app_version?.trim() || "—"}</span>
+                          <span>×{r.occurrence_count}</span>
+                          <span className="uppercase tracking-wide">
+                            {r.status}
+                          </span>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </>
@@ -393,7 +464,11 @@ export default function CrashReportsPage() {
       <BottomDrawer
         open={!!selectedLive}
         onClose={() => setSelected(null)}
-        title="Crash detail"
+        title={
+          selectedLive?.source === "video_publish"
+            ? "Video publish detail"
+            : "Crash detail"
+        }
         shrinkSheetToContent
         maxHeight="88vh"
         footer={
@@ -412,47 +487,96 @@ export default function CrashReportsPage() {
         }
       >
         {selectedLive ? (
-          <div className="text-[11px] text-[var(--text)] space-y-2">
-            <DetailRow label="Error" value={selectedLive.error_name} />
-            <DetailRow label="Message" value={selectedLive.message} />
-            <DetailRow label="Page" value={selectedLive.page_label ?? "—"} />
-            <DetailRow label="Route" value={selectedLive.route ?? "—"} mono />
-            <DetailRow label="Source" value={selectedLive.source} />
-            <DetailRow
-              label="Platform"
-              value={platformLabel(selectedLive.platform)}
-            />
-            <DetailRow
-              label="App"
-              value={`${selectedLive.app_version ?? "—"} / ${
-                selectedLive.app_build ?? "—"
-              }`}
-            />
-            <DetailRow
-              label="First seen"
-              value={formatWhen(selectedLive.first_seen_at)}
-            />
-            <DetailRow
-              label="Last seen"
-              value={formatWhen(selectedLive.last_seen_at)}
-            />
-            <DetailRow
-              label="Count"
-              value={String(selectedLive.occurrence_count)}
-            />
-            <div>
-              <div className="text-[var(--text)]/55 mb-1">Stack</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 max-h-48 overflow-y-auto">
-                {selectedLive.stack || "(none)"}
-              </pre>
+          selectedLive.source === "video_publish" ? (
+            <div className="text-[11px] text-[var(--text)] space-y-2">
+              <DetailRow
+                label="Source"
+                value={clientCrashSourceDisplayLabel(selectedLive.source)}
+              />
+              <DetailRow label="Stage" value={selectedLive.error_name} />
+              <DetailRow label="Error code" value={selectedLive.message} />
+              <DetailRow
+                label="Runtime summary"
+                value={selectedLive.runtime_summary ?? "—"}
+                mono
+              />
+              <DetailRow label="Page" value={selectedLive.page_label ?? "—"} />
+              <DetailRow
+                label="Platform"
+                value={platformLabel(selectedLive.platform)}
+              />
+              <DetailRow
+                label="App"
+                value={`${selectedLive.app_version ?? "—"} / ${
+                  selectedLive.app_build ?? "—"
+                }`}
+              />
+              <DetailRow
+                label="First seen"
+                value={formatWhen(selectedLive.first_seen_at)}
+              />
+              <DetailRow
+                label="Last seen"
+                value={formatWhen(selectedLive.last_seen_at)}
+              />
+              <DetailRow
+                label="Count"
+                value={String(selectedLive.occurrence_count)}
+              />
+              {selectedLive.last_user_id ? (
+                <DetailRow
+                  label="Last user"
+                  value={selectedLive.last_user_id}
+                  mono
+                />
+              ) : null}
             </div>
-            <div>
-              <div className="text-[var(--text)]/55 mb-1">Component stack</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 max-h-36 overflow-y-auto">
-                {selectedLive.component_stack || "(none)"}
-              </pre>
+          ) : (
+            <div className="text-[11px] text-[var(--text)] space-y-2">
+              <DetailRow label="Error" value={selectedLive.error_name} />
+              <DetailRow label="Message" value={selectedLive.message} />
+              <DetailRow label="Page" value={selectedLive.page_label ?? "—"} />
+              <DetailRow label="Route" value={selectedLive.route ?? "—"} mono />
+              <DetailRow
+                label="Source"
+                value={clientCrashSourceDisplayLabel(selectedLive.source)}
+              />
+              <DetailRow
+                label="Platform"
+                value={platformLabel(selectedLive.platform)}
+              />
+              <DetailRow
+                label="App"
+                value={`${selectedLive.app_version ?? "—"} / ${
+                  selectedLive.app_build ?? "—"
+                }`}
+              />
+              <DetailRow
+                label="First seen"
+                value={formatWhen(selectedLive.first_seen_at)}
+              />
+              <DetailRow
+                label="Last seen"
+                value={formatWhen(selectedLive.last_seen_at)}
+              />
+              <DetailRow
+                label="Count"
+                value={String(selectedLive.occurrence_count)}
+              />
+              <div>
+                <div className="text-[var(--text)]/55 mb-1">Stack</div>
+                <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 max-h-48 overflow-y-auto">
+                  {selectedLive.stack || "(none)"}
+                </pre>
+              </div>
+              <div>
+                <div className="text-[var(--text)]/55 mb-1">Component stack</div>
+                <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 max-h-36 overflow-y-auto">
+                  {selectedLive.component_stack || "(none)"}
+                </pre>
+              </div>
             </div>
-          </div>
+          )
         ) : null}
       </BottomDrawer>
     </PrimaryPageContainer>

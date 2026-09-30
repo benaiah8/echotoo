@@ -1,3 +1,4 @@
+import { createRandomUuid } from "../createRandomUuid";
 import { isNativeApp } from "../storage/utils/capacitorDetection";
 import {
   classifyAndroidVideoUriScheme,
@@ -49,7 +50,7 @@ function storageKindForPlatform(): DraftVideoStorageKind {
 export async function persistDraftVideo(
   input: PersistDraftVideoInput,
 ): Promise<DraftVideo> {
-  const localId = crypto.randomUUID();
+  const localId = createRandomUuid();
   const kind = storageKindForPlatform();
 
   let localReference: string;
@@ -141,8 +142,8 @@ export async function resolveDraftVideoPreview(options?: {
 /**
  * Web publish-time File materialization only (idb-blob drafts → File for tus-js).
  * Capacitor native-fs drafts never return a File here (IOS3): video publish uses
- * EchoVideoUpload native-path. Poster frame extraction calls
- * loadNativeDraftVideoFile directly when needed.
+ * EchoVideoUpload native-path. Native publish poster (R2) never full-reads the
+ * video into JS — only localPosterUrl / preview URL / optional in-memory File.
  */
 export async function resolveDraftVideoFile(
   draftVideo?: DraftVideo | null,

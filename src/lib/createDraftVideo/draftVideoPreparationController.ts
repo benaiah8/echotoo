@@ -223,6 +223,8 @@ export async function ensureDraftVideoPreparationStarted(
         return;
       }
 
+      // Includes prepare_timeout → markPrepareFailed left preparationStatus prepare_failed
+      // (never stuck on preparing). activeJob cleared in finally once this settles.
       if (!writeDraftMetaIfCurrentGeneration(result.draftVideo)) {
         return;
       }

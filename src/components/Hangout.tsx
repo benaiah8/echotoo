@@ -9,12 +9,9 @@ import React, {
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useSelector } from "react-redux";
-import { Paths } from "../router/Paths";
 import { type RootState } from "../app/store";
 
 import { PiFlag, PiPencilSimple, PiTrash, PiUserPlus, PiUserSwitch } from "react-icons/pi";
-import PostRatingChip from "./ui/PostRatingChip";
-import PostRatingModal from "./ui/PostRatingModal";
 import InviteDrawer from "./ui/InviteDrawer";
 import ConfirmDialog from "./ui/ConfirmDialog";
 import SocialActionCluster from "./social/SocialActionCluster";
@@ -62,6 +59,10 @@ import {
   buildPostReportDraftFromFeedItem,
   type ReportDraft,
 } from "../types/report";
+import {
+  HOME_EVENT_RAIL_CAPTION_SLOT_PX,
+  HOME_EVENT_RAIL_CARD_BORDER_BOX_PX,
+} from "../lib/homeEventRailCardGeometry";
 
 /** Fixed rail top label row height (pill + plain posted-age share the same footprint). */
 const RAIL_LABEL_ROW_CLASS =
@@ -145,7 +146,6 @@ export default function Hangout({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isAdminEditLoading, setIsAdminEditLoading] = useState(false);
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
-  const [showRatingModal, setShowRatingModal] = useState(false);
   const [isInviteDrawerClosing, setIsInviteDrawerClosing] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const [menuDropdownLeft, setMenuDropdownLeft] = useState<number | null>(null);
@@ -181,8 +181,6 @@ export default function Hangout({
     showAdminEditAction;
   const menuItemClass =
     "w-full px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--glass-active-bg)] flex items-center gap-2";
-  // Prefer post object when provided (patched by post:changed); fallback to primitive props
-  const ratingEnabled = post?.rating_enabled === true;
 
   const authorRowType: "hangout" | "experience" =
     (post?.type ?? type) === "experience" ? "experience" : "hangout";
@@ -495,9 +493,11 @@ export default function Hangout({
       className="w-[38vw] min-w-[180px] max-w-[240px] shrink-0 cursor-pointer"
     >
       <div
-        className={`relative overflow-visible mb-3 rounded-[14px] border border-[var(--border)] pt-2 px-3 pb-2 ${
+        className={`relative overflow-visible mb-3 box-border rounded-[14px] border border-[var(--border)] pt-2 px-3 pb-2 ${
           showRailCover ? "bg-transparent" : "ui-card"
         } ${isDraft ? "opacity-60" : ""}`}
+        style={{ height: HOME_EVENT_RAIL_CARD_BORDER_BOX_PX }}
+        data-hangout-rail-card-shell
       >
         {showRailCover && railCoverUrl && (
           <RailCardImageBackdrop
@@ -716,32 +716,35 @@ export default function Hangout({
             ) : null}
           </div>
 
-          {/* caption: clamp to 3 lines for equal height */}
+          {/* caption: fixed 60px slot, clamp to 3 lines — never grows/shrinks card */}
           <div
             className="mt-2.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--text)]/95"
+            data-hangout-rail-caption-slot
             style={{
               display: "-webkit-box",
               WebkitLineClamp: 3,
               WebkitBoxOrient: "vertical",
               overflow: "hidden",
-              minHeight: "60px",
+              minHeight: HOME_EVENT_RAIL_CAPTION_SLOT_PX,
+              maxHeight: HOME_EVENT_RAIL_CAPTION_SLOT_PX,
             }}
           >
             {caption}
           </div>
 
-          {showRailSocialActions ? (
-            <div
-              className="mt-2.5 flex min-w-0 items-center overflow-visible pr-8"
-              data-hangout-rail-social
-              onClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-              }}
-            >
+          {/* Action slot always reserves min-h-9 even when cluster is null */}
+          <div
+            className="mt-2.5 flex min-h-9 min-w-0 items-center overflow-visible pr-8"
+            data-hangout-rail-social
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+            }}
+          >
+            {showRailSocialActions ? (
               <SocialShelfSurfaceProvider surface="rail">
                 <SocialActionCluster
                   postId={id}
@@ -752,36 +755,10 @@ export default function Hangout({
                   variant="compact"
                 />
               </SocialShelfSurfaceProvider>
-            </div>
-          ) : null}
-
-          {/* Rating only when present — no empty footer dead space under Duo/Group. */}
-          {ratingEnabled ? (
-            <div className="mt-1 flex items-center justify-end">
-              <PostRatingChip
-                ratingEnabled={post?.rating_enabled}
-                ratingAverage={
-                  post?.effective_rating_average ??
-                  post?.rating_average ??
-                  null
-                }
-                ratingCount={
-                  post?.effective_rating_count ??
-                  post?.rating_count ??
-                  null
-                }
-                viewerRating={post?.viewer_rating ?? null}
-                onClick={() => {
-                  if (!ensureAuthed()) return;
-                  setShowRatingModal(true);
-                }}
-                className="text-xs h-6 px-2.5"
-              />
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
-      </div>
-      {/* Delete confirmation dialog */}
+      </div>      {/* Delete confirmation dialog */}
       <ConfirmDialog
         open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
@@ -801,15 +778,6 @@ export default function Hangout({
         postType="hangout"
         postCaption={caption || "Untitled"}
         onClosingChange={setIsInviteDrawerClosing}
-      />
-
-      <PostRatingModal
-        open={showRatingModal}
-        onClose={() => setShowRatingModal(false)}
-        postId={id}
-        ratingAverage={post?.effective_rating_average ?? post?.rating_average ?? null}
-        ratingCount={post?.effective_rating_count ?? post?.rating_count ?? null}
-        viewerRating={post?.viewer_rating ?? null}
       />
 
       {showAssignAction ? (

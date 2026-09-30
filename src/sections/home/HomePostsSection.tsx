@@ -89,8 +89,10 @@ interface Props {
   isVisible?: boolean;
   /** [DEBUG] Tab id for visibility logging */
   tabId?: string;
-  /** Bump to soft-refresh first page in place (e.g. native app resume) */
+  /** Bump to soft-refresh first page in place (e.g. filtered Home after a long resume) */
   softRefreshEpoch?: number;
+  /** Home empty-error recovery cycle. Manual Retry does not use this. */
+  homeRecoveryEpoch?: number;
   /** Refetch offset 0 after showing cached / initial Home rows */
   backgroundRevalidateOnMount?: boolean;
   /** Phase 2B.2A: skip offset-0 restack after unseen-first replacement */
@@ -158,6 +160,7 @@ export default function HomePostsSection({
   isVisible = true,
   tabId = "home",
   softRefreshEpoch,
+  homeRecoveryEpoch = 0,
   backgroundRevalidateOnMount = false,
   skipOffsetZeroHeadReplace = false,
   continuousCycling = false,
@@ -598,6 +601,8 @@ export default function HomePostsSection({
         <ProgressiveFeed
           key={feedKey} // Reset when filters change
           loadItems={loadItems} // PostgreSQL already filters by type
+          errorPresentation="home"
+          homeRecoveryEpoch={homeRecoveryEpoch}
           renderItem={renderItemWithRail}
           initialItems={initialItems}
           getCachedItems={getCachedItems} // Already filters by type in HomePage

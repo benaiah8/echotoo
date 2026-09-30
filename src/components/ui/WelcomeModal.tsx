@@ -68,14 +68,14 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
               Welcome to EchoToo
             </h2>
             <p className="mt-4 text-base text-[var(--text)]/80 leading-relaxed">
-              Discover events, experiences, and real-world plans with friends.
-              Find what&apos;s happening near you and explore curated stops and
-              itineraries — built for showing up, not endless scrolling.
+              Discover events and posts with friends. Find what&apos;s happening
+              near you, and share places, recommendations, and ideas worth
+              showing up for — not endless scrolling.
             </p>
           </header>
 
           {/* Get EchoToo — web only */}
-          {!hideStoreSection ? (
+          {!__ECHOTOO_IOS_BUILD__ && !hideStoreSection ? (
             <section
               className="mb-8 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left"
               aria-labelledby="welcome-get-echotoo-heading"
@@ -142,8 +142,8 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
               What you can do
             </h3>
             <p className="mt-1 mb-3 text-sm text-[var(--text)]/65">
-              Two sides of going out — spontaneous plans and places worth the
-              trip.
+              Two sides of going out — things happening, and things worth
+              sharing.
             </p>
             <div className="flex flex-col gap-3">
               <article className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -173,13 +173,11 @@ export default function WelcomeModal({ isOpen, onClose }: WelcomeModalProps) {
                     <PiMapTrifold className="text-lg" />
                   </span>
                   <div className="min-w-0">
-                    <p className="font-semibold text-[var(--text)]">
-                      Experiences
-                    </p>
+                    <p className="font-semibold text-[var(--text)]">Posts</p>
                     <p className="mt-1 text-sm text-[var(--text)]/72 leading-snug">
-                      Follow itineraries and stops you care about — from cafés
-                      to events — so every outing feels like a small adventure,
-                      not a vague maybe.
+                      Share places you like, things you did, recommendations,
+                      and multi-stop ideas — so every outing feels like a small
+                      adventure, not a vague maybe.
                     </p>
                   </div>
                 </div>

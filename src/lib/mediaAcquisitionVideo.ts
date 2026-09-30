@@ -15,6 +15,7 @@ import {
   formatAndroidVideoDiagFailure,
   logAndroidVideoDiagnostic,
 } from "./devAndroidVideoDiagnostics";
+import { maybeReportVideoIngestAdminFailure } from "./logVideoIngestOutcome";
 
 export type NativeVideoPick = {
   file: File;
@@ -194,6 +195,9 @@ function logPickFailed(stage: string, shortReason: string): void {
 function fail(
   reason: CreateVideoAcquisitionFailureReason,
 ): NativeVideoPickOutcome {
+  // Terminal acquisition failure — Admin report once here (Provider never starts).
+  // Validation codes are filtered inside maybeReportVideoIngestAdminFailure.
+  maybeReportVideoIngestAdminFailure({ reasonCode: reason, recoverable: true });
   return {
     ok: false,
     reason,

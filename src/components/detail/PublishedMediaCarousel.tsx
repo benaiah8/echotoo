@@ -20,6 +20,7 @@ import {
   isPublishedVideoOnly,
   isPublishedSingleImage,
   mergePublishedVideoDimensions,
+  preservePublishedVideoMetadataAcrossItems,
   patchPublishedMediaRow,
   publishedMediaFrameStyle,
   publishedMediaViewerKey,
@@ -325,8 +326,12 @@ export default function PublishedMediaCarousel({
       previousIndex,
       nextItems: items,
     });
-    setMediaItems(items);
-    mediaItemsRef.current = items;
+    const merged = preservePublishedVideoMetadataAcrossItems(
+      mediaItemsRef.current,
+      items,
+    );
+    mediaItemsRef.current = merged;
+    setMediaItems(merged);
     setIndex(next);
     indexRef.current = next;
 

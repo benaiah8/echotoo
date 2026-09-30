@@ -23,7 +23,6 @@ import {
   updateDraftVideoRemotePoster,
 } from "./draftVideoMeta";
 import type { DraftVideo } from "./types";
-import { loadNativeDraftVideoFile } from "./nativeDraftVideoStorage";
 import { loadWebDraftVideoFile } from "./webDraftVideoStorage";
 import { isNativeApp } from "../storage/utils/capacitorDetection";
 
@@ -100,17 +99,14 @@ async function obtainPosterJpegBlob(
     }
   }
 
+  // Prefer an already-in-memory File/Blob (web session / rare callers).
+  // Never Filesystem.readFile the full native video into JS/base64 for poster.
   let file = options.localFile ?? null;
-  if (!file) {
+  if (!file && !isNativeApp()) {
     const draft = options.draftVideo ?? readDraftVideoMeta();
     if (draft?.localReference) {
       try {
-        file = isNativeApp()
-          ? await loadNativeDraftVideoFile(draft.localReference, {
-              fileName: draft.fileName,
-              mimeType: draft.mimeType,
-            })
-          : await loadWebDraftVideoFile(draft.localReference);
+        file = await loadWebDraftVideoFile(draft.localReference);
       } catch {
         file = null;
       }

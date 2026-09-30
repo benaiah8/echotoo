@@ -95,18 +95,18 @@ export default function DesktopMarketingPanel() {
           </div>
 
           <h1 className="text-balance text-[1.65rem] font-bold leading-snug tracking-tight text-[var(--text)] sm:text-[1.95rem] sm:leading-tight">
-            Discover events, experiences, and real-world plans with friends.
+            Discover events and posts with friends.
           </h1>
           <p className="mt-5 max-w-lg text-[15px] leading-relaxed text-[var(--text)]/87">
-            Find what&apos;s happening near you, join events, and explore
-            curated stops and itineraries — built for showing up, not endless
+            Find what&apos;s happening near you, join events, and share places,
+            recommendations, and ideas worth showing up for — not endless
             scrolling.
           </p>
         </div>
       </header>
 
       {/* Get EchoToo — web only; below hero, above product overview */}
-      {!isNativeApp() ? (
+      {!__ECHOTOO_IOS_BUILD__ && !isNativeApp() ? (
         <section
           className="rounded-[2rem] border border-white/[0.09] bg-[rgba(255,255,255,0.035)] p-6 backdrop-blur-md supports-[backdrop-filter]:bg-[rgba(21,21,22,0.45)] sm:p-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
           aria-labelledby="desktop-get-echotoo-heading"
@@ -166,7 +166,7 @@ export default function DesktopMarketingPanel() {
         </section>
       ) : null}
 
-      {/* Hangouts + Experiences */}
+      {/* Events + Posts */}
       <section
         className="flex flex-col gap-5"
         aria-labelledby="desktop-product-heading"
@@ -179,8 +179,8 @@ export default function DesktopMarketingPanel() {
             What you can do
           </h2>
           <p className="text-sm text-[var(--text)]/65">
-            Two sides of going out — spontaneous plans and places worth the
-            trip.
+            Two sides of going out — things happening, and things worth
+            sharing.
           </p>
         </div>
 
@@ -203,9 +203,9 @@ export default function DesktopMarketingPanel() {
             icon={<PiMapTrifold className="text-xl" aria-hidden />}
           >
             <p>
-              Follow food spots, routes, and plans you care about — from cafés
-              to day trips — so every outing feels like a small adventure, not a
-              vague maybe.
+              Share places you like, recommendations, things you did, and
+              multi-stop ideas — so every outing feels like a small adventure,
+              not a vague maybe.
             </p>
           </FeatureCard>
         </div>

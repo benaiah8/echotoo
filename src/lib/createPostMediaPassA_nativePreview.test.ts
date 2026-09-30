@@ -146,11 +146,6 @@ describe("PASS A — native preview without full-file read", () => {
 
   it("E: web preview path still uses Blob/File (localPreviewUrl null)", async () => {
     isNativePlatformMock.mockReturnValue(false);
-    const webDraft: DraftVideo = {
-      ...nativeDraft(),
-      localStorageKind: "idb-blob",
-      localReference: "post-web-1",
-    };
 
     // Web path loads from IDB — mock via resolveDraftVideoPreview branch coverage in source.
     const indexSrc = read("src/lib/createDraftVideo/index.ts");
@@ -306,9 +301,11 @@ describe("PASS A — native preview without full-file read", () => {
     expect(indexSrc).toContain("Web publish-time File materialization only");
     expect(indexSrc).toContain("resolveDraftVideoFile");
 
-    // Poster may still full-read for frame extract; publish path must not.
+    // R2: native publish poster must NOT full-read video into JS/base64.
     const poster = read("src/lib/createDraftVideo/publishVideoPoster.ts");
-    expect(poster).toContain("loadNativeDraftVideoFile");
+    expect(poster).not.toContain("loadNativeDraftVideoFile");
+    expect(poster).toContain("loadWebDraftVideoFile");
+    expect(poster).toContain("extractVideoPosterFrameFromSrc");
 
     // Ensure preview helper is distinct from publish File path.
     expect(resolveDraftVideoFile).toBeTypeOf("function");

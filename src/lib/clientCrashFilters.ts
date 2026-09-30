@@ -1,3 +1,39 @@
+import type {
+  ClientCrashSource,
+  ClientCrashSourceFilter,
+} from "../types/clientCrashReport";
+
+const APP_CRASH_SOURCES: ReadonlySet<ClientCrashSource> = new Set([
+  "react_boundary",
+  "window_error",
+  "unhandled_rejection",
+]);
+
+export function matchesClientCrashSourceFilter(
+  source: ClientCrashSource,
+  filter: ClientCrashSourceFilter
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "video_publish") return source === "video_publish";
+  return APP_CRASH_SOURCES.has(source);
+}
+
+export function clientCrashSourceFilterLabel(
+  filter: ClientCrashSourceFilter
+): string {
+  if (filter === "all") return "All sources";
+  if (filter === "video_publish") return "Video publish";
+  return "App crashes";
+}
+
+export function clientCrashSourceDisplayLabel(source: ClientCrashSource): string {
+  if (source === "video_publish") return "Video publish";
+  if (source === "react_boundary") return "React boundary";
+  if (source === "window_error") return "Window error";
+  if (source === "unhandled_rejection") return "Unhandled rejection";
+  return source;
+}
+
 function errorName(err: unknown): string {
   if (err instanceof Error && err.name) return err.name;
   if (err && typeof err === "object" && "name" in err) {

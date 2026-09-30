@@ -2,7 +2,7 @@ import Modal from "./Modal";
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
-import { PiAppleLogo, PiEye, PiEyeSlash, PiInfo } from "react-icons/pi";
+import { PiEye, PiEyeSlash } from "react-icons/pi";
 import { RootState } from "../../app/store";
 import { setAuthModal } from "../../reducers/modalReducer";
 import { supabase } from "../../lib/supabaseClient";
@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import { dbg } from "../../lib/authDebug";
 import {
   isCapacitor,
+  isIOS,
   isNativeApp,
 } from "../../lib/storage/utils/capacitorDetection";
 import { getAuthRedirectUrl } from "../../lib/authRedirect";
@@ -44,7 +45,7 @@ const AUTH_AGREEMENT_TOAST =
   "Please agree to the Terms of Service, Community Guidelines, and Privacy Policy before continuing.";
 
 const policyLinkClass =
-  "text-[var(--brand)] underline underline-offset-2 decoration-[var(--brand)]/50 font-medium hover:opacity-90";
+  "auth-policy-link underline underline-offset-2 font-medium hover:opacity-90";
 
 /**
  * After Apple DB writes: clear profile fetch dedupe + legacy LS rows, then republish
@@ -283,8 +284,6 @@ const AuthModal = () => {
 
   /** When true, show email + password login (OAuth + guest stay visible above). */
   const [showEmailForm, setShowEmailForm] = useState(false);
-  /** Inline helper for who email login is intended for (toggle via info control). */
-  const [showEmailLoginInfo, setShowEmailLoginInfo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [signupPhase, setSignupPhase] = useState<SignupPhase>("form");
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -350,7 +349,6 @@ const AuthModal = () => {
     if (!authModal) {
       setSignupPhase("form");
       setShowEmailForm(false);
-      setShowEmailLoginInfo(false);
       setAuthAgreementError(null);
     } else {
       setAcceptedTerms(false);
@@ -825,6 +823,45 @@ const AuthModal = () => {
     );
   }
 
+  const appleBeforeGoogle = isNativeApp() && isIOS();
+  const continueWithGoogleButton = (
+    <button
+      type="button"
+      className={`ui-btn auth-google-btn flex w-full items-center justify-center gap-2 mb-3 ${
+        !acceptedTerms && !loading ? "opacity-55" : ""
+      }`}
+      onClick={handleGoogle}
+      disabled={loading}
+    >
+      <img src="/IconGoogle.svg" alt="" width={20} height={20} />
+      Continue with Google
+    </button>
+  );
+  const continueWithAppleButton = (
+    <button
+      type="button"
+      className={`ui-btn auth-apple-btn auth-apple-btn--ios flex w-full items-center justify-center gap-2 mb-3 ${
+        !acceptedTerms && !loading ? "opacity-55" : ""
+      }`}
+      onClick={handleApple}
+      disabled={loading}
+    >
+      <img
+        src="/sign-in-with-apple-logo-black.svg"
+        alt=""
+        className="auth-apple-logo auth-apple-logo--on-white-btn"
+        aria-hidden
+      />
+      <img
+        src="/sign-in-with-apple-logo-white.svg"
+        alt=""
+        className="auth-apple-logo auth-apple-logo--on-black-btn"
+        aria-hidden
+      />
+      Continue with Apple
+    </button>
+  );
+
   return (
     <Modal
       isOpen={authModal}
@@ -906,30 +943,8 @@ const AuthModal = () => {
           </p>
         ) : null}
 
-        {/* Continue with Google — always visible (collapsed + expanded) */}
-        <button
-          type="button"
-          className={`ui-btn auth-google-btn flex w-full items-center justify-center gap-2 mb-3 ${
-            !acceptedTerms && !loading ? "opacity-55" : ""
-          }`}
-          onClick={handleGoogle}
-          disabled={loading}
-        >
-          <img src="/IconGoogle.svg" alt="" width={20} height={20} />
-          Continue with Google
-        </button>
-
-        <button
-          type="button"
-          className={`ui-btn auth-apple-btn flex w-full items-center justify-center gap-2 mb-3 ${
-            !acceptedTerms && !loading ? "opacity-55" : ""
-          }`}
-          onClick={handleApple}
-          disabled={loading}
-        >
-          <PiAppleLogo className="shrink-0" size={20} aria-hidden />
-          Continue with Apple
-        </button>
+        {appleBeforeGoogle ? continueWithAppleButton : continueWithGoogleButton}
+        {appleBeforeGoogle ? continueWithGoogleButton : continueWithAppleButton}
 
         <button
           type="button"
@@ -943,7 +958,7 @@ const AuthModal = () => {
 
         {!showEmailForm ? (
           <div className="mt-0.5 w-full">
-            <div className="flex items-center justify-center gap-1 py-1">
+            <div className="flex items-center justify-center py-1">
               <button
                 type="button"
                 className={`text-center text-[10px] font-normal text-[var(--muted)] tracking-wide transition-colors hover:text-[var(--text)]/90 ${
@@ -958,28 +973,7 @@ const AuthModal = () => {
               >
                 Log in with email
               </button>
-              <button
-                type="button"
-                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] hover:text-[var(--text)]/90 ${
-                  !acceptedTerms && !loading ? "opacity-50" : "opacity-80"
-                }`}
-                aria-label="About email login"
-                aria-expanded={showEmailLoginInfo}
-                aria-controls="email-login-info"
-                onClick={() => setShowEmailLoginInfo((v) => !v)}
-              >
-                <PiInfo size={15} aria-hidden />
-              </button>
             </div>
-            {showEmailLoginInfo ? (
-              <p
-                id="email-login-info"
-                className="mx-auto mb-1 max-w-[280px] rounded-lg border border-[var(--border)]/60 bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] px-2.5 py-1.5 text-center text-[10px] leading-snug text-[var(--muted)]"
-                role="note"
-              >
-                Email login is for approved reviewer/test accounts.
-              </p>
-            ) : null}
           </div>
         ) : (
           <div
@@ -988,7 +982,7 @@ const AuthModal = () => {
             role="region"
             aria-label="Email sign-in"
           >
-            <div className="mb-2 flex items-center justify-center gap-3 px-0.5">
+            <div className="mb-2 flex items-center justify-center px-0.5">
               <button
                 type="button"
                 className="min-h-8 text-[10px] text-[var(--muted)] hover:text-[var(--text)]/90 transition-colors"
@@ -996,26 +990,7 @@ const AuthModal = () => {
               >
                 Hide
               </button>
-              <button
-                type="button"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[color-mix(in_oklab,var(--surface)_55%,transparent)] hover:text-[var(--text)]/90"
-                aria-label="About email login"
-                aria-expanded={showEmailLoginInfo}
-                aria-controls="email-login-info"
-                onClick={() => setShowEmailLoginInfo((v) => !v)}
-              >
-                <PiInfo size={15} aria-hidden />
-              </button>
             </div>
-            {showEmailLoginInfo ? (
-              <p
-                id="email-login-info"
-                className="mb-2 rounded-lg border border-[var(--border)]/60 bg-[color-mix(in_oklab,var(--surface)_40%,transparent)] px-2.5 py-1.5 text-center text-[10px] leading-snug text-[var(--muted)]"
-                role="note"
-              >
-                Email login is for approved reviewer/test accounts.
-              </p>
-            ) : null}
 
             <div
               className="rounded-xl p-4 mb-1"

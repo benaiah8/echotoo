@@ -254,9 +254,12 @@ export async function statNativeDraftVideoBytes(
 }
 
 /**
- * Poster / frame-extract compatibility only: full-file read into a JS File.
- * Must NOT be used for Create preview, draft resume, or VIDEO publish upload
- * (Capacitor native publish uses EchoVideoUpload native-path — PASS IOS3).
+ * Full-file read into a JS File (Filesystem.readFile → base64 → Blob).
+ * Must NOT be used for:
+ * - Create preview / draft resume
+ * - native VIDEO publish upload (EchoVideoUpload native-path — PASS IOS3)
+ * - native publish poster generation (R2 — use localPosterUrl / preview URL only)
+ * Remaining callers are compatibility / non-publish paths only.
  */
 export async function loadNativeDraftVideoFile(
   localReference: string,

@@ -9,6 +9,7 @@ import {
   stampSlot0OntoActivities,
   type ListCardActivity,
 } from "../../lib/listCardSlot0";
+import { createTimeoutSignal } from "../../lib/createTimeoutSignal";
 import { normalizeLatestCommentPreview } from "../../lib/latestCommentPreview";
 
 // [OPTIMIZATION: Phase 3.3] Optimized version using PostgreSQL function
@@ -185,7 +186,7 @@ export async function getUserPostsCreated(
   const { data, error } = await query
     .order("created_at", { ascending: false })
     .range(from, from + limit - 1)
-    .abortSignal(AbortSignal.timeout(20000));
+    .abortSignal(createTimeoutSignal(20000));
 
   if (import.meta.env.DEV) {
     console.log("[getUserPostsCreated] Query result:", {
