@@ -13,6 +13,8 @@ describe("Open Plan requester identity disclosure", () => {
       "Requesting shares your name and photo with the host."
     );
     expect(copy).toContain('openPlanRequesterNameHidden: "Name hidden"');
+    expect(copy).toContain('openPlanRequesterNameMissing: "Someone"');
+    expect(copy).toContain('openPlanIncomingAccept: "Chat"');
     expect(copy).not.toContain(
       "Identity is revealed if your request is accepted."
     );

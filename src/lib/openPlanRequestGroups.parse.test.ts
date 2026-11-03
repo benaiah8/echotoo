@@ -96,6 +96,7 @@ describe("Open Plan grouped parsers strip identity", () => {
     expect(visible?.request_id).toBe("req-1");
     expect(visible?.display_name).toBe("Ada Lovelace");
     expect(visible?.profile_open_key).toBe("ada");
+    expect(visible?.note).toBeNull();
     expect(visible?.echo_preset).toBe("preset:owl_02");
     expect(visible?.bio).toBe("secret bio should parse but UI must not show");
     for (const key of FORBIDDEN_ON_REQUESTER) {
@@ -114,6 +115,7 @@ describe("Open Plan grouped parsers strip identity", () => {
     });
     expect(hidden?.display_name).toBeNull();
     expect(hidden?.profile_open_key).toBeNull();
+    expect(hidden?.note).toBeNull();
 
     const missing = __parseOpenPlanRequesterForTests({
       request_id: "req-3",

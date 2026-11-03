@@ -50,6 +50,18 @@ describe("getPostScheduleLabel relative event wording", () => {
     );
   });
 
+  it("uses in_days kind for events more than two weeks out", () => {
+    const result = getPostScheduleLabel({
+      type: "hangout",
+      createdAt: "2020-01-01T00:00:00Z",
+      selectedDates: [dateOnly("2026-09-13")],
+      now: new Date(wedAug26),
+      timeZone: TZ,
+    });
+    expect(result.kind).toBe("in_days");
+    expect(result.label).toBe("in 18 days");
+  });
+
   it("does not call a following-week Monday 'This Monday' when today is Saturday", () => {
     const satAug29 = "2026-08-29T12:00:00Z";
     expect(hangoutLabel(satAug29, [dateOnly("2026-08-31")])).toBe("Next Monday");

@@ -36,6 +36,7 @@ import { clearMessagesUnreadStore } from "./lib/messagesUnreadStore";
 import { clearMessagesActivitiesAttentionStore } from "./lib/messagesActivitiesAttentionStore";
 import { clearCompanyAnnouncementStore } from "./lib/companyAnnouncementStore";
 import PushRegistrationMount from "./components/PushRegistrationMount";
+import AndroidPushAlertChannelMount from "./components/AndroidPushAlertChannelMount";
 import NativePushPermissionPromptGate from "./components/notifications/NativePushPermissionPromptGate";
 import NativePushTapNavigationBridge from "./components/NativePushTapNavigationBridge";
 import NativePushForegroundBridge from "./components/notifications/NativePushForegroundBridge";
@@ -287,6 +288,7 @@ function App() {
         <PostEngagementRealtimeMount />
         <MessagesUnreadRealtimeMount />
         <MessagesActivitiesAttentionMount />
+        {isNativeApp() && <AndroidPushAlertChannelMount />}
         {isNativeApp() && <PushRegistrationMount />}
         {isNativeApp() && <CapacitorOAuthListener />}
         {!showSplash && <AppUpdateRuntimeController />}

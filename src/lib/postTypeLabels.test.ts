@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createFlowPrimaryCtaLabel,
   postTypeCompactLabel,
+  postTypeCreatedPhrase,
   postTypeHomeFilterLabel,
   postTypeInvitePrefix,
   postTypeNotificationPhrase,
@@ -36,5 +37,10 @@ describe("postTypeLabels (Phase C Event / Post)", () => {
     expect(postTypeInvitePrefix("hangout")).toBe("Event:");
     expect(postTypeNotificationPhrase("experience")).toBe("a post");
     expect(postTypeNotificationPhrase("hangout")).toBe("an event");
+  });
+
+  it("created phrase maps hangout → event and experience → post", () => {
+    expect(postTypeCreatedPhrase("hangout")).toBe("created an event");
+    expect(postTypeCreatedPhrase("experience")).toBe("created a post");
   });
 });

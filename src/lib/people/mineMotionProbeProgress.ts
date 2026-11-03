@@ -4,7 +4,11 @@
  */
 
 import { mineEdgeVisiblePx } from "./mineEdgeNavGesture";
-import { PEOPLE_MINE_EDGE_CARD_REST_ROTATE_DEG as PEOPLE_MINE_EDGE_CARD_REST_ROTATE_DEG_TOKEN } from "./peopleCandidateMediaPresentation";
+import {
+  PEOPLE_MINE_EDGE_CARD_REST_ROTATE_DEG as PEOPLE_MINE_EDGE_CARD_REST_ROTATE_DEG_TOKEN,
+  peopleDuoModernSceneSlideStyle,
+  prefersPeopleMotionReduce,
+} from "./peopleCandidateMediaPresentation";
 
 export type MineMotionProbeProgress = {
   prev: number;
@@ -128,6 +132,11 @@ export const MINE_NAV_PORTRAIT_SELECTOR =
   '[data-people-mine-nav-portrait="true"]';
 /** @deprecated Outer wrapper is no longer transformed; kept for cleanup. */
 export const MINE_NAV_MOTION_SELECTOR = '[data-people-mine-nav-motion="true"]';
+export const MINE_DUO_INFO_COLUMN_SELECTOR =
+  '[data-people-duo-info-column="true"]';
+/** Opposite of portrait ~7° tilt — Duo modern info column only. */
+export const MINE_DUO_INFO_COUNTER_ROTATE_DEG = 1.75;
+export const MINE_DUO_INFO_COUNTER_X_PX = 6;
 
 /** Match MineEdgeNavCards resting tilt (deg). */
 export const MINE_EDGE_CARD_REST_ROTATE_DEG =
@@ -378,10 +387,45 @@ function clearPortraitNavEl(el: HTMLElement | null | undefined): void {
 
 function clearOuterNavEl(el: HTMLElement | null | undefined): void {
   if (!el) return;
+  // Duo-modern scene and legacy outer-nav share one node. Scene transforms
+  // are owned by writeDuoModernSceneVisual / clearDuoModernSceneVisual.
+  if (
+    typeof el.hasAttribute === "function" &&
+    el.hasAttribute("data-people-duo-scene")
+  ) {
+    return;
+  }
   // Ensure rejected outer motion cannot linger.
   el.style.transform = "";
   el.style.transformOrigin = "";
   el.style.willChange = "";
+}
+
+function clearDuoInfoColumnEl(el: HTMLElement | null | undefined): void {
+  if (!el) return;
+  el.style.transform = "";
+  el.style.transformOrigin = "";
+  el.style.willChange = "";
+}
+
+export function mineDuoInfoColumnCounterMotionStyle(
+  side: "prev" | "next",
+  progress: number,
+  options?: { reduceMotion?: boolean }
+): { transform: string; transformOrigin: string } {
+  const eng = mineEdgeCardEngagement(progress);
+  const idle = { transform: "", transformOrigin: "" };
+  if (eng <= 0) return idle;
+  if (options?.reduceMotion ?? prefersReducedMotionForMineFeedback()) {
+    return idle;
+  }
+  const sign = side === "next" ? -1 : 1;
+  const rot = sign * MINE_DUO_INFO_COUNTER_ROTATE_DEG * eng;
+  const x = sign * MINE_DUO_INFO_COUNTER_X_PX * eng;
+  return {
+    transform: `translate3d(${x}px, 0, 0) rotate(${rot}deg)`,
+    transformOrigin: "center top",
+  };
 }
 
 export function clearMineIncomingRealSlideVisual(
@@ -393,6 +437,9 @@ export function clearMineIncomingRealSlideVisual(
     );
     clearOuterNavEl(
       slide.querySelector<HTMLElement>(MINE_NAV_MOTION_SELECTOR)
+    );
+    clearDuoInfoColumnEl(
+      slide.querySelector<HTMLElement>(MINE_DUO_INFO_COLUMN_SELECTOR)
     );
   }
 }
@@ -408,6 +455,229 @@ export function clearMineEdgeCardNavVisual(
     el.style.transform = mineEdgeCardRestTransform(side);
     el.style.transition = "";
   }
+}
+
+/** Duo fixed bottom row — hard reset (tests / legacy). Prefer {@link settleMineEdgeCardDuoBottomFeedback}. */
+export function clearMineEdgeCardDuoBottomFeedback(
+  cards: { prev?: HTMLElement | null; next?: HTMLElement | null } | null
+): void {
+  if (!cards) return;
+  for (const side of ["prev", "next"] as const) {
+    const el = cards[side];
+    if (!el) continue;
+    el.style.transform = "";
+    el.style.transformOrigin = "";
+    el.style.transition = "";
+    el.style.filter = "";
+    el.style.opacity = "";
+    el.style.boxShadow = "";
+    el.style.backgroundColor = "";
+    el.style.color = "";
+    paintDuoNavIconCurrentColor(el);
+  }
+}
+
+/** Duo bottom nav inner face — scale + color inversion (no positional translate). */
+export const MINE_DUO_BOTTOM_FEEDBACK_MAX_SCALE = 1.135;
+export const MINE_DUO_BOTTOM_FEEDBACK_MAX_ROTATE_DEG = 4;
+export const MINE_DUO_BOTTOM_FEEDBACK_MS = 260;
+
+const MINE_DUO_BOTTOM_FEEDBACK_TRANSITION = [
+  `transform ${MINE_DUO_BOTTOM_FEEDBACK_MS}ms ease-out`,
+  `background-color ${MINE_DUO_BOTTOM_FEEDBACK_MS}ms ease-out`,
+  `color ${MINE_DUO_BOTTOM_FEEDBACK_MS}ms ease-out`,
+  `box-shadow ${MINE_DUO_BOTTOM_FEEDBACK_MS}ms ease-out`,
+  `filter ${MINE_DUO_BOTTOM_FEEDBACK_MS}ms ease-out`,
+].join(", ");
+
+const DUO_NAV_FEEDBACK_IDLE_DARK = {
+  backgroundColor: "#141414",
+  color: "#f5f0e6",
+} as const;
+const DUO_NAV_FEEDBACK_ACTIVE_DARK = {
+  backgroundColor: "#f5f0e6",
+  color: "#141414",
+} as const;
+const DUO_NAV_FEEDBACK_IDLE_LIGHT = {
+  backgroundColor: "#ebe6dc",
+  color: "#141414",
+} as const;
+const DUO_NAV_FEEDBACK_ACTIVE_LIGHT = {
+  backgroundColor: "#141414",
+  color: "#f5f0e6",
+} as const;
+
+/** Disabled Duo nav: keep solid idle fill, mute chevron only. */
+export const DUO_NAV_FEEDBACK_DISABLED_ICON_DARK =
+  "color-mix(in oklab, #f5f0e6 42%, transparent)";
+export const DUO_NAV_FEEDBACK_DISABLED_ICON_LIGHT =
+  "color-mix(in oklab, #141414 40%, transparent)";
+
+function duoNavFaceButtonIsDisabled(el: HTMLElement): boolean {
+  if (typeof el.closest !== "function") return false;
+  const host = el.closest("button") as { disabled?: boolean } | null;
+  return Boolean(host?.disabled);
+}
+
+function paintDuoNavIconCurrentColor(faceEl: HTMLElement): void {
+  if (typeof faceEl.querySelector !== "function") return;
+  const svg = faceEl.querySelector("svg");
+  if (!(svg instanceof SVGElement)) return;
+  svg.style.color = "";
+  svg.style.fill = "currentColor";
+  svg.setAttribute("fill", "currentColor");
+  const shapes = svg.querySelectorAll("path, circle, polygon, rect");
+  shapes.forEach((node) => {
+    if (!(node instanceof SVGElement)) return;
+    node.setAttribute("fill", "currentColor");
+    node.style.fill = "currentColor";
+    node.style.color = "";
+  });
+}
+
+function duoNavFeedbackTheme(): "light" | "dark" {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.classList.contains("app-light")
+    ? "light"
+    : "dark";
+}
+
+function lerpChannel(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+function lerpHexColor(from: string, to: string, t: number): string {
+  const parse = (hex: string) => {
+    const h = hex.replace("#", "");
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16),
+    ] as const;
+  };
+  const [r1, g1, b1] = parse(from);
+  const [r2, g2, b2] = parse(to);
+  const u = Math.min(1, Math.max(0, t));
+  return `rgb(${lerpChannel(r1, r2, u)}, ${lerpChannel(g1, g2, u)}, ${lerpChannel(b1, b2, u)})`;
+}
+
+export function mineEdgeCardDuoBottomFeedbackColors(
+  progress: number,
+  theme: "light" | "dark" = duoNavFeedbackTheme()
+): { backgroundColor: string; color: string } {
+  const eng = mineEdgeCardEngagement(progress);
+  const idle =
+    theme === "light" ? DUO_NAV_FEEDBACK_IDLE_LIGHT : DUO_NAV_FEEDBACK_IDLE_DARK;
+  const active =
+    theme === "light"
+      ? DUO_NAV_FEEDBACK_ACTIVE_LIGHT
+      : DUO_NAV_FEEDBACK_ACTIVE_DARK;
+  if (eng <= 0) return { ...idle };
+  return {
+    backgroundColor: lerpHexColor(
+      idle.backgroundColor,
+      active.backgroundColor,
+      eng
+    ),
+    color: lerpHexColor(idle.color, active.color, eng),
+  };
+}
+
+/** Temporary gesture color on the face; SVG fill stays currentColor. */
+export function applyMineDuoNavFeedbackIconColor(
+  faceEl: HTMLElement,
+  color: string
+): void {
+  faceEl.style.color = color;
+  paintDuoNavIconCurrentColor(faceEl);
+}
+
+/** Idle face: solid circle, CSS owns chevron color via currentColor. */
+export function settleMineEdgeCardDuoBottomFeedbackSide(
+  el: HTMLElement | null | undefined
+): void {
+  if (!el) return;
+  const theme = duoNavFeedbackTheme();
+  const idle = mineEdgeCardDuoBottomFeedbackColors(0, theme);
+  el.style.transition = MINE_DUO_BOTTOM_FEEDBACK_TRANSITION;
+  el.style.transform = "";
+  el.style.transformOrigin = "center center";
+  el.style.filter = "";
+  el.style.boxShadow =
+    theme === "light"
+      ? "0 2px 8px rgba(0,0,0,0.12)"
+      : "0 2px 10px rgba(0,0,0,0.28)";
+  el.style.backgroundColor = idle.backgroundColor;
+  el.style.color = "";
+  paintDuoNavIconCurrentColor(el);
+}
+
+export function settleMineEdgeCardDuoBottomFeedback(
+  cards: { prev?: HTMLElement | null; next?: HTMLElement | null } | null
+): void {
+  if (!cards) return;
+  for (const side of ["prev", "next"] as const) {
+    settleMineEdgeCardDuoBottomFeedbackSide(cards[side]);
+  }
+}
+
+function prefersReducedMotionForMineFeedback(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+export function mineEdgeCardDuoBottomFeedbackStyle(
+  side: "prev" | "next",
+  progress: number,
+  options?: { reduceMotion?: boolean }
+): {
+  transform: string;
+  transformOrigin: string;
+  filter: string;
+  boxShadow: string;
+  backgroundColor: string;
+  color: string;
+} {
+  const eng = mineEdgeCardEngagement(progress);
+  const colors = mineEdgeCardDuoBottomFeedbackColors(progress);
+  const idle = {
+    transform: "",
+    transformOrigin: "center center",
+    filter: "",
+    boxShadow: "",
+    backgroundColor: "",
+    color: "",
+  };
+  if (eng <= 0) return idle;
+  const reduceMotion =
+    options?.reduceMotion ?? prefersReducedMotionForMineFeedback();
+  const spread = 12 + Math.round(12 * eng);
+  const alpha = 0.24 + 0.2 * eng;
+  const ringAlpha = 0.35 + 0.4 * eng;
+  const boxShadow = [
+    `0 3px ${spread}px rgba(0,0,0,${alpha})`,
+    `0 0 0 1px rgba(255,255,255,${ringAlpha})`,
+  ].join(", ");
+  if (reduceMotion) {
+    return {
+      ...idle,
+      filter: `brightness(${1 + 0.05 * eng})`,
+      boxShadow,
+      backgroundColor: colors.backgroundColor,
+      color: colors.color,
+    };
+  }
+  const scale = 1 + (MINE_DUO_BOTTOM_FEEDBACK_MAX_SCALE - 1) * eng;
+  const rot =
+    (side === "next" ? 1 : -1) * MINE_DUO_BOTTOM_FEEDBACK_MAX_ROTATE_DEG * eng;
+  return {
+    transform: `scale(${scale}) rotate(${rot}deg)`,
+    transformOrigin: "center center",
+    filter: "",
+    boxShadow,
+    backgroundColor: colors.backgroundColor,
+    color: colors.color,
+  };
 }
 
 function writePortraitNavTransform(
@@ -442,6 +712,19 @@ export type MineIncomingRealSlideWriteArgs = {
    * (flight begin / programmatic prepare).
    */
   forceSide?: "prev" | "next" | null;
+  /**
+   * Duo bottom nav: animate only the engaged edge button (not both).
+   */
+  directionalEdgeCards?: boolean;
+  /**
+   * Fixed Duo bottom controls — brightness/shadow feedback only (no translate/scale).
+   */
+  edgeCardFixedPosition?: boolean;
+  /**
+   * Duo modern: Embla translates the whole slide. Skip extra portrait/info
+   * swipe transforms; still clear stale styles and animate nav feedback.
+   */
+  sceneExtras?: boolean;
 };
 
 /**
@@ -464,12 +747,12 @@ export function writeMineIncomingRealSlideVisual(
     edgeCards,
     animateEdgeCards = true,
     forceSide = null,
+    directionalEdgeCards = false,
+    edgeCardFixedPosition = false,
+    sceneExtras = true,
   } = args;
 
   clearMineIncomingRealSlideVisual(slides);
-  if (edgeCards) {
-    clearMineEdgeCardNavVisual(edgeCards);
-  }
 
   const engaged =
     progress.next > 0
@@ -477,8 +760,18 @@ export function writeMineIncomingRealSlideVisual(
       : progress.prev > 0
         ? "prev"
         : forceSide;
+
+  if (edgeCards) {
+    if (edgeCardFixedPosition) {
+      if (!engaged || !(slideW > 0)) {
+        settleMineEdgeCardDuoBottomFeedback(edgeCards);
+      }
+    } else {
+      clearMineEdgeCardNavVisual(edgeCards);
+    }
+  }
+
   if (!engaged || !(slideW > 0)) return;
-  if (!(frameW > 0) || !(frameH > 0)) return;
 
   const p =
     forceSide && progress.next <= 0 && progress.prev <= 0
@@ -486,6 +779,44 @@ export function writeMineIncomingRealSlideVisual(
       : engaged === "next"
         ? progress.next
         : progress.prev;
+
+  const writeEdgeFeedback = () => {
+    if (!(animateEdgeCards && edgeCards)) return;
+    const sides: Array<"prev" | "next"> =
+      directionalEdgeCards && engaged
+        ? [engaged]
+        : ["prev", "next"];
+    for (const side of sides) {
+      const card = edgeCards[side];
+      if (!card) continue;
+      if (edgeCardFixedPosition) {
+        if (p <= 0 || duoNavFaceButtonIsDisabled(card)) {
+          settleMineEdgeCardDuoBottomFeedbackSide(card);
+          continue;
+        }
+        const fb = mineEdgeCardDuoBottomFeedbackStyle(side, p);
+        card.style.transition = "none";
+        card.style.transformOrigin = fb.transformOrigin;
+        card.style.transform = fb.transform;
+        card.style.filter = fb.filter;
+        card.style.boxShadow = fb.boxShadow;
+        card.style.backgroundColor = fb.backgroundColor;
+        card.style.color = fb.color;
+        applyMineDuoNavFeedbackIconColor(card, fb.color);
+        continue;
+      }
+      card.style.transition = "none";
+      card.style.transformOrigin = mineEdgeCardTransformOrigin(side);
+      card.style.transform = mineEdgeCardMotionTransform(side, p);
+    }
+  };
+
+  if (!sceneExtras) {
+    writeEdgeFeedback();
+    return;
+  }
+
+  if (!(frameW > 0) || !(frameH > 0)) return;
 
   const resolvePortrait = (index: number): HTMLElement | null =>
     portraitEls?.[index] ??
@@ -547,17 +878,106 @@ export function writeMineIncomingRealSlideVisual(
     }
   }
 
-  // Drag only: both edge cards share the engagement curve.
-  // Programmatic/button flights keep resting transforms (already cleared above).
-  if (animateEdgeCards && edgeCards) {
-    for (const side of ["prev", "next"] as const) {
-      const card = edgeCards[side];
-      if (!card) continue;
-      card.style.transition = "none";
-      card.style.transformOrigin = mineEdgeCardTransformOrigin(side);
-      card.style.transform = mineEdgeCardMotionTransform(side, p);
-    }
+  const writeInfoColumn = (index: number) => {
+    const infoEl =
+      slides[index]?.querySelector<HTMLElement>(MINE_DUO_INFO_COLUMN_SELECTOR) ??
+      null;
+    if (!infoEl) return;
+    const fb = mineDuoInfoColumnCounterMotionStyle(engaged, p);
+    infoEl.style.transition = "none";
+    infoEl.style.transformOrigin = fb.transformOrigin;
+    infoEl.style.transform = fb.transform;
+  };
+  writeInfoColumn(incomingIndex);
+  if (p > 0) writeInfoColumn(departureIndex);
+
+  writeEdgeFeedback();
+}
+
+export const PEOPLE_DUO_MODERN_SCENE_SELECTOR = "[data-people-duo-scene]";
+
+function applyDuoModernSceneNodeStyle(
+  el: HTMLElement,
+  style: { opacity: string; transform: string; filter: string }
+): void {
+  el.style.transition = "none";
+  el.style.opacity = style.opacity;
+  el.style.transform = style.transform;
+  el.style.filter = style.filter;
+  el.style.transformOrigin = style.transform ? "center 28%" : "";
+}
+
+export function clearDuoModernSceneVisual(
+  slides: readonly HTMLElement[]
+): void {
+  const identity = peopleDuoModernSceneSlideStyle(0, { role: "idle" });
+  for (const slide of slides) {
+    const scene =
+      slide.querySelector<HTMLElement>(PEOPLE_DUO_MODERN_SCENE_SELECTOR) ??
+      null;
+    if (!scene) continue;
+    applyDuoModernSceneNodeStyle(scene, identity);
   }
+}
+
+/**
+ * One Duo-modern scene writer. Uses computeMineMotionProbeProgress values
+ * (0..1). Does not write portrait or info-column nodes.
+ */
+export function writeDuoModernSceneVisual(args: {
+  slides: readonly HTMLElement[];
+  progress: MineMotionProbeProgress;
+  departureIndex: number;
+  forceSide?: "prev" | "next" | null;
+  reduceMotion?: boolean;
+}): void {
+  const {
+    slides,
+    progress,
+    departureIndex,
+    forceSide = null,
+    reduceMotion = prefersPeopleMotionReduce(),
+  } = args;
+
+  clearDuoModernSceneVisual(slides);
+  if (reduceMotion) return;
+
+  const engaged =
+    progress.next > 0
+      ? "next"
+      : progress.prev > 0
+        ? "prev"
+        : forceSide;
+  if (!engaged) return;
+
+  const p =
+    forceSide && progress.next <= 0 && progress.prev <= 0
+      ? 0
+      : engaged === "next"
+        ? progress.next
+        : progress.prev;
+
+  const incomingIndex =
+    engaged === "next" ? departureIndex + 1 : departureIndex - 1;
+
+  const writeScene = (
+    index: number,
+    role: "incoming" | "outgoing"
+  ) => {
+    if (index < 0 || index >= slides.length) return;
+    const scene =
+      slides[index]?.querySelector<HTMLElement>(
+        PEOPLE_DUO_MODERN_SCENE_SELECTOR
+      ) ?? null;
+    if (!scene) return;
+    applyDuoModernSceneNodeStyle(
+      scene,
+      peopleDuoModernSceneSlideStyle(p, { role, side: engaged })
+    );
+  };
+
+  writeScene(incomingIndex, "incoming");
+  if (p > 0) writeScene(departureIndex, "outgoing");
 }
 
 function clamp01(n: number): number {

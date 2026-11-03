@@ -7,7 +7,9 @@
  *
  * Golden master: pixel-equivalent to former PeopleDuoCandidateSlide Mine branch.
  */
+import { useLayoutEffect, useRef } from "react";
 import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
+import { shouldResetPeopleDuoSlideScroll } from "../../lib/people/peopleDuoSlideScroll";
 import {
   PEOPLE_DUO_STACK_PAD_X,
   PEOPLE_DUO_STACK_PAD_Y,
@@ -19,6 +21,7 @@ import {
 import {
   PEOPLE_BACK_EDGE_INSET_PX,
   PEOPLE_BACK_SIZE_PX,
+  peopleDuoModernSlideScrollBottomPad,
 } from "../../pages/people/peopleShellLayout";
 import type { PostScheduleLabelKind } from "../../lib/postScheduleLabel";
 import PeopleCandidateMedia, {
@@ -27,7 +30,9 @@ import PeopleCandidateMedia, {
 import MinePortraitIdentityOverlay from "./MinePortraitIdentityOverlay";
 import MineOpportunityNote from "./MineOpportunityNote";
 import PeopleSeePostControl from "./PeopleSeePostControl";
+import PeopleDuoOpportunityInfoCard from "./PeopleDuoOpportunityInfoCard";
 import { peopleUiCopy } from "../../pages/people/peopleUiCopy";
+import { peopleDuoModernScrollTopInset } from "../../lib/people/peopleFeedLayout";
 
 /** 16px from right edge; clear Back width + 32px separation. */
 const SOURCE_EDGE_INSET_PX = PEOPLE_BACK_EDGE_INSET_PX;
@@ -110,6 +115,9 @@ export type PeopleCanonicalCandidatePresentationProps = {
   onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
   /** Duo/Discover unseen opportunity — brand-accent photo edge. */
   isUnseen?: boolean;
+  /** Duo deck modernization — below-photo info, no top source chrome. */
+  layoutVariant?: "legacy" | "duoModern";
+  postType?: "hangout" | "experience" | null;
 };
 
 /**
@@ -136,7 +144,29 @@ export default function PeopleCanonicalCandidatePresentation({
   onOpenProfile,
   onAtmosphereChange,
   isUnseen = false,
+  layoutVariant = "legacy",
+  postType = null,
 }: PeopleCanonicalCandidatePresentationProps) {
+  const isDuoModern = layoutVariant === "duoModern";
+  const duoSlideScrollRef = useRef<HTMLDivElement | null>(null);
+  const duoSlideWasCurrentRef = useRef(false);
+  const duoSlideIdentityKeyRef = useRef(noteResetKey);
+
+  useLayoutEffect(() => {
+    if (!isDuoModern) return;
+    const becameCurrentOrReplaced = shouldResetPeopleDuoSlideScroll({
+      isCurrent,
+      wasCurrent: duoSlideWasCurrentRef.current,
+      identityKey: noteResetKey,
+      prevIdentityKey: duoSlideIdentityKeyRef.current,
+    });
+    duoSlideWasCurrentRef.current = isCurrent;
+    duoSlideIdentityKeyRef.current = noteResetKey;
+    if (!becameCurrentOrReplaced) return;
+    const scroller = duoSlideScrollRef.current;
+    if (scroller) scroller.scrollTop = 0;
+  }, [isDuoModern, isCurrent, noteResetKey]);
+
   const captionText = caption?.trim() || "";
   const dateText = scheduleLabel?.trim() || "";
   const captionInteractive = Boolean(onSeePost && captionText && isCurrent);
@@ -238,7 +268,9 @@ export default function PeopleCanonicalCandidatePresentation({
       style={{
         width: "var(--people-mine-portrait-w, 100%)",
         height: "var(--people-mine-portrait-h, auto)",
-        paddingTop: PEOPLE_MINE_STACK_PAD_Y_TOP,
+        paddingTop: isDuoModern
+          ? "var(--people-duo-stack-pad-y-top, 16px)"
+          : PEOPLE_MINE_STACK_PAD_Y_TOP,
         paddingBottom: PEOPLE_DUO_STACK_PAD_Y,
         paddingLeft: PEOPLE_DUO_STACK_PAD_X,
         paddingRight: PEOPLE_DUO_STACK_PAD_X,
@@ -264,6 +296,8 @@ export default function PeopleCanonicalCandidatePresentation({
           tapIdentityKey={`${noteResetKey}:${personKey}`}
           onMineAtmosphereChange={onAtmosphereChange}
           isUnseen={isUnseen}
+          hideMinePhotoIndicators={isDuoModern}
+          mineStackPose={isDuoModern ? "duoModern" : "mine"}
         />
       </div>
     </div>
@@ -280,6 +314,73 @@ export default function PeopleCanonicalCandidatePresentation({
       anonymousIdentity={!showIdentity}
     />
   );
+
+  if (isDuoModern) {
+    const noteText = note?.trim() || null;
+    return (
+      <div
+        className="relative box-border flex h-full min-h-0 w-full flex-col overflow-visible"
+        data-people-canonical-candidate="true"
+        data-people-duo-layout="modern"
+      >
+        <div
+          ref={duoSlideScrollRef}
+          className="scroll-hide relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          data-people-duo-slide-scroll="true"
+          style={{ paddingBottom: peopleDuoModernSlideScrollBottomPad() }}
+        >
+          <div
+            className="w-full shrink-0"
+            style={{ height: peopleDuoModernScrollTopInset() }}
+            aria-hidden
+            data-people-duo-scroll-top-inset="true"
+          />
+          <div
+            className="relative flex w-full flex-col"
+            data-people-mine-nav-motion="true"
+            data-people-duo-scene="true"
+          >
+            <div
+              className="w-full shrink-0"
+              style={{
+                height: "var(--people-mine-surplus-pad-top, 0px)",
+              }}
+              aria-hidden
+              data-people-mine-surplus-pad-top="true"
+            />
+            {portrait}
+            <div
+              className="mx-auto w-full shrink-0 pb-4 pt-3"
+              style={{
+                width: "var(--people-mine-frame-w, 100%)",
+                maxWidth: "100%",
+              }}
+              data-people-duo-info-column="true"
+            >
+              <PeopleDuoOpportunityInfoCard
+                postType={postType}
+                caption={caption}
+                scheduleLabel={scheduleLabel}
+                scheduleLabelKind={scheduleLabelKind}
+                note={noteText}
+                onSeePost={
+                  captionInteractive ? () => onSeePost?.() : undefined
+                }
+              />
+            </div>
+            <div
+              className="w-full shrink-0"
+              style={{
+                height: "var(--people-mine-surplus-pad-bottom, 0px)",
+              }}
+              aria-hidden
+              data-people-mine-surplus-pad-bottom="true"
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

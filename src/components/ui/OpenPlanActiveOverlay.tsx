@@ -730,10 +730,7 @@ export default function OpenPlanActiveOverlay() {
               ].join(" ")}
               aria-hidden
             >
-              <p className="m-0">{peopleUiCopy.noteSheetPlaceholderLine1}</p>
-              <p className="m-0 mt-0.5">
-                {peopleUiCopy.noteSheetPlaceholderLine2}
-              </p>
+              <p className="m-0">{peopleUiCopy.noteSheetPlaceholder}</p>
             </div>
           ) : null}
 
@@ -760,7 +757,7 @@ export default function OpenPlanActiveOverlay() {
               maxHeight: NOTE_MAX_H,
               overflowY: "hidden",
             }}
-            aria-label={peopleUiCopy.noteSheetPlaceholderLine1}
+            aria-label={peopleUiCopy.noteSheetPlaceholder}
           />
 
           <p className="px-1 text-right text-[10px] tabular-nums text-[var(--text)]/35">
@@ -968,7 +965,7 @@ export default function OpenPlanActiveOverlay() {
           </p>
         ) : (
           <p className="px-1 text-base leading-relaxed text-[var(--text)]/42">
-            {peopleUiCopy.noteSheetPlaceholderLine1}
+            {peopleUiCopy.openPlansNoteEmpty}
           </p>
         )}
 

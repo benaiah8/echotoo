@@ -107,9 +107,95 @@ describe("runMinePairUpConnect", () => {
     expect(express).toHaveBeenCalledTimes(1);
     expect(express).toHaveBeenCalledWith("opp-1");
     expect(connectDiscoverPairUp).not.toHaveBeenCalled();
-    expect(applyUnmatchedRemoval).toHaveBeenCalledWith("opp-1");
+    expect(applyUnmatchedRemoval).not.toHaveBeenCalled();
     expect(beginFlight).toHaveBeenCalled();
     expect(endFlight).toHaveBeenCalled();
+  });
+
+  it("confirms an unmatched Duo connect without confirming a match or a failure", async () => {
+    const onDuoUnmatchedConfirmed = vi.fn();
+    const express = vi.fn(async () => ({
+      from_opportunity_id: "from",
+      to_opportunity_id: "opp-1",
+      matched: false,
+    }));
+    await runMinePairUpConnect({
+      target: target(),
+      scope: "my_plans",
+      host: {
+        shouldAbortBeforeStart: () => false,
+        isDevMock: () => false,
+        ensureAuthed: () => true,
+        authUserId: "user-1",
+        express,
+        applyUnmatchedRemoval: vi.fn(),
+        applyMatchedAndComplete: vi.fn(),
+        setPinned: vi.fn(),
+        setPhaseExpressing: vi.fn(),
+        setPhaseIdle: vi.fn(),
+        beginFlight: vi.fn(),
+        endFlight: vi.fn(),
+        onDuoUnmatchedConfirmed,
+      },
+    });
+    expect(onDuoUnmatchedConfirmed).toHaveBeenCalledTimes(1);
+    expect(onDuoUnmatchedConfirmed).toHaveBeenCalledWith("opp-1");
+
+    onDuoUnmatchedConfirmed.mockClear();
+    const matchedExpress = vi.fn(async () => ({
+      from_opportunity_id: "from",
+      to_opportunity_id: "opp-1",
+      matched: true,
+    }));
+    await runMinePairUpConnect({
+      target: target(),
+      scope: "my_plans",
+      host: {
+        shouldAbortBeforeStart: () => false,
+        isDevMock: () => false,
+        ensureAuthed: () => true,
+        authUserId: "user-1",
+        express: matchedExpress,
+        applyUnmatchedRemoval: vi.fn(),
+        applyMatchedAndComplete: vi.fn(),
+        setPinned: vi.fn(),
+        setPhaseExpressing: vi.fn(),
+        setPhaseIdle: vi.fn(),
+        beginFlight: vi.fn(),
+        endFlight: vi.fn(),
+        onDuoUnmatchedConfirmed,
+      },
+    });
+    expect(onDuoUnmatchedConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("removes a Duo candidate when express reports it is no longer eligible", async () => {
+    const express = vi.fn(async () => {
+      throw new Error("Target is not an active Pair Up");
+    });
+    const applyUnmatchedRemoval = vi.fn();
+
+    const status = await runMinePairUpConnect({
+      target: target(),
+      scope: "my_plans",
+      host: {
+        shouldAbortBeforeStart: () => false,
+        isDevMock: () => false,
+        ensureAuthed: () => true,
+        authUserId: "user-1",
+        express,
+        applyUnmatchedRemoval,
+        applyMatchedAndComplete: vi.fn(),
+        setPinned: vi.fn(),
+        setPhaseExpressing: vi.fn(),
+        setPhaseIdle: vi.fn(),
+        beginFlight: vi.fn(),
+        endFlight: vi.fn(),
+      },
+    });
+
+    expect(status).toBe("failed");
+    expect(applyUnmatchedRemoval).toHaveBeenCalledWith("opp-1");
   });
 
   it("matched path runs applyMatchedAndComplete", async () => {
@@ -201,5 +287,75 @@ describe("runMinePairUpConnect", () => {
       "connect:opp-1:my_plans"
     );
     expect(express).not.toHaveBeenCalled();
+  });
+
+  it("discover unmatched connect keeps the card and does not leave the pool", async () => {
+    connectDiscoverPairUp.mockResolvedValue({
+      opportunity: { id: "mine", source_post_id: "post-1" },
+      from_opportunity_id: "mine",
+      to_opportunity_id: "opp-1",
+      matched: false,
+    });
+    const applyUnmatchedRemoval = vi.fn();
+    const onDiscoverHeartExpressed = vi.fn();
+
+    await runMinePairUpConnect({
+      target: target(),
+      scope: "discover",
+      heartAlreadyPending: true,
+      host: {
+        shouldAbortBeforeStart: () => false,
+        isDevMock: () => false,
+        ensureAuthed: () => true,
+        authUserId: "user-1",
+        express: vi.fn(),
+        applyUnmatchedRemoval,
+        applyMatchedAndComplete: vi.fn(),
+        setPinned: vi.fn(),
+        setPhaseExpressing: vi.fn(),
+        setPhaseIdle: vi.fn(),
+        beginFlight: vi.fn(),
+        endFlight: vi.fn(),
+        onDiscoverHeartExpressed,
+      },
+    });
+
+    expect(connectDiscoverPairUp).toHaveBeenCalledWith("opp-1");
+    expect(applyUnmatchedRemoval).not.toHaveBeenCalled();
+    expect(onDiscoverHeartExpressed).toHaveBeenCalledWith("opp-1", true);
+    expect(toastSuccess).toHaveBeenCalled();
+  });
+
+  it("discover matched connect still removes the candidate", async () => {
+    connectDiscoverPairUp.mockResolvedValue({
+      opportunity: { id: "mine", source_post_id: "post-1" },
+      from_opportunity_id: "mine",
+      to_opportunity_id: "opp-1",
+      matched: true,
+    });
+    const applyMatchedAndComplete = vi.fn(async () => {});
+    const applyUnmatchedRemoval = vi.fn();
+
+    await runMinePairUpConnect({
+      target: target(),
+      scope: "discover",
+      host: {
+        shouldAbortBeforeStart: () => false,
+        isDevMock: () => false,
+        ensureAuthed: () => true,
+        authUserId: "user-1",
+        express: vi.fn(),
+        applyUnmatchedRemoval,
+        applyMatchedAndComplete,
+        setPinned: vi.fn(),
+        setPhaseExpressing: vi.fn(),
+        setPhaseIdle: vi.fn(),
+        beginFlight: vi.fn(),
+        endFlight: vi.fn(),
+      },
+    });
+
+    expect(applyMatchedAndComplete).toHaveBeenCalledWith("opp-1");
+    expect(applyUnmatchedRemoval).not.toHaveBeenCalled();
   });
 });

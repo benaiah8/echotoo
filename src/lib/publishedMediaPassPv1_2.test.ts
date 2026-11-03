@@ -151,7 +151,10 @@ describe("PASS PV1.2 — Detail shell / carousel / player contracts", () => {
 
   it("Q: inactive video pauses", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
-    expect(player).toMatch(/if \(!isActive && !isWarm\) \{[\s\S]*tearDownPlayback\(\)/);
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
+    expect(player).toMatch(
+      /resolveIdlePublishedVideoCleanup\([\s\S]*tearDownPlayback\(\)/,
+    );
   });
 
   it("R: processing→ready preserves slide key", () => {

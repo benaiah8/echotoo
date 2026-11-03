@@ -40,7 +40,17 @@ function bannerIdFromRouteData(
   if (messageId) return messageId;
   const requestId =
     typeof routeData.requestId === "string" ? routeData.requestId.trim() : "";
-  if (requestId) return `open_plan_request:${requestId}`;
+  if (requestId) {
+    const type =
+      typeof routeData.type === "string" ? routeData.type.trim() : "";
+    if (
+      type === NOTIFICATION_KINDS.GROUP_UP_REQUEST ||
+      type === NOTIFICATION_KINDS.GROUP_UP_REQUEST_ACCEPTED
+    ) {
+      return `${type}:${requestId}`;
+    }
+    return `open_plan_request:${requestId}`;
+  }
   return `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 

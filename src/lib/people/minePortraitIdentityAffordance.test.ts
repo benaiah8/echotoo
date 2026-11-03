@@ -37,15 +37,16 @@ describe("Mine portrait identity affordance (top-center)", () => {
     expect(PEOPLE_MINE_IDENTITY_LEFT_INSET_PX).toBe(12);
     expect(PEOPLE_MINE_IDENTITY_FULLSCREEN_CLEAR_PX).toBe(52);
     expect(OVERLAY_SRC).toContain('data-people-mine-identity-top="true"');
-    expect(OVERLAY_SRC).toContain(
-      'data-people-mine-identity-anchor="top-center"'
-    );
+    /* Deck keeps top-center; Discover feed uses top-left (clears fullscreen right). */
+    expect(OVERLAY_SRC).toContain('"top-center"');
+    expect(OVERLAY_SRC).toContain('"top-left"');
     expect(OVERLAY_SRC).toContain("top: PEOPLE_MINE_IDENTITY_TOP_INSET_PX");
     expect(OVERLAY_SRC).toContain("left-1/2");
     expect(OVERLAY_SRC).toContain("-translate-x-1/2");
     expect(OVERLAY_SRC).toContain(
       "PEOPLE_MINE_IDENTITY_FULLSCREEN_CLEAR_PX * 2"
     );
+    expect(OVERLAY_SRC).toContain("feedLayout");
     expect(OVERLAY_SRC).toContain("truncate");
     expect(OVERLAY_SRC).toContain("text-[16px]");
     expect(OVERLAY_SRC).not.toContain("text-[17px]");

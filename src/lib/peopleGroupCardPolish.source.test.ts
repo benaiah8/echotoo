@@ -78,7 +78,8 @@ describe("Groups card polish (source)", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
     expect(body).toContain("lookupGroupPublishedMedia");
     expect(body).toContain("publishedMediaByPostId");
-    expect(body).toContain("mediaPending");
+    expect(body).toContain("PeopleGroupUpFeedCard");
+    expect(body).toContain("lookupGroupPublishedMedia");
     expect(body).not.toContain("getOrFetchPublishedMedia(");
     expect(body).not.toContain("ensureGroupUpPublishedMediaMap");
     expect(body).not.toContain("[GroupMediaDebug]");

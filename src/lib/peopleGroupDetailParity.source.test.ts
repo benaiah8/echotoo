@@ -35,7 +35,7 @@ const video: PublishedMediaItem = {
 describe("Groups Detail parity (poster-only)", () => {
   it("1–3: single open path passes current initialMediaKey; no immersive", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain("const handleSeePost =");
+    expect(body).toContain("const handleSeePostFor =");
     expect(body).not.toContain("handleSeePostImmersive");
     expect(body).not.toContain("openImmersiveFullscreen");
     expect(body).toContain("resolveGroupSourcePostInitialMediaKey");
@@ -59,7 +59,7 @@ describe("Groups Detail parity (poster-only)", () => {
     expect(body).not.toContain("GroupPostViewer");
 
     const see = body.slice(
-      body.indexOf("const handleSeePost ="),
+      body.indexOf("const handleSeePostFor ="),
       body.indexOf("const isPending ="),
     );
     expect(see.indexOf("ensurePublishedMediaCacheForDetailHandoff")).toBeLessThan(
@@ -91,8 +91,8 @@ describe("Groups Detail parity (poster-only)", () => {
     expect(surface).not.toContain("PublishedVideoPlayer");
 
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain("MatchDeckCarousel");
-    expect(body).toContain('layout="duo"');
+    expect(body).toContain("PeopleFeedList");
+    expect(body).toContain('PeopleFeedList');
   });
 
   it("12–15: See post via shared control beside date; caption clickable", () => {

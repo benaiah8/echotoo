@@ -9,6 +9,7 @@ import GroupUpRequestersOverlay from "./messages/GroupUpRequestersOverlay";
 import OpenPlanRequestersOverlay from "./messages/OpenPlanRequestersOverlay";
 import SourceGroupsOverlay from "./social/SourceGroupsOverlay";
 import PairUpPhotoPromptMount from "./profile/PairUpPhotoPromptMount";
+import PeopleCommentComposerOverlay from "./people/PeopleCommentComposerOverlay";
 import OrdinaryErrorToastBar, {
   ORDINARY_ERROR_TOAST_DURATION_MS,
 } from "./OrdinaryErrorToastBar";
@@ -18,6 +19,10 @@ import {
   DISCOVER_PREF_TOAST_TOP,
   DISCOVER_PREF_TOASTER_ID,
 } from "../lib/showDiscoverPrefToast";
+import {
+  DUO_ALREADY_MATCHED_TOAST_TOP,
+  DUO_ALREADY_MATCHED_TOASTER_ID,
+} from "../lib/showDuoAlreadyMatchedToast";
 
 /**
  * Floating UI outside the desktop phone shell.
@@ -36,6 +41,7 @@ export default function AppFloatingChrome() {
       <PairUpActiveOverlay />
       <OpenPlanActiveOverlay />
       <GroupUpActiveOverlay />
+      <PeopleCommentComposerOverlay />
       <SourceGroupsOverlay />
       <GroupUpRequestersOverlay />
       <OpenPlanRequestersOverlay />
@@ -68,6 +74,25 @@ export default function AppFloatingChrome() {
         gutter={8}
         containerStyle={{
           top: DISCOVER_PREF_TOAST_TOP,
+          zIndex: 10050,
+        }}
+        toastOptions={{
+          duration: 6500,
+          style: {
+            background: "transparent",
+            boxShadow: "none",
+            padding: 0,
+          },
+        }}
+      />
+
+      {/* Duo already-matched — compact informational, below People top nav */}
+      <Toaster
+        toasterId={DUO_ALREADY_MATCHED_TOASTER_ID}
+        position="top-center"
+        gutter={8}
+        containerStyle={{
+          top: DUO_ALREADY_MATCHED_TOAST_TOP,
           zIndex: 10050,
         }}
         toastOptions={{

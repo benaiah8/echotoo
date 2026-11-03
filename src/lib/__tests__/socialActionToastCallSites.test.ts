@@ -59,10 +59,11 @@ describe("social action toast call-site wiring", () => {
 
   it("X: People Connect remains generic top toast", () => {
     const deck = readSrc("pages/people/MatchDeckOverlay.tsx");
-    expect(deck).toContain("toast.success");
     expect(deck).toContain("toast.error");
     expect(deck).not.toContain("showSocialActionToast");
     expect(deck).not.toContain("showPairUpJoinToast");
+    // Already-matched uses scoped helper (not direct showSocialActionToast).
+    expect(deck).toContain("showDuoAlreadyMatchedToast");
   });
 
   it("Y: Group Create/Manage remains generic top toast", () => {

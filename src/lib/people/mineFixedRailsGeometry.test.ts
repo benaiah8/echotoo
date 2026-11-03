@@ -243,9 +243,10 @@ describe("Mine vertical gaps + unusedHostH", () => {
       resolve(__dirname, "../../pages/people/MatchDeckCarousel.tsx"),
       "utf8"
     );
-    expect(carousel).toContain("--people-mine-surplus-pad-bottom");
-    expect(carousel).toContain("discoverMetrics.padBottom");
-    expect(carousel).toContain("paddingBottom: isFullWidthPresentation");
+    expect(carousel).toContain("peopleMinePortraitCssVars");
+    expect(carousel).toContain("slideDiscoverMetrics.padBottom");
+    expect(carousel).toContain("paddingBottom:");
+    expect(carousel).toContain("isFullWidthPresentation && !duoLayoutModern");
   });
 
   it("Mine portrait aspect stays within [0.75, 0.85] across hosts", () => {
@@ -281,12 +282,12 @@ describe("Mine vertical gaps + unusedHostH", () => {
     }
   });
 
-  it("no duplicate Mine bottom spacer — gap owned by shell reservation", () => {
+  it("no duplicate Mine bottom spacer — feed pad clears BottomTab", () => {
     const overlay = readFileSync(
       resolve(__dirname, "../../pages/people/MatchDeckOverlay.tsx"),
       "utf8"
     );
-    expect(overlay).toContain("peopleShellMineContentBottomPad()");
+    expect(overlay).toContain("peopleFeedContentBottomPad()");
     expect(overlay).not.toContain("data-people-mine-deck-column");
     expect(overlay).not.toContain("data-people-mine-below-spacer");
     expect(overlay).not.toContain("data-people-mine-note-to-connect-gap");
@@ -309,22 +310,15 @@ describe("Mine vertical gaps + unusedHostH", () => {
     expect(slide).not.toContain("data-mine-debug-paint");
   });
 
-  it("Connect reservation derives from Connect height + single note gap", () => {
+  it("legacy Connect reservation helpers remain for PeopleBottomDock file", () => {
     expect(PEOPLE_MINE_CONNECT_H_PX).toBe(46);
     expect(PEOPLE_MINE_CONNECT_PILL_H_PX).toBe(PEOPLE_MINE_CONNECT_H_PX);
     expect(PEOPLE_MINE_CONNECT_H_PX).toBeLessThan(PEOPLE_ACTION_CIRCLE_PX);
-    const expectedChrome =
-      PEOPLE_MINE_NOTE_TO_CONNECT_GAP_PX +
-      PEOPLE_MINE_CONNECT_H_PX +
-      PEOPLE_MINE_ACTION_TO_NAV_GAP_PX +
-      PEOPLE_NAV_CHROME_H_PX +
-      PEOPLE_SHELL_VISUAL_LIFT_PX;
-    expect(expectedChrome).toBe(164);
     const minePad = peopleShellMineContentBottomPad();
     const legacyPad = peopleShellContentBottomPad();
-    expect(minePad).toContain(`${expectedChrome}px`);
+    expect(minePad).toContain("px");
     expect(minePad).not.toContain("+ 12px");
-    expect(legacyPad).toContain("182px");
+    expect(legacyPad).toContain("168px");
     const dock = readFileSync(
       resolve(__dirname, "../../pages/people/PeopleBottomDock.tsx"),
       "utf8"

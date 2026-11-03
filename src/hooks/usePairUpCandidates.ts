@@ -21,6 +21,18 @@ import {
 import { isNativeApp } from "../lib/storage/utils/capacitorDetection";
 import { useTabActive } from "../router/PersistentTabContainer.new";
 import { peopleDebugRecord } from "../lib/people/peopleDeckDebug";
+import { clearDiscoverSentComments } from "../lib/people/discoverSentComment";
+import {
+  markDuoInterestCleared,
+  markDuoInterestExpressed,
+} from "../lib/people/duoHeartVisibility";
+import {
+  confirmDiscoverHeart,
+  discoverHeartShouldHold,
+  reconcileDiscoverHeartCandidate,
+  setDiscoverHeartViewer,
+  startDiscoverHeartListFetch,
+} from "../lib/people/discoverHeartState";
 
 export type UsePairUpCandidatesResult = {
   candidates: PairUpCandidate[];
@@ -40,6 +52,10 @@ export type UsePairUpCandidatesResult = {
   hardRefresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   express: (toOpportunityId: string) => Promise<PairUpExpressResult>;
+  /** Discover Heart only. Does not change pool membership or comment fields. */
+  noteDiscoverHeartExpressed: (opportunityId: string, expressed: boolean) => void;
+  /** Duo Heart only. Clears one opportunity and leaves the candidate visible. */
+  noteDuoHeartWithdrawn: (opportunityId: string, viewerId: string) => void;
 };
 
 function mergeMyPlansDeckPage(
@@ -63,13 +79,94 @@ function uniqueByOpportunityId(rows: PairUpCandidate[]): PairUpCandidate[] {
   return out;
 }
 
-function appendDiscoverPage(
+export function appendDiscoverPage(
   prev: PairUpCandidate[],
   incoming: PairUpCandidate[]
 ): PairUpCandidate[] {
   const seen = new Set(prev.map((row) => row.opportunity_id));
   const added = incoming.filter((row) => !seen.has(row.opportunity_id));
   return added.length === 0 ? prev : [...prev, ...added];
+}
+
+/**
+ * Discover comment retention. Memory only: a reload or Discover-hook
+ * unmount drops it. A comment does not set expressed_by_me.
+ */
+const discoverCommentRetainedRows = new Map<string, PairUpCandidate>();
+
+export function retainDiscoverCommentCandidate(row: PairUpCandidate): void {
+  const id = row.opportunity_id.trim();
+  if (!id) return;
+  discoverCommentRetainedRows.set(id, { ...row, opportunity_id: id });
+}
+
+export function releaseDiscoverCommentRetention(opportunityId: string): void {
+  const id = opportunityId.trim();
+  if (!id) return;
+  discoverCommentRetainedRows.delete(id);
+}
+
+export function clearDiscoverCommentRetention(): void {
+  discoverCommentRetainedRows.clear();
+  clearDiscoverSentComments();
+}
+
+/**
+ * Page-0 Discover replace. Server rows win. A retained comment row stays
+ * once, in its previous position, when this page omits it.
+ */
+export function applyDiscoverPageReplacement(
+  prev: PairUpCandidate[],
+  incoming: PairUpCandidate[],
+  retained: ReadonlyMap<string, PairUpCandidate>
+): PairUpCandidate[] {
+  const incomingUnique = uniqueByOpportunityId(incoming);
+  const incomingById = new Map(
+    incomingUnique.map((row) => [row.opportunity_id, row])
+  );
+  const used = new Set<string>();
+  const out: PairUpCandidate[] = [];
+
+  for (const row of prev) {
+    const fresh = incomingById.get(row.opportunity_id);
+    if (fresh) {
+      out.push(fresh);
+      used.add(row.opportunity_id);
+      continue;
+    }
+    if (retained.has(row.opportunity_id)) {
+      out.push(row);
+      used.add(row.opportunity_id);
+    }
+  }
+
+  for (const row of incomingUnique) {
+    if (!used.has(row.opportunity_id)) out.push(row);
+  }
+
+  for (const [id, row] of retained) {
+    if (!used.has(id)) out.push(row);
+  }
+
+  return out;
+}
+
+export function applyDiscoverServerPage(
+  prev: PairUpCandidate[],
+  incoming: PairUpCandidate[],
+  fetchSeq: number
+): PairUpCandidate[] {
+  const reconciled = incoming.map((row) =>
+    reconcileDiscoverHeartCandidate(row, fetchSeq)
+  );
+  const retained = new Map(discoverCommentRetainedRows);
+  const incomingIds = new Set(reconciled.map((row) => row.opportunity_id));
+  for (const row of prev) {
+    if (incomingIds.has(row.opportunity_id)) continue;
+    if (!discoverHeartShouldHold(row.opportunity_id, fetchSeq)) continue;
+    if (!retained.has(row.opportunity_id)) retained.set(row.opportunity_id, row);
+  }
+  return applyDiscoverPageReplacement(prev, reconciled, retained);
 }
 
 export function usePairUpCandidates(options?: {
@@ -163,6 +260,7 @@ export function usePairUpCandidates(options?: {
     if (inflightRef.current) return inflightRef.current;
 
     const genAtStart = listGenerationRef.current;
+    const fetchSeq = isDiscoverRef.current ? startDiscoverHeartListFetch() : 0;
     const run = (async () => {
       const usable =
         candidatesRef.current.length > 0 || hasLoadedRef.current;
@@ -188,7 +286,9 @@ export function usePairUpCandidates(options?: {
         });
         if (genAtStart !== listGenerationRef.current) return;
         if (kindRef.current === PAIR_UP_DECK_KIND_DISCOVER) {
-          setCandidates(uniqueByOpportunityId(page.candidates));
+          setCandidates((prev) =>
+            applyDiscoverServerPage(prev, page.candidates, fetchSeq)
+          );
           setNextCursor(page.next_cursor ?? null);
         } else {
           setCandidates((prev) => mergeMyPlansDeckPage(prev, page.candidates));
@@ -267,6 +367,7 @@ export function usePairUpCandidates(options?: {
     }
 
     const gen = ++listGenerationRef.current;
+    const fetchSeq = isDiscoverRef.current ? startDiscoverHeartListFetch() : 0;
     const usable =
       candidatesRef.current.length > 0 || hasLoadedRef.current;
     peopleDebugRecord("fetch:start", {
@@ -291,7 +392,11 @@ export function usePairUpCandidates(options?: {
         kind: kindRef.current,
       });
       if (gen !== listGenerationRef.current) return;
-      setCandidates(uniqueByOpportunityId(page.candidates));
+      setCandidates((prev) =>
+        kindRef.current === PAIR_UP_DECK_KIND_DISCOVER
+          ? applyDiscoverServerPage(prev, page.candidates, fetchSeq)
+          : uniqueByOpportunityId(page.candidates)
+      );
       setNextCursor(page.next_cursor ?? null);
       setHasMore(page.has_more);
       setHasLoaded(true);
@@ -329,6 +434,17 @@ export function usePairUpCandidates(options?: {
     }
   }, []);
 
+  useEffect(() => {
+    if (!isDiscover) return;
+    return () => {
+      clearDiscoverCommentRetention();
+    };
+  }, [isDiscover]);
+
+  useEffect(() => {
+    if (!isDiscover) return;
+    setDiscoverHeartViewer(typeof userId === "string" ? userId : null);
+  }, [isDiscover, userId]);
 
   useEffect(() => {
     if (!enabled) {
@@ -337,6 +453,10 @@ export function usePairUpCandidates(options?: {
     }
     if (userId === undefined) return;
     if (!userId) {
+      if (isDiscover) {
+        clearDiscoverCommentRetention();
+        setDiscoverHeartViewer(null);
+      }
       setCandidates([]);
       setHasMore(false);
       setNextCursor(null);
@@ -351,6 +471,7 @@ export function usePairUpCandidates(options?: {
     if (!peopleActive) return;
 
     if (isDiscover && isOwnP2pDiscoverDisabled()) {
+      clearDiscoverCommentRetention();
       candidatesRef.current = [];
       hasLoadedRef.current = true;
       nextCursorRef.current = null;
@@ -366,10 +487,13 @@ export function usePairUpCandidates(options?: {
     const cacheSourcePostId = isDiscover ? null : sourcePostId;
     const cached = getCachedPairUpDeck(userId, cacheSourcePostId, 0, kind);
     if (cached && candidatesRef.current.length === 0) {
-      candidatesRef.current = cached.candidates;
+      const cachedRows = isDiscover
+        ? cached.candidates.map((row) => reconcileDiscoverHeartCandidate(row, 0))
+        : cached.candidates;
+      candidatesRef.current = cachedRows;
       hasLoadedRef.current = true;
       nextCursorRef.current = cached.next_cursor ?? null;
-      setCandidates(cached.candidates);
+      setCandidates(cachedRows);
       setHasMore(cached.has_more);
       setNextCursor(cached.next_cursor ?? null);
       setLoading(false);
@@ -377,7 +501,7 @@ export function usePairUpCandidates(options?: {
       peopleDebugRecord("cache:applied", {
         hook: "pairUp",
         kind,
-        count: cached.candidates.length,
+        count: cachedRows.length,
         hasMore: cached.has_more,
       });
     } else if (!cached && !hasLoadedRef.current) {
@@ -488,6 +612,7 @@ export function usePairUpCandidates(options?: {
     if (!enabledRef.current) return;
     if (!userId || !hasMore) return;
     const gen = listGenerationRef.current;
+    const fetchSeq = isDiscoverRef.current ? startDiscoverHeartListFetch() : 0;
     setError(null);
     peopleDebugRecord("loadMore:start", {
       hook: "pairUp",
@@ -505,7 +630,14 @@ export function usePairUpCandidates(options?: {
           cursor,
         });
         if (gen !== listGenerationRef.current) return;
-        setCandidates((prev) => appendDiscoverPage(prev, page.candidates));
+        setCandidates((prev) =>
+          appendDiscoverPage(
+            prev,
+            page.candidates.map((row) =>
+              reconcileDiscoverHeartCandidate(row, fetchSeq)
+            )
+          )
+        );
         setHasMore(page.has_more);
         setNextCursor(page.next_cursor ?? null);
         peopleDebugRecord("loadMore:complete", {
@@ -543,13 +675,7 @@ export function usePairUpCandidates(options?: {
       if (!userId) throw new Error("Not authenticated");
       const previous = candidates;
       setError(null);
-      setCandidates((prev) =>
-        prev.map((row) =>
-          row.opportunity_id === toOpportunityId
-            ? { ...row, expressed_by_me: true }
-            : row
-        )
-      );
+      setCandidates((prev) => markDuoInterestExpressed(prev, toOpportunityId));
       try {
         const result = await expressPairUpInterest(toOpportunityId);
         return result;
@@ -560,6 +686,31 @@ export function usePairUpCandidates(options?: {
       }
     },
     [userId, candidates]
+  );
+
+  const noteDiscoverHeartExpressed = useCallback(
+    (opportunityId: string, expressed: boolean) => {
+      const uid = userIdRef.current;
+      if (!isDiscoverRef.current || !uid || !opportunityId) return;
+      confirmDiscoverHeart(uid, opportunityId, expressed);
+      setCandidates((prev) =>
+        prev.map((row) =>
+          row.opportunity_id === opportunityId
+            ? { ...row, expressed_by_me: expressed }
+            : row
+        )
+      );
+    },
+    []
+  );
+
+  const noteDuoHeartWithdrawn = useCallback(
+    (opportunityId: string, viewerId: string) => {
+      if (isDiscoverRef.current) return;
+      if (!viewerId || userIdRef.current !== viewerId || !opportunityId) return;
+      setCandidates((prev) => markDuoInterestCleared(prev, opportunityId));
+    },
+    []
   );
 
   return {
@@ -573,5 +724,7 @@ export function usePairUpCandidates(options?: {
     hardRefresh,
     loadMore,
     express,
+    noteDiscoverHeartExpressed,
+    noteDuoHeartWithdrawn,
   };
 }

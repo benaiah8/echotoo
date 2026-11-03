@@ -62,12 +62,16 @@ describe("Events + Posts public taxonomy (display copy)", () => {
   it("DM shared preview uses Post / Event display labels", () => {
     expect(postTypeNotificationPhrase("experience")).toBe("a post");
     expect(postTypeNotificationPhrase("hangout")).toBe("an event");
-    const src = read("src/pages/messages/DirectMessagePage.tsx");
+    const src = read("src/lib/messages/sharedPostInboxPreview.ts");
+    const page = read("src/pages/messages/DirectMessagePage.tsx");
     expect(src).toContain("postTypeNotificationPhrase");
-    expect(src).toContain('snap.post_type === "experience"');
+    expect(page).toContain('snap.post_type === "experience"');
+    expect(page).toContain('snap.origin === "duo"');
     expect(src).not.toContain("Shared an experience");
     expect(src).not.toContain("Shared a hangout");
-    expect(src).toContain("`Shared ${postTypeNotificationPhrase(kind)}`");
+    expect(page).not.toContain("Shared an experience");
+    expect(page).not.toContain("Shared a hangout");
+    expect(src).toContain("`Shared ${postTypeNotificationPhrase(input.postType)}`");
   });
 
   it("story default and CreateTitle placeholder say Post", () => {

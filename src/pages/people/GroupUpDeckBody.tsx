@@ -78,44 +78,68 @@ import {
   showGroupUpRequestToast,
 } from "../../lib/showGroupUpRequestToast";
 import { messagesConversationPath } from "../../router/Paths";
-import MatchDeckCarousel from "./MatchDeckCarousel";
-import PeopleGroupUpCandidateSlide from "../../components/people/PeopleGroupUpCandidateSlide";
-import MineEdgeNavCards, {
-  type MineEdgeNavCardsHandle,
-} from "../../components/people/MineEdgeNavCards";
-import type { PeopleMineAtmosphereReport } from "../../components/people/PeopleCandidateMedia";
+import PeopleFeedList from "../../components/people/PeopleFeedList";
+import PeopleGroupUpFeedCard from "../../components/people/PeopleGroupUpFeedCard";
+import PeoplePlansGroupsFeedSkeleton from "../../components/people/PeoplePlansGroupsFeedSkeleton";
+import { PEOPLE_GROUPS_BROWSE_TOGGLE_CLEARANCE_PX } from "../../components/people/PeopleGroupsBrowseToggle";
+import GroupUpRequestNoteComposer, {
+  emitGroupUpComposerToast,
+  groupUpHeartIntent,
+  groupUpRequestComposerStillValid,
+  openGroupUpRequestComposer,
+  trimGroupUpRequestNote,
+  type GroupUpRequestComposerContext,
+  type GroupUpRequestComposerState,
+} from "../../components/people/GroupUpRequestNoteComposer";
+import { peopleFeedContentTopPad } from "../../lib/people/peopleFeedLayout";
+import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
 import { peopleUiCopy } from "./peopleUiCopy";
 import {
   resolveGroupUpShellActionState,
   type PeopleShellPrimaryAction,
 } from "./peopleShellPrimaryAction";
-import { isPeopleMineRealIncomingEnabled } from "./matchDeckDevMocks";
-import {
-  createMineButtonFlightLatch,
-  flushMineButtonLatch,
-  planMineButtonStep,
-  queueMineButtonTarget,
-  releaseMineButtonLatchOnIndexDiverge,
-  type MineButtonFlightLatch,
-} from "../../lib/people/mineEdgeNavGesture";
-import {
-  createMineMotionProbeController,
-  type MineMotionProbeController,
-} from "../../lib/people/mineMotionProbeProgress";
 import {
   peopleDebugBumpRender,
   peopleDebugRecord,
   peopleDebugSetContext,
 } from "../../lib/people/peopleDeckDebug";
 
-const EMPTY_GROUP_MEDIA: import("../../lib/publishedMedia").PublishedMediaItem[] =
-  [];
-
 type JoinFlight = {
   undoRequested: boolean;
 };
 
 type MutationKind = "request" | "withdraw";
+
+type ProceedRequestOutcome = "skipped" | "ok" | "error";
+
+function identitySourceFor(row: GroupUpCandidate): ProfileIdentityMediaSource {
+  return {
+    profile_photos: [],
+    echo_preset: row.organizer_echo_preset,
+    avatar_url: row.organizer_avatar_url,
+    display_name: null,
+    username: null,
+  };
+}
+
+/** Privacy-safe composer snapshot — never includes a host display name. */
+function composerContextFromRow(
+  row: GroupUpCandidate
+): GroupUpRequestComposerContext {
+  const schedule = scheduleMetaFor(row);
+  const caption =
+    row.group_title?.trim() ||
+    row.source_caption?.trim() ||
+    null;
+  const opportunityId = row.opportunity_id?.trim() || "";
+  return {
+    identitySource: identitySourceFor(row),
+    caption,
+    scheduleLabel: schedule.label,
+    scheduleLabelKind: schedule.kind,
+    feedNeutralEchoSeed: opportunityId,
+  };
+}
 
 function occursLabelFor(row: GroupUpCandidate): string | null {
   if (!row.occurs_at) return null;
@@ -177,8 +201,6 @@ export default function GroupUpDeckBody({
   onRemoveCandidate,
   onSuspendSession,
   onPrimaryActionChange,
-  onAtmosphereChange,
-  onAtmosphereIdentityKeyChange,
   onOpenHostProfile,
   seenEpoch = 0,
   onSeenMarked,
@@ -189,8 +211,6 @@ export default function GroupUpDeckBody({
   onRemoveCandidate: (opportunityId: string) => void;
   onSuspendSession: () => void;
   onPrimaryActionChange?: (action: PeopleShellPrimaryAction | null) => void;
-  onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
-  onAtmosphereIdentityKeyChange?: (identityKey: string | null) => void;
   onOpenHostProfile?: (candidate: GroupUpCandidate) => void;
   seenEpoch?: number;
   onSeenMarked?: () => void;
@@ -216,6 +236,9 @@ export default function GroupUpDeckBody({
     scopeSnap.currentOpportunityIdByTab[browseTab] ?? null;
 
   const [joinResolving, setJoinResolving] = useState(false);
+  const [composer, setComposer] = useState<GroupUpRequestComposerState | null>(
+    null
+  );
   const { ensureAuthed } = useAuthActionGate();
   const authUserId = useSelector(
     (state: RootState) => state.auth?.user?.id ?? null
@@ -235,6 +258,7 @@ export default function GroupUpDeckBody({
   scopeSnapRef.current = scopeSnap;
   const joinFlightRef = useRef<Map<string, JoinFlight>>(new Map());
   const mutationRef = useRef<Map<string, MutationKind>>(new Map());
+  const submitFlightRef = useRef(false);
   const [mutationIds, setMutationIds] = useState<Set<string>>(() => new Set());
 
   const removedIds = useMemo(
@@ -349,6 +373,13 @@ export default function GroupUpDeckBody({
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (!composer || submitFlightRef.current) return;
+    if (!groupUpRequestComposerStillValid(composer, browsable)) {
+      setComposer(null);
+    }
+  }, [browsable, composer]);
 
   useEffect(() => {
     peopleDebugRecord("deck:mount", { deck: "groupUpDeckBody" });
@@ -543,37 +574,6 @@ export default function GroupUpDeckBody({
     loadMoreInFlight,
   ]);
 
-  const goToIndex = useCallback(
-    (next: number) => {
-      if (joinResolving || photoPromptOpen) return;
-      const clamped = Math.max(0, Math.min(deckRows.length - 1, next));
-      const row = deckRows[clamped];
-      const id = row ? groupUpDeckRowId(row) : null;
-      const previousId =
-        scopeSnapRef.current.currentOpportunityIdByTab[browseTab] ?? null;
-      if (
-        browseTab === "new" &&
-        authUserId &&
-        previousId &&
-        id &&
-        previousId !== id
-      ) {
-        markLocalPeopleDeckSeenAndEnqueue(authUserId, "groups_new", previousId);
-        onSeenMarked?.();
-      }
-      patchTabOpportunity(browseTab, id || null);
-    },
-    [
-      authUserId,
-      browseTab,
-      deckRows,
-      joinResolving,
-      onSeenMarked,
-      patchTabOpportunity,
-      photoPromptOpen,
-    ]
-  );
-
   const handleOpenGroup = useCallback(() => {
     if (!current) return;
     navigate(messagesConversationPath(current.conversation_id), {
@@ -715,11 +715,15 @@ export default function GroupUpDeckBody({
   );
 
   const proceedRequest = useCallback(
-    async (target: GroupUpCandidate) => {
+    async (
+      target: GroupUpCandidate,
+      draftNote?: string
+    ): Promise<ProceedRequestOutcome> => {
       const id = target.opportunity_id?.trim() || "";
-      if (!id) return;
-      if (!tryBeginMutation(id, "request")) return;
+      if (!id) return "skipped";
+      if (!tryBeginMutation(id, "request")) return "skipped";
 
+      const note = trimGroupUpRequestNote(draftNote ?? "");
       const prevState = target.viewer_state;
       const prevRequestId = target.request_id;
       const flight: JoinFlight = { undoRequested: false };
@@ -756,7 +760,10 @@ export default function GroupUpDeckBody({
       patchViewerState(id, { viewer_state: "pending", request_id: null });
 
       try {
-        const request = await requestGroupUp(id);
+        const request = await requestGroupUp(
+          id,
+          note.length > 0 ? { note } : undefined
+        );
         const status = String(request.status ?? "");
 
         if (flight.undoRequested) {
@@ -769,7 +776,7 @@ export default function GroupUpDeckBody({
           }
           patchViewerState(id, { viewer_state: "none", request_id: null });
           patchTabOpportunity("new", id);
-          return;
+          return "ok";
         }
 
         if (status === "pending") {
@@ -780,16 +787,17 @@ export default function GroupUpDeckBody({
           showGroupUpRequestToast(id, () => {
             runUndoJoin(target);
           });
-          return;
+          return "ok";
         }
 
         if (status === "accepted") {
           onRemoveCandidate(id);
           toast(peopleUiCopy.groupUpBrowseAlreadyMember);
-          return;
+          return "ok";
         }
 
         onRemoveCandidate(id);
+        return "ok";
       } catch (err) {
         if (!flight.undoRequested) {
           patchViewerState(id, {
@@ -806,6 +814,7 @@ export default function GroupUpDeckBody({
           }
           requestErrorToast(kind);
         }
+        return "error";
       } finally {
         joinFlightRef.current.delete(id);
         endMutation(id);
@@ -820,6 +829,42 @@ export default function GroupUpDeckBody({
       runUndoJoin,
       tryBeginMutation,
     ]
+  );
+
+  const openRequestComposer = useCallback(
+    (target: GroupUpCandidate) => {
+      if (submitFlightRef.current) return;
+      const id = target.opportunity_id?.trim() || "";
+      if (!id) return;
+      if (target.viewer_state !== "none") return;
+      if (target.source_unavailable) return;
+      if (target.member_count >= GROUP_ACTIVE_MEMBER_CAP) return;
+      if (mutationIds.has(id)) return;
+      const context = composerContextFromRow(target);
+      setComposer((prev) => openGroupUpRequestComposer(prev, id, context));
+    },
+    [mutationIds]
+  );
+
+  const submitGroupUpRequest = useCallback(
+    async (opportunityId: string, draft: string) => {
+      if (submitFlightRef.current) return;
+      const target =
+        candidates.find(
+          (row) => (row.opportunity_id?.trim() || "") === opportunityId
+        ) ?? null;
+      if (!target || target.viewer_state !== "none") return;
+      submitFlightRef.current = true;
+      try {
+        const outcome = await proceedRequest(target, draft);
+        if (outcome !== "error") {
+          setComposer(null);
+        }
+      } finally {
+        submitFlightRef.current = false;
+      }
+    },
+    [candidates, proceedRequest]
   );
 
   const handleJoin = useCallback(async () => {
@@ -840,7 +885,7 @@ export default function GroupUpDeckBody({
     if (!userId) return;
 
     if (isPeoplePhotoPromptBypassed()) {
-      await proceedRequest(target);
+      openRequestComposer(target);
       return;
     }
 
@@ -848,7 +893,7 @@ export default function GroupUpDeckBody({
     try {
       const profile = resolvePhotoPromptOffer(userId, "group_up_request", false);
       if (!profile) {
-        await proceedRequest(target);
+        openRequestComposer(target);
         return;
       }
 
@@ -860,7 +905,7 @@ export default function GroupUpDeckBody({
         title: GROUP_UP_JOIN_PHOTO_PROMPT_TITLE,
         description: GROUP_UP_JOIN_PHOTO_PROMPT_DESCRIPTION,
         onContinue: () => {
-          void proceedRequest(target);
+          openRequestComposer(target);
         },
       });
       if (!opened) {
@@ -876,8 +921,8 @@ export default function GroupUpDeckBody({
     ensureAuthed,
     joinResolving,
     mutationIds,
+    openRequestComposer,
     photoPromptOpen,
-    proceedRequest,
   ]);
 
   const handleWithdrawCurrent = useCallback(() => {
@@ -886,26 +931,21 @@ export default function GroupUpDeckBody({
     void runWithdraw(current);
   }, [current, runWithdraw]);
 
-  const [mediaIndexById, setMediaIndexById] = useState<Record<string, number>>(
+  const [mediaIndexById] = useState<Record<string, number>>(
     {}
   );
-  const setMediaIndexFor = useCallback((opportunityId: string, next: number) => {
-    setMediaIndexById((prev) => {
-      if (prev[opportunityId] === next) return prev;
-      return { ...prev, [opportunityId]: next };
-    });
-  }, []);
 
-  const handleSeePost = useCallback(() => {
-    if (!current || !canOpenGroupSourcePost(current)) return;
-    const sourcePostId = current.source_post_id?.trim() || "";
-    const sourceType = current.source_type;
+  const handleSeePostFor = useCallback(
+    (target: GroupUpCandidate) => {
+    if (!canOpenGroupSourcePost(target)) return;
+    const sourcePostId = target.source_post_id?.trim() || "";
+    const sourceType = target.source_type;
     if (!sourcePostId || !sourceType) return;
-    const deckId = groupUpDeckRowId(current);
+    const deckId = groupUpDeckRowId(target);
     const mediaLookup = lookupGroupPublishedMedia(
       publishedMediaByPostId,
       sourcePostId,
-      current.source_unavailable
+      target.source_unavailable
     );
     const media = mediaLookup.items;
     const idx = mediaIndexById[deckId] ?? 0;
@@ -931,13 +971,13 @@ export default function GroupUpDeckBody({
     );
   }, [
     authUserId,
-    current,
     location,
     mediaIndexById,
     navigate,
     onSuspendSession,
     publishedMediaByPostId,
   ]);
+
 
   const isPending = current?.viewer_state === "pending";
   const currentDeckId = current ? groupUpDeckRowId(current) : "";
@@ -958,140 +998,6 @@ export default function GroupUpDeckBody({
     mutationIds.has(current.opportunity_id);
 
   const controlsLocked = joinResolving || photoPromptOpen;
-
-  const groupsPrepareRef = useRef<
-    ((destinationIndex: number, opts?: { jump?: boolean }) => void) | null
-  >(null);
-  const groupsIndexRef = useRef(index);
-  groupsIndexRef.current = index;
-  const groupsButtonLatchRef = useRef<MineButtonFlightLatch>(
-    createMineButtonFlightLatch()
-  );
-  const groupsRealIncomingEnabled = isPeopleMineRealIncomingEnabled();
-  const groupsMotionProbeCtrlRef = useRef<MineMotionProbeController | null>(
-    null
-  );
-  const groupsEdgeNavCardsRef = useRef<MineEdgeNavCardsHandle>({
-    prev: null,
-    next: null,
-  });
-  if (
-    groupsRealIncomingEnabled &&
-    (!groupsMotionProbeCtrlRef.current ||
-      groupsMotionProbeCtrlRef.current.mode !== "proxy")
-  ) {
-    groupsMotionProbeCtrlRef.current = createMineMotionProbeController("proxy");
-  }
-  if (!groupsRealIncomingEnabled) {
-    groupsMotionProbeCtrlRef.current = null;
-  }
-
-  useEffect(() => {
-    const prev = groupsButtonLatchRef.current;
-    const next = releaseMineButtonLatchOnIndexDiverge(prev, index);
-    if (next !== prev) groupsButtonLatchRef.current = next;
-  }, [index]);
-
-  useEffect(() => {
-    if (deckRows.length <= 0) {
-      groupsButtonLatchRef.current = createMineButtonFlightLatch();
-    }
-  }, [deckRows.length]);
-
-  const startGroupsButtonStep = useCallback(
-    (destinationIndex: number) => {
-      const len = deckRows.length;
-      const planned = planMineButtonStep(
-        groupsButtonLatchRef.current,
-        destinationIndex,
-        groupsIndexRef.current,
-        len,
-        !controlsLocked
-      );
-      groupsButtonLatchRef.current = planned.latch;
-      if (!planned.shouldNavigate) return;
-      groupsPrepareRef.current?.(planned.clamped, { jump: true });
-      if (controlsLocked) {
-        groupsButtonLatchRef.current = {
-          flightActive: false,
-          pendingTarget: groupsButtonLatchRef.current.pendingTarget,
-          flightDest: null,
-        };
-        return;
-      }
-      goToIndex(planned.clamped);
-    },
-    [controlsLocked, deckRows.length, goToIndex]
-  );
-
-  const flushGroupsButtonPending = useCallback(() => {
-    const { latch, nextStep } = flushMineButtonLatch(
-      groupsButtonLatchRef.current,
-      groupsIndexRef.current,
-      deckRows.length
-    );
-    groupsButtonLatchRef.current = latch;
-    if (nextStep == null) return;
-    startGroupsButtonStep(nextStep);
-  }, [deckRows.length, startGroupsButtonStep]);
-
-  if (groupsMotionProbeCtrlRef.current) {
-    groupsMotionProbeCtrlRef.current.onFlightSettled = flushGroupsButtonPending;
-  }
-
-  useEffect(() => {
-    const latch = groupsButtonLatchRef.current;
-    if (!latch.flightActive || latch.flightDest == null) return;
-    if (index !== latch.flightDest) return;
-    groupsButtonLatchRef.current = {
-      ...latch,
-      flightActive: false,
-      flightDest: null,
-    };
-    flushGroupsButtonPending();
-  }, [index, flushGroupsButtonPending]);
-
-  const goGroupsPrev = useCallback(() => {
-    const len = deckRows.length;
-    if (len <= 0) return;
-    const latch = groupsButtonLatchRef.current;
-    if (latch.flightActive) {
-      const base = latch.pendingTarget ?? groupsIndexRef.current;
-      const pending = Math.max(0, base - 1);
-      groupsButtonLatchRef.current = queueMineButtonTarget(latch, pending, len);
-      return;
-    }
-    startGroupsButtonStep(Math.max(0, groupsIndexRef.current - 1));
-  }, [deckRows.length, startGroupsButtonStep]);
-
-  const goGroupsNext = useCallback(() => {
-    const len = deckRows.length;
-    if (len <= 0) return;
-    const latch = groupsButtonLatchRef.current;
-    if (latch.flightActive) {
-      const base = latch.pendingTarget ?? groupsIndexRef.current;
-      const pending = Math.min(len - 1, base + 1);
-      groupsButtonLatchRef.current = queueMineButtonTarget(latch, pending, len);
-      return;
-    }
-    startGroupsButtonStep(Math.min(len - 1, groupsIndexRef.current + 1));
-  }, [deckRows.length, startGroupsButtonStep]);
-
-  const canGroupsGoPrev = !controlsLocked && index > 0;
-  const canGroupsGoNext = !controlsLocked && index < deckRows.length - 1;
-
-  useEffect(() => {
-    if (!onAtmosphereIdentityKeyChange) return;
-    if (!current) {
-      onAtmosphereIdentityKeyChange(null);
-      return;
-    }
-    onAtmosphereIdentityKeyChange(groupUpDeckRowId(current));
-  }, [current, onAtmosphereIdentityKeyChange]);
-
-  useEffect(() => {
-    return () => onAtmosphereIdentityKeyChange?.(null);
-  }, [onAtmosphereIdentityKeyChange]);
 
   useEffect(() => {
     if (!onPrimaryActionChange) return;
@@ -1170,17 +1076,28 @@ export default function GroupUpDeckBody({
     "transition active:scale-[0.94]",
   ].join(" ");
 
+  const listTopChromePad = `calc(${peopleFeedContentTopPad()} + ${PEOPLE_GROUPS_BROWSE_TOGGLE_CLEARANCE_PX}px)`;
+
   if (loading && !hasLoaded && deckRows.length === 0 && browsable.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
-        Loading…
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-group-up-initial-loading="true"
+        data-people-feed-out-of-list-chrome="true"
+      >
+        <PeoplePlansGroupsFeedSkeleton variant="initial" surface="groups" />
       </div>
     );
   }
 
   if (error && deckRows.length === 0 && browsable.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         <p className="text-sm text-[var(--text)]/70">
           {peopleUiCopy.deckLoadError}
         </p>
@@ -1204,14 +1121,12 @@ export default function GroupUpDeckBody({
   if (trueCaughtUpBrowsable) {
     if (browseTab === "new") {
       return (
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <MineEdgeNavCards
-            canGoPrev={false}
-            canGoNext={false}
-            onPrev={() => {}}
-            onNext={() => {}}
-            fixedRailsGeometry
-          />
+        <div
+          className="relative flex min-h-0 flex-1 flex-col"
+          style={{ paddingTop: listTopChromePad }}
+          data-people-group-up-empty-new="true"
+          data-people-feed-out-of-list-chrome="true"
+        >
           <PeopleDeckEmptyCard
             kind="groups_new"
             title={peopleUiCopy.groupUpBrowseNewEmpty}
@@ -1223,7 +1138,11 @@ export default function GroupUpDeckBody({
       );
     }
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         {peopleUiCopy.groupUpBrowseEmpty}
       </div>
     );
@@ -1235,7 +1154,11 @@ export default function GroupUpDeckBody({
     (hasMore || loadMoreInFlight)
   ) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         Loading…
       </div>
     );
@@ -1253,27 +1176,38 @@ export default function GroupUpDeckBody({
   if (tabEmpty || deckRows.length === 0) {
     if (deckRows.length === 0 && (hasMore || loadMoreInFlight)) {
       return (
-        <p className="m-auto px-6 text-center text-[15px] text-[var(--text)]/60">
+        <p
+          className="m-auto px-6 text-center text-[15px] text-[var(--text)]/60"
+          style={{ paddingTop: listTopChromePad }}
+          data-people-feed-out-of-list-chrome="true"
+        >
           Loading…
         </p>
       );
     }
     if (browseTab === "yours") {
       return (
-        <p className="m-auto px-6 text-center text-[15px] text-[var(--text)]/80">
-          {peopleUiCopy.groupUpBrowseYoursEmpty}
-        </p>
+        <div
+          className="m-auto flex max-w-sm flex-col items-center gap-1.5 px-6 text-center"
+          style={{ paddingTop: listTopChromePad }}
+          data-people-feed-out-of-list-chrome="true"
+          data-people-group-up-yours-empty="true"
+        >
+          <p className="m-0 text-[15px] font-semibold text-[var(--text)]">
+            {peopleUiCopy.groupUpBrowseYoursEmptyTitle}
+          </p>
+          <p className="m-0 text-[14px] text-[var(--text)]/75">
+            {peopleUiCopy.groupUpBrowseYoursEmpty}
+          </p>
+        </div>
       );
     }
     return (
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <MineEdgeNavCards
-          canGoPrev={false}
-          canGoNext={false}
-          onPrev={() => {}}
-          onNext={() => {}}
-          fixedRailsGeometry
-        />
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         <PeopleDeckEmptyCard
           kind="groups_new"
           title={peopleUiCopy.groupUpBrowseNewEmpty}
@@ -1285,79 +1219,158 @@ export default function GroupUpDeckBody({
     );
   }
 
+  const handleGroupsHeart = (row: GroupUpCandidate) => {
+    const intent = groupUpHeartIntent(row.viewer_state);
+    if (intent === "compose" && browseTab === "new") {
+      openRequestComposer(row);
+      return;
+    }
+    if (intent === "withdraw") {
+      void runWithdraw(row);
+      return;
+    }
+    if (intent === "open") {
+      navigate(messagesConversationPath(row.conversation_id), {
+        state: { backgroundLocation: location },
+      });
+    }
+  };
+
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <MineEdgeNavCards
-        canGoPrev={canGroupsGoPrev}
-        canGoNext={canGroupsGoNext}
-        onPrev={goGroupsPrev}
-        onNext={goGroupsNext}
-        fixedRailsGeometry
-        cardsRef={
-          groupsRealIncomingEnabled ? groupsEdgeNavCardsRef : undefined
-        }
+    <>
+    <PeopleFeedList
+      topChromePad={listTopChromePad}
+      orderedIds={deckRows.map((row) => groupUpDeckRowId(row))}
+      hasMore={hasMore}
+      loadMoreInFlight={loadMoreInFlight}
+      onLoadMore={() => {
+        if (loadMoreInFlight || !hasMore) return;
+        loadMoreInFlightRef.current = true;
+        setLoadMoreInFlight(true);
+        void loadMore()
+          .catch(() => {})
+          .finally(() => {
+            loadMoreInFlightRef.current = false;
+            setLoadMoreInFlight(false);
+          });
+      }}
+      onRowVisible={(deckId) => {
+        if (browseTab !== "new" || !authUserId || !deckId) return;
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, "groups_new", deckId);
+        onSeenMarked?.();
+      }}
+      focusedId={current ? groupUpDeckRowId(current) : null}
+      onFocusedIdChange={(id) => {
+        patchTabOpportunity(browseTab, id);
+      }}
+      scrollToId={
+        scopeSnap.currentOpportunityIdByTab[browseTab] ?? null
+      }
+    >
+      {deckRows.map((row) => {
+        const deckId = groupUpDeckRowId(row);
+        const schedule = scheduleMetaFor(row);
+        const state = row.viewer_state ?? "none";
+        const pending = state === "pending";
+        const member = state === "member" || state === "owner";
+        const isOwner = state === "owner";
+        const creatorName =
+          row.organizer_display_name?.trim() ||
+          row.organizer_username?.trim() ||
+          null;
+        const heartLabel = member
+          ? peopleUiCopy.groupUpShellOpen
+          : pending
+            ? peopleUiCopy.groupUpBrowseRequested
+            : peopleUiCopy.groupUpShellRequest;
+        return (
+          <PeopleGroupUpFeedCard
+            key={deckId}
+            opportunityId={deckId}
+            isCurrent={deckId === (current ? groupUpDeckRowId(current) : null)}
+            creatorName={creatorName}
+            creatorAvatarUrl={row.organizer_avatar_url}
+            creatorUserId={row.organizer_user_id}
+            onOpenCreatorProfile={
+              onOpenHostProfile && resolveGroupHostProfileOpenKey(row)
+                ? () => onOpenHostProfile(row)
+                : null
+            }
+            groupTitle={row.group_title}
+            groupDescription={row.group_description}
+            sourceCaption={row.source_caption}
+            scheduleLabel={schedule.label}
+            scheduleLabelKind={schedule.kind}
+            postType={
+              row.source_type === "hangout" || row.source_type === "experience"
+                ? row.source_type
+                : null
+            }
+            onSeePost={
+              canOpenGroupSourcePost(row)
+                ? () => handleSeePostFor(row)
+                : null
+            }
+            showYoursBadge={isOwner}
+            isUnseen={browseTab === "new" && !groupsNewSeenIds.has(deckId)}
+            heartLabel={heartLabel}
+            heartState={
+              controlsLocked
+                ? "disabled"
+                : member
+                  ? "active"
+                  : pending
+                    ? "pending"
+                    : "idle"
+            }
+            onHeart={() => handleGroupsHeart(row)}
+            messageLabel={member ? "Open chat" : null}
+            onMessage={
+              member
+                ? () => {
+                    navigate(messagesConversationPath(row.conversation_id), {
+                      state: { backgroundLocation: location },
+                    });
+                  }
+                : null
+            }
+          />
+        );
+      })}
+    </PeopleFeedList>
+    {composer ? (
+      <GroupUpRequestNoteComposer
+        open
+        draft={composer.draft}
+        busy={mutationIds.has(composer.opportunityId)}
+        context={{
+          identitySource: composer.identitySource,
+          caption: composer.caption,
+          scheduleLabel: composer.scheduleLabel,
+          scheduleLabelKind: composer.scheduleLabelKind,
+          feedNeutralEchoSeed: composer.feedNeutralEchoSeed,
+        }}
+        onDraftChange={(value) => {
+          setComposer((prev) => (prev ? { ...prev, draft: value } : prev));
+        }}
+        onCancel={() => {
+          if (submitFlightRef.current) return;
+          setComposer(null);
+          emitGroupUpComposerToast("cancel", {
+            info: (message) => {
+              toast(message);
+            },
+          });
+        }}
+        onDismiss={() => {
+          if (submitFlightRef.current) return;
+          setComposer(null);
+        }}
+        onSubmit={(draft) => {
+          void submitGroupUpRequest(composer.opportunityId, draft);
+        }}
       />
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <MatchDeckCarousel
-          index={index}
-          onIndexChange={goToIndex}
-          items={deckRows}
-          locked={controlsLocked}
-          layout="duo"
-          duoInFlowChrome
-          duoPresentation="mine"
-          mineMotionProbeRef={
-            groupsRealIncomingEnabled ? groupsMotionProbeCtrlRef : undefined
-          }
-          mineProxyProgrammaticPrepareRef={groupsPrepareRef}
-          mineEdgeNavCardsRef={
-            groupsRealIncomingEnabled ? groupsEdgeNavCardsRef : undefined
-          }
-          renderItem={(item, meta) => {
-            const row = item as GroupUpCandidate;
-            const deckId = groupUpDeckRowId(row);
-            const mediaLookup = lookupGroupPublishedMedia(
-              publishedMediaByPostId,
-              row.source_post_id,
-              row.source_unavailable
-            );
-            const media =
-              mediaLookup.status === "pending"
-                ? EMPTY_GROUP_MEDIA
-                : mediaLookup.items;
-            const schedule = scheduleMetaFor(row);
-            return (
-              <PeopleGroupUpCandidateSlide
-                candidate={row}
-                mediaItems={media}
-                mediaPending={mediaLookup.status === "pending"}
-                mediaIndex={mediaIndexById[deckId] ?? 0}
-                onMediaIndexChange={(next) => setMediaIndexFor(deckId, next)}
-                isCurrent={meta.isCurrent}
-                withPhoto={meta.withPhoto}
-                scheduleLabel={schedule.label}
-                scheduleLabelKind={schedule.kind}
-                isUnseen={
-                  browseTab === "new" && !groupsNewSeenIds.has(deckId)
-                }
-                onSeePost={
-                  meta.isCurrent && canOpenGroupSourcePost(row)
-                    ? handleSeePost
-                    : undefined
-                }
-                onOpenHostProfile={
-                  meta.isCurrent &&
-                  onOpenHostProfile &&
-                  resolveGroupHostProfileOpenKey(row)
-                    ? () => onOpenHostProfile(row)
-                    : undefined
-                }
-                onAtmosphereChange={onAtmosphereChange}
-              />
-            );
-          }}
-        />
-      </div>
-    </div>
+    ) : null}
+    </>
   );
 }

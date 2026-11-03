@@ -167,3 +167,48 @@ export function buildOpenPlanRequestFcmPayload(
   if (sourcePostId) payload.sourcePostId = sourcePostId;
   return payload;
 }
+
+export const GROUP_UP_REQUEST_PUSH_BODY =
+  "Someone wants to join your group.";
+export const GROUP_UP_REQUEST_ACCEPTED_PUSH_BODY =
+  "You're in! Your Group Up request was accepted.";
+
+export type GroupUpPushInput = {
+  eventKind: "request" | "accepted";
+  requestId: string;
+  opportunityId: string;
+  conversationId?: string;
+  body?: string;
+};
+
+/** Group Up request or approval. No requester name, username, or member list. */
+export function buildGroupUpFcmPayload(
+  input: GroupUpPushInput
+): FcmDataPayload {
+  const requestId = input.requestId.trim();
+  const opportunityId = input.opportunityId.trim();
+  const conversationId = trim(input.conversationId);
+  if (input.eventKind === "accepted") {
+    const payload: FcmDataPayload = {
+      type: "group_up_request_accepted",
+      requestId,
+      opportunityId,
+      title: "Group Up",
+      body: trim(input.body, 200) ?? GROUP_UP_REQUEST_ACCEPTED_PUSH_BODY,
+      targetPath: conversationId
+        ? `/messages/${encodeURIComponent(conversationId)}`
+        : "/messages?tab=requests",
+    };
+    if (conversationId) payload.conversationId = conversationId;
+    return payload;
+  }
+  const payload: FcmDataPayload = {
+    type: "group_up_request",
+    requestId,
+    opportunityId,
+    title: "Group Up",
+    body: trim(input.body, 200) ?? GROUP_UP_REQUEST_PUSH_BODY,
+    targetPath: `/messages?tab=requests&requestId=${encodeURIComponent(requestId)}`,
+  };
+  return payload;
+}

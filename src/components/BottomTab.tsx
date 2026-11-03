@@ -704,10 +704,11 @@ function BottomTab() {
         ? "max(5px, min(22px, calc(var(--safe-area-bottom-layout, 0px) - 14px)))"
         : "8px";
 
-  /** Immersive People: hide chrome + peek; keep BottomTab mounted. */
-  const hidePeopleNav =
-    location.pathname === Paths.people ||
-    location.pathname.startsWith(`${Paths.people}/`);
+  /**
+   * People vertical feed uses the global BottomTab (same as Home).
+   * Immersive People dock was removed — do not hide chrome on /people.
+   */
+  const hidePeopleNav = false;
   /** Create finalize covers the tab via shell z-index — do not hide chrome for Create. */
   const hideTabChrome = hidePeopleNav || hideHomeSearchNav;
 

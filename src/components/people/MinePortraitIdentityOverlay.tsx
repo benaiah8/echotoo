@@ -36,6 +36,10 @@ export const PEOPLE_MINE_IDENTITY_LEFT_INSET_PX =
 const NAME_TEXT_CLASS =
   "block min-w-0 max-w-full truncate font-[family-name:var(--font-people-display)] text-[16px] font-medium leading-none tracking-wide text-inherit";
 
+/** Feed: smaller, less dominant name on photo. */
+const NAME_TEXT_FEED_CLASS =
+  "block min-w-0 max-w-full truncate text-[12px] font-medium leading-none tracking-tight text-inherit";
+
 const PROFILE_HIT_CLASS =
   "pointer-events-auto relative z-[1] inline-flex min-w-0 max-w-full cursor-pointer items-center border-0 bg-transparent p-0 text-inherit outline-none touch-manipulation";
 
@@ -51,6 +55,14 @@ const IDENTITY_CHIP_CLASS = [
   "border-white/18 bg-black/58 text-white",
   // Light theme: light glass + dark text
   "app-light:border-black/12 app-light:bg-white/78 app-light:text-[color-mix(in_oklab,var(--text)_92%,#0b0b0c)]",
+].join(" ");
+
+const IDENTITY_CHIP_FEED_CLASS = [
+  "pointer-events-none relative z-[1] inline-flex min-w-0 max-w-full items-center justify-center gap-0.5 overflow-hidden",
+  "rounded-full border px-2 py-1 shadow-sm",
+  "backdrop-blur-md backdrop-saturate-125",
+  "border-white/14 bg-black/42 text-white/95",
+  "app-light:border-black/10 app-light:bg-white/70 app-light:text-[color-mix(in_oklab,var(--text)_88%,#0b0b0c)]",
 ].join(" ");
 
 const BIO_TEXT_CLASS = "text-[13px] leading-relaxed text-white/88";
@@ -77,6 +89,7 @@ export default function MinePortraitIdentityOverlay({
   resetKey,
   interactive = true,
   onOpenProfile,
+  feedLayout = false,
 }: {
   name: string;
   bio: string | null;
@@ -86,6 +99,8 @@ export default function MinePortraitIdentityOverlay({
   interactive?: boolean;
   /** When set, the display name / profile icon open this candidate's profile. */
   onOpenProfile?: () => void;
+  /** People vertical feed — subtler upper-right chip (clears fullscreen). */
+  feedLayout?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
@@ -220,26 +235,43 @@ export default function MinePortraitIdentityOverlay({
     onKeyDown: onProfileKeyDown,
   } as const;
 
+  const nameTextClass = feedLayout ? NAME_TEXT_FEED_CLASS : NAME_TEXT_CLASS;
+  const chipClass = feedLayout ? IDENTITY_CHIP_FEED_CLASS : IDENTITY_CHIP_CLASS;
+
   return (
     <div
       className="pointer-events-none absolute inset-0 z-[4]"
       data-people-duo-identity="true"
       data-people-mine-identity="true"
       data-people-mine-identity-expanded={expanded ? "true" : "false"}
+      data-people-feed-identity={feedLayout ? "true" : undefined}
     >
-      {/* Top-center: name + icon only — surrounding portrait stays swipeable. */}
+      {/* Deck: top-center. Feed Discover: top-left; right inset clears fullscreen. */}
       <div
-        className="pointer-events-none absolute left-1/2 z-[5] flex min-w-0 -translate-x-1/2 justify-center"
-        style={{
-          top: PEOPLE_MINE_IDENTITY_TOP_INSET_PX,
-          // Symmetric clear so long names ellipsize before the fullscreen control.
-          maxWidth: `calc(100% - ${PEOPLE_MINE_IDENTITY_FULLSCREEN_CLEAR_PX * 2}px)`,
-        }}
+        className={
+          feedLayout
+            ? "pointer-events-none absolute z-[5] flex min-w-0 justify-start"
+            : "pointer-events-none absolute left-1/2 z-[5] flex min-w-0 -translate-x-1/2 justify-center"
+        }
+        style={
+          feedLayout
+            ? {
+                top: 8,
+                left: PEOPLE_MINE_IDENTITY_SIDE_INSET_PX,
+                right: PEOPLE_MINE_IDENTITY_FULLSCREEN_CLEAR_PX,
+              }
+            : {
+                top: PEOPLE_MINE_IDENTITY_TOP_INSET_PX,
+                maxWidth: `calc(100% - ${PEOPLE_MINE_IDENTITY_FULLSCREEN_CLEAR_PX * 2}px)`,
+              }
+        }
         data-people-mine-identity-top="true"
-        data-people-mine-identity-anchor="top-center"
+        data-people-mine-identity-anchor={
+          feedLayout ? "top-left" : "top-center"
+        }
       >
         <div
-          className={IDENTITY_CHIP_CLASS}
+          className={chipClass}
           data-people-mine-identity-chip="true"
           data-people-mine-identity-name-row="true"
         >
@@ -247,7 +279,7 @@ export default function MinePortraitIdentityOverlay({
             <>
               <button
                 type="button"
-                className={`${PROFILE_HIT_CLASS} min-w-0`}
+                className={`${PROFILE_HIT_CLASS} min-h-[28px] min-w-0`}
                 data-people-mine-identity-hit="true"
                 data-people-mine-profile-hit="true"
                 data-people-mine-profile-name-hit="true"
@@ -255,11 +287,11 @@ export default function MinePortraitIdentityOverlay({
                 title={peopleUiCopy.deckOpenProfile}
                 {...profilePointerProps}
               >
-                <span className={NAME_TEXT_CLASS}>{name}</span>
+                <span className={nameTextClass}>{name}</span>
               </button>
               <button
                 type="button"
-                className={`${PROFILE_HIT_CLASS} shrink-0 p-0.5`}
+                className={`${PROFILE_HIT_CLASS} min-h-[28px] shrink-0 p-0.5`}
                 data-people-mine-identity-hit="true"
                 data-people-mine-profile-hit="true"
                 data-people-mine-profile-icon-hit="true"
@@ -268,13 +300,17 @@ export default function MinePortraitIdentityOverlay({
                 {...profilePointerProps}
               >
                 <PiArrowSquareOutBold
-                  className="h-3.5 w-3.5 opacity-75"
+                  className={
+                    feedLayout
+                      ? "h-3 w-3 opacity-70"
+                      : "h-3.5 w-3.5 opacity-75"
+                  }
                   aria-hidden
                 />
               </button>
             </>
           ) : (
-            <span className={`${NAME_TEXT_CLASS} relative z-[1]`}>{name}</span>
+            <span className={`${nameTextClass} relative z-[1]`}>{name}</span>
           )}
         </div>
       </div>

@@ -162,3 +162,61 @@ export function patchDmInboxConversationSummary(
   setDmInboxCache(viewerUserId, next);
   return next;
 }
+
+/**
+ * A known direct with no messages yet can become a Request on the first
+ * inbound text or shared_post. The server classifies that; the client must
+ * reload instead of trusting is_request: false. Later messages, groups, and
+ * the viewer's own send are stable and must not reload.
+ * A null sender is an unread bump from the other person.
+ */
+export function knownDirectInboundNeedsAuthoritativeRequestRefresh(
+  row:
+    | Pick<InboxConversationRow, "kind" | "is_request" | "last_message_at">
+    | undefined,
+  incomingSenderId: string | null,
+  viewerUserId: string
+): boolean {
+  if (!row || row.kind !== "direct" || row.is_request) return false;
+  const at = row.last_message_at;
+  if (typeof at === "string" && at.trim().length > 0) return false;
+  const viewer = viewerUserId.trim();
+  if (!viewer) return false;
+  const sender = (incomingSenderId ?? "").trim();
+  if (sender && sender === viewer) return false;
+  return true;
+}
+
+/** Confirmed qualifying reply only. Opening or a failed send must not call this. */
+export function shouldPromoteRequestAfterReply(input: {
+  wasRequest: boolean;
+  delivered: boolean;
+  messageKind: string;
+}): boolean {
+  if (!input.delivered || !input.wasRequest) return false;
+  return input.messageKind === "text" || input.messageKind === "shared_post";
+}
+
+/** In-place classification update. Does not insert a row. Groups stay unchanged. */
+export function patchDmInboxIsRequest(
+  viewerUserId: string,
+  conversationId: string,
+  isRequest: boolean
+): InboxConversationRow[] | null {
+  const entry = getDmInboxCache(viewerUserId);
+  if (!entry) return null;
+  const id = conversationId.trim();
+  if (!id) return null;
+  let found = false;
+  let changed = false;
+  const next = entry.conversations.map((row) => {
+    if (row.conversation_id !== id) return row;
+    found = true;
+    if (row.kind === "group" || row.is_request === isRequest) return row;
+    changed = true;
+    return { ...row, is_request: isRequest };
+  });
+  if (!found) return null;
+  if (changed) setDmInboxCache(viewerUserId, next);
+  return next;
+}

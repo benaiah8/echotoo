@@ -1,0 +1,54 @@
+.people-action-state-button {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.people-action-state-button > svg {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+
+.people-action-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  border: 1.5px solid currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.35);
+  will-change: transform, opacity;
+}
+
+.people-action-state-button.is-rippling .people-action-ripple {
+  animation: people-action-ripple 520ms ease-out forwards;
+}
+
+.people-action-state-button.is-rippling .people-action-ripple--delay {
+  animation-delay: 90ms;
+}
+
+@keyframes people-action-ripple {
+  0% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-action-state-button.is-rippling .people-action-ripple,
+  .people-action-state-button.is-rippling .people-action-ripple--delay {
+    animation: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}

@@ -27,6 +27,22 @@ export type PairUpCandidate = {
   profile_photos: string[];
   echo_preset: string | null;
   expressed_by_me: boolean;
+  /**
+   * Duo list only. none is a new connection, outgoing can be withdrawn,
+   * mutual_pending should complete, and completed accepts no further Heart.
+   * Omitted payloads are treated as none.
+   */
+  duo_match_state?: "none" | "outgoing" | "mutual_pending" | "completed" | null;
+  /**
+   * True when this viewer already sent a Duo comment to this person on this post.
+   * Null or omitted when the payload did not say. Omitted is not a confirmed false.
+   */
+  duo_commented_by_me?: boolean | null;
+  /**
+   * True when this viewer has an active unexpired Pair Up on this source post.
+   * Null or omitted when the payload did not say.
+   */
+  viewer_has_active_pair_up?: boolean | null;
   profile_id: string | null;
   bio: string | null;
   source_caption: string | null;
@@ -65,6 +81,19 @@ export type PairUpDiscoverConnectResult = {
   from_opportunity_id: string;
   to_opportunity_id: string;
   matched: boolean;
+};
+
+/** Discover Heart withdrawal. Does not include pool or conversation changes. */
+export type DiscoverHeartWithdrawResult = {
+  to_opportunity_id: string;
+  from_opportunity_id: string;
+  withdrawn: boolean;
+};
+
+export type DuoHeartWithdrawResult = {
+  to_opportunity_id: string;
+  from_opportunity_id: string;
+  withdrawn: boolean;
 };
 
 export type PairUpMatchCompletion = {
@@ -199,6 +228,8 @@ export type OpenPlanRequester = {
   requested_at: string;
   /** Null when grandfathered / old client / flag false. */
   display_name: string | null;
+  /** Optional organizer-visible note. Null when absent, blank, or anonymous. */
+  note: string | null;
   /**
    * Username or user_id for OtherProfilePage when disclosed; null otherwise.
    * Never invent from display_name.
@@ -438,6 +469,8 @@ export type GroupUpRequester = {
   requester_profile_id: string | null;
   display_name: string | null;
   username: string | null;
+  /** Optional organizer-visible note. Null when absent, blank, or oversized. */
+  note: string | null;
   avatar_url: string | null;
   profile_photos: string[];
   echo_preset: string | null;

@@ -7,7 +7,10 @@ import Avatar from "../ui/Avatar";
 import { Paths, profileByUsername } from "../../router/Paths";
 import InviteNotificationItem from "./InviteNotificationItem";
 import FollowRequestNotificationItem from "./FollowRequestNotificationItem";
-import { postTypeNotificationPhrase } from "../../lib/postTypeLabels";
+import {
+  postTypeCreatedPhrase,
+  postTypeNotificationPhrase,
+} from "../../lib/postTypeLabels";
 import {
   notificationNavigateState,
   resolveCommentNotificationPostPath,
@@ -61,7 +64,7 @@ const getNotificationText = (notification: NotificationWithActor): string => {
       // Fallback to generic RSVP text
       return `${actorName} RSVP'd to your event`;
     case "post":
-      return `${actorName} posted a new ${notification.entity_type}`;
+      return `${actorName} ${postTypeCreatedPhrase(notification.entity_type)}`;
     default:
       return "New notification";
   }

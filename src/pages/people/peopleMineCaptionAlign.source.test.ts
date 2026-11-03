@@ -9,29 +9,30 @@ function read(rel: string) {
 }
 
 describe("Mine caption Back-align structure (source)", () => {
-  it("Overlay uses Mine top pad for my_plans and discover", () => {
+  it("Overlay uses People feed top/bottom pads for all scopes", () => {
     const src = read("MatchDeckOverlay.tsx");
-    expect(src).toContain("peopleShellMineContentTopPad()");
+    expect(src).toContain("peopleFeedContentTopPad()");
+    expect(src).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(src).toContain("PeopleFeedTopNav");
     expect(src).toContain("isCanonicalPairUpScope");
-    expect(src).toContain("peopleShellContentTopPad()");
   });
 
-  it("Mine + Discover drop flex breath spacers; note→Connect gap is shell pad", () => {
+  it("Feed shell drops immersive dock spacers", () => {
     const src = read("MatchDeckOverlay.tsx");
-    expect(src).toContain("isCanonicalPairUpScope");
-    expect(src).toContain("peopleShellMineContentBottomPad()");
     expect(src).not.toContain("data-people-mine-below-spacer");
     expect(src).not.toContain("data-people-mine-deck-column");
     expect(src).not.toContain("paddingBottom: PEOPLE_MINE_BOTTOM_GAP_PX");
     expect(src).not.toContain("MinePaintLayer");
-    expect(src).not.toContain("mineLayoutPaint");
-    expect(src).not.toContain("flex-[0.02]");
-    const shell = read("peopleShellLayout.ts");
-    expect(shell).toContain("PEOPLE_MINE_NOTE_TO_CONNECT_GAP_PX");
-    expect(shell).toContain("peopleShellMineContentBottomPad");
+    expect(src).not.toContain("<PeopleBottomDock");
+    const feed = readFileSync(
+      resolve(__dirname, "../../lib/people/peopleFeedLayout.ts"),
+      "utf8"
+    );
+    expect(feed).toContain("peopleFeedContentBottomPad");
+    expect(feed).toContain("--safe-area-bottom-layout");
   });
 
-  it("Carousel moves surplus padTop into CSS var (no slide paddingTop)", () => {
+  it("Legacy carousel surplus CSS var remains available", () => {
     const src = read("MatchDeckCarousel.tsx");
     expect(src).toContain("--people-mine-surplus-pad-top");
     expect(src).toContain("paddingTop: 0");
@@ -71,16 +72,14 @@ describe("Mine caption Back-align structure (source)", () => {
     expect(src).not.toContain("Legacy Discover");
   });
 
-  it("Mine caption Back-align structure preserved; deck Back lives inside unified nav", () => {
+  it("Feed top nav replaces immersive Back dock", () => {
     const src = read("MatchDeckOverlay.tsx");
     expect(src).not.toContain('data-people-back="top-left"');
     expect(src).not.toContain("data-people-back-mine");
-    expect(src).toContain("onBack={onClose}");
-    const dock = read("PeopleBottomDock.tsx");
-    expect(dock).toContain("onBack={onBack}");
-    expect(dock).not.toContain('data-people-back="bottom-left"');
-    const nav = read("PeopleFluidNav.tsx");
-    expect(nav).toContain('data-people-back="nav-leading"');
+    expect(src).toContain("PeopleFeedTopNav");
+    expect(src).not.toContain("onBack={onClose}");
+    const nav = read("PeopleFeedTopNav.tsx");
+    expect(nav).toContain("data-people-feed-top-nav");
     expect(nav).toContain("bg-[var(--glass-bg)]");
   });
 });

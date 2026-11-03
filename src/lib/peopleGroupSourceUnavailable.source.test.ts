@@ -23,7 +23,7 @@ describe("Groups source-unavailable Yours card", () => {
   it("deck body skips published media fetch for unavailable source", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
     expect(body).toContain("source_unavailable");
-    expect(body).toContain("!row.source_unavailable");
+    expect(body).toContain("canOpenGroupSourcePost");
     expect(body).toContain("EMPTY_GROUP_MEDIA");
     expect(body).toContain("handleOpenGroup");
     expect(body).toContain("messagesConversationPath(current.conversation_id)");

@@ -40,6 +40,22 @@ import BottomDrawer from "../ui/BottomDrawer";
 import OpenPlanRequesterDrawerTile from "./OpenPlanRequesterDrawerTile";
 import RequesterProfileOverlay from "./RequesterProfileOverlay";
 
+/** Matches accept_open_plan_request RAISE for withdrawn / declined / closed. */
+export const OPEN_PLAN_REQUEST_NOT_PENDING_MESSAGE =
+  "Open Plan request is not pending";
+
+export function isOpenPlanRequestNotPendingError(err: unknown): boolean {
+  const message =
+    err instanceof Error
+      ? err.message
+      : err &&
+          typeof err === "object" &&
+          typeof (err as { message?: unknown }).message === "string"
+        ? (err as { message: string }).message
+        : "";
+  return message.includes(OPEN_PLAN_REQUEST_NOT_PENDING_MESSAGE);
+}
+
 const REQUESTERS_CONTENT_SWIPE_EXCLUDE_SELECTOR = [
   "button",
   '[role="button"]',
@@ -52,18 +68,16 @@ const REQUESTERS_CONTENT_SWIPE_EXCLUDE_SELECTOR = [
 ].join(", ");
 
 /**
- * Visual cap for the inner requester scroller: four complete grid rows.
- * Tile: py-1.5 (12) + avatar 56 + name mt-1.5 (6) + 12.5px snug (~18) +
- * Accept mt-1 (4) + min-h-11 hit (44) = 140. Grid gap-y-6 = 24. Scroller pt-4 + pb-3 = 28.
+ * Visual cap for the inner requester scroller: ~six compact list rows.
+ * Compact row (no note): py-2.5 (20) + avatar/hit 44 ≈ 64–72; use 76.
+ * Long notes grow the row and scroll. Scroller pt-4 + pb-3 = 28.
  */
-const REQUESTER_TILE_HEIGHT_PX = 140;
-const REQUESTER_GRID_ROW_GAP_PX = 24;
+const REQUESTER_ROW_BASE_HEIGHT_PX = 76;
 const REQUESTER_LIST_PAD_Y_PX = 28;
-const REQUESTER_GRID_MAX_VISIBLE_ROWS = 4;
-const REQUESTER_LIST_FOUR_ROW_MAX_PX =
+const REQUESTER_LIST_MAX_VISIBLE_ROWS = 6;
+const REQUESTER_LIST_SCROLL_MAX_PX =
   REQUESTER_LIST_PAD_Y_PX +
-  REQUESTER_GRID_MAX_VISIBLE_ROWS * REQUESTER_TILE_HEIGHT_PX +
-  (REQUESTER_GRID_MAX_VISIBLE_ROWS - 1) * REQUESTER_GRID_ROW_GAP_PX;
+  REQUESTER_LIST_MAX_VISIBLE_ROWS * REQUESTER_ROW_BASE_HEIGHT_PX;
 
 function useOverlayOpening() {
   return useSyncExternalStore(
@@ -115,6 +129,7 @@ export default function OpenPlanRequestersOverlay() {
     hasLoaded,
     error,
     removeRequest,
+    refresh,
     loadMore,
     hasMore,
     isValidating,
@@ -239,7 +254,14 @@ export default function OpenPlanRequestersOverlay() {
       }
 
       toast.error(peopleUiCopy.openPlanIncomingAcceptError);
-    } catch {
+    } catch (err) {
+      if (isOpenPlanRequestNotPendingError(err)) {
+        toast(peopleUiCopy.openPlanIncomingRequestUnavailable);
+        removeRequest(requestId);
+        setProfilePreview(null);
+        void refresh();
+        return;
+      }
       toast.error(peopleUiCopy.openPlanIncomingAcceptError);
     } finally {
       busyIdRef.current = null;
@@ -322,7 +344,7 @@ export default function OpenPlanRequestersOverlay() {
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pb-3 pt-4"
             style={{
-              maxHeight: `min(${REQUESTER_LIST_FOUR_ROW_MAX_PX}px, calc(82vh - 7.5rem))`,
+              maxHeight: `min(${REQUESTER_LIST_SCROLL_MAX_PX}px, calc(82vh - 7.5rem))`,
             }}
           >
             {loading && !hasLoaded ? (
@@ -339,11 +361,16 @@ export default function OpenPlanRequestersOverlay() {
               </p>
             ) : (
               <div
-                className="grid grid-cols-2 gap-x-2 gap-y-6 min-[360px]:grid-cols-3"
+                className="flex min-w-0 flex-col"
                 role="list"
+                data-open-plan-requester-list="true"
               >
                 {requests.map((row) => (
-                  <div key={row.request_id} role="listitem" className="min-w-0">
+                  <div
+                    key={row.request_id}
+                    role="listitem"
+                    className="group/op-req min-w-0"
+                  >
                     <OpenPlanRequesterDrawerTile
                       request={row}
                       busy={busyId === row.request_id}

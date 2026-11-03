@@ -104,7 +104,7 @@ describe("Plans structural geometry (fixed rails)", () => {
   });
 
   it("Plans edge cards use fixed/adaptive geometry (not legacy 46vh)", () => {
-    expect(BODY_SRC).toContain("fixedRailsGeometry");
+    expect(BODY_SRC).toContain("PeopleFeedList");
     expect(PEOPLE_MINE_EDGE_FIXED_CARD_W_PX).toBe(60);
     expect(PEOPLE_MINE_EDGE_FIXED_VISUAL_W_PX).toBe(40);
     expect(PEOPLE_MINE_EDGE_FIXED_GAP_PX).toBe(14);
@@ -124,7 +124,7 @@ describe("Plans structural geometry (fixed rails)", () => {
     expect(PEOPLE_PLANS_BIO_2LINE_H_PX).toBe(Math.ceil(12.5 * 1.375 * 2));
     expect(SLIDE_SRC).not.toContain("PEOPLE_PLANS_BIO_2LINE_H_PX");
     expect(SLIDE_SRC).toContain("PeopleCanonicalCandidatePresentation");
-    expect(BODY_SRC).toContain('duoPresentation="mine"');
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
   });
 
   it("Plans uses canonical floating note; Mine floating note path shared", () => {

@@ -1,22 +1,22 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   PiMagnifyingGlass,
   PiSlidersHorizontal,
   PiX,
 } from "react-icons/pi";
 import Logo from "./ui/Logo";
+import HomeFiltersOverlay from "./home/HomeFiltersOverlay";
 import {
-  HOME_DATE_FILTER_DRAWER_OPTIONS,
+  buildHomeCompactFilterBarChips,
   hasNonShortcutHomeFilters,
-  isHomeDateFilterActive,
-  isHomeTypeFilterActive,
-  isTodayChipActive,
   type HomeDateFilter,
   type HomeDateFilterChip,
   type HomeViewMode,
 } from "../lib/homeVerticalFilters";
 
 const TOP_BAR_MAX_WIDTH = 640;
+/** Compact filter pill max width (initial + sticky). Search bar keeps its own sizing. */
+const FILTER_BAR_MAX_WIDTH = "min(475px, 75vw)";
 
 /** Chrome slide: slower hide (slide off), quicker show (settle in). */
 const CHROME_HIDE_MS = 620;
@@ -54,68 +54,35 @@ const chipButtonClass = (isSelected: boolean) =>
         ].join(" "),
   ].join(" ");
 
-/** End-cap controls: same 18px height as shortcut chips; no heavy chrome border. */
-const shortcutEndCapClass = (opts?: {
+/**
+ * Solid circular end caps: near page --bg so they blend in light/dark.
+ * No outline; equal size; icon centered.
+ */
+const filterBarEndCapClass = (opts?: {
   active?: boolean;
   destructive?: boolean;
 }) => {
   const active = opts?.active === true;
   const destructive = opts?.destructive === true;
   return [
-    "relative shrink-0 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-0",
+    "relative z-[2] shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-full border-0 p-0",
     "transition-[transform,background-color,color] duration-200 active:scale-[0.96]",
+    "motion-reduce:transition-none",
     destructive
       ? [
-          "text-rose-700/70 hover:bg-rose-500/[0.10] hover:text-rose-700/90",
-          "app-dark:text-rose-300/65 app-dark:hover:bg-rose-400/[0.12] app-dark:hover:text-rose-200/85",
+          "bg-[color-mix(in_oklab,var(--bg)_88%,#e11d48)] text-rose-800",
+          "hover:bg-[color-mix(in_oklab,var(--bg)_78%,#e11d48)] hover:text-rose-900",
+          "app-dark:text-rose-200/90 app-dark:hover:text-rose-100",
         ].join(" ")
       : active
-        ? "bg-[color-mix(in_oklab,var(--brand)_14%,transparent)] text-[var(--text)]"
+        ? [
+            "bg-[color-mix(in_oklab,var(--bg)_82%,var(--brand))] text-[var(--text)]",
+            "hover:bg-[color-mix(in_oklab,var(--bg)_72%,var(--brand))]",
+          ].join(" ")
         : [
-            "bg-transparent text-[var(--text)]/75",
-            "hover:bg-[color-mix(in_oklab,var(--text)_8%,transparent)] hover:text-[var(--text)]",
-            "app-dark:text-white/72 app-dark:hover:bg-white/[0.08] app-dark:hover:text-white/90",
+            "bg-[var(--bg)] text-[var(--text)]/78",
+            "hover:bg-[color-mix(in_oklab,var(--text)_8%,var(--bg))] hover:text-[var(--text)]",
           ].join(" "),
-  ].join(" ");
-};
-
-const drawerSectionLabelClass =
-  "mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--text)]/82";
-
-const drawerChipButtonClass = (
-  isSelected: boolean,
-  options?: { disabled?: boolean }
-) => {
-  const base =
-    "py-1 px-3 rounded-md text-[10px] font-medium leading-none transition-colors whitespace-nowrap border";
-  if (options?.disabled) {
-    return [
-      base,
-      "cursor-not-allowed pointer-events-none",
-      "border-[color-mix(in_oklab,var(--border)_70%,transparent)]",
-      "bg-[color-mix(in_oklab,var(--text)_5%,transparent)]",
-      "text-[var(--text)]/38",
-      "app-dark:text-white/32 app-dark:border-white/10 app-dark:bg-white/[0.04]",
-    ].join(" ");
-  }
-  if (isSelected) {
-    return [
-      base,
-      "bg-[var(--brand)] text-[var(--brand-ink)]",
-      "border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)]",
-      "shadow-[0_1px_8px_rgba(0,0,0,0.22)] app-dark:shadow-[0_2px_10px_rgba(0,0,0,0.45)]",
-    ].join(" ");
-  }
-  return [
-    base,
-    "text-[var(--text)]/92",
-    "border-[color-mix(in_oklab,var(--border)_88%,var(--text))]",
-    "bg-[color-mix(in_oklab,var(--surface-2)_55%,var(--bg))]",
-    "shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
-    "hover:bg-[color-mix(in_oklab,var(--surface-2)_72%,var(--bg))]",
-    "app-dark:text-white/90 app-dark:border-white/22",
-    "app-dark:bg-[color-mix(in_oklab,#1c1c1f_78%,transparent)]",
-    "app-dark:hover:bg-[color-mix(in_oklab,#242428_82%,transparent)]",
   ].join(" ");
 };
 
@@ -127,6 +94,8 @@ export interface HomeTopBarProps {
   /** When true (scrollY &lt; 5), main bar is full-width flush; when false, floating pill */
   atTop?: boolean;
   onToggleFilters: () => void;
+  /** Close full-screen filters without toggling (X / Escape / Android back). */
+  onCloseFilters: () => void;
   onLogoClick: () => void;
   onSearch: (q: string) => void;
   search: string;
@@ -141,7 +110,10 @@ export interface HomeTopBarProps {
   filtersOpen: boolean;
   viewMode: HomeViewMode;
   dateFilter: HomeDateFilter;
+  customOccursOn: string | null;
   onToggleDateFilter: (target: HomeDateFilterChip) => void;
+  onSelectCustomDate: (occursOn: string) => void;
+  onToggleCustomDate: (occursOn: string) => void;
   onToggleTypeFilter: (target: "hangouts" | "experiences") => void;
   friendsFilter: boolean;
   onToggleFriends: () => void;
@@ -153,6 +125,7 @@ export interface HomeTopBarProps {
   onClearAllFilters: () => void;
   /** Optional; Home may omit while tags UI is unused (defaults to []). */
   selectedTags?: readonly string[];
+  homeRefreshEpoch?: number;
 }
 
 export default function HomeTopBar({
@@ -160,6 +133,7 @@ export default function HomeTopBar({
   isHidden,
   atTop = false,
   onToggleFilters,
+  onCloseFilters,
   onLogoClick,
   onSearch,
   search,
@@ -172,7 +146,10 @@ export default function HomeTopBar({
   filtersOpen,
   viewMode,
   dateFilter,
+  customOccursOn,
   onToggleDateFilter,
+  onSelectCustomDate,
+  onToggleCustomDate,
   onToggleTypeFilter,
   friendsFilter,
   onToggleFriends,
@@ -180,12 +157,15 @@ export default function HomeTopBar({
   onSearchInputPointerDown,
   onClearAllFilters,
   selectedTags = [],
+  homeRefreshEpoch = 0,
 }: HomeTopBarProps) {
-  const todayActive = isTodayChipActive(dateFilter);
-  const eventsSelected =
-    isHomeTypeFilterActive(viewMode, "hangouts") && dateFilter === "none";
-  const placesSelected = isHomeTypeFilterActive(viewMode, "experiences");
-  /** Drawer-only / non-chip filters — subtle active on the in-pill funnel. */
+  const compactFilterChips = buildHomeCompactFilterBarChips({
+    dateFilter,
+    customOccursOn,
+    viewMode,
+    friendsFilter,
+  });
+  /** Search/tags only — date & Friends are visible chips in the bar. */
   const nonShortcutFiltersActive = hasNonShortcutHomeFilters({
     dateFilter,
     typeFilter: viewMode,
@@ -194,13 +174,42 @@ export default function HomeTopBar({
     selectedTags,
   });
 
+  const chipTrackRef = useRef<HTMLDivElement | null>(null);
+  /** Keep newly active (left-grouped) chips visible after reorder. */
+  useEffect(() => {
+    const track = chipTrackRef.current;
+    if (!track) return;
+    track.scrollLeft = 0;
+  }, [dateFilter, customOccursOn, viewMode, friendsFilter]);
+
   const showPostFiltersChrome =
     !homePostSearchActive || searchMode === "posts";
-  const filtersDrawerExpanded =
-    filtersOpen && showPostFiltersChrome;
+  const filtersOverlayOpen = filtersOpen && showPostFiltersChrome;
 
-  const handleFriendsFilterClick = () => {
-    onToggleFriends();
+  const handleCompactChipClick = (
+    chip: (typeof compactFilterChips)[number],
+  ) => {
+    switch (chip.kind) {
+      case "today":
+      case "date":
+        if (chip.customOccursOn) {
+          onToggleCustomDate(chip.customOccursOn);
+        } else if (chip.dateTarget) {
+          onToggleDateFilter(chip.dateTarget);
+        }
+        break;
+      case "events":
+        onToggleTypeFilter("hangouts");
+        break;
+      case "posts":
+        onToggleTypeFilter("experiences");
+        break;
+      case "friends":
+        onToggleFriends();
+        break;
+      default:
+        break;
+    }
   };
 
   const hidden = isHidden;
@@ -456,19 +465,17 @@ export default function HomeTopBar({
           </div>
         </div>
 
-        {/* Quick chips + optional Today-empty banner (hidden during Home post search mode) */}
+        {/* Compact filter pill: fixed ends + horizontally scrolling chips */}
         {!homePostSearchActive ? (
         <div
           data-tour-target="home-filter-shortcuts"
-          className={[
-            "pointer-events-auto mt-1 flex w-fit max-w-[calc(100vw-1.25rem)] flex-col items-center gap-1.5",
-            "self-center",
-          ].join(" ")}
+          className="pointer-events-auto mt-1 flex w-fit flex-col items-center self-center"
+          style={{ maxWidth: FILTER_BAR_MAX_WIDTH }}
         >
           <div
             data-tour-target="home-filters"
             className={[
-              "inline-flex w-fit flex-nowrap items-stretch justify-center",
+              "relative inline-flex w-fit max-w-full flex-nowrap items-center",
               "rounded-full",
               "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
               "border border-[var(--bottom-tab-border)]",
@@ -476,17 +483,23 @@ export default function HomeTopBar({
               "app-dark:shadow-[0_2px_16px_rgba(0,0,0,0.5)]",
             ].join(" ")}
           >
-            <div className="flex flex-nowrap items-center justify-center gap-1 p-1 min-w-0">
+            {/* Left fixed filter control — masks scrolling chips */}
+            <div
+              className={[
+                "relative z-[2] flex shrink-0 items-center self-stretch p-0.5",
+                "rounded-l-full bg-[var(--glass-bg)]",
+              ].join(" ")}
+            >
               <button
                 type="button"
                 aria-label="Open filters"
                 aria-pressed={filtersOpen || undefined}
                 onClick={onToggleFilters}
-                className={shortcutEndCapClass({
-                  active: nonShortcutFiltersActive,
+                className={filterBarEndCapClass({
+                  active: nonShortcutFiltersActive || filtersOpen,
                 })}
               >
-                <PiSlidersHorizontal size={11} className="block" aria-hidden />
+                <PiSlidersHorizontal size={13} className="block" aria-hidden />
                 {nonShortcutFiltersActive ? (
                   <span
                     className="absolute -top-px -right-px h-1.5 w-1.5 rounded-full bg-[var(--brand)]"
@@ -494,140 +507,84 @@ export default function HomeTopBar({
                   />
                 ) : null}
               </button>
-              <button
-                type="button"
-                onClick={() => onToggleDateFilter("today")}
-                className={chipButtonClass(todayActive)}
+            </div>
+
+            {/* Middle chip track — only region that scrolls horizontally */}
+            <div
+              ref={chipTrackRef}
+              data-home-filter-chip-track=""
+              className={[
+                "min-w-0 flex-1 overflow-x-auto overflow-y-hidden scroll-hide",
+                "[-webkit-overflow-scrolling:touch] [touch-action:pan-x]",
+                "[overscroll-behavior-x:contain]",
+                /* Soft edge fade so chips tuck under circular end caps */
+                "[mask-image:linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-8px),transparent_100%)]",
+                "[-webkit-mask-image:linear-gradient(to_right,transparent_0,black_8px,black_calc(100%-8px),transparent_100%)]",
+              ].join(" ")}
+            >
+              <div className="flex w-max flex-nowrap items-center gap-1 px-0.5 py-0.5">
+                {compactFilterChips.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => handleCompactChipClick(chip)}
+                    className={chipButtonClass(chip.active)}
+                    aria-pressed={chip.active || undefined}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Right fixed clear — masks scrolling chips; only when filters active */}
+            {hasActiveFilters ? (
+              <div
+                className={[
+                  "relative z-[2] flex shrink-0 items-center self-stretch p-0.5",
+                  "rounded-r-full bg-[var(--glass-bg)]",
+                ].join(" ")}
               >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={() => onToggleTypeFilter("hangouts")}
-                className={chipButtonClass(eventsSelected)}
-              >
-                Events
-              </button>
-              <button
-                type="button"
-                onClick={() => onToggleTypeFilter("experiences")}
-                className={chipButtonClass(placesSelected)}
-              >
-                Posts
-              </button>
-              {hasActiveFilters ? (
                 <button
                   type="button"
                   aria-label="Clear filters"
                   onClick={onClearAllFilters}
-                  className={shortcutEndCapClass({ destructive: true })}
+                  className={filterBarEndCapClass({ destructive: true })}
                 >
-                  <PiX size={11} strokeWidth={2.25} className="block" aria-hidden />
+                  <PiX
+                    size={13}
+                    strokeWidth={2.25}
+                    className="block"
+                    aria-hidden
+                  />
                 </button>
-              ) : null}
-            </div>
+              </div>
+            ) : (
+              <div
+                className="shrink-0 self-stretch rounded-r-full bg-[var(--glass-bg)] p-0.5"
+                aria-hidden
+              />
+            )}
           </div>
         </div>
         ) : null}
         </div>
 
-        {/* Filter popout: appears below quick chips */}
-        {/* When closed: no extra gap. When open: 8px gap from chips. */}
-        <div
-          data-tour-target="home-filter-panel"
-          className={[
-            "w-[80%] pointer-events-auto overflow-hidden transition-all duration-300",
-            "backdrop-blur-[var(--glass-blur)] backdrop-saturate-150",
-            "bg-[color-mix(in_oklab,var(--bg)_78%,var(--glass-bg))]",
-            "app-dark:bg-[color-mix(in_oklab,#0c0c0e_88%,var(--glass-bg))]",
-            "border border-[color-mix(in_oklab,var(--bottom-tab-border)_85%,var(--text))]",
-            "app-dark:border-white/16",
-            "shadow-[0_8px_28px_rgba(0,0,0,0.22)] app-dark:shadow-[0_12px_32px_rgba(0,0,0,0.55)]",
-            "rounded-2xl",
-            filtersDrawerExpanded
-              ? "max-h-[min(420px,72vh)] opacity-100 flex flex-col"
-              : "max-h-0 opacity-0",
-          ].join(" ")}
-          style={{
-            maxWidth: TOP_BAR_MAX_WIDTH,
-            marginTop: filtersDrawerExpanded ? 8 : 0,
-          }}
-        >
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-            <div data-tour-target="home-filter-dates">
-              <p className={drawerSectionLabelClass}>Date / Time</p>
-              <div className="flex flex-wrap gap-1.5">
-                {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
-                  const isSelected =
-                    option.enabled &&
-                    isHomeDateFilterActive(dateFilter, option.value);
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      disabled={!option.enabled}
-                      aria-disabled={!option.enabled || undefined}
-                      title={option.enabled ? undefined : "Coming soon"}
-                      onClick={() => {
-                        if (!option.enabled) return;
-                        onToggleDateFilter(option.value);
-                      }}
-                      className={drawerChipButtonClass(isSelected, {
-                        disabled: !option.enabled,
-                      })}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <p className={drawerSectionLabelClass}>Social</p>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleFriendsFilterClick}
-                  className={drawerChipButtonClass(friendsFilter)}
-                >
-                  Friends
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onToggleTypeFilter("hangouts")}
-                  className={drawerChipButtonClass(eventsSelected)}
-                >
-                  Events
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onToggleTypeFilter("experiences")}
-                  className={drawerChipButtonClass(placesSelected)}
-                >
-                  Posts
-                </button>
-              </div>
-            </div>
-
-            <div className="pt-0.5">
-              <button
-                type="button"
-                onClick={onClearAllFilters}
-                className={[
-                  "flex h-7 w-full items-center justify-center rounded-full px-4",
-                  "text-[10px] font-medium leading-none tracking-tight",
-                  "border border-rose-500/28 bg-rose-500/10 text-rose-700",
-                  "transition-colors hover:bg-rose-500/16 hover:border-rose-500/38",
-                  "app-dark:border-rose-400/24 app-dark:bg-rose-500/14 app-dark:text-rose-200",
-                  "app-dark:hover:bg-rose-500/22 app-dark:hover:border-rose-400/34",
-                ].join(" ")}
-              >
-                Clear all filters
-              </button>
-            </div>
-          </div>
-        </div>
+        <HomeFiltersOverlay
+          open={filtersOverlayOpen}
+          onClose={onCloseFilters}
+          viewMode={viewMode}
+          dateFilter={dateFilter}
+          customOccursOn={customOccursOn}
+          friendsFilter={friendsFilter}
+          hasActiveFilters={hasActiveFilters}
+          onToggleDateFilter={onToggleDateFilter}
+          onSelectCustomDate={onSelectCustomDate}
+          onToggleTypeFilter={onToggleTypeFilter}
+          onToggleFriends={onToggleFriends}
+          onClearAllFilters={onClearAllFilters}
+          homeRefreshEpoch={homeRefreshEpoch}
+        />
       </div>
     </>
   );

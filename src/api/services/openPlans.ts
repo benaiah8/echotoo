@@ -330,10 +330,12 @@ function parseOpenPlanRequester(raw: unknown): OpenPlanRequester | null {
   if (typeof row.requested_at !== "string" || !row.requested_at) return null;
   const displayRaw = asNullableString(row.display_name);
   const openKeyRaw = asNullableString(row.profile_open_key);
+  const noteRaw = asNullableString(row.note)?.trim() ?? "";
   return {
     request_id: row.request_id,
     requested_at: row.requested_at,
     display_name: displayRaw?.trim() ? displayRaw.trim() : null,
+    note: noteRaw.length > 0 && noteRaw.length <= 200 ? noteRaw : null,
     // Gated open key only — ignore leaked username / requester_id / email.
     profile_open_key: openKeyRaw?.trim() ? openKeyRaw.trim() : null,
     avatar_url: asNullableString(row.avatar_url),
@@ -630,7 +632,7 @@ export async function listOpenPlanCandidates(options?: {
 
 export async function requestOpenPlan(
   opportunityId: string,
-  options?: { identityVisibleToHost?: boolean }
+  options?: { identityVisibleToHost?: boolean; note?: string }
 ): Promise<OpenPlanRequest> {
   if (!opportunityId) throw new Error("Missing opportunity");
 
@@ -638,9 +640,11 @@ export async function requestOpenPlan(
   // Only pass true when this client presented the updated disclosure.
   // Omit/false keeps old-client anonymity (server DEFAULT false).
   const identityVisible = options?.identityVisibleToHost === true;
+  const note = typeof options?.note === "string" ? options.note.trim() : "";
   const { data, error } = await supabase.rpc("request_open_plan", {
     p_opportunity_id: opportunityId,
     p_identity_visible_to_host: identityVisible,
+    ...(note.length > 0 ? { p_note: note } : {}),
   });
   if (error) throw toPairUpRpcError(error);
 

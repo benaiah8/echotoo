@@ -63,8 +63,8 @@ describe("Groups host notch compact + profile return (source)", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
     expect(body).toContain("mediaIndexById");
     expect(body).toContain("currentOpportunityIdByTab");
-    expect(body).toContain('layout="duo"');
-    expect(body).toContain('duoPresentation="mine"');
+    expect(body).toContain("PeopleFeedList");
+    expect(body).toContain("PeopleGroupUpFeedCard");
   });
 
   it("14: People Android Back suppresses while profile open", () => {
@@ -82,10 +82,10 @@ describe("Groups host notch compact + profile return (source)", () => {
     expect(overlay).toContain('contentScope !== "discover"');
   });
 
-  it("outer Group geometry footprint unchanged", () => {
+  it("outer Group feed list remains; card is text-first Group Up", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain('duoPresentation="mine"');
-    expect(body).toContain("duoInFlowChrome");
-    expect(body).toContain("MineEdgeNavCards");
+    expect(body).toContain("PeopleGroupUpFeedCard");
+    expect(body).toContain("PeopleFeedList");
+    expect(body).not.toContain("PeopleFeedRow");
   });
 });

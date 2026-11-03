@@ -124,10 +124,9 @@ describe("Plans content-block vertical surplus", () => {
   it("extraTop surplus CSS vars remain for Mine/canonical full-width slides", () => {
     expect(SLIDE_SRC).toContain("PeopleCanonicalCandidatePresentation");
     expect(SLIDE_SRC).not.toContain("data-people-plans-surplus-pad-top");
-    expect(CAROUSEL_SRC).toContain("--people-mine-surplus-pad-top");
-    expect(CAROUSEL_SRC).toContain("--people-mine-surplus-pad-bottom");
-    expect(CAROUSEL_SRC).toContain("discoverMetrics.padBottom");
-    expect(CAROUSEL_SRC).toContain("paddingBottom: isFullWidthPresentation");
+    expect(CAROUSEL_SRC).toContain("peopleMinePortraitCssVars");
+    expect(CAROUSEL_SRC).toContain("slideDiscoverMetrics.padBottom");
+    expect(CAROUSEL_SRC).toContain("isFullWidthPresentation && !duoLayoutModern");
   });
 
   it("Plans live note is floating via canonical; inline maxHeight path remains for other modes", () => {

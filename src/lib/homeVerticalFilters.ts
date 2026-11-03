@@ -31,6 +31,8 @@ export const INITIAL_HOME_TYPE_FILTER: HomeTypeFilter = "all";
 
 export type HomeFilterState = {
   dateFilter: HomeDateFilter;
+  /** Addis YYYY-MM-DD when user picks a calendar day (mutually exclusive with date presets). */
+  customOccursOn: string | null;
   viewMode: HomeViewMode;
   friendsFilter: boolean;
 };
@@ -38,12 +40,16 @@ export type HomeFilterState = {
 export type HomeFilterAction =
   | { type: "toggleDate"; target: HomeDateFilterChip }
   | { type: "selectDate"; target: HomeDateFilterChip }
+  | { type: "selectCustomDate"; occursOn: string }
+  | { type: "toggleCustomDate"; occursOn: string }
   | { type: "toggleEvents" }
   | { type: "togglePlaces" }
   | { type: "selectEvents" }
   | { type: "selectPlaces" }
   | { type: "toggleFriends" }
   | { type: "clearAll" };
+
+export const INITIAL_HOME_CUSTOM_OCCURS_ON: string | null = null;
 
 export type ViewerLocalOccurrence = {
   occursOn: string;
@@ -60,6 +66,7 @@ export type ViewerLocalDateRange = {
 export type HomeVerticalFilterContext = {
   viewMode: HomeViewMode;
   dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
@@ -411,6 +418,176 @@ export const HOME_DATE_FILTER_DRAWER_OPTIONS: ReadonlyArray<{
   { value: "next_week", label: "Next Week", enabled: true },
 ];
 
+/** Compact-bar / drawer label for a date chip (defaults to Today). */
+export function homeDateFilterChipLabel(
+  dateFilter: HomeDateFilter,
+): string {
+  if (dateFilter === "none") return "Today";
+  const option = HOME_DATE_FILTER_DRAWER_OPTIONS.find(
+    (entry) => entry.value === dateFilter,
+  );
+  return option?.label ?? "Today";
+}
+
+/**
+ * Extra compact-bar date chip when a non-Today date is selected.
+ * Today stays as its own always-visible shortcut; only one date filter is active.
+ */
+export function homeCompactBarExtraDateFilter(
+  dateFilter: HomeDateFilter,
+): HomeDateFilterChip | null {
+  if (dateFilter === "none" || dateFilter === "today") return null;
+  return dateFilter;
+}
+
+const ADDIS_YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Compact chip label for a custom Addis calendar day (e.g. "Mon, Oct 26"). */
+export function formatHomeCustomDateChipLabel(occursOn: string): string {
+  const m = ADDIS_YMD_RE.exec(occursOn.trim());
+  if (!m) return occursOn;
+  const utc = new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12)
+  );
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(utc);
+}
+
+/** Map Addis YMD to a local Date for react-day-picker (wall Y-M-D). */
+export function addisYmdToPickerDate(occursOn: string): Date | undefined {
+  const m = ADDIS_YMD_RE.exec(occursOn.trim());
+  if (!m) return undefined;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/** Interpret picker cell as Addis YMD (same Y-M-D as the grid cell). */
+export function pickerDateToAddisYmd(day: Date): string {
+  return ymdToString({
+    year: day.getFullYear(),
+    month: day.getMonth() + 1,
+    day: day.getDate(),
+  });
+}
+
+export function isAddisYmdBeforeToday(
+  occursOn: string,
+  now: Date = new Date()
+): boolean {
+  const today = viewerLocalOccurrence(0, now)?.occursOn;
+  if (!today) return false;
+  return occursOn.trim() < today;
+}
+
+export function normalizeHomeCustomOccursOn(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!ADDIS_YMD_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** Stable keys for compact-bar chip presentation (reorder-safe). */
+export type HomeCompactFilterChipId =
+  | "today"
+  | "events"
+  | "posts"
+  | "friends"
+  | "custom-date"
+  | `date:${HomeDateFilterChip}`;
+
+export type HomeCompactFilterChipKind =
+  | "today"
+  | "date"
+  | "events"
+  | "posts"
+  | "friends";
+
+export type HomeCompactFilterChip = {
+  id: HomeCompactFilterChipId;
+  kind: HomeCompactFilterChipKind;
+  label: string;
+  active: boolean;
+  /** Present for Today and extra date chips. */
+  dateTarget?: HomeDateFilterChip;
+  /** Present for custom calendar day chips. */
+  customOccursOn?: string;
+};
+
+/**
+ * Compact-bar chip list: all active chips first (grouped), then inactive shortcuts.
+ * Canonical build order preserves relative order within each group.
+ * Friends appears only when selected. Events is active only when hangouts + no date.
+ */
+export function buildHomeCompactFilterBarChips(params: {
+  dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
+  viewMode: HomeViewMode;
+  friendsFilter: boolean;
+}): HomeCompactFilterChip[] {
+  const customDay = params.customOccursOn?.trim() || null;
+  const extraDate = customDay ? null : homeCompactBarExtraDateFilter(params.dateFilter);
+  const todayActive = isTodayChipActive(params.dateFilter) && !customDay;
+  const eventsActive =
+    isHomeTypeFilterActive(params.viewMode, "hangouts") &&
+    params.dateFilter === "none" &&
+    !customDay;
+  const postsActive = isHomeTypeFilterActive(params.viewMode, "experiences");
+
+  const canonical: HomeCompactFilterChip[] = [];
+  if (customDay) {
+    canonical.push({
+      id: "custom-date",
+      kind: "date",
+      label: formatHomeCustomDateChipLabel(customDay),
+      active: true,
+      customOccursOn: customDay,
+    });
+  }
+  if (extraDate) {
+    canonical.push({
+      id: `date:${extraDate}`,
+      kind: "date",
+      label: homeDateFilterChipLabel(extraDate),
+      active: true,
+      dateTarget: extraDate,
+    });
+  }
+  canonical.push({
+    id: "today",
+    kind: "today",
+    label: "Today",
+    active: todayActive,
+    dateTarget: "today",
+  });
+  canonical.push({
+    id: "events",
+    kind: "events",
+    label: "Events",
+    active: eventsActive,
+  });
+  canonical.push({
+    id: "posts",
+    kind: "posts",
+    label: "Posts",
+    active: postsActive,
+  });
+  if (params.friendsFilter) {
+    canonical.push({
+      id: "friends",
+      kind: "friends",
+      label: "Friends",
+      active: true,
+    });
+  }
+
+  return [
+    ...canonical.filter((chip) => chip.active),
+    ...canonical.filter((chip) => !chip.active),
+  ];
+}
+
 export function isHomeTypeFilterActive(
   viewMode: HomeViewMode,
   target: "hangouts" | "experiences"
@@ -447,9 +624,9 @@ export function getVerticalSegmentType(
  * so leftover experience dates cannot leak into those filters.
  */
 export function getHomeFeedRpcType(
-  ctx: Pick<HomeVerticalFilterContext, "viewMode" | "dateFilter">
+  ctx: Pick<HomeVerticalFilterContext, "viewMode" | "dateFilter" | "customOccursOn">
 ): FeedOptions["type"] {
-  if (ctx.dateFilter !== "none") return "hangout";
+  if (ctx.dateFilter !== "none" || ctx.customOccursOn) return "hangout";
   return getVerticalSegmentType(ctx.viewMode);
 }
 
@@ -462,7 +639,8 @@ export type HomeOccurrenceFields = {
 
 export function buildHomeOccurrenceFields(
   dateFilter: HomeDateFilter,
-  now: Date = new Date()
+  now: Date = new Date(),
+  customOccursOn?: string | null
 ): HomeOccurrenceFields {
   const empty: HomeOccurrenceFields = {
     occursOn: null,
@@ -470,6 +648,15 @@ export function buildHomeOccurrenceFields(
     occursFrom: null,
     occursTo: null,
   };
+  const custom = normalizeHomeCustomOccursOn(customOccursOn ?? "");
+  if (custom) {
+    return {
+      occursOn: custom,
+      occursTz: HOME_EVENT_TIMEZONE,
+      occursFrom: null,
+      occursTo: null,
+    };
+  }
   if (dateFilter === "none") return empty;
   const params = getDateSpotlightOccurrenceParams(dateFilter, now);
   if (!params) return { ...empty, occursTz: HOME_EVENT_TIMEZONE };
@@ -492,11 +679,13 @@ export function buildHomeOccurrenceFields(
 /** Discovery rails/spotlight only on unfiltered All Home. */
 export function shouldShowHomeDiscoveryRails(params: {
   dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
   viewMode: HomeViewMode;
   friendsFilter: boolean;
 }): boolean {
   return (
     params.dateFilter === "none" &&
+    !params.customOccursOn &&
     params.viewMode === "all" &&
     !params.friendsFilter
   );
@@ -504,6 +693,7 @@ export function shouldShowHomeDiscoveryRails(params: {
 
 export function hasExplicitHomeContentFilters(params: {
   dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
   viewMode: HomeViewMode;
   friendsFilter: boolean;
 }): boolean {
@@ -517,33 +707,105 @@ export function applyHomeFilterTransition(
   switch (action.type) {
     case "toggleDate": {
       if (current.dateFilter === action.target) {
-        return { ...current, dateFilter: "none", viewMode: "all" };
+        return {
+          ...current,
+          dateFilter: "none",
+          customOccursOn: null,
+          viewMode: "all",
+        };
       }
-      return { ...current, dateFilter: action.target, viewMode: "hangouts" };
+      return {
+        ...current,
+        dateFilter: action.target,
+        customOccursOn: null,
+        viewMode: "hangouts",
+      };
     }
     case "selectDate":
-      return { ...current, dateFilter: action.target, viewMode: "hangouts" };
+      return {
+        ...current,
+        dateFilter: action.target,
+        customOccursOn: null,
+        viewMode: "hangouts",
+      };
+    case "selectCustomDate": {
+      const occursOn = normalizeHomeCustomOccursOn(action.occursOn);
+      if (!occursOn) return current;
+      return {
+        ...current,
+        dateFilter: "none",
+        customOccursOn: occursOn,
+        viewMode: "hangouts",
+      };
+    }
+    case "toggleCustomDate": {
+      const occursOn = normalizeHomeCustomOccursOn(action.occursOn);
+      if (!occursOn) return current;
+      if (current.customOccursOn === occursOn) {
+        return {
+          ...current,
+          customOccursOn: null,
+          viewMode: "all",
+        };
+      }
+      return {
+        ...current,
+        dateFilter: "none",
+        customOccursOn: occursOn,
+        viewMode: "hangouts",
+      };
+    }
     case "toggleEvents": {
-      if (current.viewMode === "hangouts" && current.dateFilter === "none") {
+      if (
+        current.viewMode === "hangouts" &&
+        current.dateFilter === "none" &&
+        !current.customOccursOn
+      ) {
         return { ...current, viewMode: "all" };
       }
-      return { ...current, viewMode: "hangouts", dateFilter: "none" };
+      return {
+        ...current,
+        viewMode: "hangouts",
+        dateFilter: "none",
+        customOccursOn: null,
+      };
     }
     case "selectEvents":
-      return { ...current, viewMode: "hangouts", dateFilter: "none" };
+      return {
+        ...current,
+        viewMode: "hangouts",
+        dateFilter: "none",
+        customOccursOn: null,
+      };
     case "togglePlaces": {
       if (current.viewMode === "experiences") {
-        return { ...current, viewMode: "all", dateFilter: "none" };
+        return {
+          ...current,
+          viewMode: "all",
+          dateFilter: "none",
+          customOccursOn: null,
+        };
       }
-      return { ...current, viewMode: "experiences", dateFilter: "none" };
+      return {
+        ...current,
+        viewMode: "experiences",
+        dateFilter: "none",
+        customOccursOn: null,
+      };
     }
     case "selectPlaces":
-      return { ...current, viewMode: "experiences", dateFilter: "none" };
+      return {
+        ...current,
+        viewMode: "experiences",
+        dateFilter: "none",
+        customOccursOn: null,
+      };
     case "toggleFriends":
       return { ...current, friendsFilter: !current.friendsFilter };
     case "clearAll":
       return {
         dateFilter: INITIAL_HOME_DATE_FILTER,
+        customOccursOn: INITIAL_HOME_CUSTOM_OCCURS_ON,
         viewMode: INITIAL_HOME_TYPE_FILTER,
         friendsFilter: false,
       };
@@ -585,6 +847,7 @@ export function tagsForFeedOptions(
 
 export type HasActiveHomeFiltersInput = {
   dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
   typeFilter: HomeTypeFilter;
   friendsFilter: boolean;
   search: string;
@@ -595,6 +858,7 @@ export type HasActiveHomeFiltersInput = {
 export function hasActiveHomeFilters(params: HasActiveHomeFiltersInput): boolean {
   return (
     params.dateFilter !== "none" ||
+    Boolean(params.customOccursOn) ||
     params.typeFilter !== "all" ||
     params.friendsFilter ||
     params.search.trim() !== "" ||
@@ -603,19 +867,15 @@ export function hasActiveHomeFilters(params: HasActiveHomeFiltersInput): boolean
 }
 
 /**
- * True when an active filter is not fully communicated by the visible
- * Today / Events / Places shortcut chips (drawer dates, Friends, search, tags).
- * Shortcut-only Today / Events / Places do not light this indicator.
+ * True when an active filter is not fully shown as a compact-bar chip
+ * (search / tags). Date and Friends now appear as chips, so they do not
+ * light the in-pill funnel indicator.
  */
 export function hasNonShortcutHomeFilters(
   params: HasActiveHomeFiltersInput
 ): boolean {
-  if (params.friendsFilter) return true;
   if (params.search.trim() !== "") return true;
   if (params.selectedTags.length > 0) return true;
-  if (params.dateFilter !== "none" && params.dateFilter !== "today") {
-    return true;
-  }
   return false;
 }
 
@@ -646,6 +906,7 @@ export function shouldPersonalizeHomeVerticalFeed(_params: {
   friendsFilter?: boolean;
   dateFilter?: HomeDateFilter;
 }): boolean {
+  void _params;
   return false;
 }
 
@@ -654,7 +915,11 @@ export function isTrueDefaultAllVerticalFeed(
   ctx: HomeVerticalFilterContext,
   now: Date = new Date()
 ): boolean {
-  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
+  const occurs = buildHomeOccurrenceFields(
+    ctx.dateFilter,
+    now,
+    ctx.customOccursOn
+  );
   return isTrueDefaultAllFeed({
     type: getHomeFeedRpcType(ctx),
     friendsOnly: ctx.friendsFilter,
@@ -678,7 +943,11 @@ export function buildHomeVerticalFirstPageFeedKeyOptions(
   ctx: HomeVerticalFilterContext,
   now: Date = new Date()
 ): Parameters<typeof dataCache.generateFeedKey>[0] {
-  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
+  const occurs = buildHomeOccurrenceFields(
+    ctx.dateFilter,
+    now,
+    ctx.customOccursOn
+  );
   return {
     type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
@@ -716,7 +985,11 @@ export function buildVerticalLoadFeedOptions(
   page: { offset: number; limit: number },
   now: Date = new Date()
 ): FeedOptions {
-  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
+  const occurs = buildHomeOccurrenceFields(
+    ctx.dateFilter,
+    now,
+    ctx.customOccursOn
+  );
   return {
     type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
@@ -747,7 +1020,11 @@ export function buildVerticalFeedOptionsProp(
   occursTo: string | null;
   friendsFilter: boolean;
 } {
-  const occurs = buildHomeOccurrenceFields(ctx.dateFilter, now);
+  const occurs = buildHomeOccurrenceFields(
+    ctx.dateFilter,
+    now,
+    ctx.customOccursOn
+  );
   return {
     type: getHomeFeedRpcType(ctx),
     q: ctx.feedSearchQ,
@@ -827,6 +1104,7 @@ export function buildRailCacheFeedKeyOptions(
 export function buildHomeVerticalFilterContext(params: {
   viewMode: HomeViewMode;
   dateFilter?: HomeDateFilter;
+  customOccursOn?: string | null;
   feedSearchQ?: string;
   selectedTags: string[];
   viewerProfileId: string | null;
@@ -835,6 +1113,7 @@ export function buildHomeVerticalFilterContext(params: {
   return {
     viewMode: params.viewMode,
     dateFilter: params.dateFilter ?? "none",
+    customOccursOn: params.customOccursOn ?? null,
     feedSearchQ: params.feedSearchQ,
     selectedTags: params.selectedTags,
     viewerProfileId: params.viewerProfileId,

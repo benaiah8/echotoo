@@ -111,7 +111,7 @@ function buildInviteInAppDataBody(
 ): string {
   if (noteLine.length > 0) return noteLine;
   if (threadKind === "group") return "Invited you to a group";
-  if (postType === "experience") return "Invited you to a place";
+  if (postType === "experience") return "Invited you to a post";
   return "Invited you to an event";
 }
 

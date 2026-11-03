@@ -238,26 +238,20 @@ describe("People hard refresh", () => {
     expect(overlay).toContain("data-people-ptr-surface");
     expect(overlay).toContain("peopleTabsCovered");
     expect(overlay).toContain("acquirePullToRefreshBlock");
-    expect(overlay).toContain("PeopleBottomDock");
-    // Dock is sibling of ptr surface, not inside it.
+    expect(overlay).toContain("PeopleFeedTopNav");
+    expect(overlay).toContain("PeopleFeedList");
+    // Top nav is sibling of ptr surface, not inside it.
     const ptrIdx = overlay.indexOf('data-people-ptr-surface="true"');
-    const dockIdx = overlay.indexOf("<PeopleBottomDock");
+    const navIdx = overlay.indexOf("<PeopleFeedTopNav");
     expect(ptrIdx).toBeGreaterThan(-1);
-    expect(dockIdx).toBeGreaterThan(ptrIdx);
+    expect(navIdx).toBeGreaterThan(-1);
+    expect(navIdx).toBeLessThan(ptrIdx);
 
     const ptr = read("hooks/useHomePullToRefresh.ts");
     expect(ptr).toContain("COMMIT_DAMPED_PX = 52");
     expect(ptr).toContain("MIN_INTERVAL_MS = 1400");
     expect(ptr).toContain("Math.abs(dx) > dy");
     expect(ptr).toContain("dy > Math.abs(dx) * 1.2");
-
-    const carousel = read("pages/people/MatchDeckCarousel.tsx");
-    expect(carousel).toContain("acquirePullToRefreshBlock");
-    expect(carousel).toContain("Do NOT acquire PTR block here");
-    expect(carousel).toContain("emblaPtrPointerDownRef");
-    expect(carousel).toMatch(
-      /const onScroll = \(\) => \{[\s\S]*acquirePullToRefreshBlock\(\)/
-    );
   });
 
   it("25–26: tab retap hard refresh; Groups Yours excluded", () => {

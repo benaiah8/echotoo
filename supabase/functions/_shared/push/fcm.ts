@@ -2,13 +2,15 @@
  * Shared FCM HTTP v1 helpers for Supabase Edge push functions.
  * Canonical base: former send-invite-push/fcm.ts (Android + iOS, rich errors).
  *
- * Android: data-only, HIGH priority (invite-style custom rendering).
+ * Android `notification_and_data`: HIGH priority + echo_alerts_v1 channel + default sound.
+ * Android `data_only`: HIGH priority, data map only (custom native rendering path).
  * iOS: notification + APNS alert + data.
  *
  * Note: `import { SignJWT }` — not `import * as jose` + `jose.SignJWT` — some Deno/edge
  * bundles break class construction on namespace imports (SignJWT must be used with `new`).
  */
 import { SignJWT, importPKCS8 } from "npm:jose@5.9.6";
+import { buildAndroidNotificationAndDataConfig } from "./androidNotificationDelivery.ts";
 import type {
   AndroidDeliveryMode,
   FcmDataPayload,
@@ -212,6 +214,7 @@ export async function sendFcmToDevice(
         ? {
             token: deviceToken,
             notification,
+            android: buildAndroidNotificationAndDataConfig(),
             data: fcmData,
           }
         : {

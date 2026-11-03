@@ -9,10 +9,12 @@ function read(rel: string): string {
 describe("homeTour wiring", () => {
   it("adds filter cue + panel targets without behavior changes", () => {
     const topBar = read("src/components/HomeTopBar.tsx");
+    const overlay = read("src/components/home/HomeFiltersOverlay.tsx");
     const home = read("src/pages/HomePage.tsx");
 
     expect(topBar).toContain('data-tour-target="home-search-filters"');
-    expect(topBar).toContain('data-tour-target="home-filter-panel"');
+    expect(overlay).toContain('data-tour-target="home-filter-panel"');
+    expect(overlay).toContain('data-tour-target="home-filter-dates"');
     expect(topBar).toContain('data-tour-target="home-filter-shortcuts"');
     expect(topBar).toContain('data-tour-target="home-filter-trigger"');
     expect(topBar).toContain('data-tour-target="home-filters"');
@@ -21,14 +23,15 @@ describe("homeTour wiring", () => {
     expect(home).toContain("onCloseTourFilters");
   });
 
-  it("filter shortcuts wrap Today/Events/Posts row", () => {
+  it("filter shortcuts wrap compact chip bar (Today/Events/Posts via builders)", () => {
     const topBar = read("src/components/HomeTopBar.tsx");
     const start = topBar.indexOf('data-tour-target="home-filter-shortcuts"');
     expect(start).toBeGreaterThan(-1);
-    const region = topBar.slice(start, start + 2200);
-    expect(region).toContain("Today");
-    expect(region).toContain("Events");
-    expect(region).toContain("Posts");
+    const region = topBar.slice(start, start + 4500);
+    expect(region).toContain("compactFilterChips.map");
+    expect(region).toContain("{chip.label}");
+    expect(region).toContain('data-tour-target="home-filters"');
+    expect(topBar).toContain("buildHomeCompactFilterBarChips");
     expect(region).not.toContain("Places");
   });
 

@@ -376,6 +376,7 @@ function parseGroupUpRequester(raw: unknown): GroupUpRequester | null {
   ) {
     return null;
   }
+  const noteRaw = asNullableString(row.note)?.trim() ?? "";
   return {
     request_id: row.request_id,
     opportunity_id: row.opportunity_id,
@@ -385,11 +386,19 @@ function parseGroupUpRequester(raw: unknown): GroupUpRequester | null {
     requester_profile_id: asNullableString(row.requester_profile_id),
     display_name: asNullableString(row.display_name),
     username: asNullableString(row.username),
+    note: noteRaw.length > 0 && noteRaw.length <= 200 ? noteRaw : null,
     avatar_url: asNullableString(row.avatar_url),
     profile_photos: parseProfilePhotos(row.profile_photos),
     echo_preset: normalizeEchoPreset(row.echo_preset),
     bio: asNullableString(row.bio),
   };
+}
+
+/** @internal Vitest */
+export function __parseGroupUpRequesterForTests(
+  raw: unknown
+): GroupUpRequester | null {
+  return parseGroupUpRequester(raw);
 }
 
 function parseGroupUpRequestersPage(raw: unknown): GroupUpRequestersPage {
@@ -899,12 +908,15 @@ export async function listGroupUpCandidates(options?: {
 }
 
 export async function requestGroupUp(
-  opportunityId: string
+  opportunityId: string,
+  options?: { note?: string }
 ): Promise<GroupUpRequest> {
   if (!opportunityId) throw new Error("Missing opportunity");
 
+  const note = typeof options?.note === "string" ? options.note.trim() : "";
   const { data, error } = await supabase.rpc("request_group_up", {
     p_opportunity_id: opportunityId,
+    ...(note.length > 0 ? { p_note: note } : {}),
   });
   if (error) throw toPairUpRpcError(error);
 

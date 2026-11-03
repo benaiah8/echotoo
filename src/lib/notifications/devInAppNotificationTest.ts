@@ -55,7 +55,7 @@ export function registerDevInAppNotificationTestHook(): () => void {
       showFromPushData(
         {
           type: "followed_post",
-          title: "Jordan shared something new",
+          title: "Jordan created a post",
           body: "Tap to view",
           postId: samplePostId,
           postType: "hangout",

@@ -58,14 +58,11 @@ describe("PeopleGroupSourceMedia helpers", () => {
 });
 
 describe("Groups canonical presentation (source)", () => {
-  it("1–4: GroupUp deck uses duo/mine fixed footprint", () => {
+  it("1–4: GroupUp feed uses PeopleFeedList + text-first Group Up card", () => {
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain('layout="duo"');
-    expect(body).toContain('duoPresentation="mine"');
-    expect(body).toContain("duoInFlowChrome");
-    expect(body).toContain("MineEdgeNavCards");
-    expect(body).toContain("fixedRailsGeometry");
-    expect(body).toContain("PeopleGroupUpCandidateSlide");
+    expect(body).toContain("PeopleFeedList");
+    expect(body).toContain("PeopleGroupUpFeedCard");
+    expect(body).not.toContain("PeopleFeedRow");
     expect(body).not.toContain("GroupUpDeckCard");
     expect(body).not.toContain("MatchDeckPlanContext");
   });

@@ -54,52 +54,38 @@ export const DISCOVER_PARITY_NOTE_FIXTURE =
   "This is a Discover opportunity note used for parity testing.";
 
 describe("Canonical Mine + Discover motion / edge / note parity", () => {
-  it("production real-incoming is enabled for canonical PairUp (not my_plans-only)", () => {
-    expect(OVERLAY_SRC).toContain(
-      "isCanonicalPairUpScope && isPeopleMineRealIncomingEnabled()"
-    );
-    expect(OVERLAY_SRC).not.toMatch(
+  it("production real-incoming is Duo Embla only (Discover is vertical)", () => {
+    expect(OVERLAY_SRC).toContain("isPeopleMineRealIncomingEnabled()");
+    expect(OVERLAY_SRC).toMatch(
       /mineRealIncomingEnabled\s*=\s*\n\s*contentScope === "my_plans"/
     );
     // Prod flag helper defaults on (DEV may override via localStorage).
     expect(typeof isPeopleMineRealIncomingEnabled()).toBe("boolean");
   });
 
-  it("prepareRef + motion controller + cardsRef are not gated to visualScope my_plans", () => {
-    expect(OVERLAY_SRC).toContain("mineMotionProbeRef={");
-    expect(OVERLAY_SRC).toContain("mineProxyProgrammaticPrepareRef={");
-    expect(OVERLAY_SRC).toContain("mineEdgeNavCardsRef={");
-    expect(OVERLAY_SRC).not.toContain(
-      "mineMotionSurfaceEnabled && visualScope === \"my_plans\""
-    );
-    expect(OVERLAY_SRC).not.toContain(
-      "mineRealIncomingEnabled && visualScope === \"my_plans\""
-    );
-    expect(OVERLAY_SRC).toContain(
-      "mineMotionSurfaceEnabled\n                          ? mineMotionProbeCtrlRef"
-    );
-    expect(OVERLAY_SRC).toContain(
-      "mineMotionSurfaceEnabled\n                          ? mineProxyProgrammaticPrepareRef"
-    );
-    expect(OVERLAY_SRC).toContain(
-      "mineRealIncomingEnabled\n                          ? mineEdgeNavCardsRef"
-    );
-    expect(OVERLAY_SRC).toContain(
-      "mineMotionProbeCtrlRef.current.onFlightSettled = flushMineButtonPending"
-    );
-    expect(OVERLAY_SRC).toMatch(
-      /cardsRef=\{\s*\n\s*mineRealIncomingEnabled \? mineEdgeNavCardsRef/
-    );
+  it("hybrid: Discover vertical person rows; Duo remounts MatchDeckCarousel", () => {
+    expect(OVERLAY_SRC).toContain("PeopleFeedList");
+    expect(OVERLAY_SRC).toContain("PeopleDiscoverPersonRow");
+    expect(OVERLAY_SRC).toContain("PeopleDiscoverOpportunityBox");
+    expect(OVERLAY_SRC).toContain("groupDiscoverOpportunities");
+    expect(OVERLAY_SRC).toContain("<MatchDeckCarousel");
+    expect(OVERLAY_SRC).toContain("PeopleDuoCandidateSlide");
+    expect(OVERLAY_SRC).toContain('data-people-duo-deck="true"');
+    expect(OVERLAY_SRC).toContain("handleFeedHeart");
+    expect(OVERLAY_SRC).toContain("handleFeedMessage");
+    expect(OVERLAY_SRC).toContain("<MineAtmosphereCrossfade");
+    expect(OVERLAY_SRC).toContain("isDuoAtmosphereScope");
+    expect(OVERLAY_SRC).toContain("<PeopleBottomDock");
+    expect(OVERLAY_SRC).toContain("hideCategoryNav");
   });
 
-  it("carousel still owns jump prepare + real-incoming scroll writes for duoPresentation mine", () => {
+  it("MatchDeckCarousel retains jump/scroll helpers for Duo isolation", () => {
     expect(CAROUSEL_SRC).toContain("mineButtonScrollJumpRef");
     expect(CAROUSEL_SRC).toContain("opts?.jump === true");
     expect(CAROUSEL_SRC).toContain("emblaApi.scrollTo(index, jump)");
     expect(CAROUSEL_SRC).toContain("writeMineIncomingRealSlideVisual");
     expect(CAROUSEL_SRC).toContain("mineRealIncomingEnabledRef");
     expect(CAROUSEL_SRC).toContain("unlockMineMotionProbeFlight");
-    expect(OVERLAY_SRC).toContain('duoPresentation="mine"');
   });
 
   it("edge-button latch supports second and rapid hops after flush", () => {
@@ -165,15 +151,14 @@ describe("Canonical Mine + Discover motion / edge / note parity", () => {
     expect(DUO_SRC).toContain("noteResetKey={candidate.opportunity_id}");
   });
 
-  it("Plans and Groups remain outside canonical PairUp presentation", () => {
-    expect(OPEN_PLANS_BODY).toContain('duoPresentation="mine"');
-    expect(OPEN_PLANS_BODY).toContain("PeopleOpenPlanCandidateSlide");
-    expect(OPEN_PLANS_BODY).toContain("plansPrepareRef");
+  it("Plans and Groups use feed rows; PairUp Connect stays Duo/Discover", () => {
+    expect(OPEN_PLANS_BODY).toContain("PeopleFeedList");
+    expect(OPEN_PLANS_BODY).toContain("PeopleOpenPlanFeedCard");
+    expect(OPEN_PLANS_BODY).toContain("requestOpenPlan");
     expect(PLANS_SLIDE).toContain("PeopleCanonicalCandidatePresentation");
-    expect(GROUPS_BODY).not.toContain("PeopleCanonicalCandidatePresentation");
+    expect(GROUPS_BODY).toContain("PeopleFeedList");
+    expect(GROUPS_BODY).toContain("requestGroupUp");
     expect(OVERLAY_SRC).toContain("GroupUpDeckBody");
-    // Plans owns its motion controller (same production path), not Overlay PairUp latch.
-    expect(OPEN_PLANS_BODY).toContain("createMineMotionProbeController");
-    expect(OPEN_PLANS_BODY).toContain("plansRealIncomingEnabled");
+    expect(OVERLAY_SRC).toContain("runMinePairUpConnect");
   });
 });

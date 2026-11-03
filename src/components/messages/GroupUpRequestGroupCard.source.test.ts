@@ -28,6 +28,7 @@ function requester(id: string): GroupUpRequester {
     profile_photos: [],
     echo_preset: null,
     bio: null,
+    note: null,
   };
 }
 

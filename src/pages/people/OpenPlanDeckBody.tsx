@@ -32,28 +32,25 @@ import {
 } from "../../lib/people/peopleDeckSeenSync";
 import type { OpenPlanCandidate } from "../../lib/people/types";
 import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
-import {
-  createMineButtonFlightLatch,
-  flushMineButtonLatch,
-  planMineButtonStep,
-  queueMineButtonTarget,
-  releaseMineButtonLatchOnIndexDiverge,
-  type MineButtonFlightLatch,
-} from "../../lib/people/mineEdgeNavGesture";
-import {
-  createMineMotionProbeController,
-  type MineMotionProbeController,
-} from "../../lib/people/mineMotionProbeProgress";
-import MatchDeckCarousel from "./MatchDeckCarousel";
-import PeopleOpenPlanCandidateSlide from "../../components/people/PeopleOpenPlanCandidateSlide";
-import MineEdgeNavCards, {
-  type MineEdgeNavCardsHandle,
-} from "../../components/people/MineEdgeNavCards";
-import type { PeopleMineAtmosphereReport } from "../../components/people/PeopleCandidateMedia";
+import PeopleFeedList from "../../components/people/PeopleFeedList";
+import PeopleOpenPlanFeedCard from "../../components/people/PeopleOpenPlanFeedCard";
+import PeoplePlansGroupsFeedSkeleton from "../../components/people/PeoplePlansGroupsFeedSkeleton";
+import { peopleFeedContentTopPad } from "../../lib/people/peopleFeedLayout";
+import OpenPlanRequestNoteComposer, {
+  classifyOpenPlanRequestStatus,
+  emitOpenPlanComposerToast,
+  openOpenPlanRequestComposer,
+  openPlanHeartIntent,
+  openPlanRequestComposerStillValid,
+  runOpenPlanRequestSubmit,
+  type OpenPlanRequestComposerContext,
+  type OpenPlanRequestComposerState,
+} from "../../components/people/OpenPlanRequestNoteComposer";
 import { peopleUiCopy } from "./peopleUiCopy";
 import { resolveOpenPlanShellActionState } from "./peopleShellPrimaryAction";
 import type { PeopleShellPrimaryAction } from "./peopleShellPrimaryAction";
-import { isPeopleMineRealIncomingEnabled } from "./matchDeckDevMocks";
+import { formatOpenPlanSchedule } from "../../lib/openPlanSchedule";
+import { getPostScheduleLabel } from "../../lib/postScheduleLabel";
 import {
   peopleDebugBumpRender,
   peopleDebugRecord,
@@ -79,14 +76,38 @@ function identitySourceFor(row: OpenPlanCandidate): ProfileIdentityMediaSource {
   };
 }
 
+/** Privacy-safe composer snapshot — never includes a host display name. */
+function composerContextFromRow(
+  row: OpenPlanCandidate
+): OpenPlanRequestComposerContext {
+  const scheduleLabel = row.occurs_at
+    ? formatOpenPlanSchedule(
+        row.occurs_at,
+        row.occurs_time_explicit !== false
+      ) || null
+    : null;
+  const scheduleLabelKind = row.occurs_at
+    ? getPostScheduleLabel({
+        type: "hangout",
+        createdAt: row.occurs_at,
+        selectedDates: [row.occurs_at],
+      }).kind
+    : null;
+  return {
+    identitySource: identitySourceFor(row),
+    caption: row.source_caption?.trim() || null,
+    scheduleLabel,
+    scheduleLabelKind,
+    feedNeutralEchoSeed: row.opportunity_id,
+  };
+}
+
 export default function OpenPlanDeckBody({
   deck,
   scopeSnap,
   patchScope,
   onRemoveCandidate,
   onPrimaryActionChange,
-  onAtmosphereChange,
-  onAtmosphereIdentityKeyChange,
   authUserId = null,
   seenEpoch = 0,
   onSeenMarked,
@@ -97,8 +118,6 @@ export default function OpenPlanDeckBody({
   /** Single shared removal path: hook remove + removedIds. */
   onRemoveCandidate: (opportunityId: string) => void;
   onPrimaryActionChange?: (action: PeopleShellPrimaryAction | null) => void;
-  onAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
-  onAtmosphereIdentityKeyChange?: (identityKey: string | null) => void;
   authUserId?: string | null;
   /** Shared People deck seen-history epoch (bumps on mark). */
   seenEpoch?: number;
@@ -119,6 +138,10 @@ export default function OpenPlanDeckBody({
 
   const { enterCreateAsDefaultPost } = useCreateChooser();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [composer, setComposer] = useState<OpenPlanRequestComposerState | null>(
+    null
+  );
+  const submitFlightRef = useRef(false);
   const loadMoreInFlightRef = useRef(false);
   const [loadMoreInFlight, setLoadMoreInFlight] = useState(false);
   const lastValidIndexRef = useRef(0);
@@ -194,6 +217,13 @@ export default function OpenPlanDeckBody({
         : lastValidIndexRef.current;
   const current = foundIndex >= 0 ? deckRows[foundIndex] : null;
   const controlsLocked = busyId != null;
+
+  useEffect(() => {
+    if (!composer || submitFlightRef.current) return;
+    if (!openPlanRequestComposerStillValid(composer, deckRows)) {
+      setComposer(null);
+    }
+  }, [composer, deckRows]);
 
   const prevOpenPlanDebugRef = useRef({
     index,
@@ -365,146 +395,6 @@ export default function OpenPlanDeckBody({
     plansSeenIds,
   ]);
 
-  const goToIndex = useCallback(
-    (next: number) => {
-      if (controlsLocked) return;
-      const clamped = Math.max(0, Math.min(deckRows.length - 1, next));
-      const id = deckRows[clamped]?.opportunity_id ?? null;
-      const previousId = scopeSnapRef.current.currentOpportunityId;
-      if (authUserId && previousId && id && previousId !== id) {
-        markLocalPeopleDeckSeenAndEnqueue(authUserId, "open_plans", previousId);
-        onSeenMarked?.();
-      }
-      patchScope({ currentOpportunityId: id });
-    },
-    [authUserId, controlsLocked, deckRows, onSeenMarked, patchScope]
-  );
-
-  const plansPrepareRef = useRef<
-    ((destinationIndex: number, opts?: { jump?: boolean }) => void) | null
-  >(null);
-  const plansIndexRef = useRef(index);
-  plansIndexRef.current = index;
-  const plansButtonLatchRef = useRef<MineButtonFlightLatch>(
-    createMineButtonFlightLatch()
-  );
-
-  const plansRealIncomingEnabled = isPeopleMineRealIncomingEnabled();
-  const plansMotionProbeCtrlRef = useRef<MineMotionProbeController | null>(
-    null
-  );
-  const plansEdgeNavCardsRef = useRef<MineEdgeNavCardsHandle>({
-    prev: null,
-    next: null,
-  });
-  if (
-    plansRealIncomingEnabled &&
-    (!plansMotionProbeCtrlRef.current ||
-      plansMotionProbeCtrlRef.current.mode !== "proxy")
-  ) {
-    plansMotionProbeCtrlRef.current = createMineMotionProbeController("proxy");
-  }
-  if (!plansRealIncomingEnabled) {
-    plansMotionProbeCtrlRef.current = null;
-  }
-
-  useEffect(() => {
-    const prev = plansButtonLatchRef.current;
-    const next = releaseMineButtonLatchOnIndexDiverge(prev, index);
-    if (next !== prev) {
-      plansButtonLatchRef.current = next;
-    }
-  }, [index]);
-
-  useEffect(() => {
-    if (deckRows.length <= 0) {
-      plansButtonLatchRef.current = createMineButtonFlightLatch();
-    }
-  }, [deckRows.length]);
-
-  const startPlansButtonStep = useCallback(
-    (destinationIndex: number) => {
-      const len = deckRows.length;
-      const planned = planMineButtonStep(
-        plansButtonLatchRef.current,
-        destinationIndex,
-        plansIndexRef.current,
-        len,
-        !controlsLocked
-      );
-      plansButtonLatchRef.current = planned.latch;
-      if (!planned.shouldNavigate) return;
-      plansPrepareRef.current?.(planned.clamped, { jump: true });
-      if (controlsLocked) {
-        plansButtonLatchRef.current = {
-          flightActive: false,
-          pendingTarget: plansButtonLatchRef.current.pendingTarget,
-          flightDest: null,
-        };
-        return;
-      }
-      goToIndex(planned.clamped);
-    },
-    [controlsLocked, deckRows.length, goToIndex]
-  );
-
-  const flushPlansButtonPending = useCallback(() => {
-    const { latch, nextStep } = flushMineButtonLatch(
-      plansButtonLatchRef.current,
-      plansIndexRef.current,
-      deckRows.length
-    );
-    plansButtonLatchRef.current = latch;
-    if (nextStep == null) return;
-    startPlansButtonStep(nextStep);
-  }, [deckRows.length, startPlansButtonStep]);
-
-  if (plansMotionProbeCtrlRef.current) {
-    plansMotionProbeCtrlRef.current.onFlightSettled = flushPlansButtonPending;
-  }
-
-  // After index settles on button dest, flush queued hops (backup if no probe).
-  useEffect(() => {
-    const latch = plansButtonLatchRef.current;
-    if (!latch.flightActive || latch.flightDest == null) return;
-    if (index !== latch.flightDest) return;
-    plansButtonLatchRef.current = {
-      ...latch,
-      flightActive: false,
-      flightDest: null,
-    };
-    flushPlansButtonPending();
-  }, [index, flushPlansButtonPending]);
-
-  const goPlansPrev = useCallback(() => {
-    const len = deckRows.length;
-    if (len <= 0) return;
-    const latch = plansButtonLatchRef.current;
-    if (latch.flightActive) {
-      const base = latch.pendingTarget ?? plansIndexRef.current;
-      const pending = Math.max(0, base - 1);
-      plansButtonLatchRef.current = queueMineButtonTarget(latch, pending, len);
-      return;
-    }
-    startPlansButtonStep(Math.max(0, plansIndexRef.current - 1));
-  }, [deckRows.length, startPlansButtonStep]);
-
-  const goPlansNext = useCallback(() => {
-    const len = deckRows.length;
-    if (len <= 0) return;
-    const latch = plansButtonLatchRef.current;
-    if (latch.flightActive) {
-      const base = latch.pendingTarget ?? plansIndexRef.current;
-      const pending = Math.min(len - 1, base + 1);
-      plansButtonLatchRef.current = queueMineButtonTarget(latch, pending, len);
-      return;
-    }
-    startPlansButtonStep(Math.min(len - 1, plansIndexRef.current + 1));
-  }, [deckRows.length, startPlansButtonStep]);
-
-  const canPlansGoPrev = !controlsLocked && index > 0;
-  const canPlansGoNext = !controlsLocked && index < deckRows.length - 1;
-
   const setPhotoIndexFor = useCallback(
     (opportunityId: string, nextIndex: number) => {
       patchScope({
@@ -517,37 +407,79 @@ export default function OpenPlanDeckBody({
     [patchScope, photoIndexById]
   );
 
-  const handleImDown = useCallback(async () => {
+  const openRequestComposer = useCallback(
+    (opportunityId: string) => {
+      if (submitFlightRef.current) return;
+      const row = deckRows.find((r) => r.opportunity_id === opportunityId);
+      if (!row) return;
+      const context = composerContextFromRow(row);
+      setComposer((prev) =>
+        openOpenPlanRequestComposer(prev, opportunityId, context)
+      );
+    },
+    [deckRows]
+  );
+
+  const submitOpenPlanRequest = useCallback(
+    async (id: string, draft: string) => {
+      const outcome = await runOpenPlanRequestSubmit({
+        flight: submitFlightRef,
+        opportunityId: id,
+        draft,
+        request: (id, options) =>
+          requestOpenPlan(id, {
+            identityVisibleToHost: true,
+            note: options.note,
+          }),
+        onStart: () => setBusyId(id),
+      });
+      if (outcome.status === "skipped") return;
+      try {
+        const toastCopy = {
+          accepted: peopleUiCopy.openPlansAlreadyAccepted,
+          error: peopleUiCopy.openPlansRequestError,
+        };
+        const notify = {
+          info: (message: string) => {
+            toast(message);
+          },
+          accepted: (message: string) => {
+            toast(message);
+          },
+          error: (message: string) => {
+            toast.error(message);
+          },
+        };
+        if (outcome.status === "error") {
+          emitOpenPlanComposerToast("error", notify, toastCopy);
+          return;
+        }
+        const status = String(outcome.result.status ?? "");
+        const kind = classifyOpenPlanRequestStatus(status);
+        if (kind === "pending") {
+          patchRequestStatus(id, "pending");
+          emitOpenPlanComposerToast("pending", notify, toastCopy);
+        } else if (kind === "accepted") {
+          onRemoveCandidate(id);
+          emitOpenPlanComposerToast("accepted", notify, toastCopy);
+        } else {
+          onRemoveCandidate(id);
+          void refresh();
+          emitOpenPlanComposerToast("refresh", notify, toastCopy);
+        }
+        setComposer(null);
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [onRemoveCandidate, patchRequestStatus, refresh]
+  );
+
+  const handleImDown = useCallback(() => {
     if (!current || controlsLocked) return;
     if (current.my_request_status === "pending") return;
-    const id = current.opportunity_id;
-    setBusyId(id);
-    try {
-      const request = await requestOpenPlan(id, {
-        identityVisibleToHost: true,
-      });
-      const status = String(request.status ?? "");
-      if (status === "pending") {
-        patchRequestStatus(id, "pending");
-      } else if (status === "accepted") {
-        onRemoveCandidate(id);
-        toast(peopleUiCopy.openPlansAlreadyAccepted);
-      } else {
-        onRemoveCandidate(id);
-        void refresh();
-      }
-    } catch {
-      toast.error(peopleUiCopy.openPlansRequestError);
-    } finally {
-      setBusyId(null);
-    }
-  }, [
-    controlsLocked,
-    current,
-    onRemoveCandidate,
-    patchRequestStatus,
-    refresh,
-  ]);
+    openRequestComposer(current.opportunity_id);
+  }, [controlsLocked, current, openRequestComposer]);
 
   const handleWithdraw = useCallback(async () => {
     if (!current || controlsLocked) return;
@@ -630,30 +562,28 @@ export default function OpenPlanDeckBody({
     return () => onPrimaryActionChange?.(null);
   }, [onPrimaryActionChange]);
 
-  useEffect(() => {
-    if (!onAtmosphereIdentityKeyChange) return;
-    if (!current) {
-      onAtmosphereIdentityKeyChange(null);
-      return;
-    }
-    onAtmosphereIdentityKeyChange(current.opportunity_id);
-  }, [current, onAtmosphereIdentityKeyChange]);
-
-  useEffect(() => {
-    return () => onAtmosphereIdentityKeyChange?.(null);
-  }, [onAtmosphereIdentityKeyChange]);
+  const listTopChromePad = peopleFeedContentTopPad();
 
   if (loading && !hasLoaded && deckRows.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
-        Loading…
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-open-plans-initial-loading="true"
+        data-people-feed-out-of-list-chrome="true"
+      >
+        <PeoplePlansGroupsFeedSkeleton variant="initial" surface="plans" />
       </div>
     );
   }
 
   if (error && deckRows.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         <p className="text-sm text-[var(--text)]/70">
           {peopleUiCopy.deckLoadError}
         </p>
@@ -674,7 +604,11 @@ export default function OpenPlanDeckBody({
     (hasMore || loadMoreInFlight)
   ) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60">
+      <div
+        className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center text-sm text-[var(--text)]/60"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         Loading…
       </div>
     );
@@ -689,14 +623,11 @@ export default function OpenPlanDeckBody({
     })
   ) {
     return (
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <MineEdgeNavCards
-          canGoPrev={false}
-          canGoNext={false}
-          onPrev={() => {}}
-          onNext={() => {}}
-          fixedRailsGeometry
-        />
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        style={{ paddingTop: listTopChromePad }}
+        data-people-feed-out-of-list-chrome="true"
+      >
         <PeopleDeckEmptyCard
           kind="plans"
           title={peopleUiCopy.openPlansEmpty}
@@ -708,56 +639,148 @@ export default function OpenPlanDeckBody({
     );
   }
 
+  const handlePlansHeart = async (row: OpenPlanCandidate) => {
+    if (controlsLocked) return;
+    const id = row.opportunity_id;
+    if (busyId === id) return;
+    if (row.my_request_status === "pending") {
+      setBusyId(id);
+      try {
+        const request = await withdrawOpenPlanRequest(id);
+        const status = String(request.status ?? "");
+        if (status === "closed") {
+          onRemoveCandidate(id);
+        } else if (status === "withdrawn") {
+          patchRequestStatus(id, null);
+        } else {
+          void refresh();
+        }
+      } catch {
+        toast.error(peopleUiCopy.openPlansWithdrawError);
+      } finally {
+        setBusyId(null);
+      }
+      return;
+    }
+    if (openPlanHeartIntent(row.my_request_status) === "compose") {
+      openRequestComposer(id);
+    }
+  };
+
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {deckRows.length > 0 ? (
-        <MineEdgeNavCards
-          canGoPrev={canPlansGoPrev}
-          canGoNext={canPlansGoNext}
-          onPrev={goPlansPrev}
-          onNext={goPlansNext}
-          fixedRailsGeometry
-          cardsRef={
-            plansRealIncomingEnabled ? plansEdgeNavCardsRef : undefined
-          }
-        />
-      ) : null}
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <MatchDeckCarousel
-          index={index}
-          onIndexChange={goToIndex}
-          locked={controlsLocked}
-          layout="duo"
-          duoInFlowChrome
-          duoPresentation="mine"
-          mineMotionProbeRef={
-            plansRealIncomingEnabled ? plansMotionProbeCtrlRef : undefined
-          }
-          mineProxyProgrammaticPrepareRef={plansPrepareRef}
-          mineEdgeNavCardsRef={
-            plansRealIncomingEnabled ? plansEdgeNavCardsRef : undefined
-          }
-          items={deckRows}
-          renderItem={(item, meta) => {
-            const row = item as OpenPlanCandidate;
-            return (
-              <PeopleOpenPlanCandidateSlide
-                candidate={row}
-                identitySource={identitySourceFor(row)}
-                photoIndex={photoIndexById[row.opportunity_id] ?? 0}
-                onPhotoIndexChange={(next) =>
-                  setPhotoIndexFor(row.opportunity_id, next)
-                }
-                isCurrent={meta.isCurrent}
-                withPhoto={meta.withPhoto}
-                neighborSide={meta.neighborSide}
-                onAtmosphereChange={onAtmosphereChange}
-                isUnseen={!plansSeenIds.has(row.opportunity_id)}
-              />
-            );
-          }}
-        />
-      </div>
-    </div>
+    <>
+    <PeopleFeedList
+      topChromePad={listTopChromePad}
+      orderedIds={deckRows.map((r) => r.opportunity_id)}
+      hasMore={hasMore}
+      loadMoreInFlight={loadMoreInFlight}
+      onLoadMore={() => {
+        if (loadMoreInFlight || !hasMore) return;
+        loadMoreInFlightRef.current = true;
+        setLoadMoreInFlight(true);
+        void loadMore()
+          .catch(() => {})
+          .finally(() => {
+            loadMoreInFlightRef.current = false;
+            setLoadMoreInFlight(false);
+          });
+      }}
+      onRowVisible={(opportunityId) => {
+        if (!authUserId || !opportunityId) return;
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, "open_plans", opportunityId);
+        onSeenMarked?.();
+      }}
+      focusedId={current?.opportunity_id ?? null}
+      onFocusedIdChange={(id) => {
+        patchScope({ currentOpportunityId: id });
+      }}
+      scrollToId={scopeSnap.currentOpportunityId}
+    >
+      {deckRows.map((row) => {
+        const pendingRow = row.my_request_status === "pending";
+        const busy = busyId === row.opportunity_id;
+        const scheduleLabel = row.occurs_at
+          ? formatOpenPlanSchedule(
+              row.occurs_at,
+              row.occurs_time_explicit !== false
+            ) || null
+          : null;
+        return (
+          <PeopleOpenPlanFeedCard
+            key={row.opportunity_id}
+            opportunityId={row.opportunity_id}
+            identitySource={identitySourceFor(row)}
+            feedNeutralEchoSeed={row.opportunity_id}
+            photoIndex={photoIndexById[row.opportunity_id] ?? 0}
+            onPhotoIndexChange={(next) =>
+              setPhotoIndexFor(row.opportunity_id, next)
+            }
+            isCurrent={row.opportunity_id === current?.opportunity_id}
+            caption={row.source_caption}
+            scheduleLabel={scheduleLabel}
+            note={row.description?.trim() || null}
+            isUnseen={!plansSeenIds.has(row.opportunity_id)}
+            heartLabel={
+              pendingRow
+                ? peopleUiCopy.openPlansWithdraw
+                : peopleUiCopy.openPlansImDown
+            }
+            heartState={
+              busy ? "busy" : pendingRow ? "pending" : "idle"
+            }
+            onHeart={() => {
+              void handlePlansHeart(row);
+            }}
+          />
+        );
+      })}
+    </PeopleFeedList>
+    {composer ? (
+      <OpenPlanRequestNoteComposer
+        open
+        draft={composer.draft}
+        busy={busyId != null && busyId === composer.opportunityId}
+        context={{
+          identitySource: composer.identitySource,
+          caption: composer.caption,
+          scheduleLabel: composer.scheduleLabel,
+          scheduleLabelKind: composer.scheduleLabelKind,
+          feedNeutralEchoSeed: composer.feedNeutralEchoSeed,
+        }}
+        onDraftChange={(value) => {
+          setComposer((prev) => (prev ? { ...prev, draft: value } : prev));
+        }}
+        onCancel={() => {
+          if (submitFlightRef.current) return;
+          setComposer(null);
+          emitOpenPlanComposerToast(
+            "cancel",
+            {
+              info: (message) => {
+                toast(message);
+              },
+              accepted: (message) => {
+                toast(message);
+              },
+              error: (message) => {
+                toast.error(message);
+              },
+            },
+            {
+              accepted: peopleUiCopy.openPlansAlreadyAccepted,
+              error: peopleUiCopy.openPlansRequestError,
+            }
+          );
+        }}
+        onDismiss={() => {
+          if (submitFlightRef.current) return;
+          setComposer(null);
+        }}
+        onSubmit={(draft) => {
+          void submitOpenPlanRequest(composer.opportunityId, draft);
+        }}
+      />
+    ) : null}
+    </>
   );
 }

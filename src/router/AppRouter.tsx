@@ -24,6 +24,7 @@ import FeedTestPage from "../pages/FeedTestPage";
 import DirectMessagePage from "../pages/messages/DirectMessagePage";
 import OpenDmPage from "../pages/dev/OpenDmPage";
 import MinePortraitStackPreview from "../pages/dev/MinePortraitStackPreview";
+import OpenPlanRequestersListPreview from "../pages/dev/OpenPlanRequestersListPreview";
 import ReportsReviewPage from "../pages/reviews/ReportsReviewPage";
 import AppUpdatesPage from "../pages/internal/AppUpdatesPage";
 import CompanyAnnouncementsPage from "../pages/internal/CompanyAnnouncementsPage";
@@ -249,9 +250,9 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
 
         {/* Utility routes */}
         <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path={Paths.feedTest} element={<FeedTestPage />} />
         {import.meta.env.DEV ? (
           <>
+            <Route path={Paths.feedTest} element={<FeedTestPage />} />
             <Route
               path={Paths.devOpenDm}
               element={
@@ -263,6 +264,10 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
             <Route
               path={Paths.devMinePortraitStack}
               element={<MinePortraitStackPreview />}
+            />
+            <Route
+              path={Paths.devOpenPlanRequestersList}
+              element={<OpenPlanRequestersListPreview />}
             />
           </>
         ) : null}

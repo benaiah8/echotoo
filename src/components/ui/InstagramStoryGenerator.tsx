@@ -62,6 +62,7 @@ async function captureStoryToCanvas(
     canvas: HTMLCanvasElement,
     validation: ReturnType<typeof validateStoryExportCanvas>
   ) => {
+    if (!import.meta.env.DEV) return;
     console.info("[InstagramStoryGenerator]", {
       attempt,
       renderer,
@@ -81,10 +82,12 @@ async function captureStoryToCanvas(
       foreignObjectRendering: true,
     });
   } catch (foErr) {
-    console.warn(
-      "[InstagramStoryGenerator] foreignObject capture failed; retrying with legacy renderer",
-      foErr
-    );
+    if (import.meta.env.DEV) {
+      console.warn(
+        "[InstagramStoryGenerator] foreignObject capture failed; retrying with legacy renderer",
+        foErr
+      );
+    }
     const legacyCanvas = await html2canvas(el, {
       ...base,
       foreignObjectRendering: false,
@@ -107,10 +110,12 @@ async function captureStoryToCanvas(
   logCapture(1, "foreignObject", foCanvas, vFo);
   if (vFo.ok) return foCanvas;
 
-  console.info("[InstagramStoryGenerator]", {
-    reason: "invalid_canvas",
-    retryingWith: "legacy",
-  });
+  if (import.meta.env.DEV) {
+    console.info("[InstagramStoryGenerator]", {
+      reason: "invalid_canvas",
+      retryingWith: "legacy",
+    });
+  }
 
   const legacyCanvas = await html2canvas(el, {
     ...base,
@@ -269,17 +274,21 @@ export default function InstagramStoryGenerator({
           });
           const vManual = validateStoryExportCanvas(canvas);
           if (!vManual.ok) {
-            console.warn(
-              "[InstagramStoryGenerator] manual canvas failed validation; falling back to html2canvas",
-              vManual.stats
-            );
+            if (import.meta.env.DEV) {
+              console.warn(
+                "[InstagramStoryGenerator] manual canvas failed validation; falling back to html2canvas",
+                vManual.stats
+              );
+            }
             canvas = await captureStoryToCanvas(exportCaptureRef.current);
           }
         } catch (manualErr) {
-          console.warn(
-            "[InstagramStoryGenerator] manual canvas render failed; falling back to html2canvas",
-            manualErr
-          );
+          if (import.meta.env.DEV) {
+            console.warn(
+              "[InstagramStoryGenerator] manual canvas render failed; falling back to html2canvas",
+              manualErr
+            );
+          }
           canvas = await captureStoryToCanvas(exportCaptureRef.current);
         }
       } else {

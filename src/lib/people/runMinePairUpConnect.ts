@@ -15,6 +15,12 @@ import {
   peopleConnectUserToastKind,
   type PeopleConnectRpcName,
 } from "./peopleConnectHardening";
+import {
+  beginDiscoverHeartPending,
+  cancelDiscoverHeartPending,
+  clearDiscoverHeartOpportunity,
+  confirmDiscoverHeart,
+} from "./discoverHeartState";
 import { isPeoplePhotoPromptBypassed } from "../peoplePhotoPromptSession";
 import { resolvePhotoPromptOffer } from "../peoplePhotoPromptPolicy";
 import {
@@ -48,13 +54,29 @@ export type MinePairUpConnectHost = {
   setPhaseIdle: () => void;
   beginFlight: () => void;
   endFlight: () => void;
+  /** Discover unmatched Heart: keep the card and mark this opportunity active. */
+  onDiscoverHeartExpressed?: (opportunityId: string, expressed: boolean) => void;
+  /** Duo unmatched Connect succeeded. Not called for a match or a failure. */
+  onDuoUnmatchedConfirmed?: (opportunityId: string) => void;
 };
 
 export type MinePairUpConnectRequest = {
   target: PairUpCandidate;
   scope: MinePairUpConnectScope;
   host: MinePairUpConnectHost;
+  /**
+   * Discover Heart button. The runner marks this opportunity pending and
+   * does not take the deck-wide Connect lock.
+   */
+  heartAlreadyPending?: boolean;
 };
+
+export type MinePairUpConnectStatus =
+  | "matched"
+  | "open"
+  | "failed"
+  | "aborted"
+  | "ignored";
 
 /**
  * Starts Connect for a captured target. Photo-gate may defer the mutation;
@@ -62,49 +84,77 @@ export type MinePairUpConnectRequest = {
  */
 export async function runMinePairUpConnect(
   request: MinePairUpConnectRequest
-): Promise<void> {
+): Promise<MinePairUpConnectStatus> {
   const { target, scope, host } = request;
-  if (scope !== "my_plans" && scope !== "discover") return;
-  if (host.shouldAbortBeforeStart()) return;
+  const trackHeart = scope === "discover" && request.heartAlreadyPending === true;
+  if (scope !== "my_plans" && scope !== "discover") return "ignored";
+  if (host.shouldAbortBeforeStart()) return "ignored";
 
   if (host.isDevMock(target)) {
     host.applyUnmatchedRemoval(target.opportunity_id);
-    return;
+    return "open";
   }
 
-  if (!host.ensureAuthed()) return;
+  if (!host.ensureAuthed()) return "aborted";
   const userId = host.authUserId;
-  if (!userId) return;
+  if (!userId) return "aborted";
+
+  if (trackHeart) {
+    const started = beginDiscoverHeartPending(
+      userId,
+      target.opportunity_id,
+      target.expressed_by_me
+    );
+    if (!started) return "ignored";
+  }
 
   const releaseFlight = () => {
+    if (trackHeart) {
+      cancelDiscoverHeartPending(userId, target.opportunity_id);
+      return;
+    }
     host.endFlight();
   };
 
-  const runMutation = async () => {
+  const runMutation = async (): Promise<MinePairUpConnectStatus> => {
     const rpc: PeopleConnectRpcName =
       scope === "discover"
         ? "connect_discover_pair_up"
         : "express_pair_up_interest";
     host.setPinned(target);
-    host.setPhaseExpressing();
+    if (trackHeart) {
+      /* Pending is already scoped to this opportunity. */
+    } else {
+      host.setPhaseExpressing();
+    }
     try {
       const result =
         scope === "discover"
           ? await connectDiscoverPairUp(target.opportunity_id)
           : await host.express(target.opportunity_id);
       if (result.matched) {
+        if (scope === "discover") {
+          clearDiscoverHeartOpportunity(target.opportunity_id);
+        }
         await host.applyMatchedAndComplete(target.opportunity_id);
-        return;
+        return "matched";
       }
       host.setPinned(null);
-      host.setPhaseIdle();
-      host.applyUnmatchedRemoval(target.opportunity_id);
+      if (!trackHeart) host.setPhaseIdle();
       if (scope === "discover") {
+        confirmDiscoverHeart(userId, target.opportunity_id, true);
+        host.onDiscoverHeartExpressed?.(target.opportunity_id, true);
         toast.success(peopleUiCopy.discoverAddedToP2p);
+      } else {
+        host.onDuoUnmatchedConfirmed?.(target.opportunity_id);
       }
+      return "open";
     } catch (err) {
       host.setPinned(null);
-      host.setPhaseIdle();
+      if (!trackHeart) host.setPhaseIdle();
+      if (trackHeart) {
+        cancelDiscoverHeartPending(userId, target.opportunity_id);
+      }
       logPeopleConnectFailureDev({
         rpc,
         err,
@@ -119,24 +169,26 @@ export async function runMinePairUpConnect(
           : peopleUiCopy.deckExpressError
       );
       if (isPeopleConnectStaleEligibilityError(err)) {
+        if (scope === "discover") {
+          clearDiscoverHeartOpportunity(target.opportunity_id);
+        }
         host.applyUnmatchedRemoval(target.opportunity_id);
       }
+      return "failed";
     } finally {
       releaseFlight();
     }
   };
 
-  host.beginFlight();
+  if (!trackHeart) host.beginFlight();
 
   if (isPeoplePhotoPromptBypassed()) {
-    await runMutation();
-    return;
+    return runMutation();
   }
 
   const profile = resolvePhotoPromptOffer(userId, "people_connect", false);
   if (!profile) {
-    await runMutation();
-    return;
+    return runMutation();
   }
 
   const opened = openPairUpPhotoPrompt({
@@ -156,5 +208,7 @@ export async function runMinePairUpConnect(
   if (!opened) {
     /* Another connect/join intent already owns the singleton prompt. */
     releaseFlight();
+    return "aborted";
   }
+  return "ignored";
 }

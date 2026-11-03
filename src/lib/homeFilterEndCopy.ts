@@ -1,4 +1,5 @@
 import {
+  formatHomeCustomDateChipLabel,
   tomorrowSecondaryDateFilter,
   type HomeDateFilter,
   type HomeFilterAction,
@@ -9,6 +10,7 @@ export type HomeFilterEndVariant = "zero" | "exhausted";
 
 export type HomeFilterEndCopyInput = {
   dateFilter: HomeDateFilter;
+  customOccursOn?: string | null;
   viewMode: HomeViewMode;
   friendsFilter: boolean;
   variant: HomeFilterEndVariant;
@@ -183,9 +185,29 @@ function combinedDateHeading(
     : `That's all from friends ${window}`;
 }
 
+function customDateBaseCopy(
+  occursOn: string,
+  _variant: HomeFilterEndVariant
+): Omit<HomeFilterEndCopy, "heading"> & {
+  headingZero: string;
+  headingExhausted: string;
+} {
+  const label = formatHomeCustomDateChipLabel(occursOn);
+  return {
+    headingZero: `Nothing happening ${label} yet`,
+    headingExhausted: `That's all for ${label}`,
+    createPrompt: PROMPT_DATE_EVENTS,
+    primaryLabel: CREATE,
+    secondaryLabel: "See all events",
+    tertiaryLabel: TERTIARY,
+    secondaryAction: { type: "selectEvents" },
+  };
+}
+
 function hasContentFilters(input: HomeFilterEndCopyInput): boolean {
   return (
     input.dateFilter !== "none" ||
+    Boolean(input.customOccursOn) ||
     input.viewMode !== "all" ||
     input.friendsFilter
   );
@@ -215,6 +237,24 @@ export function getHomeFilterEndCopy(
     return {
       heading: getHomeSearchPostsEmptyHeading(hasContentFilters(input)),
       createPrompt: PROMPT_SEARCH_FILTERS,
+      primaryLabel: base.primaryLabel,
+      secondaryLabel: base.secondaryLabel,
+      tertiaryLabel: base.tertiaryLabel,
+      secondaryAction: base.secondaryAction,
+    };
+  }
+
+  if (input.customOccursOn) {
+    const base = customDateBaseCopy(input.customOccursOn, input.variant);
+    const friendsHeading =
+      input.friendsFilter && input.variant === "zero"
+        ? `Nothing from friends on ${formatHomeCustomDateChipLabel(input.customOccursOn)} yet`
+        : input.friendsFilter && input.variant === "exhausted"
+          ? `That's all from friends on ${formatHomeCustomDateChipLabel(input.customOccursOn)}`
+          : undefined;
+    return {
+      heading: headingOf(base, friendsHeading),
+      createPrompt: base.createPrompt,
       primaryLabel: base.primaryLabel,
       secondaryLabel: base.secondaryLabel,
       tertiaryLabel: base.tertiaryLabel,

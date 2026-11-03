@@ -112,7 +112,7 @@ describe("PASS PV1.3 — processing + HLS guards", () => {
     expect(player).toContain('preload="none"');
     expect(player).toContain("userWantsPlayRef");
     expect(player).toMatch(
-      /if \(!isActive && !isWarm\) \{[\s\S]*tearDownPlayback\(\)/,
+      /resolveIdlePublishedVideoCleanup\([\s\S]*tearDownPlayback\(\)/,
     );
     expect(player).not.toMatch(/5\s*second|first five|downloadCache|fixed.?5/i);
   });

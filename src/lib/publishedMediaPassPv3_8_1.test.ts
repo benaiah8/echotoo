@@ -78,10 +78,12 @@ describe("PASS PV3.8.1 — sync play / ownership (PV3.8.2-compatible)", () => {
     expect(player).toContain("manualPlayInFlightRef");
   });
 
-  it("O: idle tearDown suppressed during manual ownership catch-up", () => {
+  it("O: idle force-pauses during manual inflight then tears down", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
-    expect(player).toContain("teardown-suppressed-manual-inflight");
+    expect(player).toContain("idle-force-pause-manual-inflight");
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
     expect(player).toContain("manualPlayInFlightRef.current");
+    expect(player).not.toContain("teardown-suppressed-manual-inflight");
   });
 
   it("P/Q: warm tap promotes + HLS reuse", () => {

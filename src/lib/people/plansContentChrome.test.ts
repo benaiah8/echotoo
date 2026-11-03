@@ -42,7 +42,7 @@ describe("Plans content chrome → canonical (superseded stack removed)", () => 
     expect(SHARED_SRC).toContain('expansionMode = "inline"');
     expect(SHARED_SRC).toContain('expansionMode === "floating"');
     expect(SLIDE_SRC).toContain("candidate.description");
-    expect(BODY_SRC).toContain('duoPresentation="mine"');
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
   });
 
   it("privacy disclosure is not on compact action or Plans slide", () => {
@@ -68,7 +68,7 @@ describe("Plans content chrome → canonical (superseded stack removed)", () => 
     expect(BODY_SRC).toContain("requestOpenPlan");
     expect(BODY_SRC).toContain("withdrawOpenPlanRequest");
     expect(BODY_SRC).toContain("identityVisibleToHost: true");
-    expect(BODY_SRC).toContain("fixedRailsGeometry");
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
   });
 
   it("Plans live metrics use Mine chromeProfile (not Plans chrome reserve)", () => {
@@ -82,6 +82,6 @@ describe("Plans content chrome → canonical (superseded stack removed)", () => 
       chromeProfile: "mine",
     });
     expect(m.fullWidthSlide).toBe(true);
-    expect(BODY_SRC).toContain('duoPresentation="mine"');
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
   });
 });

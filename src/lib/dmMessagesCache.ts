@@ -18,7 +18,7 @@ export type DmMessagesCacheEntry = {
 const MAX_CONVERSATIONS = 5;
 const MAX_MESSAGES_PER_ENTRY = 60;
 
-/** No first-page list_messages while younger than this. */
+/** Focus/reconnect reconcile may skip while younger than this (open always fetches). */
 export const DM_MESSAGES_FRESH_MS = 60_000;
 /** Paint + silent merge while younger than this. */
 export const DM_MESSAGES_STALE_USABLE_MS = 5 * 60_000;

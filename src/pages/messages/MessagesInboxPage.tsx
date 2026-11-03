@@ -57,6 +57,7 @@ import {
   inboxConversationSortAt,
   isDmInboxFresh,
   isDmInboxUsable,
+  knownDirectInboundNeedsAuthoritativeRequestRefresh,
   patchDmInboxConversationSummary,
   patchDmInboxNotificationsMuted,
   patchDmInboxUnread,
@@ -73,7 +74,10 @@ import { invalidateGroupUpMemberships } from "../../lib/groupUpMembershipsCache"
 import { invalidateGroupUpRequestGroups } from "../../lib/groupUpRequestGroupsCache";
 import { invalidateGroupUpSourceList } from "../../lib/groupUpSourceListCache";
 import { logDmRealtime } from "../../lib/messagesRealtimeDebug";
-import { subscribeConversationPreviewPatches } from "../../lib/conversationPreviewEvents";
+import {
+  subscribeConversationPreviewPatches,
+  subscribeInboxRequestPromoted,
+} from "../../lib/conversationPreviewEvents";
 import {
   eligibleInboxConversations,
   filterInboxByQuery,
@@ -509,6 +513,33 @@ export default function MessagesInboxPage() {
     [loadInbox]
   );
 
+  /**
+   * First inbound message on an empty known direct. One trailing list reload.
+   * Does not run for groups, existing requests, or conversations that already
+   * have a last message.
+   */
+  const refreshIfRequestClassificationStale = useCallback(
+    (conversationId: string, incomingSenderId: string | null): boolean => {
+      const viewer = viewerUserIdRef.current;
+      if (!viewer) return false;
+      const row = rowsRef.current.find(
+        (item) => item.conversation_id === conversationId
+      );
+      if (
+        !knownDirectInboundNeedsAuthoritativeRequestRefresh(
+          row,
+          incomingSenderId,
+          viewer
+        )
+      ) {
+        return false;
+      }
+      scheduleAuthoritativeRefresh(viewer);
+      return true;
+    },
+    [scheduleAuthoritativeRefresh]
+  );
+
   const runSilentInboxReconcile = useCallback(
     (viewerId: string, reason: string) => {
       const cached = getDmInboxCache(viewerId);
@@ -790,9 +821,33 @@ export default function MessagesInboxPage() {
 
   useEffect(() => {
     if (!viewerUserId) return;
+    return subscribeInboxRequestPromoted((conversationId) => {
+      setRows((prev) => {
+        let changed = false;
+        const next = prev.map((row) => {
+          if (row.conversation_id !== conversationId) return row;
+          if (row.kind === "group" || row.is_request === false) return row;
+          changed = true;
+          return { ...row, is_request: false };
+        });
+        return changed ? next : prev;
+      });
+    });
+  }, [viewerUserId]);
+
+  useEffect(() => {
+    if (!viewerUserId) return;
     return subscribeConversationPreviewPatches((patch) => {
       const conversationId = patch.conversationId.trim();
       if (!conversationId) return;
+      if (
+        refreshIfRequestClassificationStale(
+          conversationId,
+          patch.senderUserId ?? null
+        )
+      ) {
+        return;
+      }
       const last_message_at = patch.lastMessageAt ?? null;
       const last_message_preview = patch.preview ?? null;
       const last_message_sender_id = patch.senderUserId ?? null;
@@ -833,7 +888,7 @@ export default function MessagesInboxPage() {
         return mapped;
       });
     });
-  }, [viewerUserId]);
+  }, [viewerUserId, refreshIfRequestClassificationStale]);
 
   useMessagesInboxRealtime({
     viewerUserId,
@@ -861,6 +916,7 @@ export default function MessagesInboxPage() {
     },
     onMemberUnread: (conversationId, unreadCount) => {
       if (!viewerUserId) return;
+      refreshIfRequestClassificationStale(conversationId, null);
       const next = patchDmInboxUnread(
         viewerUserId,
         conversationId,
@@ -905,6 +961,14 @@ export default function MessagesInboxPage() {
       last_message_sender_id,
     }) => {
       if (!viewerUserId) return;
+      if (
+        refreshIfRequestClassificationStale(
+          conversationId,
+          last_message_sender_id
+        )
+      ) {
+        return;
+      }
       const is_last_from_me =
         !!last_message_sender_id && last_message_sender_id === viewerUserId;
       const next = patchDmInboxConversationSummary(viewerUserId, conversationId, {

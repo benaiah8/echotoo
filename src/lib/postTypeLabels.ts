@@ -72,3 +72,10 @@ export function postTypeNotificationPhrase(
 ): "an event" | "a post" {
   return asKind(type) === "hangout" ? "an event" : "a post";
 }
+
+/** Followed-post / publish announcement verb phrase (display only). */
+export function postTypeCreatedPhrase(
+  type: string | null | undefined,
+): "created an event" | "created a post" {
+  return asKind(type) === "hangout" ? "created an event" : "created a post";
+}

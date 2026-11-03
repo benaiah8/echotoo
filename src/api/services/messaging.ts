@@ -25,6 +25,8 @@ export type MessageKind = "text" | "shared_post" | "match_context";
 export type SharedPostSnapshot = {
   v: 1;
   post_type: "hangout" | "experience";
+  /** Present only when the server marked this share as a Duo comment. */
+  origin?: "duo";
 };
 
 export type MatchContextSubtype = "open_plan_match" | "pair_up_match";
@@ -297,6 +299,9 @@ function parseSharedPostSnapshot(raw: unknown): SharedPostSnapshot | null {
   const postType = asString(o.post_type);
   if (v !== 1) return null;
   if (postType !== "hangout" && postType !== "experience") return null;
+  if (o.origin === "duo") {
+    return { v: 1, post_type: postType, origin: "duo" };
+  }
   return { v: 1, post_type: postType };
 }
 
@@ -544,7 +549,8 @@ export async function sendSharedPostMessage(
   conversationId: string,
   postId: string,
   note: string | null | undefined,
-  clientMessageId?: string
+  clientMessageId?: string,
+  duoComment?: boolean
 ): Promise<{ data: SendMessageResult | null; error: unknown }> {
   try {
     const trimmedConversationId = (conversationId ?? "").trim();
@@ -567,12 +573,26 @@ export async function sendSharedPostMessage(
     const id =
       (clientMessageId ?? "").trim() || createClientMessageId();
 
-    const { data, error } = await supabase.rpc("send_shared_post_message", {
+    const rpcArgs: {
+      p_conversation_id: string;
+      p_post_id: string;
+      p_note: string | null;
+      p_client_message_id: string;
+      p_duo_comment?: true;
+    } = {
       p_conversation_id: trimmedConversationId,
       p_post_id: trimmedPostId,
       p_note: noteTrimmed.length > 0 ? noteTrimmed : null,
       p_client_message_id: id,
-    });
+    };
+    if (duoComment === true) {
+      rpcArgs.p_duo_comment = true;
+    }
+
+    const { data, error } = await supabase.rpc(
+      "send_shared_post_message",
+      rpcArgs
+    );
 
     if (error) {
       console.error("[sendSharedPostMessage] RPC error:", error);

@@ -89,4 +89,45 @@ describe("iOS editable input ≥16px hardening (source)", () => {
     );
     expect(section).toContain("font-size: 16px;");
   });
+
+  it("People editors declare ≥16px on editable inputs (not only the coarse CSS floor)", () => {
+    const pairUp = readRepo("src/components/ui/PairUpActiveOverlay.tsx");
+    expect(pairUp).toContain('id="pair-up-note-editor"');
+    expect(pairUp).toContain(
+      '"px-1 py-1 text-base leading-relaxed text-[var(--text)]"'
+    );
+
+    const openPlan = readRepo("src/components/ui/OpenPlanActiveOverlay.tsx");
+    expect(openPlan).toContain('id="open-plan-note-editor"');
+    expect(openPlan).toContain(
+      '"px-1 py-1 text-base leading-relaxed text-[var(--text)]"'
+    );
+
+    const groupUp = readRepo("src/components/ui/GroupUpActiveOverlay.tsx");
+    expect(groupUp).toContain('id="group-up-name"');
+    expect(groupUp).toContain(
+      '"py-1 text-base font-semibold leading-snug text-[var(--text)]"'
+    );
+    expect(groupUp).toContain('id="group-up-description"');
+    expect(groupUp).toContain(
+      '"pr-5 py-1 text-base leading-relaxed text-[var(--text)]"'
+    );
+
+    const comment = readRepo(
+      "src/components/people/PeopleCommentComposerOverlay.tsx"
+    );
+    expect(comment).toContain('id="people-comment-composer-body"');
+    expect(comment).toContain(
+      '"px-3 py-2.5 text-base leading-relaxed text-[var(--text)]"'
+    );
+
+    const request = readRepo(
+      "src/components/people/OpenPlanRequestNoteComposer.tsx"
+    );
+    expect(request).toContain('data-open-plan-request-note-input="true"');
+    expect(request).toContain(
+      '"px-3 py-2.5 text-base leading-relaxed text-[var(--text)]"'
+    );
+    expect(request).not.toContain("text-[14px]");
+  });
 });

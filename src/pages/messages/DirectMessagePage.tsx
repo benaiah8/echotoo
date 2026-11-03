@@ -47,7 +47,7 @@ import {
 import type { InviteThreadParticipant } from "../../api/services/inviteThreads";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
-import { postTypeNotificationPhrase } from "../../lib/postTypeLabels";
+import { sharedPostInboxPreview } from "../../lib/messages/sharedPostInboxPreview";
 import { getMyGroupUpForConversation } from "../../api/services/groupUp";
 import type { GroupUpSourceContext } from "../../lib/people/types";
 import {
@@ -104,6 +104,12 @@ import {
   DM_MESSAGES_FRESH_MS,
 } from "../../lib/dmMessagesCache";
 import {
+  dedupePrepend,
+  mergeNewestPage,
+  messageKey,
+  tipFromMessages,
+} from "../../lib/dmMessageMerge";
+import {
   getDmConversationParticipantsCache,
   participantsEntryToMemberRows,
   removeDmConversationParticipantsCache,
@@ -118,9 +124,11 @@ import {
 import {
   getDmInboxCache,
   patchDmInboxConversationSummary,
+  patchDmInboxIsRequest,
   patchDmInboxNotificationsMuted,
   patchDmInboxUnread,
   removeDmInboxConversation,
+  shouldPromoteRequestAfterReply,
 } from "../../lib/dmInboxCache";
 import {
   clearConversationUnread,
@@ -131,11 +139,13 @@ import { invalidateGroupUpMemberships } from "../../lib/groupUpMembershipsCache"
 import { invalidateGroupUpOwnForPost } from "../../lib/groupUpCache";
 import { invalidateGroupUpRequestGroups } from "../../lib/groupUpRequestGroupsCache";
 import { invalidateGroupUpSourceList } from "../../lib/groupUpSourceListCache";
-import { emitConversationPreviewPatch } from "../../lib/conversationPreviewEvents";
+import {
+  emitConversationPreviewPatch,
+  emitInboxRequestPromoted,
+} from "../../lib/conversationPreviewEvents";
 import { logDmRealtime } from "../../lib/messagesRealtimeDebug";
 import {
   useDirectConversationRealtime,
-  threadRealtimeHadCoverageGap,
   isThreadRealtimeHealthy,
 } from "../../hooks/useDirectConversationRealtime";
 import { supabase } from "../../lib/supabaseClient";
@@ -295,24 +305,23 @@ function partnerFirstName(profile: OtherProfile | null): string {
   return "them";
 }
 
-function messageKey(m: MessageRow): string {
-  return m.id || m.client_message_id;
-}
-
 function inboxPreviewFromMessage(m: MessageRow): string {
   if (m.message_kind === "match_context") {
     return (m.body ?? "").trim().slice(0, 200) || "Match";
   }
   if (m.message_kind === "shared_post") {
-    const note = (m.body ?? "").trim();
     const snap = m.reference_snapshot;
-    const kind =
+    const postType =
       snap && "post_type" in snap && snap.post_type === "experience"
         ? "experience"
         : "hangout";
-    const label = `Shared ${postTypeNotificationPhrase(kind)}`;
-    if (note.length > 0) return `${label} · ${note}`.slice(0, 200);
-    return label;
+    const origin =
+      snap && "origin" in snap && snap.origin === "duo" ? "duo" : null;
+    return sharedPostInboxPreview({
+      note: m.body,
+      postType,
+      origin,
+    });
   }
   return (m.body ?? "").slice(0, 200);
 }
@@ -325,6 +334,19 @@ function dmTextBubbleClass(mine: boolean): string {
       : "bg-[color-mix(in_oklab,var(--surface-2)_84%,var(--bg))] text-[var(--text)]/88 ring-1 ring-black/[0.04] app-dark:bg-[color-mix(in_oklab,var(--surface-2)_56%,var(--bg))] app-dark:text-[var(--text)]/92 app-dark:ring-white/[0.08]"
   }`;
 }
+
+/** Same fill and text as a normal bubble. The ring is replaced by the gradient frame. */
+function duoCommentBubbleClass(mine: boolean): string {
+  return dmTextBubbleClass(mine)
+    .replace(" ring-1 ring-amber-200/55", "")
+    .replace(" app-dark:ring-amber-400/22", "")
+    .replace(" ring-1 ring-black/[0.04]", "")
+    .replace(" app-dark:ring-white/[0.08]", "");
+}
+
+/** Border only. Opaque underpaint stops the gradient from tinting the fill. */
+const duoCommentFrameClass =
+  "rounded-[calc(1.15rem+1.5px)] bg-[linear-gradient(115deg,#f97316_0%,#eab308_20%,#22c55e_40%,#22d3ee_60%,#3b82f6_80%,#a855f7_100%)] p-[1.5px]";
 
 function sharedPostNote(body: string): string | null {
   const note = body.trim();
@@ -340,6 +362,16 @@ function sharedPostFallbackType(
   return t === "hangout" || t === "experience" ? t : null;
 }
 
+function isDuoCommentMessage(m: MessageRow): boolean {
+  const snap = m.reference_snapshot;
+  return (
+    m.message_kind === "shared_post" &&
+    !!snap &&
+    "origin" in snap &&
+    snap.origin === "duo"
+  );
+}
+
 function isMalformedSharedPost(m: MessageRow): boolean {
   if (m.message_kind !== "shared_post") return false;
   const refId = (m.reference_id ?? "").trim();
@@ -350,46 +382,6 @@ function isMalformedSharedPost(m: MessageRow): boolean {
     return true;
   }
   return false;
-}
-
-function dedupePrepend(
-  existing: MessageRow[],
-  olderChronological: MessageRow[]
-): MessageRow[] {
-  const seen = new Set(existing.map(messageKey));
-  const toAdd: MessageRow[] = [];
-  for (const m of olderChronological) {
-    const key = messageKey(m);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    toAdd.push(m);
-  }
-  return [...toAdd, ...existing];
-}
-
-/** Merge newest chronological page into existing list; keep older session pages. */
-function mergeNewestPage(
-  existing: MessageRow[],
-  newestChronological: MessageRow[]
-): MessageRow[] {
-  if (newestChronological.length === 0) return existing;
-  const byKey = new Map<string, MessageRow>();
-  for (const m of existing) byKey.set(messageKey(m), m);
-  for (const m of newestChronological) byKey.set(messageKey(m), m);
-  const merged = Array.from(byKey.values());
-  merged.sort((a, b) => {
-    const at = Date.parse(a.created_at);
-    const bt = Date.parse(b.created_at);
-    if (at !== bt) return at - bt;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
-  return merged;
-}
-
-function tipFromMessages(messages: MessageRow[]): MessageListCursor | null {
-  if (messages.length === 0) return null;
-  const tip = messages[messages.length - 1];
-  return { created_at: tip.created_at, id: tip.id };
 }
 
 function sameLocalCalendarDay(aIso: string, bIso: string): boolean {
@@ -1466,21 +1458,10 @@ export default function DirectMessagePage() {
         }
         setConversationKind(kind);
 
-        const cacheFresh = !!(cached && isDmMessagesFresh(cached));
+        // Always reconcile newest page on open. Paint from cache above; merge
+        // when usable so older session pages stay and the inbox tip cannot outrun history.
         const cacheUsable = !!(cached && isDmMessagesUsable(cached));
-        const hadRealtimeGap = cached
-          ? threadRealtimeHadCoverageGap(conversationId, cached.updatedAt)
-          : false;
-        const skipFirstPageList =
-          cacheFresh && hasCachedMessages && !hadRealtimeGap;
-        const silentMerge = !skipFirstPageList && cacheUsable && hasCachedMessages;
-        if (hasCachedMessages && hadRealtimeGap) {
-          logDmRealtime("thread-reconcile", {
-            conversationId,
-            realtime_gap: true,
-            forceMerge: true,
-          });
-        }
+        const silentMerge = cacheUsable && hasCachedMessages;
 
         if (kind === "group") {
           setOtherUserId(null);
@@ -1505,16 +1486,11 @@ export default function DirectMessagePage() {
               : null;
           setGroupCreatedBy(createdBy);
 
-          if (skipFirstPageList && cached) {
-            scheduleMarkRead(tipFromMessages(cached.messages));
-            setLoading(false);
-            return;
-          }
-
           const listResult = await listMessages(conversationId);
           if (cancelled) return;
 
           if (listResult.error || !listResult.data) {
+            // Keep painted cache; do not advance read on failed newest-page fetch.
             if (!hasCachedMessages) {
               setLoadError(
                 rpcLikeMessage(listResult.error, "Could not load messages.")
@@ -1525,20 +1501,19 @@ export default function DirectMessagePage() {
           }
 
           const chronological = [...listResult.data.messages].reverse();
-          if (silentMerge) {
+          if (silentMerge && cached) {
             setMessages((prev) => {
               const merged = mergeNewestPage(prev, chronological);
               setDmMessagesCache(
                 viewer,
                 conversationId,
                 merged,
-                listResult.data!.has_more,
-                listResult.data!.next_cursor
+                cached.hasMoreOlder,
+                cached.olderCursor
               );
               return merged;
             });
-            setHasMoreOlder(listResult.data.has_more);
-            setOlderCursor(listResult.data.next_cursor);
+            // Preserve older-page pagination from the painted cache/session.
           } else {
             setMessages(chronological);
             setHasMoreOlder(listResult.data.has_more);
@@ -1598,17 +1573,9 @@ export default function DirectMessagePage() {
         }
 
         const needProfile = !seedComplete;
-        const needMessages = !skipFirstPageList;
 
         const [listResult, profile, accessResult] = await Promise.all([
-          needMessages
-            ? listMessages(conversationId)
-            : Promise.resolve({
-                data: null as Awaited<
-                  ReturnType<typeof listMessages>
-                >["data"],
-                error: null as unknown,
-              }),
+          listMessages(conversationId),
           needProfile
             ? getProfileByUserId(resolvedOther)
             : Promise.resolve(null),
@@ -1617,50 +1584,47 @@ export default function DirectMessagePage() {
 
         if (cancelled) return;
 
-        if (needMessages) {
-          if (listResult.error || !listResult.data) {
-            if (!hasCachedMessages) {
-              setLoadError(
-                rpcLikeMessage(listResult.error, "Could not load messages.")
-              );
-            }
+        const listOk = !listResult.error && !!listResult.data;
+        if (!listOk) {
+          // Keep painted cache; do not advance read on failed newest-page fetch.
+          if (!hasCachedMessages) {
+            setLoadError(
+              rpcLikeMessage(listResult.error, "Could not load messages.")
+            );
             setLoading(false);
             return;
           }
-
-          const chronological = [...listResult.data.messages].reverse();
-          if (silentMerge) {
+        } else {
+          const chronological = [...listResult.data!.messages].reverse();
+          if (silentMerge && cached) {
             setMessages((prev) => {
               const merged = mergeNewestPage(prev, chronological);
               setDmMessagesCache(
                 viewer,
                 conversationId,
                 merged,
-                listResult.data!.has_more,
-                listResult.data!.next_cursor
+                cached.hasMoreOlder,
+                cached.olderCursor
               );
               return merged;
             });
-            setHasMoreOlder(listResult.data.has_more);
-            setOlderCursor(listResult.data.next_cursor);
+            // Preserve older-page pagination from the painted cache/session.
           } else {
             setMessages(chronological);
-            setHasMoreOlder(listResult.data.has_more);
-            setOlderCursor(listResult.data.next_cursor);
+            setHasMoreOlder(listResult.data!.has_more);
+            setOlderCursor(listResult.data!.next_cursor);
             setDmMessagesCache(
               viewer,
               conversationId,
               chronological,
-              listResult.data.has_more,
-              listResult.data.next_cursor
+              listResult.data!.has_more,
+              listResult.data!.next_cursor
             );
           }
           void ensureSharedPostsResolved(
             collectSharedPostReferenceIds(chronological)
           );
           scheduleMarkRead(tipFromMessages(chronological));
-        } else if (cached) {
-          scheduleMarkRead(tipFromMessages(cached.messages));
         }
 
         if (!accessResult.error && accessResult.data) {
@@ -2020,8 +1984,20 @@ export default function DirectMessagePage() {
       );
       patchInboxPreviewFromLiveMessage(data.message);
 
-      if (wasRequest) {
+      if (
+        wasRequest &&
+        shouldPromoteRequestAfterReply({
+          wasRequest: true,
+          delivered: true,
+          messageKind: data.message.message_kind,
+        })
+      ) {
         applyUnlockAccess();
+        const viewer = viewerUserIdRef.current;
+        if (viewer) {
+          patchDmInboxIsRequest(viewer, conversationId, false);
+          emitInboxRequestPromoted(conversationId);
+        }
         window.dispatchEvent(new CustomEvent(MESSAGES_TAB_REFRESH_EVENT));
       } else if (
         data.created === true &&
@@ -2889,12 +2865,29 @@ export default function DirectMessagePage() {
                             ) : null}
                             {isSharedPost ? (
                               <div className="flex min-w-0 flex-col gap-1.5">
+                                {isDuoCommentMessage(m) ? (
+                                  <p className="text-[11px] font-medium leading-none text-orange-800 supports-[background-clip:text]:bg-gradient-to-r supports-[background-clip:text]:from-orange-700 supports-[background-clip:text]:via-amber-500 supports-[background-clip:text]:to-yellow-400 supports-[background-clip:text]:bg-clip-text supports-[background-clip:text]:text-transparent app-dark:text-amber-200 app-dark:supports-[background-clip:text]:from-orange-300 app-dark:supports-[background-clip:text]:via-amber-200 app-dark:supports-[background-clip:text]:to-yellow-200">
+                                    Duo comment
+                                  </p>
+                                ) : null}
                                 {sharedNote ? (
-                                  <div className={dmTextBubbleClass(mine)}>
-                                    <p className="whitespace-pre-wrap break-words">
-                                      {sharedNote}
-                                    </p>
-                                  </div>
+                                  isDuoCommentMessage(m) ? (
+                                    <div className={duoCommentFrameClass}>
+                                      <div className="overflow-hidden rounded-[1.15rem] bg-[var(--bg)]">
+                                        <div className={duoCommentBubbleClass(mine)}>
+                                          <p className="whitespace-pre-wrap break-words">
+                                            {sharedNote}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className={dmTextBubbleClass(mine)}>
+                                      <p className="whitespace-pre-wrap break-words">
+                                        {sharedNote}
+                                      </p>
+                                    </div>
+                                  )
                                 ) : null}
                                 <SharedPostMessageCard
                                   status={sharedCardStatus}

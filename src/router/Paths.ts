@@ -25,6 +25,8 @@ export const Paths = {
   devOpenDm: "/dev/open-dm",
   /** DEV-only Mine portrait stack depth/shadow preview. */
   devMinePortraitStack: "/dev/mine-portrait-stack",
+  /** DEV-only Open Plan requester list presentation harness. */
+  devOpenPlanRequestersList: "/dev/open-plan-requesters-list",
   /** Reviewer-only internal landing (links to reports, app updates, etc.). */
   internal: "/internal",
   /** Reviewer-only report queue (not in bottom nav; RLS + allowlist). */

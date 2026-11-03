@@ -230,6 +230,8 @@ export {
   shouldSuppressCompetingPlayDuringHandoff,
   shouldCommitDeferredPlaybackTeardown,
   shouldTearDownIdlePublishedVideo,
+  resolveIdlePublishedVideoCleanup,
+  shouldAbortPublishedPlayBecauseNotActive,
   resolveHandoffRestoreAbortDisposition,
   abandonPublishedVideoHandoffForManualPlay,
   nextHandoffVisualSeekLock,

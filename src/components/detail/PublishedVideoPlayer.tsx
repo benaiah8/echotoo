@@ -78,6 +78,8 @@ import {
   shouldRetryPublishedVideoPlayMuted,
   shouldCommitDeferredPlaybackTeardown,
   shouldTearDownIdlePublishedVideo,
+  resolveIdlePublishedVideoCleanup,
+  shouldAbortPublishedPlayBecauseNotActive,
   resolveHandoffRestoreAbortDisposition,
   abandonPublishedVideoHandoffForManualPlay,
   nextHandoffVisualSeekLock,
@@ -856,7 +858,29 @@ export default function PublishedVideoPlayer({
         isActive,
         isWarm,
       };
-      const finishPlayed = (): "played" | "rejected" => {
+      const finishPlayed = (): "played" | "rejected" | "aborted" => {
+        if (
+          shouldAbortPublishedPlayBecauseNotActive({
+            isActive: isActiveRef.current,
+          })
+        ) {
+          try {
+            video.pause();
+          } catch {
+            /* ignore */
+          }
+          setPlaying(false);
+          setPlayPending(false);
+          userWantsPlayRef.current = false;
+          playIntentRef.current = "none";
+          logPublishedVideoState("play-result", {
+            ...collectDiag({
+              playResult: "aborted",
+              reason: "idle-after-async-play",
+            }),
+          });
+          return "aborted";
+        }
         if (userPausedRef.current) {
           try {
             video.pause();
@@ -1480,37 +1504,52 @@ export default function PublishedVideoPlayer({
     videoId,
   ]);
 
-  // Idle (neither active nor warm): full tear down.
+  // Idle (neither active nor warm): pause immediately (even mid manual-play), then tear down.
   useEffect(() => {
-    if (!isActive && !isWarm) {
-      if (
-        !shouldTearDownIdlePublishedVideo({
-          isActive,
-          isWarm,
-        })
-      ) {
-        return;
-      }
-      setLocalUserPaused(false);
-      if (manualPlayInFlightRef.current) {
-        logPublishedVideoState("pause-command", {
-          mediaKey: item.key,
-          reason: "teardown-suppressed-manual-inflight",
-          isActive,
-          isWarm,
-          ...publishedVideoMediaSnapshot(videoRef.current, {
-            hlsAttached: hlsAttachedRef.current,
-            softPaused: userPausedRef.current,
-            ownsPlayback: false,
-          }),
-        });
-        return;
-      }
-      autoplayGenRef.current += 1;
-      autoplayRejectedRef.current = false;
+    const cleanup = resolveIdlePublishedVideoCleanup({
+      isActive,
+      isWarm,
+      manualPlayInFlight: manualPlayInFlightRef.current,
+    });
+    if (!cleanup.shouldCleanup) return;
+    if (
+      !shouldTearDownIdlePublishedVideo({
+        isActive,
+        isWarm,
+      })
+    ) {
+      return;
+    }
+    setLocalUserPaused(false);
+    if (cleanup.forcePause) {
+      const video = videoRef.current;
+      const wasManualInFlight = manualPlayInFlightRef.current;
+      pauseVideo();
+      logPublishedVideoState("pause-command", {
+        mediaKey: item.key,
+        reason: wasManualInFlight
+          ? "idle-force-pause-manual-inflight"
+          : "idle-force-pause",
+        isActive,
+        isWarm,
+        ...publishedVideoMediaSnapshot(video, {
+          hlsAttached: hlsAttachedRef.current,
+          softPaused: userPausedRef.current,
+          ownsPlayback: false,
+        }),
+      });
+    }
+    if (cleanup.clearPlayIntent) {
+      userWantsPlayRef.current = false;
+      playIntentRef.current = "none";
+      manualPlayInFlightRef.current = false;
+    }
+    autoplayGenRef.current += 1;
+    autoplayRejectedRef.current = false;
+    if (cleanup.tearDown) {
       tearDownPlayback();
     }
-  }, [isActive, isWarm, item.key, tearDownPlayback]);
+  }, [isActive, isWarm, item.key, pauseVideo, tearDownPlayback]);
 
   useEffect(() => {
     // New media identity only — parent consume must not reset applied generation.
@@ -1851,6 +1890,52 @@ export default function PublishedVideoPlayer({
     tryPlayIfWanted,
     videoId,
   ]);
+
+  // Capacitor background/lock: stop playback when the native app becomes inactive.
+  // Foreground resume stays on document.visibilitychange / list epoch (no auto-restart here).
+  useEffect(() => {
+    let removed = false;
+    let removeListener: (() => void) | undefined;
+
+    void (async () => {
+      try {
+        const { App } = await import("@capacitor/app");
+        if (removed) return;
+        const handle = await App.addListener(
+          "appStateChange",
+          ({ isActive: appActive }) => {
+            if (appActive) return;
+            logPublishedVideoState("document-hidden", {
+              ...collectDiag({
+                reason: "appStateChange",
+                documentHidden: true,
+              }),
+            });
+            autoplayGenRef.current += 1;
+            autoplayRejectedRef.current = false;
+            manualPlayInFlightRef.current = false;
+            userWantsPlayRef.current = false;
+            playIntentRef.current = "none";
+            tearDownPlayback();
+          },
+        );
+        if (removed) {
+          void handle.remove();
+          return;
+        }
+        removeListener = () => {
+          void handle.remove();
+        };
+      } catch {
+        /* web / unavailable — document.visibility remains */
+      }
+    })();
+
+    return () => {
+      removed = true;
+      removeListener?.();
+    };
+  }, [tearDownPlayback]);
 
   useEffect(() => {
     const video = videoRef.current;

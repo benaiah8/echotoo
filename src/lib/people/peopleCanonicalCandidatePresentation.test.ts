@@ -60,23 +60,22 @@ function mineMetrics(hostW: number, hostH: number) {
 }
 
 describe("PeopleCanonicalCandidatePresentation — Mine + Discover", () => {
-  it("Mine and Discover render PeopleCanonicalCandidatePresentation", () => {
+  it("Duo uses canonical presentation; Plans still use canonical", () => {
     expect(DUO_SRC).toContain("PeopleCanonicalCandidatePresentation");
-    expect(DUO_SRC).not.toContain("data-people-duo-identity");
-    expect(DUO_SRC).not.toContain("data-people-duo-note");
-    expect(DUO_SRC).not.toContain('peekDirection="down"');
+    expect(DUO_SRC).not.toContain("PeopleDuoImmersivePresentation");
     expect(CANONICAL_SRC).toContain('data-people-canonical-candidate="true"');
+    expect(OVERLAY_SRC).toContain("PeopleDiscoverPersonRow");
+    expect(OVERLAY_SRC).toContain("PeopleFeedList");
     expect(OVERLAY_SRC).toContain("PeopleDuoCandidateSlide");
-    expect(OVERLAY_SRC).toContain('duoPresentation="mine"');
-    expect(OVERLAY_SRC).toContain('presentation="mine"');
     expect(OVERLAY_SRC).toContain("isCanonicalPairUpScope");
+    expect(PLANS_SLIDE).toContain("PeopleCanonicalCandidatePresentation");
   });
 
   it("Mine and Discover produce identical geometry at the same host", () => {
     expect(PEOPLE_MINE_EDGE_FIXED_SIDE_ALLOC_PX).toBe(54);
     expect(PEOPLE_MINE_MEDIA_ASPECT_MIN).toBe(0.75);
     expect(PEOPLE_MINE_MEDIA_ASPECT_MAX).toBe(0.85);
-    // Overlay drives Discover through duoPresentation="mine" → chromeProfile mine.
+    // Duo Embla still uses duoPresentation="mine" → chromeProfile mine.
     expect(OVERLAY_SRC).toContain('duoPresentation="mine"');
     for (const [hostW, hostH] of [
       [360, 640],
@@ -99,28 +98,19 @@ describe("PeopleCanonicalCandidatePresentation — Mine + Discover", () => {
     }
   });
 
-  it("Discover uses Mine shell, edges, atmosphere, compact Connect", () => {
+  it("Discover uses feed shell; Duo atmosphere gated to my_plans", () => {
     expect(OVERLAY_SRC).toContain("isCanonicalPairUpScope");
     expect(OVERLAY_SRC).toContain("isCanonicalPeopleScope");
-    expect(OVERLAY_SRC).toMatch(
-      /isCanonicalPeopleScope[\s\S]{0,80}MineAtmosphereCrossfade/
-    );
-    expect(OVERLAY_SRC).toMatch(
-      /isCanonicalPairUpScope[\s\S]{0,120}MineEdgeNavCards/
-    );
-    expect(OVERLAY_SRC).toContain("fixedRailsGeometry");
-    expect(OVERLAY_SRC).toContain(
-      "const mineCompactConnect = isCanonicalPeopleScope"
-    );
-    expect(OVERLAY_SRC).toContain(
-      "isCanonicalPairUpScope && isPeopleMineRealIncomingEnabled()"
-    );
-    expect(OVERLAY_SRC).toContain("peopleShellMineContentTopPad()");
-    expect(OVERLAY_SRC).toContain("peopleShellMineContentBottomPad()");
+    expect(OVERLAY_SRC).toContain("<MineAtmosphereCrossfade");
+    expect(OVERLAY_SRC).toContain("isDuoAtmosphereScope");
+    expect(OVERLAY_SRC).toContain("bg-transparent");
+    expect(OVERLAY_SRC).toContain("PeopleFeedList");
+    expect(OVERLAY_SRC).toContain("PeopleFeedTopNav");
+    expect(OVERLAY_SRC).toContain("topChromePad={peopleFeedContentTopPad()}");
+    expect(OVERLAY_SRC).toContain("peopleFeedContentBottomPad()");
+    expect(OVERLAY_SRC).toContain("paddingTop: 0");
+    expect(OVERLAY_SRC).toContain("handleFeedHeart");
     expect(OVERLAY_SRC).not.toContain("flex-[0.02]");
-    expect(OVERLAY_SRC).not.toContain(
-      "mineMotionSurfaceEnabled && visualScope === \"my_plans\""
-    );
     expect(PEOPLE_MINE_CONNECT_H_PX).toBe(46);
     expect(PEOPLE_MINE_NOTE_TO_CONNECT_GAP_PX).toBe(22);
     expect(PEOPLE_ACTION_CIRCLE_PX).toBe(72);
@@ -128,14 +118,14 @@ describe("PeopleCanonicalCandidatePresentation — Mine + Discover", () => {
     expect(DOCK_SRC).toContain("PEOPLE_MINE_CONNECT_H_PX");
   });
 
-  it("Discover identity/note/atmosphere use canonical pieces", () => {
+  it("Discover identity/note use person-row + opportunity-box pieces", () => {
     expect(CANONICAL_SRC).toContain("MinePortraitIdentityOverlay");
     expect(CANONICAL_SRC).toContain("MineOpportunityNote");
     expect(CANONICAL_SRC).toContain('data-people-duo-source-surface="mine-top-right"');
     expect(CANONICAL_SRC).toContain('peekDirection="up"');
     expect(OVERLAY_SRC).toContain("handleMineAtmosphereChange");
-    expect(OVERLAY_SRC).toContain("onMineAtmosphereChange=");
-    expect(OVERLAY_SRC).toContain("handleMineAtmosphereChange");
+    expect(OVERLAY_SRC).toContain("PeopleDiscoverPersonRow");
+    expect(OVERLAY_SRC).toContain("PeopleDiscoverOpportunityBox");
   });
 
   it("Discover Connect mutation path unchanged", () => {
@@ -153,8 +143,8 @@ describe("PeopleCanonicalCandidatePresentation — Mine + Discover", () => {
   });
 
   it("Plans still uses OpenPlanDeckBody + PeopleOpenPlanCandidateSlide", () => {
-    expect(OPEN_PLANS_BODY).toContain("PeopleOpenPlanCandidateSlide");
-    expect(OPEN_PLANS_BODY).toContain('duoPresentation="mine"');
+    expect(OPEN_PLANS_BODY).toContain("PeopleOpenPlanFeedCard");
+    expect(OPEN_PLANS_BODY).not.toContain("PeopleFeedRow");
     expect(OPEN_PLANS_BODY).toContain("requestOpenPlan");
     expect(PLANS_SLIDE).toContain("PeopleCanonicalCandidatePresentation");
     expect(PLANS_SLIDE).toContain("identityVisible={false}");

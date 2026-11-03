@@ -68,6 +68,14 @@ import {
   HOME_TAB_REFRESH_EVENT,
   type HomeTabRefreshDetail,
 } from "../lib/homeRefreshEvents";
+import {
+  applyHomeBrowseScrollRestore,
+  getHomeBrowseScrollPosition,
+  resolveHomeBrowseScrollYForLeave,
+  resolveHomeBrowseScrollYForRestore,
+  saveHomeBrowseScrollPosition,
+  shouldTrackHomeBrowseWindowScroll,
+} from "../lib/homeBrowseScrollPosition";
 import { useHomePullToRefresh } from "../hooks/useHomePullToRefresh";
 import { useOverlayBackgroundScrollLock } from "../hooks/useOverlayBackgroundScrollLock";
 import { dispatchBottomTabPeek } from "../lib/bottomTabPeek";
@@ -92,6 +100,7 @@ import {
   getFeedSearchQ,
   hasActiveHomeFilters,
   hasExplicitHomeContentFilters,
+  INITIAL_HOME_CUSTOM_OCCURS_ON,
   INITIAL_HOME_DATE_FILTER,
   INITIAL_HOME_TYPE_FILTER,
   isTrueDefaultAllVerticalFeed,
@@ -170,6 +179,9 @@ export default function HomePage() {
   const [selectedTags] = useState<string[]>([]);
   const [dateFilter, setDateFilter] = useState<HomeDateFilter>(
     INITIAL_HOME_DATE_FILTER
+  );
+  const [customOccursOn, setCustomOccursOn] = useState<string | null>(
+    INITIAL_HOME_CUSTOM_OCCURS_ON
   );
   const [friendsFilter, setFriendsFilter] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -433,11 +445,12 @@ export default function HomePage() {
       buildHomeVerticalFilterContext({
         viewMode,
         dateFilter,
+        customOccursOn,
         selectedTags,
         viewerProfileId,
         friendsFilter,
       }),
-    [viewMode, dateFilter, selectedTags, viewerProfileId, friendsFilter]
+    [viewMode, dateFilter, customOccursOn, selectedTags, viewerProfileId, friendsFilter]
   );
 
   const searchFilterCtx = useMemo(
@@ -445,12 +458,13 @@ export default function HomePage() {
       buildHomeVerticalFilterContext({
         viewMode,
         dateFilter,
+        customOccursOn,
         feedSearchQ,
         selectedTags,
         viewerProfileId,
         friendsFilter,
       }),
-    [viewMode, dateFilter, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
+    [viewMode, dateFilter, customOccursOn, feedSearchQ, selectedTags, viewerProfileId, friendsFilter]
   );
 
   // tweak these if your actual header/footer heights differ (floating top bar + quick chips + gradient)
@@ -461,6 +475,11 @@ export default function HomePage() {
 
   // Track and persist scroll position per feed key to restore when navigating back
   const latestScrollRef = useRef(0);
+  /** Skip the next key/tab restore after an intentional top reset (PTR / filter / re-tap). */
+  const skipBrowseScrollRestoreRef = useRef(false);
+  const wasHomeTabActiveForScrollRef = useRef(isHomeTabActive);
+  const homePostSearchActiveRef = useRef(homePostSearchActive);
+  homePostSearchActiveRef.current = homePostSearchActive;
 
   /** Browse first-page cache key — never includes search `q`. */
   const browseVerticalFirstPageFeedKeyOptions = useMemo(
@@ -484,28 +503,11 @@ export default function HomePage() {
   );
 
   const saveScrollPosition = useCallback((key: string, value: number) => {
-    try {
-      localStorage.setItem(
-        `home_scroll:${key}`,
-        JSON.stringify({ v: 1, y: Math.max(0, value) })
-      );
-    } catch (e) {
-      // ignore storage errors
-    }
+    saveHomeBrowseScrollPosition(key, value);
   }, []);
 
   const getSavedScrollPosition = useCallback((key: string): number => {
-    try {
-      const raw = localStorage.getItem(`home_scroll:${key}`);
-      if (!raw) return 0;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.y === "number") {
-        return parsed.y;
-      }
-    } catch (e) {
-      // ignore parse/storage errors
-    }
-    return 0;
+    return getHomeBrowseScrollPosition(key);
   }, []);
 
   const scrollHomeFeedToTop = useCallback(() => {
@@ -514,6 +516,7 @@ export default function HomePage() {
     }
     window.scrollTo({ top: 0, behavior: "auto" });
     latestScrollRef.current = 0;
+    skipBrowseScrollRestoreRef.current = true;
     saveScrollPosition(browseFeedCacheKey, 0);
   }, [browseFeedCacheKey, saveScrollPosition]);
 
@@ -530,6 +533,7 @@ export default function HomePage() {
     if (homePostSearchActive && !prevSearchActiveForScrollRef.current) {
       const y = window.scrollY;
       preSearchScrollYRef.current = y;
+      latestScrollRef.current = y;
       saveScrollPosition(browseFeedCacheKey, y);
     }
     prevSearchActiveForScrollRef.current = homePostSearchActive;
@@ -574,22 +578,33 @@ export default function HomePage() {
 
   const homeFilterStateRef = useRef({
     dateFilter,
+    customOccursOn,
     viewMode,
     friendsFilter,
   });
-  homeFilterStateRef.current = { dateFilter, viewMode, friendsFilter };
+  homeFilterStateRef.current = {
+    dateFilter,
+    customOccursOn,
+    viewMode,
+    friendsFilter,
+  };
 
   const applyHomeFilterAction = useCallback(
     (action: HomeFilterAction) => {
       const next = applyHomeFilterTransition(homeFilterStateRef.current, action);
       setDateFilter(next.dateFilter);
+      setCustomOccursOn(next.customOccursOn);
       setViewMode(next.viewMode);
       setFriendsFilter(next.friendsFilter);
-      setFiltersOpen(false);
+      // Keep full-screen filters open so users can combine multiple filters.
       scheduleScrollHomeFeedToTop();
     },
     [scheduleScrollHomeFeedToTop]
   );
+
+  const handleCloseHomeFilters = useCallback(() => {
+    setFiltersOpen(false);
+  }, []);
 
   const clearAllHomeFilters = useCallback(() => {
     homeSearchIgnoreFocusRef.current = true;
@@ -598,6 +613,7 @@ export default function HomePage() {
       { type: "clearAll" }
     );
     setDateFilter(cleared.dateFilter);
+    setCustomOccursOn(cleared.customOccursOn);
     setViewMode(cleared.viewMode);
     setFriendsFilter(cleared.friendsFilter);
     setHomeSearchShellOpen(false);
@@ -612,6 +628,20 @@ export default function HomePage() {
   const handleToggleDateFilter = useCallback(
     (target: HomeDateFilterChip) => {
       applyHomeFilterAction({ type: "toggleDate", target });
+    },
+    [applyHomeFilterAction]
+  );
+
+  const handleSelectCustomDate = useCallback(
+    (occursOn: string) => {
+      applyHomeFilterAction({ type: "selectCustomDate", occursOn });
+    },
+    [applyHomeFilterAction]
+  );
+
+  const handleToggleCustomDate = useCallback(
+    (occursOn: string) => {
+      applyHomeFilterAction({ type: "toggleCustomDate", occursOn });
     },
     [applyHomeFilterAction]
   );
@@ -991,30 +1021,111 @@ export default function HomePage() {
     refreshEpoch: homeRefreshEpoch,
   });
 
-  // Restore scroll on mount / browse-key change — never while search overlay is open.
+  /**
+   * Save browse Y when Home becomes inactive; restore when it becomes active.
+   * Uses latestScrollRef (captured while visible) so collapsed window.scrollY≈0
+   * after display:none cannot overwrite a valid position.
+   */
+  useLayoutEffect(() => {
+    const wasActive = wasHomeTabActiveForScrollRef.current;
+    const nowActive = isHomeTabActive;
+
+    if (wasActive && !nowActive) {
+      if (!homePostSearchActiveRef.current) {
+        const y = resolveHomeBrowseScrollYForLeave({
+          latestY: latestScrollRef.current,
+          windowY: window.scrollY,
+        });
+        latestScrollRef.current = y;
+        saveScrollPosition(browseFeedCacheKey, y);
+      }
+    }
+
+    if (!wasActive && nowActive) {
+      if (
+        !homePostSearchActiveRef.current &&
+        !skipBrowseScrollRestoreRef.current
+      ) {
+        const target = resolveHomeBrowseScrollYForRestore({
+          latestY: latestScrollRef.current,
+          storedY: getSavedScrollPosition(browseFeedCacheKey),
+        });
+        if (target > 0) {
+          const apply = () => {
+            const applied = applyHomeBrowseScrollRestore(target);
+            if (applied >= 0) {
+              latestScrollRef.current = applied;
+            }
+            return applied;
+          };
+          // Layout may not have full feed height yet after display:block.
+          apply();
+          requestAnimationFrame(() => {
+            apply();
+            requestAnimationFrame(apply);
+          });
+        }
+      }
+      skipBrowseScrollRestoreRef.current = false;
+    }
+
+    wasHomeTabActiveForScrollRef.current = nowActive;
+  }, [
+    isHomeTabActive,
+    browseFeedCacheKey,
+    getSavedScrollPosition,
+    saveScrollPosition,
+  ]);
+
+  // Restore scroll on mount / browse-key change — never while search or hidden.
   useEffect(() => {
-    if (homePostSearchActive) return;
+    if (homePostSearchActive || !isHomeTabActive) return;
+    if (skipBrowseScrollRestoreRef.current) {
+      skipBrowseScrollRestoreRef.current = false;
+      return;
+    }
     const savedY = getSavedScrollPosition(browseFeedCacheKey);
     if (savedY > 0) {
       requestAnimationFrame(() => {
-        window.scrollTo({ top: savedY, behavior: "auto" });
+        const applied = applyHomeBrowseScrollRestore(savedY);
+        if (applied >= 0) {
+          latestScrollRef.current = applied;
+        }
       });
     }
-  }, [browseFeedCacheKey, getSavedScrollPosition, homePostSearchActive]);
+  }, [
+    browseFeedCacheKey,
+    getSavedScrollPosition,
+    homePostSearchActive,
+    isHomeTabActive,
+  ]);
 
-  // Track scroll and persist on unmount using the browse key only.
+  // Track scroll while Home browse is visible; ignore shared window scroll when hidden.
   useEffect(() => {
     const onScroll = () => {
+      if (
+        !shouldTrackHomeBrowseWindowScroll({
+          isHomeTabActive: isHomeTabActiveRef.current,
+          homePostSearchActive: homePostSearchActiveRef.current,
+        })
+      ) {
+        return;
+      }
       latestScrollRef.current = window.scrollY;
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       window.removeEventListener("scroll", onScroll);
-      if (!homePostSearchActive) {
+      if (
+        shouldTrackHomeBrowseWindowScroll({
+          isHomeTabActive: isHomeTabActiveRef.current,
+          homePostSearchActive: homePostSearchActiveRef.current,
+        })
+      ) {
         saveScrollPosition(browseFeedCacheKey, latestScrollRef.current);
       }
     };
-  }, [browseFeedCacheKey, saveScrollPosition, homePostSearchActive]);
+  }, [browseFeedCacheKey, saveScrollPosition]);
 
   // [REFACTOR] Removed hydrate/SWR/trim functions - ProgressiveFeed handles all loading
   // This eliminates race conditions and duplicate API calls
@@ -1036,24 +1147,7 @@ export default function HomePage() {
     if (!filtersOpen) setForceRevealHeader(false);
   }, [filtersOpen]);
 
-  useEffect(() => {
-    if (!filtersOpen) return;
-
-    const handleOutsidePress = (event: PointerEvent) => {
-      // Home Tour owns the screen while open — don't fight Date/Time spotlight.
-      if (document.querySelector("[data-home-tour-overlay]")) return;
-      const root = homeTopBarRef.current;
-      if (!root) return;
-      const target = event.target as Node | null;
-      if (target && root.contains(target)) return;
-      setFiltersOpen(false);
-    };
-
-    document.addEventListener("pointerdown", handleOutsidePress);
-    return () => {
-      document.removeEventListener("pointerdown", handleOutsidePress);
-    };
-  }, [filtersOpen]);
+  // Full-screen filters dismiss via header close / Escape / Android back (HomeFiltersOverlay).
 
   // [OPTIMIZATION: Phase 6.2 - React] Memoize callbacks to prevent unnecessary re-renders
   // Why: These callbacks are passed as props, memoization prevents child re-renders
@@ -1118,44 +1212,48 @@ export default function HomePage() {
     () =>
       hasActiveHomeFilters({
         dateFilter,
+        customOccursOn,
         typeFilter: viewMode,
         friendsFilter,
         search,
         selectedTags,
       }),
-    [dateFilter, viewMode, friendsFilter, search, selectedTags]
+    [dateFilter, customOccursOn, viewMode, friendsFilter, search, selectedTags]
   );
 
   const browseHasActiveFilters = useMemo(
     () =>
       hasActiveHomeFilters({
         dateFilter,
+        customOccursOn,
         typeFilter: viewMode,
         friendsFilter,
         search: "",
         selectedTags,
       }),
-    [dateFilter, viewMode, friendsFilter, selectedTags]
+    [dateFilter, customOccursOn, viewMode, friendsFilter, selectedTags]
   );
 
   const explicitContentFilters = useMemo(
     () =>
       hasExplicitHomeContentFilters({
         dateFilter,
+        customOccursOn,
         viewMode,
         friendsFilter,
       }),
-    [dateFilter, viewMode, friendsFilter]
+    [dateFilter, customOccursOn, viewMode, friendsFilter]
   );
 
   const showHomeDiscoveryRails = useMemo(
     () =>
       shouldShowHomeDiscoveryRails({
         dateFilter,
+        customOccursOn,
         viewMode,
         friendsFilter,
       }),
-    [dateFilter, viewMode, friendsFilter]
+    [dateFilter, customOccursOn, viewMode, friendsFilter]
   );
 
   // [FIX: Phase 1.2 - Horizontal Rail] Fixed discovery fetch for injected rails
@@ -1632,6 +1730,7 @@ export default function HomePage() {
             backgroundRevalidateOnMount
             softRefreshEpoch={homeFeedSoftRefreshEpoch}
             dateFilter={dateFilter}
+            customOccursOn={customOccursOn}
             explicitContentFilters={explicitContentFilters}
             onHomeFilterAction={applyHomeFilterAction}
             onBackToFeed={clearAllHomeFilters}
@@ -1681,6 +1780,7 @@ export default function HomePage() {
           isHidden={effectiveHomeTopHidden}
           atTop={effectiveHomeAtTop}
           onToggleFilters={handleFilterClick}
+          onCloseFilters={handleCloseHomeFilters}
           onLogoClick={handleLogoClick}
           onSearch={handleSearchChange}
           search={search}
@@ -1695,11 +1795,15 @@ export default function HomePage() {
           filtersOpen={filtersOpen}
           viewMode={viewMode}
           dateFilter={dateFilter}
+          customOccursOn={customOccursOn}
           onToggleDateFilter={handleToggleDateFilter}
+          onSelectCustomDate={handleSelectCustomDate}
+          onToggleCustomDate={handleToggleCustomDate}
           onToggleTypeFilter={handleToggleTypeFilter}
           friendsFilter={friendsFilter}
           onToggleFriends={handleToggleFriends}
           onClearAllFilters={clearAllHomeFilters}
+          homeRefreshEpoch={homeRefreshEpoch}
         />
 
         {/* Browse stays mounted; search is an opaque overlay. */}
@@ -1784,6 +1888,7 @@ export default function HomePage() {
               softRefreshEpoch={homeFeedSoftRefreshEpoch}
               homeRecoveryEpoch={homePostSearchActive ? 0 : homeRecoveryEpoch}
               dateFilter={dateFilter}
+              customOccursOn={customOccursOn}
               explicitContentFilters={explicitContentFilters}
               onHomeFilterAction={applyHomeFilterAction}
               onBackToFeed={clearAllHomeFilters}

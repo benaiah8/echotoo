@@ -201,7 +201,7 @@ describe("PASS PV3 — Feed/Profile published media + list autoplay", () => {
 
   it("S: inactive cards do not attach HLS (idle gates load)", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
-    expect(player).toContain("if (!isActive && !isWarm)");
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
     expect(player).toContain("tearDownPlayback()");
     expect(player).toContain("ensureHlsLoaded");
     expect(player).toContain('preload="none"');

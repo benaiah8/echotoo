@@ -1,5 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { DayPicker, type Matcher } from "react-day-picker";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  DayPicker,
+  DayButton,
+  type DayButtonProps,
+  type Matcher,
+} from "react-day-picker";
+import { pickerDateToAddisYmd } from "../../lib/homeVerticalFilters";
 import {
   PiArrowsOutLineHorizontal,
   PiCalendarBlank,
@@ -40,6 +53,10 @@ export type CreateScheduleCalendarBodyProps = {
    * Place Duo passes `rdp-theme--full-width` for fluid 7-column grid.
    */
   dayPickerClassName?: string;
+  /** Home filter calendar: event counts per Addis YMD (positive only shown). */
+  homeDayEventCounts?: HomeDayEventCountsDisplay;
+  /** Fired when the user navigates to a different month. */
+  onDisplayMonthChange?: (month: Date) => void;
 };
 
 function normalize(d: Date) {
@@ -52,6 +69,63 @@ function sameDay(a?: Date | null, b?: Date | null) {
 
 function sortDays(arr: Date[]) {
   return [...arr].map(normalize).sort((a, b) => a.getTime() - b.getTime());
+}
+
+export type HomeDayEventCountsDisplay = {
+  status: "loading" | "ready" | "error";
+  countsByYmd?: ReadonlyMap<string, number>;
+};
+
+function createDayButtonWithEventCount(countsState: HomeDayEventCountsDisplay) {
+  return function DayButtonWithEventCount(props: DayButtonProps) {
+    const { day, modifiers, children, className, ...buttonProps } = props;
+    const ref = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+      if (modifiers.focused) ref.current?.focus();
+    }, [modifiers.focused]);
+
+    let badge: ReactNode = null;
+    if (
+      countsState.status === "ready" &&
+      countsState.countsByYmd &&
+      !day.outside
+    ) {
+      const ymd = pickerDateToAddisYmd(day.date);
+      const count = countsState.countsByYmd.get(ymd);
+      if (typeof count === "number" && count > 0) {
+        const label =
+          count === 1 ? "1 event on this day" : `${count} events on this day`;
+        badge = (
+          <span
+            className="home-rdp-event-count pointer-events-none"
+            aria-label={label}
+          >
+            {count > 99 ? "99+" : count}
+          </span>
+        );
+      }
+    }
+
+    if (!badge) {
+      return <DayButton {...props} />;
+    }
+
+    const mergedClass = [className, "home-rdp-day-with-count"]
+      .filter(Boolean)
+      .join(" ");
+
+    return (
+      <button
+        ref={ref}
+        type="button"
+        {...buttonProps}
+        className={mergedClass}
+      >
+        <span className="home-rdp-day-num">{children}</span>
+        {badge}
+      </button>
+    );
+  };
 }
 
 function daysBetween(a: Date, b: Date) {
@@ -84,6 +158,8 @@ export default function CreateScheduleCalendarBody({
   endMonth,
   showFooterControls = true,
   dayPickerClassName = "",
+  homeDayEventCounts,
+  onDisplayMonthChange,
 }: CreateScheduleCalendarBodyProps) {
   const isSinglePick = pickMode === "single";
   const [currentMonth, setCurrentMonth] = useState<Date>(() => new Date());
@@ -94,10 +170,20 @@ export default function CreateScheduleCalendarBody({
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
   });
 
+  const onDisplayMonthChangeRef = useRef(onDisplayMonthChange);
+  onDisplayMonthChangeRef.current = onDisplayMonthChange;
+
+  const handleMonthChange = useCallback((month: Date) => {
+    setCurrentMonth(month);
+    onDisplayMonthChangeRef.current?.(month);
+  }, []);
+
   const goToToday = useCallback(() => {
     const now = new Date();
     setTodayDate(normalize(now));
-    setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+    const month = new Date(now.getFullYear(), now.getMonth(), 1);
+    setCurrentMonth(month);
+    onDisplayMonthChangeRef.current?.(month);
   }, []);
 
   useEffect(() => {
@@ -226,6 +312,11 @@ export default function CreateScheduleCalendarBody({
     .filter(Boolean)
     .join(" ");
 
+  const dayPickerComponents = useMemo(() => {
+    if (!homeDayEventCounts) return undefined;
+    return { DayButton: createDayButtonWithEventCount(homeDayEventCounts) };
+  }, [homeDayEventCounts]);
+
   return (
     <div className="flex min-h-0 w-full flex-col gap-2.5">
       <div className="min-h-0 flex-1 overflow-y-auto [-webkit-overflow-scrolling:touch]">
@@ -236,12 +327,13 @@ export default function CreateScheduleCalendarBody({
             onSelect={handleSelectSingle}
             onDayClick={handleDayClick}
             month={currentMonth}
-            onMonthChange={setCurrentMonth}
+            onMonthChange={handleMonthChange}
             today={todayDate}
             disabled={disabledDays}
             startMonth={startMonth}
             endMonth={endMonth}
             className={dayPickerRootClass}
+            components={dayPickerComponents}
             modifiers={modifiers}
             modifiersClassNames={{
               rangeStart: "range-start",
@@ -257,12 +349,13 @@ export default function CreateScheduleCalendarBody({
             onSelect={handleSelectMultiple}
             onDayClick={handleDayClick}
             month={currentMonth}
-            onMonthChange={setCurrentMonth}
+            onMonthChange={handleMonthChange}
             today={todayDate}
             disabled={disabledDays}
             startMonth={startMonth}
             endMonth={endMonth}
             className={dayPickerRootClass}
+            components={dayPickerComponents}
             modifiers={modifiers}
             modifiersClassNames={{
               rangeStart: "range-start",

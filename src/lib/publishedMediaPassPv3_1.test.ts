@@ -42,7 +42,8 @@ describe("PASS PV3.1 — seamless social video startup", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
     expect(player).toContain("showPoster");
     expect(player).toContain("bg-black");
-    expect(player).not.toContain("data-published-video-processing");
+    // Processing overlay marker is present; HLS attach still gated on ready.
+    expect(player).toContain("data-published-video-processing");
     expect(player).toMatch(
       /ensureHlsLoaded[\s\S]*status !== "ready"[\s\S]*return false/,
     );
@@ -148,7 +149,7 @@ describe("PASS PV3.1 — seamless social video startup", () => {
     );
     const surface = read("src/components/PublishedMediaSurface.tsx");
 
-    expect(player).toContain("if (!isActive && !isWarm)");
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
     expect(player).toContain("tearDownPlayback()");
     expect(player).toContain("hls.destroy()");
     expect(player).toContain("removeAttribute(\"src\")");

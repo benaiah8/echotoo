@@ -32,6 +32,9 @@ import {
 import {
   computePeopleDiscoverCardMetrics,
   isPeopleDiscoverMetricsReady,
+  peopleDuoModernSceneGestureWriteAllowed,
+  peopleDuoModernSceneSlideStyle,
+  peopleMinePortraitCssVars,
   PEOPLE_DISCOVER_GAP_PX,
   PEOPLE_DUO_CENTER_SCALE,
   PEOPLE_DUO_NEIGHBOR_SCALE,
@@ -43,6 +46,8 @@ import {
   beginMineMotionProbeFlight,
   claimMineMotionProbeFlightDestination,
   clearMineEdgeCardNavVisual,
+  settleMineEdgeCardDuoBottomFeedback,
+  clearDuoModernSceneVisual,
   clearMineIncomingRealSlideVisual,
   computeMineMotionProbeGeometry,
   computeMineMotionProbeProgress,
@@ -53,6 +58,7 @@ import {
   prepareMineMotionProbeProgrammaticFlight,
   queryMineMotionProbeFrontFrame,
   unlockMineMotionProbeFlight,
+  writeDuoModernSceneVisual,
   writeMineIncomingRealSlideVisual,
   writeMineMotionProbeVisual,
   type MineMotionProbeController,
@@ -60,9 +66,16 @@ import {
   type MineMotionProbeLanding,
 } from "../../lib/people/mineMotionProbeProgress";
 import { matchDeckPhotoMountRadius } from "../../lib/people/mineCandidateImageWarm";
+import {
+  peopleDuoModernMetricsHostH,
+  peopleFeedContentTopPadPx,
+  readPeopleSafeAreaTopPx,
+} from "../../lib/people/peopleFeedLayout";
 import { isPeopleMineRealIncomingEnabled } from "./matchDeckDevMocks";
 import type { MineEdgeNavCardsHandle } from "../../components/people/MineEdgeNavCards";
 import { peopleMineEmblaAllowsDragFromTarget } from "../../lib/people/mineIdentityGesture";
+import { PiCaretLeftBold, PiCaretRightBold } from "react-icons/pi";
+import PeopleDuoCardSkeleton from "../../components/skeletons/PeopleDuoCardSkeleton";
 
 const GAP = 10;
 const SIDE_PEEK = 32;
@@ -83,16 +96,42 @@ type EmblaCarouselApi = NonNullable<ReturnType<typeof useEmblaCarousel>[1]>;
 function applyPhysicalSlidePresentation(
   emblaApi: EmblaCarouselApi,
   withScale: boolean,
-  mode: "peek" | "fullWidth" = "peek"
+  mode: "peek" | "fullWidth" = "peek",
+  options?: { duoModernScene?: boolean; departureIndex?: number }
 ): void {
   const nodes = emblaApi.slideNodes();
   if (nodes.length === 0) return;
 
-  // Mine full-width: neighbors leave by geometry — never gate content via opacity.
-  if (mode === "fullWidth") {
+  const duoModernScene = options?.duoModernScene === true;
+
+  // Mine / Plans full-width: neighbors leave by geometry — never gate content.
+  if (mode === "fullWidth" && !duoModernScene) {
     for (const node of nodes) {
       node.style.opacity = "1";
       node.style.transform = "";
+      node.style.transformOrigin = "";
+    }
+    return;
+  }
+
+  // Duo-modern rest/settle: identity on the scene wrapper. Live motion is
+  // writeDuoModernSceneVisual (scrollProgress, one writer).
+  if (mode === "fullWidth" && duoModernScene) {
+    const style = peopleDuoModernSceneSlideStyle(0, {
+      role: "idle",
+      reduceMotion: true,
+    });
+    for (const node of nodes) {
+      node.style.opacity = "1";
+      node.style.transform = "";
+      node.style.filter = "";
+      node.style.transformOrigin = "";
+      const scene =
+        node.querySelector<HTMLElement>("[data-people-duo-scene]") ?? node;
+      scene.style.opacity = style.opacity;
+      scene.style.transform = style.transform;
+      scene.style.filter = style.filter;
+      scene.style.transformOrigin = "";
     }
     return;
   }
@@ -113,6 +152,7 @@ function applyPhysicalSlidePresentation(
     if (snap === undefined || !node) continue;
     const dist = Math.abs(scroll - snap);
     const ratio = Math.min(1, dist / halfStep);
+
     const opacity = CENTER_OPACITY - ratio * (CENTER_OPACITY - SIDE_OPACITY);
     node.style.opacity = String(Number(opacity.toFixed(3)));
     if (withScale) {
@@ -204,6 +244,16 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   mineEdgeNavCardsRef = undefined as
     | RefObject<MineEdgeNavCardsHandle | null>
     | undefined,
+  /** Duo modern layout — wider portrait + below-photo info reserve. */
+  duoLayoutModern = false,
+  /** Duo modern: displayable photo count per candidate (stack headroom). */
+  resolveDuoModernDisplayPhotoCount,
+  /** Subtle prev/next chevrons beside the portrait (Duo). */
+  duoEmblaNavArrows = false,
+  canNavPrev = false,
+  canNavNext = false,
+  onNavPrev,
+  onNavNext,
   renderItem,
 }: {
   items: T[];
@@ -223,6 +273,13 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     ((destinationIndex: number, opts?: { jump?: boolean }) => void) | null
   >;
   mineEdgeNavCardsRef?: RefObject<MineEdgeNavCardsHandle | null>;
+  duoLayoutModern?: boolean;
+  resolveDuoModernDisplayPhotoCount?: (candidate: T) => number;
+  duoEmblaNavArrows?: boolean;
+  canNavPrev?: boolean;
+  canNavNext?: boolean;
+  onNavPrev?: () => void;
+  onNavNext?: () => void;
   renderItem: (candidate: T, meta: MatchDeckSlotMeta) => ReactNode;
 }) {
   const isDuoLayout = layout === "duo" || layout === "discover";
@@ -267,6 +324,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   isMinePresentationRef.current = isMinePresentation;
   const isFullWidthPresentationRef = useRef(isFullWidthPresentation);
   isFullWidthPresentationRef.current = isFullWidthPresentation;
+  const duoLayoutModernRef = useRef(duoLayoutModern);
+  duoLayoutModernRef.current = duoLayoutModern;
 
   /** DEV probe: frozen departure snap; geometry cached from host width. */
   const mineProbeAnchorRef = useRef(index);
@@ -280,6 +339,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   const releasePtrBlockRef = useRef<(() => void) | null>(null);
   /** True between Embla pointerDown and pointerUp — used to gate scroll→PTR block. */
   const emblaPtrPointerDownRef = useRef(false);
+  /** Duo-modern: physical drag owns scene motion until Embla settle (survives pointerUp). */
+  const duoGestureSceneFlightRef = useRef(false);
   const mineEdgeNavCardsRefBox = useRef(mineEdgeNavCardsRef);
   mineEdgeNavCardsRefBox.current = mineEdgeNavCardsRef;
   /** Cached portrait nav wrappers — refreshed on layout/reInit, not per scroll. */
@@ -298,9 +359,38 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   const clearMineRealIncomingVisuals = useCallback(
     (slides: HTMLElement[]) => {
       clearMineIncomingRealSlideVisual(slides);
-      clearMineEdgeCardNavVisual(
-        mineEdgeNavCardsRefBox.current?.current ?? null
-      );
+      clearDuoModernSceneVisual(slides);
+      const edgeCards = mineEdgeNavCardsRefBox.current?.current ?? null;
+      if (duoLayoutModernRef.current) {
+        settleMineEdgeCardDuoBottomFeedback(edgeCards);
+      } else {
+        clearMineEdgeCardNavVisual(edgeCards);
+      }
+    },
+    []
+  );
+
+  const writeDuoModernSceneIfDragging = useCallback(
+    (
+      emblaApi: EmblaCarouselApi,
+      progress: { prev: number; next: number },
+      forceSide: "prev" | "next" | null = null
+    ) => {
+      if (!duoLayoutModernRef.current) return;
+      if (
+        !peopleDuoModernSceneGestureWriteAllowed({
+          pointerDown: emblaPtrPointerDownRef.current,
+          gestureFlight: duoGestureSceneFlightRef.current,
+          forceSide,
+        })
+      ) {
+        return;
+      }
+      writeDuoModernSceneVisual({
+        slides: emblaApi.slideNodes(),
+        progress,
+        departureIndex: mineProbeAnchorRef.current,
+      });
     },
     []
   );
@@ -313,27 +403,34 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     ) => {
       const geom = mineProbeGeomRef.current;
       const slideW = geom.shellW;
-      if (!(slideW > 0)) return;
-      const frameW = geom.frameW > 0 ? geom.frameW : 0;
-      const frameH = geom.frameH > 0 ? geom.frameH : 0;
-      const portraitCenterLocalX =
-        geom.centerX > 0 ? geom.centerX : slideW / 2;
-      writeMineIncomingRealSlideVisual({
-        slides: emblaApi.slideNodes(),
-        progress,
-        departureIndex: mineProbeAnchorRef.current,
-        slideW,
-        portraitCenterLocalX,
-        frameW,
-        frameH,
-        portraitEls: minePortraitElsRef.current,
-        edgeCards: mineEdgeNavCardsRefBox.current?.current,
-        animateEdgeCards:
-          mineProbeRefBox.current?.current?.flightAnimateEdgeCards === true,
-        forceSide,
-      });
+      if (slideW > 0) {
+        const frameW = geom.frameW > 0 ? geom.frameW : 0;
+        const frameH = geom.frameH > 0 ? geom.frameH : 0;
+        const portraitCenterLocalX =
+          geom.centerX > 0 ? geom.centerX : slideW / 2;
+        writeMineIncomingRealSlideVisual({
+          slides: emblaApi.slideNodes(),
+          progress,
+          departureIndex: mineProbeAnchorRef.current,
+          slideW,
+          portraitCenterLocalX,
+          frameW,
+          frameH,
+          portraitEls: minePortraitElsRef.current,
+          edgeCards: mineEdgeNavCardsRefBox.current?.current,
+          animateEdgeCards:
+            duoLayoutModernRef.current ||
+            mineProbeRefBox.current?.current?.flightAnimateEdgeCards === true,
+          forceSide,
+          directionalEdgeCards: duoLayoutModernRef.current,
+          edgeCardFixedPosition: duoLayoutModernRef.current,
+          sceneExtras: !duoLayoutModernRef.current,
+        });
+      }
+      // Scene last in this turn so edge/portrait cleanup cannot erase it.
+      writeDuoModernSceneIfDragging(emblaApi, progress, forceSide);
     },
-    []
+    [writeDuoModernSceneIfDragging]
   );
 
   const emblaOptions = useMemo(
@@ -369,31 +466,66 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     [emblaRef]
   );
 
-  const discoverMetrics: PeopleDiscoverCardMetrics = useMemo(
-    () =>
-      computePeopleDiscoverCardMetrics({
-        hostW: size.w,
-        hostH: size.h,
-        reserveInFlowChrome: isDuoLayout ? duoInFlowChrome : false,
-        distributeVerticalSurplus: isFullWidthPresentation,
-        upwardPeekPad: isMinePresentation,
-        fullWidthSlide: isFullWidthPresentation,
-        chromeProfile: isMinePresentation
-          ? "mine"
-          : isPlansPresentation
-            ? "plans"
-            : "discover",
-      }),
+  const discoverMetricsInput = useMemo(
+    () => ({
+      hostW: size.w,
+      hostH: duoLayoutModern
+        ? peopleDuoModernMetricsHostH(
+            size.h,
+            peopleFeedContentTopPadPx(
+              readPeopleSafeAreaTopPx(
+                hostRef.current ??
+                  (typeof document !== "undefined"
+                    ? document.documentElement
+                    : null)
+              )
+            )
+          )
+        : size.h,
+      reserveInFlowChrome: isDuoLayout ? duoInFlowChrome : false,
+      distributeVerticalSurplus: isFullWidthPresentation,
+      upwardPeekPad: isMinePresentation,
+      fullWidthSlide: isFullWidthPresentation,
+      chromeProfile: isMinePresentation
+        ? duoLayoutModern
+          ? ("duoModern" as const)
+          : ("mine" as const)
+        : isPlansPresentation
+          ? ("plans" as const)
+          : ("discover" as const),
+    }),
     [
       size.w,
       size.h,
       isDuoLayout,
       duoInFlowChrome,
+      duoLayoutModern,
       isMinePresentation,
       isPlansPresentation,
       isFullWidthPresentation,
     ]
   );
+
+  const discoverMetrics: PeopleDiscoverCardMetrics = useMemo(() => {
+    const duoPhotoCount =
+      duoLayoutModern && resolveDuoModernDisplayPhotoCount && items.length > 0
+        ? resolveDuoModernDisplayPhotoCount(
+            items[clampIndex(index, items.length)]!
+          )
+        : 0;
+    return computePeopleDiscoverCardMetrics({
+      ...discoverMetricsInput,
+      ...(duoLayoutModern
+        ? { duoModernDisplayPhotoCount: duoPhotoCount }
+        : {}),
+    });
+  }, [
+    discoverMetricsInput,
+    duoLayoutModern,
+    resolveDuoModernDisplayPhotoCount,
+    items,
+    index,
+  ]);
 
   const metrics = useMemo(() => {
     if (size.w === 0 || size.h === 0) {
@@ -615,11 +747,13 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
 
     const onPointerDown = () => {
       const snap = emblaApi.selectedScrollSnap();
-      if (isMinePresentationRef.current && mineProbeRefBox.current?.current) {
+      if (isMinePresentationRef.current) {
         mineProbeAnchorRef.current = snap;
-        // New gesture: rebind departure neighbors + open destination (ignore
-        // stale settles until pointerUp claims the landing snap).
-        lockMineMotionProbeFlight(mineProbeRefBox.current.current, snap);
+        if (mineProbeRefBox.current?.current) {
+          // New gesture: rebind departure neighbors + open destination (ignore
+          // stale settles until pointerUp claims the landing snap).
+          lockMineMotionProbeFlight(mineProbeRefBox.current.current, snap);
+        }
       }
       peopleDebugRecord("embla:pointerDown", {
         ...emblaStateRef.current,
@@ -629,6 +763,9 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       // Do NOT acquire PTR block here — vertical pull-to-refresh must be able
       // to start on the card surface. Block only once Embla owns horizontal scroll.
       emblaPtrPointerDownRef.current = true;
+      if (duoLayoutModernRef.current) {
+        duoGestureSceneFlightRef.current = true;
+      }
     };
 
     const onScroll = () => {
@@ -642,6 +779,19 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       emblaPtrPointerDownRef.current = false;
       releasePtrBlockRef.current?.();
       releasePtrBlockRef.current = null;
+      if (duoLayoutModernRef.current) {
+        const idle = computeMineMotionProbeProgress(
+          emblaApi.scrollProgress(),
+          emblaApi.scrollSnapList(),
+          mineProbeAnchorRef.current
+        );
+        // Tap / already-idle release: no settle follow-through. Keep flight
+        // when progress remains so Embla scroll after pointer-up can write.
+        if (idle.prev <= 0 && idle.next <= 0) {
+          duoGestureSceneFlightRef.current = false;
+          clearDuoModernSceneVisual(emblaApi.slideNodes());
+        }
+      }
       if (!isMinePresentationRef.current) return;
       const selected = emblaApi.selectedScrollSnap();
       claimMineMotionProbeFlightDestination(
@@ -659,9 +809,10 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
         const ctrl = mineProbeRefBox.current?.current;
         // Claim if still open (e.g. settle without a prior pointerUp claim).
         claimMineMotionProbeFlightDestination(ctrl, selected);
+        duoGestureSceneFlightRef.current = false;
+        mineProbeAnchorRef.current = selected;
         // Only clears when settled snap matches this flight's destination.
         if (unlockMineMotionProbeFlight(ctrl, selected)) {
-          mineProbeAnchorRef.current = selected;
           hideMineMotionProbeVisual(ctrl);
           clearMineRealIncomingVisuals(emblaApi.slideNodes());
         }
@@ -690,6 +841,7 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       emblaApi.off("scroll", onScroll);
       emblaApi.off("settle", onSettle);
       emblaPtrPointerDownRef.current = false;
+      duoGestureSceneFlightRef.current = false;
       releasePtrBlockRef.current?.();
       releasePtrBlockRef.current = null;
     };
@@ -707,6 +859,10 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       if (!isFullWidthPresentationRef.current) return;
       const jump = opts?.jump === true;
       mineButtonScrollJumpRef.current = jump;
+      if (duoLayoutModernRef.current) {
+        duoGestureSceneFlightRef.current = false;
+        clearDuoModernSceneVisual(emblaApi.slideNodes());
+      }
       // Plans: jump flag only (no Mine motion probe / real-incoming).
       if (!isMinePresentationRef.current) return;
       const snap = emblaApi.selectedScrollSnap();
@@ -750,6 +906,9 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
 
   useEffect(() => {
     if (!emblaApi) return;
+    if (duoLayoutModernRef.current && duoGestureSceneFlightRef.current) {
+      return;
+    }
     const selected = emblaApi.selectedScrollSnap();
     if (selected === index) {
       // Button prepare may have locked a programmatic flight, but Embla is
@@ -781,8 +940,10 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     });
     // Button path may have already begun this departure→destination flight;
     // begin with the same pair is idempotent (duplicate).
-    if (isMinePresentationRef.current && mineProbeRefBox.current?.current) {
+    if (isMinePresentationRef.current) {
       mineProbeAnchorRef.current = selected;
+    }
+    if (isMinePresentationRef.current && mineProbeRefBox.current?.current) {
       beginMineMotionProbeFlight(mineProbeRefBox.current.current, {
         departureIndex: selected,
         destinationIndex: index,
@@ -843,8 +1004,18 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     suppressSettleCommitRef.current = true;
     emblaApi.reInit();
     emblaApi.scrollTo(indexRef.current, true);
-    applyPhysicalSlidePresentation(emblaApi, isDuoLayout, slidePresentationMode);
-  }, [emblaApi, isDuoLayout, discoverMetrics, items.length, slidePresentationMode]);
+    applyPhysicalSlidePresentation(emblaApi, isDuoLayout, slidePresentationMode, {
+      duoModernScene: duoLayoutModern,
+      departureIndex: mineProbeAnchorRef.current,
+    });
+  }, [
+    emblaApi,
+    isDuoLayout,
+    discoverMetrics,
+    items.length,
+    slidePresentationMode,
+    duoLayoutModern,
+  ]);
 
   const opportunityIds = useMemo(
     () => items.map((row) => carouselItemId(row)),
@@ -880,6 +1051,10 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
         mineProbeAnchorRef.current
       );
 
+      if (duoLayoutModernRef.current && !mineRealIncomingEnabledRef.current) {
+        writeDuoModernSceneIfDragging(emblaApi, progress, null);
+      }
+
       if (mineRealIncomingEnabledRef.current) {
         hideMineMotionProbeVisual(mineProbeRefBox.current?.current);
         writeMineRealIncomingFromProgress(emblaApi, progress, null);
@@ -891,11 +1066,21 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       writeMineMotionProbeVisual(ctrl, progress, mineProbeGeomRef.current);
     };
 
+    const cancelPresentationRaf = () => {
+      if (!rafId) return;
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
     const syncPresentation = () => {
       applyPhysicalSlidePresentation(
         emblaApi,
         isDuoLayout,
-        slidePresentationMode
+        slidePresentationMode,
+        {
+          duoModernScene: duoLayoutModernRef.current,
+          departureIndex: mineProbeAnchorRef.current,
+        }
       );
     };
 
@@ -903,6 +1088,10 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       // Probe/proxy: write in Embla's scroll callback (already inside Embla rAF).
       // Do NOT schedule another requestAnimationFrame for the probe.
       syncMineMotionProbe();
+
+      // Duo-modern scene writes in this Embla scroll callback (finger-follow).
+      // Skip coalesced rAF so identity settle cannot race a stale frame.
+      if (duoLayoutModernRef.current) return;
 
       // Discover peek opacity/scale keeps existing coalesced rAF.
       if (rafId) return;
@@ -913,12 +1102,14 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     };
 
     const onSettleOpacity = () => {
+      cancelPresentationRaf();
+      duoGestureSceneFlightRef.current = false;
       if (isMinePresentationRef.current) {
         const selected = emblaApi.selectedScrollSnap();
         const ctrl = mineProbeRefBox.current?.current;
         claimMineMotionProbeFlightDestination(ctrl, selected);
+        mineProbeAnchorRef.current = selected;
         if (unlockMineMotionProbeFlight(ctrl, selected)) {
-          mineProbeAnchorRef.current = selected;
           hideMineMotionProbeVisual(ctrl);
           clearMineRealIncomingVisuals(emblaApi.slideNodes());
         }
@@ -927,6 +1118,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     };
 
     const onReInitOpacity = () => {
+      cancelPresentationRaf();
+      duoGestureSceneFlightRef.current = false;
       if (isMinePresentationRef.current) {
         const selected = emblaApi.selectedScrollSnap();
         const ctrl = mineProbeRefBox.current?.current;
@@ -949,7 +1142,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     emblaApi.on("reInit", onReInitOpacity);
 
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
+      cancelPresentationRaf();
+      duoGestureSceneFlightRef.current = false;
       emblaApi.off("scroll", onScroll);
       emblaApi.off("settle", onSettleOpacity);
       emblaApi.off("reInit", onReInitOpacity);
@@ -957,6 +1151,15 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
       hideMineMotionProbeVisual(ctrl);
       unlockMineMotionProbeFlight(ctrl, undefined, { force: true });
       clearMineRealIncomingVisuals(emblaApi.slideNodes());
+      applyPhysicalSlidePresentation(
+        emblaApi,
+        isDuoLayout,
+        slidePresentationMode,
+        {
+          duoModernScene: duoLayoutModernRef.current,
+          departureIndex: mineProbeAnchorRef.current,
+        }
+      );
     };
   }, [
     emblaApi,
@@ -964,10 +1167,12 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
     metrics.cardW,
     isDuoLayout,
     slidePresentationMode,
+    duoLayoutModern,
     isMinePresentation,
     cacheMinePortraitEls,
     clearMineRealIncomingVisuals,
     writeMineRealIncomingFromProgress,
+    writeDuoModernSceneIfDragging,
   ]);
 
   // Cache probe start anchors + measured resting front-photo landing (not per scroll).
@@ -1055,12 +1260,17 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
 
   useEffect(() => {
     if (!emblaApi) return;
+    if (duoLayoutModern && duoGestureSceneFlightRef.current) return;
     applyPhysicalSlidePresentation(
       emblaApi,
       isDuoLayout,
-      slidePresentationMode
+      slidePresentationMode,
+      {
+        duoModernScene: duoLayoutModern,
+        departureIndex: mineProbeAnchorRef.current,
+      }
     );
-  }, [emblaApi, index, isDuoLayout, slidePresentationMode]);
+  }, [emblaApi, index, isDuoLayout, slidePresentationMode, duoLayoutModern]);
 
   const handleSlideClick = useCallback(
     (e: MouseEvent<HTMLDivElement>, slideIndex: number) => {
@@ -1107,41 +1317,68 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
   }, [deckReady, size.w, size.h, metrics.cardW, metrics.cardH]);
 
   const minePortraitStyle = isFullWidthPresentation
-    ? ({
-        ["--people-mine-portrait-w" as string]: `${discoverMetrics.portraitW}px`,
-        ["--people-mine-portrait-h" as string]: `${discoverMetrics.portraitH}px`,
-        ["--people-mine-frame-w" as string]: `${discoverMetrics.frameW}px`,
-        ["--people-mine-frame-h" as string]: `${discoverMetrics.frameH}px`,
-        // Surplus padTop is an in-slide spacer under absolute caption (not CSS padding).
-        ["--people-mine-surplus-pad-top" as string]: `${discoverMetrics.padTop}px`,
-        ["--people-mine-surplus-pad-bottom" as string]: `${discoverMetrics.padBottom}px`,
-        ["--people-mine-unused-host" as string]: `${discoverMetrics.unusedHostH}px`,
-      } as CSSProperties)
+    ? (peopleMinePortraitCssVars(discoverMetrics) as CSSProperties)
     : undefined;
 
   return (
     <div
       ref={hostRef}
-      className="relative min-h-0 w-full flex-1 overflow-hidden"
+      className="relative h-full min-h-0 w-full flex-1 overflow-hidden"
       data-people-deck-carousel-host="true"
       style={
         isFullWidthPresentation
-          ? ({
-              ["--people-mine-portrait-w" as string]: `${discoverMetrics.portraitW}px`,
-              ["--people-mine-portrait-h" as string]: `${discoverMetrics.portraitH}px`,
-              ["--people-mine-frame-w" as string]: `${discoverMetrics.frameW}px`,
-              ["--people-mine-frame-h" as string]: `${discoverMetrics.frameH}px`,
-              ["--people-mine-surplus-pad-top" as string]: `${discoverMetrics.padTop}px`,
-              ["--people-mine-surplus-pad-bottom" as string]: `${discoverMetrics.padBottom}px`,
-              ["--people-mine-unused-host" as string]: `${discoverMetrics.unusedHostH}px`,
-            } as CSSProperties)
+          ? (peopleMinePortraitCssVars(discoverMetrics) as CSSProperties)
           : undefined
       }
     >
+      {duoEmblaNavArrows && deckReady ? (
+        <>
+          <button
+            type="button"
+            aria-label="Previous opportunity"
+            disabled={!canNavPrev}
+            onClick={() => {
+              if (canNavPrev) onNavPrev?.();
+            }}
+            className={[
+              "pointer-events-auto absolute left-1 top-[42%] z-[22] inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)]/35 bg-[var(--surface)]/88 shadow-sm backdrop-blur-sm transition active:scale-[0.94]",
+              !canNavPrev ? "pointer-events-none opacity-0" : "opacity-90",
+            ].join(" ")}
+            data-people-duo-embla-nav="prev"
+          >
+            <PiCaretLeftBold className="h-5 w-5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Next opportunity"
+            disabled={!canNavNext}
+            onClick={() => {
+              if (canNavNext) onNavNext?.();
+            }}
+            className={[
+              "pointer-events-auto absolute right-1 top-[42%] z-[22] inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)]/35 bg-[var(--surface)]/88 shadow-sm backdrop-blur-sm transition active:scale-[0.94]",
+              !canNavNext ? "pointer-events-none opacity-0" : "opacity-90",
+            ].join(" ")}
+            data-people-duo-embla-nav="next"
+          >
+            <PiCaretRightBold className="h-5 w-5" aria-hidden />
+          </button>
+        </>
+      ) : null}
+      {isDuoLayout && !deckReady && items.length > 0 ? (
+        <div
+          className="pointer-events-none absolute inset-0 z-[1] overflow-hidden"
+          data-people-duo-deck-pending="true"
+          role="status"
+        >
+          <PeopleDuoCardSkeleton />
+        </div>
+      ) : null}
       {deckReady ? (
         <div
           ref={setEmblaViewportRef}
           className="relative h-full overflow-hidden"
+          data-people-embla-viewport="true"
           style={{
             touchAction: "pan-y pinch-zoom",
           }}
@@ -1153,7 +1390,23 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
                 : "items-center"
             }`}
           >
-            {items.map((candidate, i) => (
+            {items.map((candidate, i) => {
+              const slideDiscoverMetrics =
+                isFullWidthPresentation &&
+                duoLayoutModern &&
+                resolveDuoModernDisplayPhotoCount
+                  ? computePeopleDiscoverCardMetrics({
+                      ...discoverMetricsInput,
+                      duoModernDisplayPhotoCount:
+                        resolveDuoModernDisplayPhotoCount(candidate),
+                    })
+                  : discoverMetrics;
+              const slidePortraitStyle = isFullWidthPresentation
+                ? (peopleMinePortraitCssVars(
+                    slideDiscoverMetrics
+                  ) as CSSProperties)
+                : minePortraitStyle;
+              return (
               <div
                 key={carouselItemId(candidate) || `slide-${i}`}
                 className="relative min-w-0 shrink-0 select-none overflow-visible"
@@ -1166,10 +1419,11 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
                   boxSizing: "border-box",
                   // Full-width: no paddingTop — surplus pad lives in-slide.
                   paddingTop: 0,
-                  paddingBottom: isFullWidthPresentation
-                    ? discoverMetrics.padBottom
-                    : 0,
-                  ...minePortraitStyle,
+                  paddingBottom:
+                    isFullWidthPresentation && !duoLayoutModern
+                      ? slideDiscoverMetrics.padBottom
+                      : 0,
+                  ...slidePortraitStyle,
                 }}
                 onClick={(e) => handleSlideClick(e, i)}
               >
@@ -1182,7 +1436,8 @@ export default function MatchDeckCarousel<T extends MatchDeckCarouselItem>({
                     i === index ? null : i < index ? "left" : "right",
                 })}
               </div>
-            ))}
+            );
+            })}
           </div>
         </div>
       ) : null}

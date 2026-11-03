@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { dataCache } from "./dataCache";
 import { HOME_EVENT_TIMEZONE } from "./homeFeedConstants";
 import {
   applyHomeFilterTransition,
@@ -10,6 +11,12 @@ import {
   getHomeFeedRpcType,
   hasExplicitHomeContentFilters,
   hasNonShortcutHomeFilters,
+  buildHomeCompactFilterBarChips,
+  buildHomeVerticalFirstPageFeedKeyOptions,
+  formatHomeCustomDateChipLabel,
+  homeCompactBarExtraDateFilter,
+  homeDateFilterChipLabel,
+  isTodayChipActive,
   isTrueDefaultAllVerticalFeed,
   shouldPersonalizeHomeVerticalFeed,
   shouldShowHomeDiscoveryRails,
@@ -28,6 +35,7 @@ const baseCtx = (
 ): HomeVerticalFilterContext => ({
   viewMode: "all",
   dateFilter: "none",
+  customOccursOn: null,
   selectedTags: [],
   viewerProfileId: "profile-1",
   friendsFilter: false,
@@ -38,6 +46,7 @@ const baseState = (
   partial: Partial<HomeFilterState> = {}
 ): HomeFilterState => ({
   dateFilter: "none",
+  customOccursOn: null,
   viewMode: "all",
   friendsFilter: false,
   ...partial,
@@ -196,6 +205,7 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "today",
+      customOccursOn: null,
       viewMode: "hangouts",
       friendsFilter: false,
     });
@@ -208,6 +218,7 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "none",
+      customOccursOn: null,
       viewMode: "hangouts",
       friendsFilter: false,
     });
@@ -220,6 +231,7 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "none",
+      customOccursOn: null,
       viewMode: "experiences",
       friendsFilter: false,
     });
@@ -232,6 +244,7 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "tomorrow",
+      customOccursOn: null,
       viewMode: "hangouts",
       friendsFilter: true,
     });
@@ -248,6 +261,7 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "none",
+      customOccursOn: null,
       viewMode: "all",
       friendsFilter: false,
     });
@@ -267,8 +281,166 @@ describe("applyHomeFilterTransition", () => {
     );
     expect(next).toEqual({
       dateFilter: "none",
+      customOccursOn: null,
       viewMode: "hangouts",
       friendsFilter: true,
+    });
+  });
+
+  it("supports simultaneous Friends with date or type filters", () => {
+    const nextWeekFriends = applyHomeFilterTransition(
+      baseState({ friendsFilter: true }),
+      { type: "toggleDate", target: "next_week" }
+    );
+    expect(nextWeekFriends).toEqual({
+      dateFilter: "next_week",
+      customOccursOn: null,
+      viewMode: "hangouts",
+      friendsFilter: true,
+    });
+    expect(homeCompactBarExtraDateFilter(nextWeekFriends.dateFilter)).toBe(
+      "next_week"
+    );
+    expect(isTodayChipActive(nextWeekFriends.dateFilter)).toBe(false);
+
+    const postsFriends = applyHomeFilterTransition(
+      baseState({ friendsFilter: true }),
+      { type: "togglePlaces" }
+    );
+    expect(postsFriends).toEqual({
+      dateFilter: "none",
+      customOccursOn: null,
+      viewMode: "experiences",
+      friendsFilter: true,
+    });
+  });
+
+  it("selectCustomDate scopes hangouts and clears presets", () => {
+    const next = applyHomeFilterTransition(
+      baseState({ dateFilter: "tomorrow", viewMode: "all" }),
+      { type: "selectCustomDate", occursOn: "2026-11-05" }
+    );
+    expect(next).toEqual({
+      dateFilter: "none",
+      customOccursOn: "2026-11-05",
+      viewMode: "hangouts",
+      friendsFilter: false,
+    });
+  });
+
+  it("toggleCustomDate clears when the same day is toggled off", () => {
+    const next = applyHomeFilterTransition(
+      baseState({ customOccursOn: "2026-11-05", viewMode: "hangouts" }),
+      { type: "toggleCustomDate", occursOn: "2026-11-05" }
+    );
+    expect(next.customOccursOn).toBeNull();
+    expect(next.viewMode).toBe("all");
+  });
+
+  it("preset date clears customOccursOn", () => {
+    const next = applyHomeFilterTransition(
+      baseState({ customOccursOn: "2026-11-05", viewMode: "hangouts" }),
+      { type: "selectDate", target: "today" }
+    );
+    expect(next.dateFilter).toBe("today");
+    expect(next.customOccursOn).toBeNull();
+  });
+
+  it("Friends preserved with custom date", () => {
+    const next = applyHomeFilterTransition(
+      baseState({ friendsFilter: true }),
+      { type: "selectCustomDate", occursOn: "2026-11-05" }
+    );
+    expect(next.friendsFilter).toBe(true);
+    expect(next.customOccursOn).toBe("2026-11-05");
+  });
+});
+
+describe("custom calendar date helpers", () => {
+  it("buildHomeOccurrenceFields uses custom day with Addis tz", () => {
+    const occurs = buildHomeOccurrenceFields("none", ADDIS_TUESDAY, "2026-11-05");
+    expect(occurs).toEqual({
+      occursOn: "2026-11-05",
+      occursTz: HOME_EVENT_TIMEZONE,
+      occursFrom: null,
+      occursTo: null,
+    });
+  });
+
+  it("custom date overrides preset dateFilter for RPC occurrence", () => {
+    const occurs = buildHomeOccurrenceFields(
+      "today",
+      ADDIS_TUESDAY,
+      "2026-11-05"
+    );
+    expect(occurs.occursOn).toBe("2026-11-05");
+  });
+
+  it("formats compact chip label with short weekday and Addis calendar day", () => {
+    expect(formatHomeCustomDateChipLabel("2026-10-26")).toBe("Mon, Oct 26");
+    expect(formatHomeCustomDateChipLabel("2026-10-28")).toBe("Wed, Oct 28");
+    expect(formatHomeCustomDateChipLabel("2026-10-29")).toBe("Thu, Oct 29");
+    expect(formatHomeCustomDateChipLabel("2026-11-05")).toBe("Thu, Nov 5");
+    expect(formatHomeCustomDateChipLabel("2026-12-01")).toBe("Tue, Dec 1");
+    expect(formatHomeCustomDateChipLabel("2027-01-01")).toBe("Fri, Jan 1");
+    expect(formatHomeCustomDateChipLabel("2024-02-29")).toBe("Thu, Feb 29");
+  });
+
+  it("buildVerticalLoadFeedOptions sends hangout + occurs for custom date", () => {
+    const opts = buildVerticalLoadFeedOptions(
+      baseCtx({ customOccursOn: "2026-11-05", viewMode: "hangouts" }),
+      { offset: 0, limit: 15 },
+      ADDIS_TUESDAY
+    );
+    expect(opts.type).toBe("hangout");
+    expect(opts.occursOn).toBe("2026-11-05");
+    expect(opts.occursTz).toBe(HOME_EVENT_TIMEZONE);
+    expect(opts.friendsOnly).toBeUndefined();
+  });
+
+  it("Friends + custom date includes friendsOnly on RPC options", () => {
+    const opts = buildVerticalLoadFeedOptions(
+      baseCtx({
+        customOccursOn: "2026-11-05",
+        viewMode: "hangouts",
+        friendsFilter: true,
+      }),
+      { offset: 0, limit: 15 },
+      ADDIS_TUESDAY
+    );
+    expect(opts.friendsOnly).toBe(true);
+  });
+
+  it("feed cache keys differ for different custom dates", () => {
+    const a = dataCache.generateFeedKey(
+      buildHomeVerticalFirstPageFeedKeyOptions(
+        baseCtx({ customOccursOn: "2026-11-05", viewMode: "hangouts" }),
+        ADDIS_TUESDAY
+      )
+    );
+    const b = dataCache.generateFeedKey(
+      buildHomeVerticalFirstPageFeedKeyOptions(
+        baseCtx({ customOccursOn: "2026-11-06", viewMode: "hangouts" }),
+        ADDIS_TUESDAY
+      )
+    );
+    expect(a).not.toBe(b);
+    expect(a).toContain("2026-11-05");
+    expect(b).toContain("2026-11-06");
+  });
+
+  it("custom date chip is active-first with short label", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "none",
+      customOccursOn: "2026-11-05",
+      viewMode: "hangouts",
+      friendsFilter: false,
+    });
+    expect(chips[0]).toMatchObject({
+      id: "custom-date",
+      active: true,
+      label: "Thu, Nov 5",
+      customOccursOn: "2026-11-05",
     });
   });
 });
@@ -290,12 +462,155 @@ describe("discovery rails helper", () => {
       })
     ).toBe(false);
     expect(
+      shouldShowHomeDiscoveryRails({
+        dateFilter: "none",
+        customOccursOn: "2026-11-05",
+        viewMode: "all",
+        friendsFilter: false,
+      })
+    ).toBe(false);
+    expect(
       hasExplicitHomeContentFilters({
         dateFilter: "none",
         viewMode: "all",
         friendsFilter: true,
       })
     ).toBe(true);
+  });
+});
+
+describe("homeDateFilterChipLabel", () => {
+  it("maps none and each date filter to drawer labels", () => {
+    expect(homeDateFilterChipLabel("none")).toBe("Today");
+    expect(homeDateFilterChipLabel("today")).toBe("Today");
+    expect(homeDateFilterChipLabel("tomorrow")).toBe("Tomorrow");
+    expect(homeDateFilterChipLabel("this_week")).toBe("This Week");
+    expect(homeDateFilterChipLabel("this_weekend")).toBe("This Weekend");
+    expect(homeDateFilterChipLabel("next_week")).toBe("Next Week");
+  });
+});
+
+describe("homeCompactBarExtraDateFilter", () => {
+  it("omits extra chip for none and today", () => {
+    expect(homeCompactBarExtraDateFilter("none")).toBeNull();
+    expect(homeCompactBarExtraDateFilter("today")).toBeNull();
+  });
+
+  it("returns the selected non-Today date for a separate active chip", () => {
+    expect(homeCompactBarExtraDateFilter("tomorrow")).toBe("tomorrow");
+    expect(homeCompactBarExtraDateFilter("this_week")).toBe("this_week");
+    expect(homeCompactBarExtraDateFilter("this_weekend")).toBe("this_weekend");
+    expect(homeCompactBarExtraDateFilter("next_week")).toBe("next_week");
+  });
+});
+
+describe("isTodayChipActive", () => {
+  it("is true only when dateFilter is today", () => {
+    expect(isTodayChipActive("today")).toBe(true);
+    expect(isTodayChipActive("none")).toBe(false);
+    expect(isTodayChipActive("next_week")).toBe(false);
+    expect(isTodayChipActive("tomorrow")).toBe(false);
+  });
+});
+
+describe("buildHomeCompactFilterBarChips", () => {
+  const ids = (
+    chips: ReturnType<typeof buildHomeCompactFilterBarChips>
+  ) => chips.map((c) => c.id);
+  const labels = (
+    chips: ReturnType<typeof buildHomeCompactFilterBarChips>
+  ) => chips.map((c) => c.label);
+
+  it("defaults to Today | Events | Posts with no duplicates", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "none",
+      viewMode: "all",
+      friendsFilter: false,
+    });
+    expect(labels(chips)).toEqual(["Today", "Events", "Posts"]);
+    expect(chips.every((c) => !c.active)).toBe(true);
+    expect(new Set(ids(chips)).size).toBe(chips.length);
+  });
+
+  it("groups Next Week before inactive Today / Events / Posts", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "next_week",
+      viewMode: "hangouts",
+      friendsFilter: false,
+    });
+    expect(labels(chips)).toEqual([
+      "Next Week",
+      "Today",
+      "Events",
+      "Posts",
+    ]);
+    expect(chips[0]?.active).toBe(true);
+    expect(chips.slice(1).every((c) => !c.active)).toBe(true);
+    expect(isTodayChipActive("next_week")).toBe(false);
+  });
+
+  it("groups Next Week + Friends, then inactive shortcuts", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "next_week",
+      viewMode: "hangouts",
+      friendsFilter: true,
+    });
+    expect(labels(chips)).toEqual([
+      "Next Week",
+      "Friends",
+      "Today",
+      "Events",
+      "Posts",
+    ]);
+    expect(chips.filter((c) => c.active).map((c) => c.label)).toEqual([
+      "Next Week",
+      "Friends",
+    ]);
+  });
+
+  it("groups Events + Friends without falsely activating Today", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "none",
+      viewMode: "hangouts",
+      friendsFilter: true,
+    });
+    expect(labels(chips)).toEqual(["Events", "Friends", "Today", "Posts"]);
+  });
+
+  it("groups Today + Friends then Events | Posts", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "today",
+      viewMode: "hangouts",
+      friendsFilter: true,
+    });
+    expect(labels(chips)).toEqual(["Today", "Friends", "Events", "Posts"]);
+    expect(chips.find((c) => c.id === "events")?.active).toBe(false);
+  });
+
+  it("does not highlight Events when a date filter is selected", () => {
+    const chips = buildHomeCompactFilterBarChips({
+      dateFilter: "tomorrow",
+      viewMode: "hangouts",
+      friendsFilter: false,
+    });
+    expect(chips.find((c) => c.id === "events")?.active).toBe(false);
+    expect(chips.find((c) => c.id === "date:tomorrow")?.active).toBe(true);
+  });
+
+  it("clear-all shape restores default order", () => {
+    const cleared = applyHomeFilterTransition(
+      baseState({
+        dateFilter: "next_week",
+        viewMode: "hangouts",
+        friendsFilter: true,
+      }),
+      { type: "clearAll" }
+    );
+    expect(labels(buildHomeCompactFilterBarChips(cleared))).toEqual([
+      "Today",
+      "Events",
+      "Posts",
+    ]);
   });
 });
 
@@ -308,7 +623,7 @@ describe("hasNonShortcutHomeFilters", () => {
     selectedTags: [] as string[],
   };
 
-  it("is false for idle and shortcut-only Today / Events / Places", () => {
+  it("is false for idle, dates, Friends, and type chips (now visible in the bar)", () => {
     expect(hasNonShortcutHomeFilters(idle)).toBe(false);
     expect(
       hasNonShortcutHomeFilters({
@@ -329,18 +644,18 @@ describe("hasNonShortcutHomeFilters", () => {
         typeFilter: "experiences",
       })
     ).toBe(false);
-  });
-
-  it("is true for drawer dates, Friends, search, and tags", () => {
     expect(
       hasNonShortcutHomeFilters({ ...idle, dateFilter: "tomorrow" })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       hasNonShortcutHomeFilters({ ...idle, dateFilter: "this_weekend" })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       hasNonShortcutHomeFilters({ ...idle, friendsFilter: true })
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("is true for search and tags (not shown as compact chips)", () => {
     expect(
       hasNonShortcutHomeFilters({ ...idle, search: "coffee" })
     ).toBe(true);
@@ -349,7 +664,7 @@ describe("hasNonShortcutHomeFilters", () => {
     ).toBe(true);
   });
 
-  it("is true when Friends combines with a visible shortcut", () => {
+  it("Friends + shortcuts stay false for the in-pill indicator", () => {
     expect(
       hasNonShortcutHomeFilters({
         ...idle,
@@ -357,7 +672,7 @@ describe("hasNonShortcutHomeFilters", () => {
         typeFilter: "hangouts",
         friendsFilter: true,
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

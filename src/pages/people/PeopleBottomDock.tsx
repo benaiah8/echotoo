@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import {
   PiArrowClockwiseBold,
   PiChatCircleBold,
@@ -45,6 +46,15 @@ export default function PeopleBottomDock({
   onSelectGroups,
   primaryAction,
   mineCompactConnect = true,
+  /** When true, render Connect/Join primary only (categories live in PeopleFeedTopNav). */
+  hideCategoryNav = false,
+  /**
+   * Duo + global BottomTab: portal to document root so z-index is not capped
+   * by PeoplePage (z-30) stacking context.
+   */
+  portalToDocumentRoot = false,
+  /** Optional Message icon beside primary Connect (Duo deck only). */
+  companionMessageAction = null,
 }: {
   activeDestination: PeopleFlatDestination;
   discoverEnabled: boolean;
@@ -59,6 +69,14 @@ export default function PeopleBottomDock({
   primaryAction: PeopleShellPrimaryAction | null;
   /** Canonical compact Connect / Join / I'm down pill. */
   mineCompactConnect?: boolean;
+  hideCategoryNav?: boolean;
+  portalToDocumentRoot?: boolean;
+  companionMessageAction?: {
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    busy?: boolean;
+  } | null;
 }) {
   const bottomOffset = peopleShellDockBottomOffset();
   const action = primaryAction;
@@ -74,12 +92,15 @@ export default function PeopleBottomDock({
   const showYoursContext =
     activeDestination === "groups" && groupsYoursActive;
 
-  return (
+  const dock = (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 overflow-visible"
       style={{
         zIndex: PEOPLE_SHELL_Z_ABOVE_BOTTOM_TAB,
       }}
+      data-people-duo-connect-portal={
+        portalToDocumentRoot ? "true" : undefined
+      }
       data-people-shell
       data-people-shell-version="v12.3-groups-states"
       data-people-shell-primary-shelves="false"
@@ -115,6 +136,64 @@ export default function PeopleBottomDock({
             {peopleUiCopy.groupUpYoursContextLabel}
           </p>
         ) : null}
+
+        <div
+          className={[
+            "pointer-events-none flex shrink-0 items-end justify-center gap-2.5",
+            companionMessageAction ? "flex-row" : "",
+          ].join(" ")}
+          data-people-dock-primary-row={
+            companionMessageAction ? "connect-and-message" : undefined
+          }
+        >
+          {companionMessageAction ? (
+            <button
+              type="button"
+              data-people-feed-message="true"
+              data-people-duo-dock-message="true"
+              aria-label={companionMessageAction.label}
+              aria-busy={companionMessageAction.busy || undefined}
+              disabled={
+                companionMessageAction.disabled ||
+                companionMessageAction.busy
+              }
+              onClick={() => {
+                if (
+                  companionMessageAction.disabled ||
+                  companionMessageAction.busy
+                ) {
+                  return;
+                }
+                companionMessageAction.onPress();
+              }}
+              className={[
+                "people-action-hit pointer-events-auto inline-flex shrink-0 items-center justify-center rounded-full border box-border",
+                "shadow-[0_2px_8px_rgba(0,0,0,0.18)] transition active:scale-[0.94]",
+                peopleShellActionFaceClass(
+                  companionMessageAction.disabled ||
+                    companionMessageAction.busy
+                    ? "muted"
+                    : "brand",
+                  Boolean(
+                    companionMessageAction.disabled ||
+                      companionMessageAction.busy
+                  )
+                ),
+              ].join(" ")}
+              style={{
+                width: PEOPLE_ACTION_CIRCLE_PX,
+                height: PEOPLE_ACTION_CIRCLE_PX,
+                minWidth: PEOPLE_ACTION_CIRCLE_PX,
+                minHeight: PEOPLE_ACTION_CIRCLE_PX,
+              }}
+            >
+              <PiChatCircleBold
+                className="shrink-0"
+                style={{ width: 22, height: 22 }}
+                aria-hidden
+              />
+            </button>
+          ) : null}
 
         <button
           type="button"
@@ -214,28 +293,33 @@ export default function PeopleBottomDock({
             </>
           )}
         </button>
-
-        <div
-          style={{ height: actionToNavGap }}
-          aria-hidden
-          data-people-action-to-nav-gap={actionToNavGap}
-        />
-
-        <div
-          className="pointer-events-auto relative w-full bg-transparent"
-          data-people-nav-with-back-row="unified"
-        >
-          <PeopleFluidNav
-            activeDestination={activeDestination}
-            discoverEnabled={discoverEnabled}
-            groupsPillState={groupsPillState}
-            onBack={onBack}
-            onSelectDuo={onSelectDuo}
-            onSelectDiscover={onSelectDiscover}
-            onSelectPlans={onSelectPlans}
-            onSelectGroups={onSelectGroups}
-          />
         </div>
+
+        {hideCategoryNav ? null : (
+          <>
+            <div
+              style={{ height: actionToNavGap }}
+              aria-hidden
+              data-people-action-to-nav-gap={actionToNavGap}
+            />
+
+            <div
+              className="pointer-events-auto relative w-full bg-transparent"
+              data-people-nav-with-back-row="unified"
+            >
+              <PeopleFluidNav
+                activeDestination={activeDestination}
+                discoverEnabled={discoverEnabled}
+                groupsPillState={groupsPillState}
+                onBack={onBack}
+                onSelectDuo={onSelectDuo}
+                onSelectDiscover={onSelectDiscover}
+                onSelectPlans={onSelectPlans}
+                onSelectGroups={onSelectGroups}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <style>{`
@@ -253,6 +337,11 @@ export default function PeopleBottomDock({
       `}</style>
     </div>
   );
+
+  if (portalToDocumentRoot && typeof document !== "undefined") {
+    return createPortal(dock, document.body);
+  }
+  return dock;
 }
 
 function ActionIcon({

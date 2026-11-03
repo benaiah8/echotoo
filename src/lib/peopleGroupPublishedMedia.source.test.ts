@@ -133,9 +133,9 @@ describe("Groups Feed-style media (isolated)", () => {
     expect(GROUP_PUBLISHED_MEDIA_USES_INNER_SWIPER).toBe(false);
 
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain('layout="duo"');
+    expect(body).toContain('PeopleFeedList');
     // Embla carousel remains the horizontal owner (MatchDeckCarousel).
-    expect(body).toContain("MatchDeckCarousel");
+    expect(body).toContain("PeopleFeedList");
   });
 
   it("12–14: no-media / host / title band footprint (chrome inside card)", () => {

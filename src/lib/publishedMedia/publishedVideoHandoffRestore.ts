@@ -85,6 +85,48 @@ export function shouldTearDownIdlePublishedVideo(options: {
   return !options.isActive && !options.isWarm;
 }
 
+/**
+ * Idle (!active && !warm) must stop audio immediately — including while a
+ * tap-to-play request is still resolving — then tear down media/HLS.
+ */
+export function resolveIdlePublishedVideoCleanup(options: {
+  isActive: boolean;
+  isWarm: boolean;
+  manualPlayInFlight: boolean;
+}): {
+  shouldCleanup: boolean;
+  forcePause: boolean;
+  clearPlayIntent: boolean;
+  tearDown: boolean;
+} {
+  const shouldCleanup = !options.isActive && !options.isWarm;
+  if (!shouldCleanup) {
+    return {
+      shouldCleanup: false,
+      forcePause: false,
+      clearPlayIntent: false,
+      tearDown: false,
+    };
+  }
+  return {
+    shouldCleanup: true,
+    forcePause: true,
+    clearPlayIntent: true,
+    // Always tear down when idle; manual-in-flight no longer suppresses HLS destroy.
+    tearDown: true,
+  };
+}
+
+/**
+ * After async `video.play()`, drop playback if the player is no longer active.
+ * Warm-only must not keep audible playback.
+ */
+export function shouldAbortPublishedPlayBecauseNotActive(options: {
+  isActive: boolean;
+}): boolean {
+  return !options.isActive;
+}
+
 export type HandoffRestoreAbortDisposition = "ignore-stale" | "keep-pending";
 
 /**

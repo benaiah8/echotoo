@@ -78,15 +78,15 @@ describe("People rapid-nav preload + Group media pending", () => {
     expect(surface).toContain("showPendingLoading");
   });
 
-  it("5: selected Group pending media shows loading affordance", () => {
+  it("5: Group published-media loading affordance remains on surface component", () => {
     const surface = read(
       "components/people/PeopleGroupPublishedMediaSurface.tsx"
     );
     expect(surface).toContain("VideoPlaybackLoadingSpinner");
     expect(surface).toContain('data-people-group-media-loading="true"');
-
+    // Group Up feed uses organizer identity; published-media surface stays available.
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain("mediaPending={mediaLookup.status === \"pending\"}");
+    expect(body).toContain("PeopleGroupUpFeedCard");
   });
 
   it("6: settled empty Group does not show loading", () => {
@@ -130,7 +130,7 @@ describe("People rapid-nav preload + Group media pending", () => {
     expect(body).not.toContain("ensureGroupUpPublishedMediaMap");
   });
 
-  it("10: existing Duo/Discover/Plans warm behavior is unchanged", () => {
+  it("10: existing Duo/Discover warm helpers + Plans feed remain wired", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
     expect(overlay).toContain("mineImageWarmOffsets");
     expect(overlay).toContain("resolveMineProxyImageUrl");
@@ -140,10 +140,9 @@ describe("People rapid-nav preload + Group media pending", () => {
     expect(warm).toContain("mineImageWarmOffsets");
     expect(warm).toContain("matchDeckPhotoMountRadius");
 
-    // Plans deck body still uses duo presentation + carousel (no warm rewrite).
     const plans = read("pages/people/OpenPlanDeckBody.tsx");
-    expect(plans).toContain('duoPresentation="mine"');
-    expect(plans).toContain("MatchDeckCarousel");
+    expect(plans).toContain("PeopleFeedList");
+    expect(plans).toContain("PeopleOpenPlanFeedCard");
   });
 
   it("11: Group poster-only video behavior is unchanged", () => {

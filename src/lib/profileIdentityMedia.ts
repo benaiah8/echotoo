@@ -30,6 +30,9 @@ export type ProfileIdentityMediaSource = {
   avatar_url?: string | null;
   display_name?: string | null;
   username?: string | null;
+  /** Optional — enables deterministic Echo when photos/preset are empty. */
+  user_id?: string | null;
+  profile_id?: string | null;
 };
 
 export type ProfileIdentityMediaKind =

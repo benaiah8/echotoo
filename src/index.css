@@ -644,6 +644,51 @@ body,
   }
 }
 
+/*
+ * Duo portrait wait plate — reuses social-shelf-resolving-shimmer travel.
+ * Mixes --text so the sweep reads on --surface-2 / --surface (shelf uses --bg).
+ * Do not attach .social-action-contrast-shelf to portrait media.
+ */
+.people-duo-portrait-shimmer {
+  /* Position comes from the node (absolute inset-0 overlay vs h-full fill).
+   * Do not set position here — it overrides Tailwind `absolute` and collapses
+   * the Echo/photo wait layer to 0×0 inside the flex portrait frame. */
+  overflow: hidden;
+  /* Soft plate toward People shell surface — avoids a heavy solid block. */
+  background: color-mix(in oklab, var(--surface-2) 72%, var(--bg));
+}
+
+html.theme-light .people-duo-portrait-shimmer {
+  background: color-mix(in oklab, var(--surface-2) 58%, var(--bg));
+}
+
+.people-duo-portrait-shimmer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    color-mix(in oklab, var(--text) 10%, transparent) 38%,
+    color-mix(in oklab, var(--text) 18%, transparent) 50%,
+    color-mix(in oklab, var(--text) 10%, transparent) 62%,
+    transparent 100%
+  );
+  opacity: 0.75;
+  animation: social-shelf-resolving-shimmer 1.45s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-duo-portrait-shimmer::before {
+    animation: none;
+    transform: none;
+    opacity: 0.36;
+    background: color-mix(in oklab, var(--text) 14%, transparent);
+  }
+}
+
 .page-content {
   padding-left: 8px;
   padding-right: 8px;

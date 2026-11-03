@@ -74,8 +74,8 @@ const PRESS_TRANSITION =
   "transform 100ms cubic-bezier(0.22, 1, 0.36, 1)";
 
 export type MineEdgeNavCardsHandle = {
-  prev: HTMLButtonElement | null;
-  next: HTMLButtonElement | null;
+  prev: HTMLElement | null;
+  next: HTMLElement | null;
 };
 
 type Side = "prev" | "next";
@@ -87,6 +87,7 @@ function MineEdgeNavCard({
   bindRef,
   fixedRailsGeometry = false,
   portraitOuterH = 0,
+  visuallyHidden = false,
 }: {
   side: Side;
   disabled: boolean;
@@ -95,6 +96,7 @@ function MineEdgeNavCard({
   fixedRailsGeometry?: boolean;
   /** Mine portrait outer height — drives adaptive edge card height. */
   portraitOuterH?: number;
+  visuallyHidden?: boolean;
 }) {
   const isPrev = side === "prev";
   const cardW = edgeCardHitW(fixedRailsGeometry);
@@ -225,7 +227,7 @@ function MineEdgeNavCard({
 
   const setNodeRef = useCallback(
     (node: HTMLButtonElement | null) => {
-      bindRef?.(side, node);
+      if (!visuallyHidden) bindRef?.(side, node);
       // Transform is owned by Carousel progress writes / settle clear.
       // Apply resting pose once on mount so React re-renders (disabled toggle)
       // never reset engagement transforms via the style prop.
@@ -238,7 +240,7 @@ function MineEdgeNavCard({
         setPressedVisual(false);
       }
     },
-    [bindRef, setPressedVisual, side],
+    [bindRef, setPressedVisual, side, visuallyHidden],
   );
 
   return (
@@ -258,10 +260,14 @@ function MineEdgeNavCard({
         e.preventDefault();
       }}
       className={[
-        "group pointer-events-auto absolute z-[22] touch-manipulation select-none overflow-visible",
+        "group absolute z-[22] touch-manipulation select-none overflow-visible",
+        visuallyHidden
+          ? "pointer-events-none opacity-0"
+          : "pointer-events-auto",
         "disabled:pointer-events-none",
         "border-0 bg-transparent p-0 shadow-none",
       ].join(" ")}
+      data-people-mine-edge-nav-hidden={visuallyHidden ? "true" : undefined}
       style={{
         width: cardW,
         height: cardH,
@@ -339,6 +345,7 @@ export default function MineEdgeNavCards({
   onNext,
   cardsRef,
   fixedRailsGeometry = false,
+  visuallyHidden = false,
 }: {
   canGoPrev: boolean;
   canGoNext: boolean;
@@ -348,6 +355,8 @@ export default function MineEdgeNavCards({
   cardsRef?: RefObject<MineEdgeNavCardsHandle | null>;
   /** Mine fixed side rails — fixed visual strip; Plans keeps legacy. */
   fixedRailsGeometry?: boolean;
+  /** Hide decorative edge cards (Duo bottom nav owns visible controls). */
+  visuallyHidden?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [portraitOuterH, setPortraitOuterH] = useState(0);
@@ -508,6 +517,7 @@ export default function MineEdgeNavCards({
         bindRef={bindRef}
         fixedRailsGeometry={fixedRailsGeometry}
         portraitOuterH={portraitOuterH}
+        visuallyHidden={visuallyHidden}
       />
       <MineEdgeNavCard
         side="next"
@@ -516,6 +526,7 @@ export default function MineEdgeNavCards({
         bindRef={bindRef}
         fixedRailsGeometry={fixedRailsGeometry}
         portraitOuterH={portraitOuterH}
+        visuallyHidden={visuallyHidden}
       />
     </div>
   );

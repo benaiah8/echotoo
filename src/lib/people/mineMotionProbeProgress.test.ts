@@ -19,9 +19,15 @@ import {
   mineOutgoingPortraitScale,
   mineOutgoingRealSlideExtraTranslateX,
   mineEdgeCardEngagement,
+  applyMineDuoNavFeedbackIconColor,
+  mineEdgeCardDuoBottomFeedbackColors,
+  mineDuoInfoColumnCounterMotionStyle,
+  mineEdgeCardDuoBottomFeedbackStyle,
   mineEdgeCardMotionTransform,
   mineEdgeCardRestTransform,
   mineEdgeCardTransformOrigin,
+  MINE_DUO_BOTTOM_FEEDBACK_MAX_SCALE,
+  MINE_DUO_INFO_COUNTER_ROTATE_DEG,
   mineMotionProbeAdjacentAtIndex,
   mineMotionProbeLandingFromRects,
   mineMotionProbeVisiblePx,
@@ -36,6 +42,8 @@ import {
   MINE_PORTRAIT_NAV_ROTATE_DEG,
   prepareMineMotionProbeProgrammaticFlight,
   unlockMineMotionProbeFlight,
+  writeDuoModernSceneVisual,
+  settleMineEdgeCardDuoBottomFeedbackSide,
   writeMineIncomingRealSlideVisual,
   writeMineMotionProbeVisual,
 } from "./mineMotionProbeProgress";
@@ -508,25 +516,79 @@ describe("mineEdgeCardEngagement", () => {
   });
 });
 
+describe("mineEdgeCardDuoBottomFeedbackStyle", () => {
+  it("returns idle styles at rest", () => {
+    const idle = mineEdgeCardDuoBottomFeedbackStyle("next", 0, {
+      reduceMotion: false,
+    });
+    expect(idle.transform).toBe("");
+    expect(idle.filter).toBe("");
+  });
+
+  it("scales and rotates directionally at peak engagement", () => {
+    const next = mineEdgeCardDuoBottomFeedbackStyle("next", 0.6, {
+      reduceMotion: false,
+    });
+    const prev = mineEdgeCardDuoBottomFeedbackStyle("prev", 0.6, {
+      reduceMotion: false,
+    });
+    expect(MINE_DUO_BOTTOM_FEEDBACK_MAX_SCALE).toBeCloseTo(1.135, 3);
+    expect(next.transform).toContain("scale(1.135");
+    expect(next.transform).toContain("rotate(4deg)");
+    expect(prev.transform).toContain("rotate(-4deg)");
+    expect(next.transform).not.toContain("translate");
+    expect(next.backgroundColor).toContain("rgb");
+    expect(next.color).toContain("rgb");
+  });
+
+  it("skips scale/rotate when reduced motion is requested", () => {
+    const fb = mineEdgeCardDuoBottomFeedbackStyle("next", 0.6, {
+      reduceMotion: true,
+    });
+    expect(fb.transform).toBe("");
+    expect(fb.backgroundColor).toContain("rgb");
+  });
+
+  it("inverts dark-mode nav colors at peak engagement", () => {
+    const peak = mineEdgeCardDuoBottomFeedbackColors(0.6, "dark");
+    expect(peak.backgroundColor).toBe("rgb(245, 240, 230)");
+    expect(peak.color).toBe("rgb(20, 20, 20)");
+  });
+
+  it("inverts light-mode nav colors at peak engagement", () => {
+    const peak = mineEdgeCardDuoBottomFeedbackColors(0.6, "light");
+    expect(peak.backgroundColor).toBe("rgb(20, 20, 20)");
+    expect(peak.color).toBe("rgb(245, 240, 230)");
+  });
+
+  it("applyMineDuoNavFeedbackIconColor is exported for Duo nav faces", () => {
+    expect(typeof applyMineDuoNavFeedbackIconColor).toBe("function");
+  });
+});
+
 describe("writeMineIncomingRealSlideVisual", () => {
   function slideWithEls(index: number) {
     return {
       querySelector: (sel: string) => {
         if (sel.includes("nav-portrait")) return portraitEls[index];
         if (sel.includes("nav-motion")) return outerEls[index];
+        if (sel.includes("duo-info-column")) return infoEls[index];
         return null;
       },
     } as unknown as HTMLElement;
   }
   const portraitEls: Array<{ style: Record<string, string> }> = [];
   const outerEls: Array<{ style: Record<string, string> }> = [];
+  const infoEls: Array<{ style: Record<string, string> }> = [];
 
   function resetEls(n: number) {
     portraitEls.length = 0;
     outerEls.length = 0;
+    infoEls.length = 0;
     for (let i = 0; i < n; i += 1) {
       portraitEls.push({ style: {} });
       outerEls.push({ style: { transform: "translate3d(-99px, 0, 0) scale(0.5)" } });
+      infoEls.push({ style: {} });
     }
   }
 
@@ -602,6 +664,150 @@ describe("writeMineIncomingRealSlideVisual", () => {
     );
   });
 
+  it("tilts Duo info column opposite the portrait and clears at rest", () => {
+    const mid = mineDuoInfoColumnCounterMotionStyle("next", 0.6, {
+      reduceMotion: false,
+    });
+    expect(mid.transform).toContain(
+      `rotate(-${MINE_DUO_INFO_COUNTER_ROTATE_DEG}deg)`
+    );
+    expect(mid.transform).toContain("translate3d(-6px");
+    expect(
+      mineDuoInfoColumnCounterMotionStyle("next", 1, { reduceMotion: false })
+        .transform
+    ).toBe("");
+    expect(
+      mineDuoInfoColumnCounterMotionStyle("next", 0.6, { reduceMotion: true })
+        .transform
+    ).toBe("");
+    resetEls(2);
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0.6 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+    });
+    expect(infoEls[0]?.style.transform).toContain(
+      `rotate(-${MINE_DUO_INFO_COUNTER_ROTATE_DEG}deg)`
+    );
+    expect(infoEls[1]?.style.transform).toContain(
+      `rotate(-${MINE_DUO_INFO_COUNTER_ROTATE_DEG}deg)`
+    );
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+    });
+    expect(infoEls[0]?.style.transform).toBe("");
+    expect(infoEls[1]?.style.transform).toBe("");
+  });
+
+  it("Duo sceneExtras leaves portrait and info identity while still writing nav feedback", () => {
+    resetEls(2);
+    const nextFace = { style: {} as Record<string, string> };
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0.6 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      sceneExtras: false,
+      animateEdgeCards: true,
+      directionalEdgeCards: true,
+      edgeCardFixedPosition: true,
+      edgeCards: { next: nextFace as unknown as HTMLElement, prev: null },
+    });
+    expect(portraitEls[0]?.style.transform).toBe("");
+    expect(portraitEls[1]?.style.transform).toBe("");
+    expect(infoEls[0]?.style.transform).toBe("");
+    expect(infoEls[1]?.style.transform).toBe("");
+    expect(nextFace.style.backgroundColor).toBeTruthy();
+    expect(nextFace.style.transform).toContain("scale(");
+  });
+
+  it("does not erase Duo-modern scene transform on the shared nav-motion node", () => {
+    const sceneStyle: Record<string, string> = {};
+    const sceneEl = {
+      style: sceneStyle,
+      hasAttribute: (name: string) => name === "data-people-duo-scene",
+    };
+    const portraitStyle: Record<string, string> = {};
+    const infoStyle: Record<string, string> = {};
+    const slide = {
+      querySelector: (sel: string) => {
+        if (sel.includes("people-duo-scene") || sel.includes("nav-motion")) {
+          return sceneEl;
+        }
+        if (sel.includes("nav-portrait")) return { style: portraitStyle };
+        if (sel.includes("duo-info-column")) return { style: infoStyle };
+        return null;
+      },
+    } as unknown as HTMLElement;
+
+    writeDuoModernSceneVisual({
+      slides: [slide, slide],
+      progress: { prev: 0, next: 0.5 },
+      departureIndex: 0,
+      reduceMotion: false,
+    });
+    const afterScene = sceneStyle.transform;
+    expect(afterScene).toContain("scale(");
+    expect(afterScene).not.toBe("");
+
+    writeMineIncomingRealSlideVisual({
+      slides: [slide, slide],
+      progress: { prev: 0, next: 0.5 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      sceneExtras: false,
+      animateEdgeCards: false,
+    });
+    expect(sceneStyle.transform).toBe(afterScene);
+    expect(portraitStyle.transform ?? "").toBe("");
+    expect(infoStyle.transform ?? "").toBe("");
+  });
+
+  it("legacy outer-nav cleanup still clears nodes without data-people-duo-scene", () => {
+    const outerStyle: Record<string, string> = {
+      transform: "translate3d(-99px, 0, 0) scale(0.5)",
+    };
+    const slide = {
+      querySelector: (sel: string) => {
+        if (sel.includes("nav-motion")) {
+          return {
+            style: outerStyle,
+            hasAttribute: () => false,
+          };
+        }
+        if (sel.includes("nav-portrait")) return { style: {} };
+        if (sel.includes("duo-info-column")) return { style: {} };
+        return null;
+      },
+    } as unknown as HTMLElement;
+    writeMineIncomingRealSlideVisual({
+      slides: [slide],
+      progress: { prev: 0, next: 0 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+    });
+    expect(outerStyle.transform).toBe("");
+  });
+
   it("parks NEXT incoming mostly outside at progress 0 via forceSide; outgoing stays clear", () => {
     resetEls(2);
     writeMineIncomingRealSlideVisual({
@@ -671,6 +877,137 @@ describe("writeMineIncomingRealSlideVisual", () => {
     expect(prevStyle.transform).toContain(`scale(${MINE_EDGE_CARD_MAX_SCALE})`);
     expect(nextStyle.transformOrigin).toBe("right center");
     expect(prevStyle.transformOrigin).toBe("left center");
+  });
+
+  it("edgeCardFixedPosition pulses inner face only (scale/rotate, no translate)", () => {
+    resetEls(2);
+    const prevStyle: Record<string, string> = {};
+    const nextStyle: Record<string, string> = {};
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0.55 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      animateEdgeCards: true,
+      directionalEdgeCards: true,
+      edgeCardFixedPosition: true,
+      edgeCards: {
+        prev: { style: prevStyle } as unknown as HTMLElement,
+        next: { style: nextStyle } as unknown as HTMLElement,
+      },
+    });
+    expect(nextStyle.transform).toContain("scale(");
+    expect(nextStyle.transform).not.toContain("translate");
+    expect(prevStyle.transform).toBeUndefined();
+    expect(nextStyle.backgroundColor).toContain("rgb");
+    expect(nextStyle.color).toContain("rgb");
+  });
+
+  it("edgeCardFixedPosition does not rewrite the idle face every scroll frame", () => {
+    resetEls(2);
+    const prevStyle: Record<string, string> = {
+      color: "SENTINEL",
+      backgroundColor: "SENTINEL_BG",
+    };
+    const nextStyle: Record<string, string> = {};
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0.55 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      animateEdgeCards: true,
+      directionalEdgeCards: true,
+      edgeCardFixedPosition: true,
+      edgeCards: {
+        prev: { style: prevStyle } as unknown as HTMLElement,
+        next: { style: nextStyle } as unknown as HTMLElement,
+      },
+    });
+    expect(prevStyle.color).toBe("SENTINEL");
+    expect(prevStyle.backgroundColor).toBe("SENTINEL_BG");
+    expect(nextStyle.transform).toContain("scale(");
+  });
+
+  it("edgeCardFixedPosition settles a disabled face without swipe invert", () => {
+    resetEls(2);
+    const prevStyle: Record<string, string> = {
+      transform: "scale(1.1)",
+      backgroundColor: "rgb(245, 240, 230)",
+      color: "rgb(20, 20, 20)",
+    };
+    const nextStyle: Record<string, string> = {};
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0.55, next: 0 },
+      departureIndex: 1,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      animateEdgeCards: true,
+      directionalEdgeCards: true,
+      edgeCardFixedPosition: true,
+      edgeCards: {
+        prev: {
+          style: prevStyle,
+          closest: () => ({ disabled: true }),
+        } as unknown as HTMLElement,
+        next: { style: nextStyle } as unknown as HTMLElement,
+      },
+    });
+    expect(prevStyle.transform).toBe("");
+    expect(prevStyle.backgroundColor).toBe("#141414");
+    expect(prevStyle.color).toBe("");
+    expect(nextStyle.transform).toBeUndefined();
+  });
+
+  it("settleMineEdgeCardDuoBottomFeedbackSide keeps solid fill and clears icon color", () => {
+    const style: Record<string, string> = {
+      color: "rgb(20, 20, 20)",
+      transform: "scale(1.1)",
+    };
+    settleMineEdgeCardDuoBottomFeedbackSide({
+      style,
+      closest: () => ({ disabled: true }),
+    } as unknown as HTMLElement);
+    expect(style.backgroundColor).toBe("#141414");
+    expect(style.color).toBe("");
+    expect(style.transform).toBe("");
+  });
+
+  it("directionalEdgeCards animates only the engaged side (Duo bottom nav)", () => {
+    resetEls(2);
+    const prevStyle: Record<string, string> = {
+      transform: mineEdgeCardRestTransform("prev"),
+      transformOrigin: "",
+    };
+    const nextStyle: Record<string, string> = {
+      transform: mineEdgeCardRestTransform("next"),
+      transformOrigin: "",
+    };
+    writeMineIncomingRealSlideVisual({
+      slides: [0, 1].map(slideWithEls),
+      progress: { prev: 0, next: 0.55 },
+      departureIndex: 0,
+      slideW: 400,
+      portraitCenterLocalX: 200,
+      frameW: 260,
+      frameH: 347,
+      animateEdgeCards: true,
+      directionalEdgeCards: true,
+      edgeCards: {
+        prev: { style: prevStyle } as unknown as HTMLElement,
+        next: { style: nextStyle } as unknown as HTMLElement,
+      },
+    });
+    expect(nextStyle.transform).not.toBe(mineEdgeCardRestTransform("next"));
+    expect(prevStyle.transform).toBe(mineEdgeCardRestTransform("prev"));
   });
 
   it("keeps edge cards at rest when animateEdgeCards is false (button flights)", () => {

@@ -303,6 +303,40 @@ export default function CreateFinalizeVideoPlayer({
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [pauseVideo]);
 
+  // Native background/lock: pause preview. Do not auto-resume on foreground —
+  // isActiveHero / dock effects re-evaluate autoplay when appropriate.
+  useEffect(() => {
+    let removed = false;
+    let removeListener: (() => void) | undefined;
+
+    void (async () => {
+      try {
+        const { App } = await import("@capacitor/app");
+        if (removed) return;
+        const handle = await App.addListener(
+          "appStateChange",
+          ({ isActive: appActive }) => {
+            if (!appActive) pauseVideo();
+          },
+        );
+        if (removed) {
+          void handle.remove();
+          return;
+        }
+        removeListener = () => {
+          void handle.remove();
+        };
+      } catch {
+        /* web / unavailable */
+      }
+    })();
+
+    return () => {
+      removed = true;
+      removeListener?.();
+    };
+  }, [pauseVideo]);
+
   useEffect(() => {
     const onFullscreenChange = () => {
       const { isFullscreen: next, exited } = syncFullscreenChangeState({

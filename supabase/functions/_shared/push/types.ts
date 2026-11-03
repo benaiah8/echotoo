@@ -8,7 +8,10 @@ export type PushDevicePlatform = "android" | "ios";
 export type AndroidDeliveryMode = "data_only" | "notification_and_data";
 
 export type FcmSendOptions = {
-  /** Default `data_only` (invite). Post push uses `notification_and_data`. */
+  /**
+   * Android delivery. Production senders use `notification_and_data`
+   * (HIGH + echo_alerts_v1 channel via shared fcm.ts). Default remains `data_only`.
+   */
   androidDelivery?: AndroidDeliveryMode;
   defaultNotification?: {
     title: string;

@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  GROUP_UP_REQUEST_NOT_PENDING_MESSAGE,
+  isGroupUpRequestNotPendingError,
+} from "./GroupUpRequestersOverlay";
 
 function readOverlay(): string {
   return readFileSync(
@@ -79,17 +83,20 @@ describe("GroupUpRequestersOverlay presentation", () => {
     expect(src).not.toContain("border-b border-[var(--border)]/40 px-3");
   });
 
-  it("renders a 2/3-column requester grid without a diagonal capsule", () => {
+  it("renders a single-column requester list without a diagonal capsule", () => {
     const src = readOverlay();
-    expect(src).toContain("grid grid-cols-2 gap-x-2 gap-y-6 min-[360px]:grid-cols-3");
+    expect(src).toContain('data-group-up-requester-list="true"');
+    expect(src).toContain("flex min-w-0 flex-col");
+    expect(src).toContain("group/gu-req");
     expect(src).toContain("GroupUpRequesterDrawerTile");
     expect(src).toContain("key={row.request_id}");
+    expect(src).not.toContain("grid grid-cols-2");
     expect(src).not.toContain("GroupUpRequesterDrawerRow");
     expect(src).not.toContain("ACTION_PILL_ROTATE_DEG");
     expect(src).not.toContain("data-action-capsule");
   });
 
-  it("increases description-to-grid spacing without extra spacers", () => {
+  it("increases description-to-list spacing without extra spacers", () => {
     const src = readOverlay();
     expect(src).toContain(
       "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pb-3 pt-4"
@@ -99,19 +106,20 @@ describe("GroupUpRequestersOverlay presentation", () => {
     expect(src).not.toContain("mt-3 grid");
   });
 
-  it("caps the inner requester scroller at four grid rows without a forced height", () => {
+  it("caps the inner requester scroller at six compact list rows without a forced height", () => {
     const src = readOverlay();
-    expect(src).toContain("REQUESTER_TILE_HEIGHT_PX = 138");
-    expect(src).toContain("REQUESTER_GRID_ROW_GAP_PX = 24");
+    expect(src).toContain("REQUESTER_ROW_BASE_HEIGHT_PX = 76");
     expect(src).toContain("REQUESTER_LIST_PAD_Y_PX = 28");
-    expect(src).toContain("REQUESTER_GRID_MAX_VISIBLE_ROWS = 4");
-    expect(src).toContain("REQUESTER_LIST_FOUR_ROW_MAX_PX");
-    expect(28 + 4 * 138 + 3 * 24).toBe(652);
+    expect(src).toContain("REQUESTER_LIST_MAX_VISIBLE_ROWS = 6");
+    expect(src).toContain("REQUESTER_LIST_SCROLL_MAX_PX");
+    expect(28 + 6 * 76).toBe(484);
     expect(src).toContain(
-      "maxHeight: `min(${REQUESTER_LIST_FOUR_ROW_MAX_PX}px, calc(82vh - 7.5rem))`"
+      "maxHeight: `min(${REQUESTER_LIST_SCROLL_MAX_PX}px, calc(82vh - 7.5rem))`"
     );
-    expect(src).not.toContain("h-[652px]");
-    expect(src).not.toContain("min-h-[652px]");
+    expect(src).not.toContain("REQUESTER_LIST_FOUR_ROW_MAX_PX");
+    expect(src).not.toContain("REQUESTER_TILE_HEIGHT_PX");
+    expect(src).not.toContain("h-[484px]");
+    expect(src).not.toContain("min-h-[484px]");
     expect(src).not.toContain("ResizeObserver");
     expect(src).toContain("Load more");
     expect(src).toContain("hasMore");
@@ -121,10 +129,10 @@ describe("GroupUpRequestersOverlay presentation", () => {
     expect(src).toContain("onOverlayPointerDownCapture");
     const headerIdx = src.indexOf("data-pending-count-badge");
     const listIdx = src.indexOf("ref={listScrollRef}");
-    const gridIdx = src.indexOf("grid grid-cols-2 gap-x-2 gap-y-6 min-[360px]:grid-cols-3");
+    const listMarkerIdx = src.indexOf('data-group-up-requester-list="true"');
     expect(headerIdx).toBeGreaterThan(0);
     expect(listIdx).toBeGreaterThan(headerIdx);
-    expect(gridIdx).toBeGreaterThan(listIdx);
+    expect(listMarkerIdx).toBeGreaterThan(listIdx);
   });
 
   it("reuses content swipe-to-close on the BottomDrawer portal while the sheet is visible", () => {
@@ -207,35 +215,67 @@ describe("GroupUpRequestersOverlay presentation", () => {
     expect(src).not.toContain("force: true");
     expect(src).not.toContain("fetch(");
   });
+
+  it("refreshes requesters when Accept hits a not-pending request", () => {
+    const src = readOverlay();
+    const acceptFn = src.slice(
+      src.indexOf("const handleAccept"),
+      src.indexOf("const handleDecline")
+    );
+    expect(acceptFn).toContain("isGroupUpRequestNotPendingError(err)");
+    expect(acceptFn).toContain("groupUpIncomingRequestUnavailable");
+    expect(acceptFn).toContain("removeRequest(requestId)");
+    expect(acceptFn).toContain("void refresh()");
+    expect(acceptFn).toContain("groupUpIncomingAcceptError");
+    expect(src).toContain("refresh,");
+    expect(
+      isGroupUpRequestNotPendingError(
+        new Error(GROUP_UP_REQUEST_NOT_PENDING_MESSAGE)
+      )
+    ).toBe(true);
+    expect(
+      isGroupUpRequestNotPendingError({
+        message: `PGRST: ${GROUP_UP_REQUEST_NOT_PENDING_MESSAGE}`,
+      })
+    ).toBe(true);
+    expect(isGroupUpRequestNotPendingError(new Error("network down"))).toBe(
+      false
+    );
+  });
 });
 
 describe("GroupUpRequesterDrawerTile presentation", () => {
-  it("shows a truncated display name without bio, username, or a fake note", () => {
+  it("shows a list-row display name with timestamp and no bio", () => {
     const src = readTile();
     expect(src).toContain("request.display_name");
-    expect(src).toContain("truncate text-center text-[11px] font-medium");
+    expect(src).toContain("truncate text-[14px] font-semibold");
+    expect(src).toContain("formatRequestedAt");
+    expect(src).toContain("data-group-up-request-sent");
     expect(src).toContain("groupUpIncomingSomeone");
     expect(src).not.toContain("request.bio");
     expect(src).not.toContain("@{");
     expect(src).not.toContain("`@${");
+    expect(src).not.toContain("openPlanIncomingAccept");
+    expect(src).not.toContain(">Chat<");
   });
 
-  it("uses a 56px circular Avatar matching Group Members tiles", () => {
+  it("uses a 40px circular Avatar in the list identity row", () => {
     const src = readTile();
-    expect(src).toContain("AVATAR_PX = 56");
+    expect(src).toContain("AVATAR_PX = 40");
     expect(src).toContain('from "../ui/Avatar"');
     expect(src).toContain("size={AVATAR_PX}");
-    expect(src).toContain("h-14 w-14");
+    expect(src).toContain("h-10 w-10");
     expect(src).toContain("rounded-full");
     expect(src).toContain("requester_user_id");
     expect(src).toContain("deckOpenProfile");
     expect(src).toContain("onProfile(request)");
+    expect(src).toContain('data-group-up-requester-top="true"');
   });
 
-  it("groups Accept/Decline in one compact pill with independent 44px targets", () => {
+  it("keeps Accept/Decline in one compact pill with independent 44px targets", () => {
     const src = readTile();
     expect(src).toContain("data-requester-action-pill");
-    expect(src).toContain("inline-flex items-center rounded-full");
+    expect(src).toContain("inline-flex shrink-0 items-center self-center rounded-full");
     expect(src).toContain("PiCheck");
     expect(src).toContain("PiX");
     expect(src).toContain("aria-label={peopleUiCopy.groupUpIncomingAccept}");
@@ -250,5 +290,17 @@ describe("GroupUpRequesterDrawerTile presentation", () => {
     expect(src).not.toContain("rotate(");
     expect(src).not.toContain("min-w-[6.5rem]");
     expect((src.match(/h-11 w-11/g) ?? []).length).toBe(2);
+  });
+
+  it("renders a full optional note and a subtle row divider", () => {
+    const src = readTile();
+    expect(src).toContain("data-group-up-request-note");
+    expect(src).toContain("request.note?.trim()");
+    expect(src).toContain("[overflow-wrap:anywhere]");
+    expect(src).toContain("break-words");
+    expect(src).not.toContain("line-clamp-");
+    expect(src).toContain('data-group-up-requester-divider="true"');
+    expect(src).toContain("bg-[var(--border)]");
+    expect(src).toContain("group-last/gu-req:hidden");
   });
 });

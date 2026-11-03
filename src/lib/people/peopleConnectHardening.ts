@@ -7,7 +7,8 @@
 export type PeopleConnectRpcName =
   | "connect_discover_pair_up"
   | "connect_profile_pair_up"
-  | "express_pair_up_interest";
+  | "express_pair_up_interest"
+  | "withdraw_discover_pair_up_interest";
 
 export type PeopleConnectErrorFields = {
   message: string;

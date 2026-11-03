@@ -83,7 +83,10 @@ describe("PASS PV2B — inactive / background / HLS buffer", () => {
   it("D/E: inactive pauses and destroys HLS", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
     expect(player).toContain("tearDownPlayback");
-    expect(player).toMatch(/if \(!isActive && !isWarm\) \{[\s\S]*tearDownPlayback\(\)/);
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
+    expect(player).toMatch(
+      /resolveIdlePublishedVideoCleanup\([\s\S]*tearDownPlayback\(\)/,
+    );
     expect(player).toContain("destroyHls");
     expect(player).toContain("video.removeAttribute(\"src\")");
   });

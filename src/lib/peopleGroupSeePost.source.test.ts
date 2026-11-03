@@ -110,7 +110,7 @@ describe("Groups See post source entry", () => {
 
     const body = read("pages/people/GroupUpDeckBody.tsx");
     expect(body).toContain(
-      "meta.isCurrent && canOpenGroupSourcePost(row)",
+      "canOpenGroupSourcePost(row)",
     );
   });
 

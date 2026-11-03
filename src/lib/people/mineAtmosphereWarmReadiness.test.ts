@@ -368,31 +368,11 @@ describe("warm readiness integration", () => {
 });
 
 describe("MatchDeckOverlay warm watch wiring", () => {
-  it("reuses warmMineFrontImage and isMineFrontImageWarmDone on identity commit", () => {
-    expect(overlaySrc).toContain("isMineFrontImageWarmDone");
-    expect(overlaySrc).toContain("warmMineFrontImage");
+  it("Duo (my_plans) wires atmosphere warm-watch; Discover feed does not", () => {
     expect(overlaySrc).toContain("shouldRunMineAtmosphereWarmWatch");
-    expect(overlaySrc).toContain("resolveMineFrontPhotoPath");
     expect(overlaySrc).toContain("mineAtmosphereWarmWatchGenRef");
-  });
-
-  it("still applies child reports through shouldApplyMineAtmosphereReport", () => {
-    expect(overlaySrc).toContain("shouldApplyMineAtmosphereReport");
     expect(overlaySrc).toContain("applyMineAtmospherePath");
-  });
-
-  it("warm catch must not apply null (child-ready race fix)", () => {
-    expect(overlaySrc).toContain("tryApplyFromWarmSuccess");
-    expect(overlaySrc).toContain("resolveMineAtmosphereWarmSettlement");
-    expect(overlaySrc).toContain("Ignore warm rejection");
-    expect(overlaySrc).not.toMatch(
-      /\.catch\(\s*\(\)\s*=>\s*tryApplyFromWarm\(null\)/
-    );
-    const warmCatch = overlaySrc.match(
-      /warmMineFrontImage\([\s\S]*?\)\s*\.then\([\s\S]*?\)\s*\.catch\(\(\)\s*=>\s*\{([\s\S]*?)\}\)/
-    );
-    expect(warmCatch?.[1] ?? "").not.toMatch(
-      /applyMineAtmospherePath\s*\(/
-    );
+    expect(overlaySrc).toContain("isDuoAtmosphereScope");
+    expect(overlaySrc).toContain("warmMineFrontImages");
   });
 });

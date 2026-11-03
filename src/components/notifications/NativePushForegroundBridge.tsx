@@ -18,6 +18,10 @@ import {
 import { invalidateOpenPlanIncoming } from "../../lib/openPlanCache";
 import { invalidateOpenPlanRequestGroups } from "../../lib/openPlanRequestGroupsCache";
 import { invalidateOpenPlanRequesters } from "../../lib/openPlanRequestersCache";
+import { invalidateGroupUpIncoming } from "../../lib/groupUpIncomingCache";
+import { invalidateGroupUpRequestGroups } from "../../lib/groupUpRequestGroupsCache";
+import { invalidateGroupUpRequesters } from "../../lib/groupUpRequestersCache";
+import { invalidateGroupUpMemberships } from "../../lib/groupUpMembershipsCache";
 import { getViewerAuthUserId } from "../../api/services/follows";
 
 let foregroundListenerAdded = false;
@@ -115,10 +119,8 @@ export default function NativePushForegroundBridge() {
               }
             }
 
-            if (
-              normalizeNotificationKind(routeData.type) ===
-              NOTIFICATION_KINDS.OPEN_PLAN_REQUEST
-            ) {
+            const foregroundKind = normalizeNotificationKind(routeData.type);
+            if (foregroundKind === NOTIFICATION_KINDS.OPEN_PLAN_REQUEST) {
               void getViewerAuthUserId().then((uid) => {
                 if (!uid) return;
                 invalidateOpenPlanIncoming(uid);
@@ -130,6 +132,28 @@ export default function NativePushForegroundBridge() {
                 if (opportunityId) {
                   invalidateOpenPlanRequesters(uid, opportunityId);
                 }
+              });
+            }
+            if (foregroundKind === NOTIFICATION_KINDS.GROUP_UP_REQUEST) {
+              void getViewerAuthUserId().then((uid) => {
+                if (!uid) return;
+                invalidateGroupUpIncoming(uid);
+                invalidateGroupUpRequestGroups(uid);
+                const conversationId =
+                  typeof routeData.conversationId === "string"
+                    ? routeData.conversationId.trim()
+                    : "";
+                if (conversationId) {
+                  invalidateGroupUpRequesters(uid, conversationId);
+                }
+              });
+            }
+            if (
+              foregroundKind === NOTIFICATION_KINDS.GROUP_UP_REQUEST_ACCEPTED
+            ) {
+              void getViewerAuthUserId().then((uid) => {
+                if (!uid) return;
+                invalidateGroupUpMemberships(uid);
               });
             }
           }

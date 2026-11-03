@@ -6,6 +6,7 @@ import {
   type NotificationKind,
 } from "./notificationKinds";
 import { isObsoleteGoingRsvpPushPayload } from "../activitiesNotificationEligibility";
+import { postTypeCreatedPhrase } from "../postTypeLabels";
 
 export type InAppNotificationDisplay = {
   title: string;
@@ -26,6 +27,9 @@ const LEGACY_POSTED_PATTERN =
 
 const SHARED_SOMETHING_NEW_TITLE =
   /^(.+?\S)\s+shared something new\.?$/i;
+
+const CREATED_EVENT_OR_POST_TITLE =
+  /^(.+?\S)\s+created (an event|a post)\.?$/i;
 
 const INVITE_CAPTION_SEPARATOR = /\n\n────────\nPost:\s*/;
 
@@ -100,6 +104,11 @@ function extractFollowedPostAuthorName(
   const rawBody = asTrimmed(data.body);
 
   if (rawTitle) {
+    const createdTitle = rawTitle.match(CREATED_EVENT_OR_POST_TITLE);
+    if (createdTitle?.[1]) {
+      const name = createdTitle[1].trim();
+      if (name.toLowerCase() !== "someone") return name;
+    }
     const sharedTitle = rawTitle.match(SHARED_SOMETHING_NEW_TITLE);
     if (sharedTitle?.[1]) {
       const name = sharedTitle[1].trim();
@@ -110,6 +119,12 @@ function extractFollowedPostAuthorName(
   if (rawBody && rawBody !== "Tap to view") {
     const legacyBody = rawBody.match(LEGACY_POSTED_PATTERN);
     if (legacyBody?.[1]) return legacyBody[1].trim();
+
+    const createdBody = rawBody.match(CREATED_EVENT_OR_POST_TITLE);
+    if (createdBody?.[1]) {
+      const name = createdBody[1].trim();
+      if (name.toLowerCase() !== "someone") return name;
+    }
 
     const sharedBody = rawBody.match(SHARED_SOMETHING_NEW_TITLE);
     if (sharedBody?.[1]) {
@@ -125,10 +140,11 @@ function formatFollowedPost(
   data: Record<string, unknown>
 ): InAppNotificationDisplay {
   const avatarUrl = asTrimmed(data.avatarUrl) || undefined;
+  const createdPhrase = postTypeCreatedPhrase(asTrimmed(data.postType));
   const name = extractFollowedPostAuthorName(data);
   const title = name
-    ? `${name} shared something new`
-    : "Someone shared something new";
+    ? `${name} ${createdPhrase}`
+    : `Someone ${createdPhrase}`;
 
   return {
     title,
@@ -294,6 +310,21 @@ export function formatInAppNotificationDisplay(
         body:
           asTrimmed(data.body) ||
           "Someone is interested in your open plan.",
+        showAvatar: false,
+      };
+    case NOTIFICATION_KINDS.GROUP_UP_REQUEST:
+      return {
+        title: asTrimmed(data.title) || "Group Up",
+        body:
+          asTrimmed(data.body) || "Someone wants to join your group.",
+        showAvatar: false,
+      };
+    case NOTIFICATION_KINDS.GROUP_UP_REQUEST_ACCEPTED:
+      return {
+        title: asTrimmed(data.title) || "Group Up",
+        body:
+          asTrimmed(data.body) ||
+          "You're in! Your Group Up request was accepted.",
         showAvatar: false,
       };
     default:

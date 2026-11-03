@@ -57,11 +57,11 @@ const DUO_SRC = readFileSync(
 );
 
 describe("Plans → canonical People presentation", () => {
-  it("Mine, Discover, and Plans use PeopleCanonicalCandidatePresentation", () => {
+  it("Duo uses immersive presentation; Plans use PeopleCanonicalCandidatePresentation", () => {
     expect(DUO_SRC).toContain("PeopleCanonicalCandidatePresentation");
     expect(SLIDE_SRC).toContain("PeopleCanonicalCandidatePresentation");
-    expect(BODY_SRC).toContain("PeopleOpenPlanCandidateSlide");
-    expect(BODY_SRC).toContain('duoPresentation="mine"');
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
+    expect(BODY_SRC).not.toContain("PeopleFeedRow");
     expect(BODY_SRC).not.toContain('duoPresentation="plans"');
   });
 
@@ -80,7 +80,7 @@ describe("Plans → canonical People presentation", () => {
       390 - 2 * PEOPLE_MINE_EDGE_FIXED_SIDE_ALLOC_PX,
       1
     );
-    expect(BODY_SRC).toContain('duoPresentation="mine"');
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
   });
 
   it("Plans maps caption/schedule/note into canonical slots; identity stays hidden", () => {
@@ -107,9 +107,6 @@ describe("Plans → canonical People presentation", () => {
 
   it("Plans action uses compact pill; mutations preserved; no disclosure line", () => {
     expect(OVERLAY_SRC).toContain("isCanonicalPeopleScope");
-    expect(OVERLAY_SRC).toContain(
-      "const mineCompactConnect = isCanonicalPeopleScope"
-    );
     expect(BODY_SRC).not.toContain("openPlansPrivacyLine");
     expect(BODY_SRC).not.toContain("disclosure");
     expect(BODY_SRC).toContain("requestOpenPlan");
@@ -119,16 +116,14 @@ describe("Plans → canonical People presentation", () => {
     expect(DOCK_SRC).toContain("PEOPLE_MINE_CONNECT_H_PX");
   });
 
-  it("Plans uses canonical atmosphere + real-incoming edges/motion", () => {
-    expect(BODY_SRC).toContain("onAtmosphereChange");
-    expect(BODY_SRC).toContain("createMineMotionProbeController");
-    expect(BODY_SRC).toContain("mineMotionProbeRef");
-    expect(BODY_SRC).toContain("mineEdgeNavCardsRef");
-    expect(BODY_SRC).toContain("onFlightSettled");
-    expect(BODY_SRC).toContain("fixedRailsGeometry");
-    expect(OVERLAY_SRC).toContain("setPlansAtmosphereIdentityKey");
-    expect(OVERLAY_SRC).toMatch(
-      /isCanonicalPeopleScope[\s\S]{0,80}MineAtmosphereCrossfade/
+  it("Plans uses Discover-style feed cards without atmosphere wash", () => {
+    expect(BODY_SRC).not.toContain("onAtmosphereChange");
+    expect(BODY_SRC).toContain("PeopleFeedList");
+    expect(BODY_SRC).toContain("PeopleOpenPlanFeedCard");
+    expect(OVERLAY_SRC).not.toContain("setPlansAtmosphereIdentityKey");
+    expect(OVERLAY_SRC).toContain("isDuoAtmosphereScope");
+    expect(OVERLAY_SRC).toContain(
+      'mode === "p2p" && contentScope === "my_plans"'
     );
   });
 

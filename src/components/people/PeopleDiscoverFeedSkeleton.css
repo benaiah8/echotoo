@@ -1,0 +1,41 @@
+/**
+ * Discover feed skeleton shimmer — theme-aware reflective sweep.
+ * Reuses social-shelf-resolving-shimmer from index.css.
+ */
+
+.people-discover-feed-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--text) 12%, var(--surface-2));
+}
+
+html.theme-light .people-discover-feed-shimmer {
+  background: color-mix(in oklab, var(--text) 7%, var(--surface-2));
+}
+
+.people-discover-feed-shimmer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    color-mix(in oklab, var(--text) 14%, transparent) 38%,
+    color-mix(in oklab, var(--text) 26%, transparent) 50%,
+    color-mix(in oklab, var(--text) 14%, transparent) 62%,
+    transparent 100%
+  );
+  opacity: 0.85;
+  animation: social-shelf-resolving-shimmer 1.45s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .people-discover-feed-shimmer::before {
+    animation: none;
+    transform: none;
+    opacity: 0.4;
+    background: color-mix(in oklab, var(--text) 18%, transparent);
+  }
+}

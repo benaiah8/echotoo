@@ -259,10 +259,9 @@ Deno.serve(async (req) => {
     else if (un) displayName = un;
   }
 
-  const title =
-    displayName === "Someone"
-      ? "Someone shared something new"
-      : `${displayName} shared something new`;
+  const createdPhrase =
+    entityType === "hangout" ? "created an event" : "created a post";
+  const title = `${displayName} ${createdPhrase}`;
   const bodyText = "Tap to view";
 
   const fcmDataPayload = {

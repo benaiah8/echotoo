@@ -108,15 +108,13 @@ describe("peopleNavPrimaryUi V11.4 outline frames", () => {
   });
 });
 
-describe("BottomTab People hide contract", () => {
-  it("keeps instant People hide; Create does not hide BottomTab chrome", () => {
+describe("BottomTab People visibility contract", () => {
+  it("shows BottomTab on People; Create still does not hide chrome via People path", () => {
     const src = readFileSync(
       resolve(__dirname, "../../components/BottomTab.tsx"),
       "utf8"
     );
-    expect(src).toContain(
-      "invisible pointer-events-none opacity-0 !transition-none"
-    );
+    expect(src).toContain("hidePeopleNav = false");
     expect(src).toContain("hidePeopleNav");
     expect(src).not.toContain("hideComposerNav");
     expect(src).not.toContain("isCreateFinalizeComposerPath");

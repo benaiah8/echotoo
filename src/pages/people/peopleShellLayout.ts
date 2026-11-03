@@ -182,8 +182,8 @@ export const PEOPLE_SHELL_PROPORTIONAL_GEOMETRY = true;
 
 /** Flat People primary destinations (UI). Internal scopes stay my_plans / discover / open_plans / groups. */
 export const PEOPLE_FLAT_DESTINATION_ORDER = [
-  "duo",
   "discover",
+  "duo",
   "plans",
   "groups",
 ] as const;
@@ -291,6 +291,52 @@ export function peopleShellMineContentBottomPad(): string {
     PEOPLE_MINE_ACTION_TO_NAV_GAP_PX +
     PEOPLE_NAV_CHROME_H_PX;
   return `calc(${chromeH}px + var(--safe-area-bottom-layout, 0px))`;
+}
+
+/**
+ * Duo with global BottomTab + PeopleFeedTopNav — reserve Connect pill only
+ * (no duplicate dock category nav). Aligns with {@link peopleFeedContentBottomPad} tab band.
+ */
+/** Duo modern bottom row (nav + heart/comment pill) above global BottomTab. */
+export const PEOPLE_DUO_MODERN_ACTION_ROW_H_PX = 68;
+export const PEOPLE_DUO_MODERN_ACTION_ROW_GAP_PX = 14;
+
+export function peopleShellMineDuoGlobalTabBottomPad(): string {
+  const actionBand =
+    PEOPLE_DUO_MODERN_ACTION_ROW_H_PX + PEOPLE_DUO_MODERN_ACTION_ROW_GAP_PX;
+  return `calc(${actionBand}px + 64px + var(--safe-area-bottom-layout, 0px) + 12px)`;
+}
+
+/**
+ * Gap from last caption/note line to the Heart/Comment pill (8–12px band).
+ * Replaces stacked ACTION_ROW_GAP + former 20px readability.
+ */
+export const PEOPLE_DUO_MODERN_SCROLL_TO_ACTION_GAP_PX = 10;
+/** @deprecated Prefer {@link PEOPLE_DUO_MODERN_SCROLL_TO_ACTION_GAP_PX}. */
+export const PEOPLE_DUO_MODERN_SCROLL_READABILITY_PX =
+  PEOPLE_DUO_MODERN_SCROLL_TO_ACTION_GAP_PX;
+
+/** BottomTab face band used by Duo floating chrome (not Discover feed pad). */
+export const PEOPLE_DUO_MODERN_TAB_BAND_H_PX = 64;
+/**
+ * Optical gap from Duo action buttons to BottomTab top.
+ * Shared by the floating cluster and in-slide scroll reserve.
+ */
+export const PEOPLE_DUO_MODERN_TAB_OPTICAL_PX = 6;
+
+/** Padding under the Duo action cluster / wash (tab band + dock + optical). */
+export function peopleDuoModernTabBandPad(): string {
+  return `calc(${PEOPLE_DUO_MODERN_TAB_BAND_H_PX}px + ${peopleShellDockBottomOffset()} + ${PEOPLE_DUO_MODERN_TAB_OPTICAL_PX}px)`;
+}
+
+/**
+ * In-slide scroll inset: Heart/Comment pill (52 + p-2 = 68) + 10px gap +
+ * BottomTab 64 + optical + the more conservative of dockOffset vs safe-area.
+ * Duo content pane uses paddingBottom 0 so Embla can paint behind chrome.
+ */
+export function peopleDuoModernSlideScrollBottomPad(): string {
+  const tabLift = `max(${peopleShellDockBottomOffset()}, var(--safe-area-bottom-layout, 0px))`;
+  return `calc(${PEOPLE_DUO_MODERN_ACTION_ROW_H_PX}px + ${PEOPLE_DUO_MODERN_SCROLL_TO_ACTION_GAP_PX}px + ${PEOPLE_DUO_MODERN_TAB_BAND_H_PX}px + ${PEOPLE_DUO_MODERN_TAB_OPTICAL_PX}px + ${tabLift})`;
 }
 
 /** Discover / Plans / Groups — reserve Back row above the deck. */

@@ -67,8 +67,11 @@ describe("Group media Prev/Next + centered title", () => {
     expect(shell).toContain("onActiveIndexChange");
 
     const body = read("pages/people/GroupUpDeckBody.tsx");
+    // Text-first Groups card has no in-feed media cycle; See Post still
+    // reads mediaIndexById (defaults to 0) for Detail handoff.
     expect(body).toContain("mediaIndexById");
-    expect(body).toContain("setMediaIndexFor");
+    expect(body).toContain("PeopleGroupUpFeedCard");
+    expect(body).not.toContain("setMediaIndexFor");
   });
 
   it("7–8: controls stop propagation; do not open Post Detail", () => {
@@ -116,8 +119,8 @@ describe("Group media Prev/Next + centered title", () => {
     expect(shell).toContain("data-people-group-media-dots");
 
     const body = read("pages/people/GroupUpDeckBody.tsx");
-    expect(body).toContain("MatchDeckCarousel");
-    expect(body).toContain('layout="duo"');
+    expect(body).toContain("PeopleFeedList");
+    expect(body).toContain("PeopleGroupUpFeedCard");
 
     const notch = read("components/people/PeopleGroupHostNotch.tsx");
     expect(notch).toContain("data-people-group-host-notch");

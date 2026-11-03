@@ -3,6 +3,7 @@
  */
 import {
   Paths,
+  messagesConversationPath,
   messagesConversationPathWithMessage,
   messagesRequestsPath,
   postDetailPath,
@@ -215,6 +216,34 @@ export function resolveNotificationRoute(
       path:
         targetPath ??
         messagesRequestsPath(requestId || undefined),
+      mode: "navigate_full",
+    };
+  }
+
+  if (kind === NOTIFICATION_KINDS.GROUP_UP_REQUEST) {
+    const requestId = asTrimmedString(data.requestId);
+    const targetPath = sanitizeInternalTargetPath(data.targetPath);
+    return {
+      supported: true,
+      kind,
+      path:
+        targetPath ??
+        messagesRequestsPath(requestId || undefined),
+      mode: "navigate_full",
+    };
+  }
+
+  if (kind === NOTIFICATION_KINDS.GROUP_UP_REQUEST_ACCEPTED) {
+    const conversationId = asTrimmedString(data.conversationId);
+    const targetPath = sanitizeInternalTargetPath(data.targetPath);
+    return {
+      supported: true,
+      kind,
+      path:
+        targetPath ??
+        (conversationId
+          ? messagesConversationPath(conversationId)
+          : messagesRequestsPath()),
       mode: "navigate_full",
     };
   }

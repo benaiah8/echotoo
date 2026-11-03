@@ -16,6 +16,10 @@ export const PEOPLE_CANDIDATE_MEDIA_ASPECT_MIN = 4 / 5;
 export const PEOPLE_DUO_FRONT_RADIUS = "1.65rem";
 /** Rear photo frame radius (Profile: rounded-[1.5rem]). */
 export const PEOPLE_DUO_REAR_RADIUS = "1.5rem";
+/** Duo modern layout — matched front frame + info card (does not change global Mine/Discover). */
+export const PEOPLE_DUO_MODERN_FRAME_RADIUS = "1rem";
+/** Duo modern rear peek — slightly inset vs front for stack compatibility. */
+export const PEOPLE_DUO_MODERN_REAR_RADIUS = "0.9375rem";
 /** Approx px for tests (1.65rem @ 16px root). */
 export const PEOPLE_DUO_PORTRAIT_RADIUS_PX = 26.4;
 
@@ -263,6 +267,183 @@ export const PEOPLE_PLANS_CHROME_H_PX =
 export const PEOPLE_DUO_NEIGHBOR_SCALE = 0.96;
 export const PEOPLE_DUO_CENTER_SCALE = 1;
 
+/**
+ * Duo-modern complete-scene motion (portrait + info). Same grow/shrink
+ * direction as Mine real-incoming portraits, with milder magnitudes so the
+ * taller scene stays inside overflow-x-hidden slide-scroll.
+ *
+ * Drop-and-Fade (opacity 0.88/0.55, scale 0.96, translateY 14) is retired.
+ */
+export const PEOPLE_DUO_MODERN_SCENE_START_SCALE = 0.68;
+/** Outgoing floor. Incoming still uses START_SCALE. */
+export const PEOPLE_DUO_MODERN_SCENE_OUTGOING_END_SCALE = 0.52;
+export const PEOPLE_DUO_MODERN_SCENE_ROTATE_DEG = 6;
+/** Bounded extra X — not the portrait off-screen park path. */
+export const PEOPLE_DUO_MODERN_SCENE_EXTRA_X_PX = 28;
+/** Outgoing-only. Revert to 0 to disable. Incoming/idle stay unfiltered. */
+export const PEOPLE_DUO_MODERN_SCENE_BLUR_PX = 9.6;
+export const PEOPLE_DUO_MODERN_SCENE_TX_PX = PEOPLE_DUO_MODERN_SCENE_EXTRA_X_PX;
+export const PEOPLE_DUO_MODERN_SCENE_TY_PX = 0;
+/** Retired Drop-and-Fade tokens — kept so stale tests fail loudly if re-read. */
+export const PEOPLE_DUO_MODERN_SCENE_NEIGHBOR_SCALE =
+  PEOPLE_DUO_MODERN_SCENE_START_SCALE;
+export const PEOPLE_DUO_MODERN_SCENE_NEIGHBOR_OPACITY = 1;
+export const PEOPLE_DUO_MODERN_SCENE_INCOMING_OPACITY = 1;
+
+export const PEOPLE_DUO_MODERN_SCENE_IDENTITY = {
+  opacity: "1",
+  transform: "",
+  filter: "",
+} as const;
+
+export type PeopleDuoModernSceneRole = "outgoing" | "incoming" | "idle";
+export type PeopleDuoModernSceneSide = "prev" | "next";
+
+/** Scene writes during pointer-down or the settle of that same physical drag. */
+export function peopleDuoModernSceneGestureWriteAllowed(args: {
+  pointerDown: boolean;
+  gestureFlight: boolean;
+  forceSide?: "prev" | "next" | null;
+}): boolean {
+  if (args.forceSide) return false;
+  return args.pointerDown === true || args.gestureFlight === true;
+}
+
+function clampDuoSceneProgress(progress: number): number {
+  if (!Number.isFinite(progress) || progress <= 0) return 0;
+  if (progress >= 1) return 1;
+  return progress;
+}
+
+/** Incoming: START_SCALE → 1. Same direction as mineIncomingProxyScale. */
+export function peopleDuoModernSceneIncomingScale(progress: number): number {
+  const p = clampDuoSceneProgress(progress);
+  return (
+    PEOPLE_DUO_MODERN_SCENE_START_SCALE +
+    p * (1 - PEOPLE_DUO_MODERN_SCENE_START_SCALE)
+  );
+}
+
+/**
+ * Ease-out cubic on the same gesture `p`. Front-loads shrink/blur so
+ * p≈0.5 already looks strongly gone; still monotonic and reversible.
+ */
+export function peopleDuoModernSceneOutgoingIntensity(progress: number): number {
+  const p = clampDuoSceneProgress(progress);
+  const remain = 1 - p;
+  return 1 - remain * remain * remain;
+}
+
+/** Outgoing: 1 → END_SCALE along outgoing intensity. */
+export function peopleDuoModernSceneOutgoingScale(progress: number): number {
+  const t = peopleDuoModernSceneOutgoingIntensity(progress);
+  return 1 - t * (1 - PEOPLE_DUO_MODERN_SCENE_OUTGOING_END_SCALE);
+}
+
+/** Outgoing blur px along the same intensity. 0 when the cap is disabled. */
+export function peopleDuoModernSceneOutgoingBlurPx(progress: number): number {
+  if (PEOPLE_DUO_MODERN_SCENE_BLUR_PX <= 0) return 0;
+  return PEOPLE_DUO_MODERN_SCENE_BLUR_PX * peopleDuoModernSceneOutgoingIntensity(progress);
+}
+
+/** Incoming tilt: NEXT +ROT → 0, PREV −ROT → 0. */
+export function peopleDuoModernSceneIncomingRotateDeg(
+  progress: number,
+  side: PeopleDuoModernSceneSide
+): number {
+  const mag = PEOPLE_DUO_MODERN_SCENE_ROTATE_DEG * (1 - clampDuoSceneProgress(progress));
+  if (mag === 0) return 0;
+  return side === "next" ? mag : -mag;
+}
+
+/** Outgoing tilt: NEXT 0 → −ROT, PREV 0 → +ROT. */
+export function peopleDuoModernSceneOutgoingRotateDeg(
+  progress: number,
+  side: PeopleDuoModernSceneSide
+): number {
+  const mag = PEOPLE_DUO_MODERN_SCENE_ROTATE_DEG * clampDuoSceneProgress(progress);
+  if (mag === 0) return 0;
+  return side === "next" ? -mag : mag;
+}
+
+/**
+ * Modest extra X inside the visible scene. Does not use the portrait
+ * off-screen park formula (that AABB is too large for this wrapper).
+ */
+export function peopleDuoModernSceneExtraTranslateX(
+  role: "incoming" | "outgoing",
+  side: PeopleDuoModernSceneSide,
+  progress: number
+): number {
+  const p = clampDuoSceneProgress(progress);
+  const mag = PEOPLE_DUO_MODERN_SCENE_EXTRA_X_PX;
+  if (role === "incoming") {
+    const signed = side === "next" ? 1 : -1;
+    return signed * (1 - p) * mag;
+  }
+  const signed = side === "next" ? -1 : 1;
+  return signed * p * mag;
+}
+
+export function peopleDuoModernSceneRole(args: {
+  slideIndex: number;
+  departureIndex: number;
+  progress: { prev: number; next: number };
+}): PeopleDuoModernSceneRole {
+  const { slideIndex, departureIndex, progress } = args;
+  const dep = Math.floor(departureIndex);
+  const towardNext = progress.next > 0 && progress.next >= progress.prev;
+  const towardPrev = progress.prev > 0 && progress.prev > progress.next;
+  if (!towardNext && !towardPrev) return "idle";
+  if (slideIndex === dep) return "outgoing";
+  if (towardNext && slideIndex === dep + 1) return "incoming";
+  if (towardPrev && slideIndex === dep - 1) return "incoming";
+  return "idle";
+}
+
+/**
+ * Finger-following complete-scene transform. Opacity stays 1.
+ * Incoming at p=0 is the parked start pose (arrow prepare / forceSide).
+ */
+export function peopleDuoModernSceneSlideStyle(
+  progress: number = 0,
+  options?: {
+    reduceMotion?: boolean;
+    role?: PeopleDuoModernSceneRole;
+    side?: PeopleDuoModernSceneSide;
+  }
+): { opacity: string; transform: string; filter: string } {
+  if (options?.reduceMotion) {
+    return { ...PEOPLE_DUO_MODERN_SCENE_IDENTITY };
+  }
+  const role = options?.role ?? "idle";
+  const side = options?.side ?? "next";
+  if (role === "idle") {
+    return { ...PEOPLE_DUO_MODERN_SCENE_IDENTITY };
+  }
+  const p = clampDuoSceneProgress(progress);
+  if (role === "outgoing" && p <= 0) {
+    return { ...PEOPLE_DUO_MODERN_SCENE_IDENTITY };
+  }
+
+  const scale =
+    role === "incoming"
+      ? peopleDuoModernSceneIncomingScale(p)
+      : peopleDuoModernSceneOutgoingScale(p);
+  const rot =
+    role === "incoming"
+      ? peopleDuoModernSceneIncomingRotateDeg(p, side)
+      : peopleDuoModernSceneOutgoingRotateDeg(p, side);
+  const extraX = peopleDuoModernSceneExtraTranslateX(role, side, p);
+  const blurPx =
+    role === "outgoing" ? peopleDuoModernSceneOutgoingBlurPx(p) : 0;
+  return {
+    opacity: "1",
+    transform: `translate3d(${extraX.toFixed(2)}px, 0, 0) rotate(${rot.toFixed(2)}deg) scale(${scale.toFixed(4)})`,
+    filter: blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : "",
+  };
+}
+
 export const PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX = 10;
 
 /** Profile-matched face/stack motion. */
@@ -285,7 +466,146 @@ export const PEOPLE_DUO_PHOTO_BORDER_CSS = PEOPLE_DUO_PHOTO_BORDER_FRONT_CSS;
 export type PeopleDuoPeekDirection = "up" | "down";
 export type PeopleDuoPresentationVariant = "mine" | "discover" | "plans";
 /** Chrome / reserve profile for Duo metrics (Mine vs Plans vs Discover). */
-export type PeopleDuoChromeProfile = "mine" | "discover" | "plans";
+export type PeopleDuoChromeProfile =
+  | "mine"
+  | "discover"
+  | "plans"
+  | "duoModern";
+
+/**
+ * Duo modern side rails — just enough for ~4% rear peeks outside the front
+ * frame (inside stack pad + this margin). Smaller than Mine's 54px edge cards.
+ */
+export const PEOPLE_DUO_MODERN_EDGE_SIDE_ALLOC_PX = 8;
+
+/** Front photograph target vs scene/host width (not the stack envelope). */
+export const PEOPLE_DUO_MODERN_FRONT_WIDTH_RATIO = 0.85;
+
+/** @deprecated Duo modern no longer shrinks the front frame by 0.93. */
+export const PEOPLE_DUO_MODERN_FRAME_W_SCALE = 1;
+
+/** In-flow opportunity info card reserve (metrics only; slide scrolls). */
+export const PEOPLE_DUO_MODERN_INFLOW_CHROME_EST_PX = 108;
+
+/**
+ * Extra gap below category nav before portrait block (Duo modern only).
+ * 0: list-gap + surplus air were stacking on tall hosts; stack peek stays in
+ * {@link peopleDuoModernStackPadYTopPx}.
+ */
+export const PEOPLE_DUO_MODERN_NAV_TO_STACK_CLEARANCE_PX = 0;
+
+/** Minimum Duo modern top pad (Echo / single front frame). */
+export const PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MIN_PX = 16;
+
+/** Extra px above pose-derived peek so rear cards never clip. */
+export const PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MARGIN_PX = 8;
+
+/**
+ * Normalized distance above card center to highest point (unit × frameH).
+ * Uses {@link PEOPLE_MINE_STACK_POSE} geometry — Duo modern metrics only.
+ */
+export function peopleMineStackTopHeadroomUnit(
+  role: PeopleMineStackRole,
+  pose: PeopleMineStackPoseMap = PEOPLE_MINE_STACK_POSE
+): number {
+  const { yPct, rotDeg, scale } = pose[role];
+  const rad = (rotDeg * Math.PI) / 180;
+  const ty = yPct / 100;
+  const corners: Array<[number, number]> = [
+    [-0.5, -0.5],
+    [0.5, -0.5],
+    [-0.5, 0.5],
+    [0.5, 0.5],
+  ];
+  let minY = Infinity;
+  for (const [cx, cy] of corners) {
+    const yr = cx * scale * Math.sin(rad) + cy * scale * Math.cos(rad);
+    minY = Math.min(minY, yr + ty);
+  }
+  return Math.max(0, -(minY + scale * 0.5));
+}
+
+/**
+ * Axis-aligned bounds of a Duo-modern stack layer in unit-frame space,
+ * using {@link PEOPLE_MINE_CARD_TRANSFORM_ORIGIN} (50% 90%).
+ */
+export function peopleDuoModernStackLayerAabb(role: PeopleMineStackRole): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+} {
+  const pose = PEOPLE_DUO_MODERN_STACK_POSE[role];
+  const ox = 0.5;
+  const oy = 0.9;
+  const rad = (pose.rotDeg * Math.PI) / 180;
+  const cs = Math.cos(rad);
+  const sn = Math.sin(rad);
+  const tx = pose.xPct / 100;
+  const ty = pose.yPct / 100;
+  const corners: Array<[number, number]> = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of corners) {
+    const dx = x - ox;
+    const dy = y - oy;
+    const rx = (dx * cs - dy * sn) * pose.scale;
+    const ry = (dx * sn + dy * cs) * pose.scale;
+    const px = ox + rx + tx;
+    const py = oy + ry + ty;
+    minX = Math.min(minX, px);
+    maxX = Math.max(maxX, px);
+    minY = Math.min(minY, py);
+    maxY = Math.max(maxY, py);
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+/** Duo modern stack top pad from frame height + displayable photo count. */
+export function peopleDuoModernStackPadYTopPx(
+  frameH: number,
+  displayPhotoCount: number
+): number {
+  if (!(frameH > 0) || displayPhotoCount <= 1) {
+    return PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MIN_PX;
+  }
+  const roles: PeopleMineStackRole[] =
+    displayPhotoCount >= 3 ? ["left", "right"] : ["right"];
+  let peekUnit = 0;
+  for (const role of roles) {
+    peekUnit = Math.max(
+      peekUnit,
+      Math.max(0, -peopleDuoModernStackLayerAabb(role).minY)
+    );
+  }
+  const fromPose = Math.ceil(
+    peekUnit * frameH + PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MARGIN_PX
+  );
+  return Math.max(PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MIN_PX, fromPose);
+}
+
+/**
+ * Duo modern: leftover host height is unusedHostH (not a scrollable bottom
+ * spacer). Top surplus pad is 0 so tall hosts do not add nav-to-stack air.
+ */
+export function peopleDuoModernDistributeHostSurplus(surplus: number): {
+  padTop: number;
+  padBottom: number;
+} {
+  if (!Number.isFinite(surplus) || surplus <= 0) {
+    return { padTop: 0, padBottom: 0 };
+  }
+  const extra = PEOPLE_DUO_MODERN_NAV_TO_STACK_CLEARANCE_PX;
+  const padTop = Math.min(extra, Math.floor(surplus));
+  return { padTop, padBottom: 0 };
+}
 
 export type PeoplePhotoStackPeek = {
   side: "left" | "right";
@@ -387,6 +707,19 @@ export type PeopleMineStackRole = "front" | "left" | "right";
 export const PEOPLE_MINE_CARD_TRANSFORM_ORIGIN = "50% 90%";
 
 /** Tunable Mine stack offsets — staggered TOP reveal, minimal side flare. */
+export type PeopleMineStackPose = {
+  xPct: number;
+  yPct: number;
+  rotDeg: number;
+  scale: number;
+  opacity: number;
+};
+
+export type PeopleMineStackPoseMap = Record<
+  PeopleMineStackRole,
+  PeopleMineStackPose
+>;
+
 export const PEOPLE_MINE_STACK_POSE = {
   front: { xPct: 0, yPct: 0, rotDeg: 0, scale: 1, opacity: 1 },
   /** Next photo — right rear, moderate lift (~-7% start; kept). */
@@ -397,7 +730,24 @@ export const PEOPLE_MINE_STACK_POSE = {
    * without widening horizontal flare.
    */
   left: { xPct: -2.35, yPct: -14, rotDeg: -2.05, scale: 0.97, opacity: 1 },
-} as const;
+} as const satisfies PeopleMineStackPoseMap;
+
+/**
+ * Duo modern only — Profile-inspired side peeks. Do not replace
+ * {@link PEOPLE_MINE_STACK_POSE}.
+ */
+export const PEOPLE_DUO_MODERN_STACK_POSE = {
+  front: { xPct: 0, yPct: 0, rotDeg: 0, scale: 1, opacity: 1 },
+  right: { xPct: 2.2, yPct: -4, rotDeg: 1, scale: 0.97, opacity: 0.88 },
+  left: { xPct: -2.2, yPct: -4, rotDeg: -1, scale: 0.97, opacity: 0.88 },
+} as const satisfies PeopleMineStackPoseMap;
+
+/** Envelope headroom always uses three-photo peek so front bottoms align. */
+export const PEOPLE_DUO_MODERN_STACK_ENVELOPE_PHOTO_COUNT = 3;
+
+export function peopleDuoModernCardOpacity(role: PeopleMineStackRole): number {
+  return PEOPLE_DUO_MODERN_STACK_POSE[role].opacity;
+}
 
 /** Settled z-order: left under right under front. */
 export const PEOPLE_MINE_Z_SETTLED: Record<PeopleMineStackRole, number> = {
@@ -863,6 +1213,30 @@ export function peopleMineTargetFrameW(
   return Math.min(Math.max(frameW, 0), maxFrame);
 }
 
+/** Duo modern — wider portrait after removing visible edge preview cards. */
+export function peopleDuoModernTargetFrameW(
+  hostW: number,
+  hostH: number = 0
+): number {
+  void hostH;
+  if (!(hostW > 0)) return 0;
+  const padX = PEOPLE_DISCOVER_STACK_PAD_X;
+  const maxOuter = PEOPLE_MINE_MAX_SLIDE_W;
+  const minOuter = PEOPLE_DISCOVER_MIN_FRAME_W + 2 * padX;
+  const side = PEOPLE_DUO_MODERN_EDGE_SIDE_ALLOC_PX;
+  let portraitOuterW = hostW - 2 * side;
+  portraitOuterW = Math.min(portraitOuterW, maxOuter);
+  portraitOuterW = Math.max(portraitOuterW, Math.min(minOuter, hostW));
+  let frameW = Math.max(0, portraitOuterW - 2 * padX);
+  const maxFrame = maxOuter - 2 * padX;
+  frameW = Math.min(Math.max(frameW, 0), maxFrame);
+  const ratioCap = hostW * PEOPLE_DUO_MODERN_FRONT_WIDTH_RATIO;
+  if (ratioCap > 0) {
+    frameW = Math.min(frameW, ratioCap);
+  }
+  return Math.max(0, frameW);
+}
+
 export type PeopleMineStackAssignment = {
   photoIndex: number;
   role: PeopleMineStackRole;
@@ -889,9 +1263,16 @@ export function peopleMineStackAssignments(
   return out;
 }
 
-export function peopleMineCardTransform(role: PeopleMineStackRole): string {
-  const p = PEOPLE_MINE_STACK_POSE[role];
+export function peopleMineCardTransform(
+  role: PeopleMineStackRole,
+  pose: PeopleMineStackPoseMap = PEOPLE_MINE_STACK_POSE
+): string {
+  const p = pose[role];
   return `translate(-50%, -50%) translate(${p.xPct}%, ${p.yPct}%) rotate(${p.rotDeg}deg) scale(${p.scale})`;
+}
+
+export function peopleDuoModernCardTransform(role: PeopleMineStackRole): string {
+  return peopleMineCardTransform(role, PEOPLE_DUO_MODERN_STACK_POSE);
 }
 
 export function peopleMineCardOpacity(_role: PeopleMineStackRole): number {
@@ -953,6 +1334,46 @@ export function isMountedPhotoPaintReady(img: HTMLImageElement | null): boolean 
   if (!img.complete) return false;
   if (img.naturalWidth <= 0) return false;
   return true;
+}
+
+export function reduceMineSlotPaintReady(
+  prev: ReadonlySet<number>,
+  photoIndex: number,
+  ready: boolean
+): ReadonlySet<number> {
+  if (prev.has(photoIndex) === ready) return prev;
+  const next = new Set(prev);
+  if (ready) next.add(photoIndex);
+  else next.delete(photoIndex);
+  return next;
+}
+
+export function nextMineFrontPaintReady(
+  prev: boolean,
+  photoIndex: number,
+  displayedIndex: number,
+  ready: boolean
+): boolean {
+  if (photoIndex !== displayedIndex) return prev;
+  return ready === prev ? prev : ready;
+}
+
+/**
+ * Callback-ref identity changes fire `null` then the node. Do not treat detach
+ * as "unready" — that toggles opacity and retriggers the ref forever.
+ */
+export function applyMineStackImgNode(args: {
+  photoIndex: number;
+  node: HTMLImageElement | null;
+  imgRefs: Map<number, HTMLImageElement>;
+  onReady: (photoIndex: number, ready: boolean) => void;
+}): void {
+  if (!args.node) {
+    args.imgRefs.delete(args.photoIndex);
+    return;
+  }
+  args.imgRefs.set(args.photoIndex, args.node);
+  args.onReady(args.photoIndex, isMountedPhotoPaintReady(args.node));
 }
 
 export async function ensureMountedPhotoDecoded(
@@ -1074,6 +1495,8 @@ export function computePeopleDiscoverCardMetrics(input: {
    * Pass `"plans"` for open_plans (Plans chrome, not Mine 73px note).
    */
   chromeProfile?: PeopleDuoChromeProfile;
+  /** Duo modern — displayable photo count for stack headroom (0 = Echo/empty). */
+  duoModernDisplayPhotoCount?: number;
 }): PeopleDiscoverCardMetrics {
   const { hostW, hostH } = input;
   const reserveChrome = input.reserveInFlowChrome !== false;
@@ -1084,13 +1507,20 @@ export function computePeopleDiscoverCardMetrics(input: {
     input.chromeProfile ?? (upwardPeekPad ? "mine" : "discover");
   const stackPadX = PEOPLE_DISCOVER_STACK_PAD_X;
   const stackPadY = PEOPLE_DISCOVER_STACK_PAD_Y;
-  const stackPadYTop =
-    chromeProfile === "mine" ? PEOPLE_MINE_STACK_PAD_Y_TOP : stackPadY;
+  let stackPadYTop =
+    chromeProfile === "mine"
+      ? PEOPLE_MINE_STACK_PAD_Y_TOP
+      : chromeProfile === "duoModern"
+        ? PEOPLE_DUO_MODERN_STACK_PAD_Y_TOP_MIN_PX
+        : stackPadY;
+  const duoModernDisplayPhotoCount = input.duoModernDisplayPhotoCount ?? 0;
   const chromeH = reserveChrome
     ? chromeProfile === "mine"
       ? PEOPLE_MINE_SOURCE_CHROME_H_PX +
         PEOPLE_MINE_TOP_GAP_PX +
         PEOPLE_MINE_NOTE_RESERVE_H_PX
+      : chromeProfile === "duoModern"
+        ? PEOPLE_DUO_MODERN_INFLOW_CHROME_EST_PX
       : chromeProfile === "plans"
         ? PEOPLE_PLANS_CHROME_H_PX
         : PEOPLE_DUO_SOURCE_CHROME_H_PX + PEOPLE_DUO_NOTE_RESERVE_H_PX
@@ -1126,7 +1556,9 @@ export function computePeopleDiscoverCardMetrics(input: {
     frameW =
       chromeProfile === "plans"
         ? peoplePlansTargetFrameW(hostW, hostH)
-        : peopleMineTargetFrameW(hostW, hostH);
+        : chromeProfile === "duoModern"
+          ? peopleDuoModernTargetFrameW(hostW, hostH)
+          : peopleMineTargetFrameW(hostW, hostH);
     frameW = Math.max(frameW, PEOPLE_DISCOVER_MIN_FRAME_W);
     portraitW = frameW + 2 * stackPadX;
   } else {
@@ -1154,7 +1586,9 @@ export function computePeopleDiscoverCardMetrics(input: {
       const targetW =
         chromeProfile === "plans"
           ? peoplePlansTargetFrameW(hostW, hostH)
-          : peopleMineTargetFrameW(hostW, hostH);
+          : chromeProfile === "duoModern"
+            ? peopleDuoModernTargetFrameW(hostW, hostH)
+            : peopleMineTargetFrameW(hostW, hostH);
       if (frameW > targetW && targetW > 0) {
         frameW = Math.max(PEOPLE_DISCOVER_MIN_FRAME_W, targetW);
         frameH = frameW / aspect;
@@ -1224,9 +1658,15 @@ export function computePeopleDiscoverCardMetrics(input: {
   // fill — but never past the 3:4 tall envelope (aspect ≥ ASPECT_MIN).
   // Genuine leftover after clamp is split by peopleMineDistributeHostSurplus
   // (not stretch, not unusedHostH dump below the note).
-  if (chromeProfile === "mine" && fullWidthSlide && hostH > 0) {
+  if (
+    (chromeProfile === "mine" || chromeProfile === "duoModern") &&
+    fullWidthSlide &&
+    hostH > 0
+  ) {
     const targetW = Math.max(
-      peopleMineTargetFrameW(hostW, hostH),
+      chromeProfile === "duoModern"
+        ? peopleDuoModernTargetFrameW(hostW, hostH)
+        : peopleMineTargetFrameW(hostW, hostH),
       PEOPLE_DISCOVER_MIN_FRAME_W
     );
     const mediaBudget = Math.max(0, hostH - chromeH);
@@ -1261,6 +1701,19 @@ export function computePeopleDiscoverCardMetrics(input: {
     }
   }
 
+  if (chromeProfile === "duoModern" && frameH > 0) {
+    stackPadYTop = peopleDuoModernStackPadYTopPx(
+      frameH,
+      Math.max(
+        PEOPLE_DUO_MODERN_STACK_ENVELOPE_PHOTO_COUNT,
+        duoModernDisplayPhotoCount
+      )
+    );
+    const mediaPadYFinal = stackPadYTop + stackPadY;
+    mediaH = frameH + mediaPadYFinal;
+    contentH = Math.min(hostH, mediaH + chromeH);
+  }
+
   // Vertical surplus pads — Mine and Plans each own an explicit branch.
   // Mine: ~50/50 around portrait+note (caption/Back/Connect stay fixed).
   // Plans: ~50/50 around the full portrait+chrome content block.
@@ -1278,6 +1731,11 @@ export function computePeopleDiscoverCardMetrics(input: {
     const d = peoplePlansDistributeContentBlockSurplus(surplus);
     padTop = d.padTop;
     padBottom = d.padBottom;
+  } else if (distributeSurplus && chromeProfile === "duoModern") {
+    const surplus = Math.max(0, Math.round(hostH - contentH));
+    const d = peopleDuoModernDistributeHostSurplus(surplus);
+    padTop = d.padTop;
+    padBottom = d.padBottom;
   } else if (distributeSurplus) {
   const surplus = Math.max(0, hostH - contentH);
     const d = distributeMineSurplus(surplus);
@@ -1289,6 +1747,7 @@ export function computePeopleDiscoverCardMetrics(input: {
   const slideH = fullWidthSlide
     ? hostH
     : contentH + padTop + padBottom;
+
   const unusedHostH = Math.max(0, hostH - (contentH + padTop + padBottom));
   const portraitH = mediaH;
 
@@ -1327,3 +1786,19 @@ export function isPeopleDiscoverMetricsReady(
 }
 
 export const isPeopleDuoMetricsReady = isPeopleDiscoverMetricsReady;
+
+/** CSS variables for Mine / Duo modern portrait column (per-slide or host). */
+export function peopleMinePortraitCssVars(
+  metrics: PeopleDiscoverCardMetrics
+): Record<string, string> {
+  return {
+    "--people-mine-portrait-w": `${metrics.portraitW}px`,
+    "--people-mine-portrait-h": `${metrics.portraitH}px`,
+    "--people-mine-frame-w": `${metrics.frameW}px`,
+    "--people-mine-frame-h": `${metrics.frameH}px`,
+    "--people-mine-surplus-pad-top": `${metrics.padTop}px`,
+    "--people-mine-surplus-pad-bottom": `${metrics.padBottom}px`,
+    "--people-mine-unused-host": `${metrics.unusedHostH}px`,
+    "--people-duo-stack-pad-y-top": `${metrics.stackPadYTop}px`,
+  };
+}

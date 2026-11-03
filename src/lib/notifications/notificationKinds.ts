@@ -15,6 +15,8 @@ export const NOTIFICATION_KINDS = {
   ACTIVITY_FOLLOW: "activity_follow",
   ACTIVITY_RSVP: "activity_rsvp",
   OPEN_PLAN_REQUEST: "open_plan_request",
+  GROUP_UP_REQUEST: "group_up_request",
+  GROUP_UP_REQUEST_ACCEPTED: "group_up_request_accepted",
 } as const;
 
 export type NotificationKind =
@@ -96,6 +98,16 @@ export const NOTIFICATION_KIND_META: Record<
     bannerCapable: true,
   },
   [NOTIFICATION_KINDS.OPEN_PLAN_REQUEST]: {
+    routable: true,
+    pushCapable: true,
+    bannerCapable: true,
+  },
+  [NOTIFICATION_KINDS.GROUP_UP_REQUEST]: {
+    routable: true,
+    pushCapable: true,
+    bannerCapable: true,
+  },
+  [NOTIFICATION_KINDS.GROUP_UP_REQUEST_ACCEPTED]: {
     routable: true,
     pushCapable: true,
     bannerCapable: true,

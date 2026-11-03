@@ -1,0 +1,107 @@
+@keyframes duo-match-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Portrait dim: 150ms in, ~250ms peak, clear by 1.4s. Toast stays. */
+@keyframes duo-match-toast-wash {
+  0% {
+    opacity: 0;
+  }
+  10.7% {
+    opacity: 1;
+  }
+  28.6% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* One soft Heart-red ring. Plays once behind the toast. */
+@keyframes duo-match-toast-ripple {
+  0% {
+    opacity: 0.72;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.55);
+  }
+}
+
+@keyframes duo-match-heart-pulse {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.duo-match-toast {
+  animation: duo-match-toast-in 220ms ease-out;
+  /* Compact capsule: h-10 (40px) + p-1 keeps the shell in the 36–44px band. */
+  box-sizing: border-box;
+}
+
+.duo-match-toast-wash {
+  z-index: 0;
+  pointer-events: none;
+  /* Dark peak 38%. Opacity returns to 0, so the wash ends fully clear. */
+  background: color-mix(in oklab, black 38%, transparent);
+  animation: duo-match-toast-wash 1400ms ease-out forwards;
+}
+
+html.theme-light .duo-match-toast-wash,
+html.app-light .duo-match-toast-wash {
+  background: color-mix(in oklab, black 28%, transparent);
+}
+
+.duo-match-toast-ripple {
+  z-index: 0;
+  width: min(100%, 12.5rem);
+  height: 2.75rem;
+  border-radius: 9999px;
+  /* Same red as the active Duo Heart fill. */
+  border: 10px solid color-mix(in oklab, rgb(225, 29, 72) 46%, transparent);
+  filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.92);
+  animation: duo-match-toast-ripple 840ms ease-out forwards;
+  will-change: transform, opacity;
+}
+
+html[data-duo-match-heart-pulse="1"]
+  [data-people-action-kind="heart"][data-people-action-visual="active"] {
+  animation: duo-match-heart-pulse 480ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duo-match-toast {
+    animation: none;
+  }
+
+  .duo-match-toast-wash,
+  .duo-match-toast-ripple {
+    animation: none !important;
+    opacity: 0 !important;
+    visibility: hidden;
+  }
+
+  html[data-duo-match-heart-pulse="1"]
+    [data-people-action-kind="heart"][data-people-action-visual="active"] {
+    animation: none;
+  }
+}

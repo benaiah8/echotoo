@@ -1,10 +1,12 @@
 /**
  * Anonymous Open Plan requester media. Never resolves a profile by id.
- * Photo → Echo preset → '?' — no names, no profile lookup.
+ * Photo → Echo preset / legacy preset → deterministic Echo (neutral seed) → '?'.
+ * Prefer Echo over '?' whenever presets are available.
  */
 
 import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import { isAvatarPresetValue } from "../../lib/avatarPresets";
+import { resolvePeopleFeedEchoPreset } from "../../lib/people/peopleFeedLayout";
 import { resolveProfileIdentityMedia } from "../../lib/profileIdentityMedia";
 
 type Props = {
@@ -12,6 +14,12 @@ type Props = {
   profilePhotos: string[];
   echoPreset: string | null;
   size: number;
+  /**
+   * Stable non-PII seed (e.g. request row id) for approved deterministic Echo
+   * when the profile has no photo and no stored echo_preset. Do not pass a
+   * gated user/profile id for undisclosed hosts.
+   */
+  neutralEchoSeed?: string | null;
   className?: string;
 };
 
@@ -20,6 +28,7 @@ export default function OpenPlanAnonymousAvatar({
   profilePhotos,
   echoPreset,
   size,
+  neutralEchoSeed = null,
   className,
 }: Props) {
   const resolved = resolveProfileIdentityMedia({
@@ -33,9 +42,16 @@ export default function OpenPlanAnonymousAvatar({
   if (resolved.kind === "photos" || resolved.kind === "legacy-photo") {
     src = avatarDisplayUrl(resolved.primaryPhoto) ?? null;
     isPreset = isAvatarPresetValue(resolved.primaryPhoto);
-  } else if (resolved.kind === "echo" && resolved.echoPreset) {
-    src = avatarDisplayUrl(resolved.echoPreset) ?? null;
-    isPreset = true;
+  } else {
+    const echo = resolvePeopleFeedEchoPreset(
+      {
+        echo_preset: echoPreset,
+        avatar_url: avatarUrl,
+      },
+      neutralEchoSeed
+    );
+    src = avatarDisplayUrl(echo) ?? null;
+    isPreset = Boolean(src);
   }
 
   return (

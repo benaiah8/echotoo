@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type MouseEvent,
@@ -67,6 +68,10 @@ import {
   type PeopleConnectRpcName,
 } from "../../lib/people/peopleConnectHardening";
 import { peopleUiCopy } from "../../pages/people/peopleUiCopy";
+import {
+  retryProfileMatchCompletion,
+  settleProfileConnect,
+} from "../../lib/profileConnectCompletion";
 import { socialUiCopy } from "../../lib/social/socialUiCopy";
 import { messagesConversationPath } from "../../router/Paths";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
@@ -332,6 +337,10 @@ export default function ProfileSocialOpportunityCard({
   const [duoBusy, setDuoBusy] = useState(false);
   const [connectBusy, setConnectBusy] = useState(false);
   const [groupBusy, setGroupBusy] = useState(false);
+  const [pendingMatchOpportunityId, setPendingMatchOpportunityId] = useState<
+    string | null
+  >(null);
+  const completeFlightRef = useRef(false);
 
   const duoPayload = row.duo;
   const groupPayload = row.group;
@@ -585,23 +594,68 @@ export default function ProfileSocialOpportunityCard({
     viewerUserId,
   ]);
 
+  const markProfileInterestOnly = useCallback(
+    (opportunityId: string) => {
+      if (!viewerUserId) return;
+      patchCachedProfileSocialOpportunity(
+        viewerUserId,
+        profileUserId,
+        opportunityId,
+        { viewer_duo_joined: true }
+      );
+    },
+    [viewerUserId, profileUserId]
+  );
+
+  const markProfileConnected = useCallback(
+    (opportunityId: string) => {
+      if (!viewerUserId) return;
+      patchCachedProfileSocialOpportunity(
+        viewerUserId,
+        profileUserId,
+        opportunityId,
+        { viewer_duo_joined: true, viewer_profile_connected: true }
+      );
+    },
+    [viewerUserId, profileUserId]
+  );
+
   const runComplete = useCallback(
-    async (opportunityId: string) => {
+    async (opportunityId: string): Promise<boolean> => {
+      if (completeFlightRef.current) return false;
+      completeFlightRef.current = true;
+      setConnectBusy(true);
       try {
-        const done = await completePairUpMatch(opportunityId);
-        navigate(messagesConversationPath(done.conversation_id), {
+        const settled = await retryProfileMatchCompletion({
+          opportunityId,
+          complete: completePairUpMatch,
+          markConnected: () => markProfileConnected(opportunityId),
+        });
+        if (!settled.ok) {
+          setPendingMatchOpportunityId(settled.opportunityId);
+          toast.error(peopleUiCopy.deckCompleteError);
+          return false;
+        }
+        setPendingMatchOpportunityId(null);
+        navigate(messagesConversationPath(settled.completion.conversation_id), {
           state: { fromPeopleMatch: true },
         });
-      } catch {
-        toast.error(peopleUiCopy.deckCompleteError);
+        return true;
+      } finally {
+        completeFlightRef.current = false;
+        setConnectBusy(false);
       }
     },
-    [navigate]
+    [markProfileConnected, navigate]
   );
 
   const handleConnect = useCallback(async () => {
     if (!ensureAuthed()) return;
     if (connectBusy || !viewerUserId || isSelf || !duoPayload) return;
+    if (pendingMatchOpportunityId) {
+      await runComplete(pendingMatchOpportunityId);
+      return;
+    }
     if (connectActive) return;
 
     const duoOppId = duoPayload.opportunity_id;
@@ -619,15 +673,36 @@ export default function ProfileSocialOpportunityCard({
               profileOwnerUserId: profileUserId,
             });
 
-        patchCachedProfileSocialOpportunity(
-          viewerUserId,
-          profileUserId,
-          duoOppId,
-          { viewer_duo_joined: true, viewer_profile_connected: true }
-        );
+        const settled = await settleProfileConnect({
+          matched: result.matched,
+          opportunityId: duoOppId,
+          markInterestOnly: () => markProfileInterestOnly(duoOppId),
+          markConnected: () => markProfileConnected(duoOppId),
+          complete: async (opportunityId) => {
+            if (completeFlightRef.current) {
+              throw new Error("Match completion already in progress");
+            }
+            completeFlightRef.current = true;
+            try {
+              return await completePairUpMatch(opportunityId);
+            } finally {
+              completeFlightRef.current = false;
+            }
+          },
+        });
 
-        if (result.matched) {
-          await runComplete(duoOppId);
+        if (settled.status === "needs_retry") {
+          setPendingMatchOpportunityId(settled.opportunityId);
+          toast.error(peopleUiCopy.deckCompleteError);
+          return;
+        }
+
+        if (settled.status === "completed") {
+          setPendingMatchOpportunityId(null);
+          navigate(
+            messagesConversationPath(settled.completion.conversation_id),
+            { state: { fromPeopleMatch: true } }
+          );
           return;
         }
 
@@ -700,6 +775,9 @@ export default function ProfileSocialOpportunityCard({
     viewerUserId,
     isSelf,
     connectActive,
+    pendingMatchOpportunityId,
+    markProfileInterestOnly,
+    markProfileConnected,
     duoJoined,
     viewerDuoJoined,
     duoPayload,
@@ -707,6 +785,7 @@ export default function ProfileSocialOpportunityCard({
     profileUserId,
     runComplete,
     clearProfilePairActionState,
+    navigate,
   ]);
 
   const handleGroupRequest = useCallback(async () => {
@@ -975,7 +1054,9 @@ export default function ProfileSocialOpportunityCard({
                             label={
                               connectActive
                                 ? peopleUiCopy.deckConnectedLabel
-                                : peopleUiCopy.deckConnectLabel
+                                : pendingMatchOpportunityId
+                                  ? peopleUiCopy.deckRetryComplete
+                                  : peopleUiCopy.deckConnectLabel
                             }
                             icon={
                               connectActive ? (

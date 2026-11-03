@@ -12,15 +12,24 @@ import toast from "react-hot-toast";
 import {
   completePairUpMatch,
   setP2pDiscoverEnabled,
+  withdrawDiscoverPairUpInterest,
+  withdrawDuoPairUpInterest,
 } from "../../api/services/pairUp";
 import {
   getProfileByUserId,
   getViewerAuthUserId,
 } from "../../api/services/follows";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import { PiHeartFill } from "react-icons/pi";
+import "./DuoMatchToast.css";
+import "./DuoHeartActionFeedback.css";
 import type { UseGroupUpCandidatesResult } from "../../hooks/useGroupUpCandidates";
 import type { UseOpenPlanCandidatesResult } from "../../hooks/useOpenPlanCandidates";
-import type { UsePairUpCandidatesResult } from "../../hooks/usePairUpCandidates";
+import {
+  releaseDiscoverCommentRetention,
+  retainDiscoverCommentCandidate,
+  type UsePairUpCandidatesResult,
+} from "../../hooks/usePairUpCandidates";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { interleavePairUpCandidates } from "../../lib/interleavePairUpCandidates";
 import type { GroupUpCandidate, PairUpCandidate } from "../../lib/people/types";
@@ -91,33 +100,13 @@ import {
   type MineWarmDirection,
 } from "../../lib/people/mineCandidateImageWarm";
 import {
-  resolveMineAtmosphereWarmSettlement,
-  shouldRunMineAtmosphereWarmWatch,
-} from "../../lib/people/mineAtmosphereWarmReadiness";
-import {
   resolveMineFrontDisplayUrl,
   resolveMineFrontPhotoPath,
 } from "../../lib/people/mineFrontPhotoPath";
 import {
-  messagesConversationPath,
-  Paths,
-} from "../../router/Paths";
-import PeopleDeckEmptyCard from "../../components/people/PeopleDeckEmptyCard";
-import { useTabVisibility } from "../../router/PersistentTabContainer.new";
-import MatchDeckCarousel from "./MatchDeckCarousel";
-import PeopleDuoCandidateSlide from "./PeopleDuoCandidateSlide";
-import PeopleDuoModeTransition from "./PeopleDuoModeTransition";
-import {
-  isPairUpPrimaryScope,
-  type PeoplePrimaryScope,
-} from "../../lib/people/peopleDuoModeTransition";
-import OpenPlanDeckBody from "./OpenPlanDeckBody";
-import GroupUpDeckBody from "./GroupUpDeckBody";
-import PeopleBottomDock from "./PeopleBottomDock";
-import MineCandidateProfileOverlay from "../../components/people/MineCandidateProfileOverlay";
-import MineEdgeNavCards, {
-  type MineEdgeNavCardsHandle,
-} from "../../components/people/MineEdgeNavCards";
+  resolveMineAtmosphereWarmSettlement,
+  shouldRunMineAtmosphereWarmWatch,
+} from "../../lib/people/mineAtmosphereWarmReadiness";
 import MineAtmosphereCrossfade from "../../components/people/MineAtmosphereCrossfade";
 import type { PeopleMineAtmosphereReport } from "../../components/people/PeopleCandidateMedia";
 import {
@@ -129,6 +118,49 @@ import {
 } from "../../lib/people/mineAtmosphereCrossfade";
 import { shouldApplyMineAtmosphereReport } from "../../lib/people/mineAtmosphereIdentitySync";
 import { prefersPeopleMotionReduce } from "../../lib/people/peopleCandidateMediaPresentation";
+import {
+  messagesConversationPath,
+  Paths,
+} from "../../router/Paths";
+import PeopleDeckEmptyCard from "../../components/people/PeopleDeckEmptyCard";
+import PeopleDuoCardSkeleton from "../../components/skeletons/PeopleDuoCardSkeleton";
+import { useTabVisibility } from "../../router/PersistentTabContainer.new";
+import PeopleDuoModeTransition from "./PeopleDuoModeTransition";
+import {
+  isPairUpPrimaryScope,
+  type PeoplePrimaryScope,
+} from "../../lib/people/peopleDuoModeTransition";
+import OpenPlanDeckBody from "./OpenPlanDeckBody";
+import GroupUpDeckBody from "./GroupUpDeckBody";
+import PeopleFeedTopNav from "./PeopleFeedTopNav";
+import PeopleFeedList from "../../components/people/PeopleFeedList";
+import PeopleDiscoverPersonRow from "../../components/people/PeopleDiscoverPersonRow";
+import PeopleDiscoverOpportunityBox from "../../components/people/PeopleDiscoverOpportunityBox";
+import PeopleDiscoverFeedSkeleton from "../../components/people/PeopleDiscoverFeedSkeleton";
+import PeopleGroupsBrowseToggle, {
+  PEOPLE_GROUPS_BROWSE_TOGGLE_CLEARANCE_PX,
+} from "../../components/people/PeopleGroupsBrowseToggle";
+import MatchDeckCarousel from "./MatchDeckCarousel";
+import PeopleDuoBottomActionRow from "../../components/people/PeopleDuoBottomActionRow";
+import MineEdgeNavCards from "../../components/people/MineEdgeNavCards";
+import PeopleDuoCandidateSlide from "./PeopleDuoCandidateSlide";
+import MineCandidateProfileOverlay from "../../components/people/MineCandidateProfileOverlay";
+import {
+  groupDiscoverOpportunities,
+  type DiscoverPersonAppearance,
+} from "../../lib/people/groupDiscoverOpportunities";
+import {
+  clampDiscoverPhotoIndex,
+} from "../../lib/people/discoverProfilePhotoSelection";
+import {
+  adaptDuoPresentationIdentity,
+  peopleDuoModernDisplayPhotoCount,
+} from "../../lib/people/duoPresentationIdentity";
+import {
+  buildDiscoverIdentityByPersonKey,
+} from "../../lib/people/mergeDiscoverPersonIdentity";
+import { discoverNeutralEchoSeedForPerson } from "../../lib/people/peopleFeedLayout";
+import { normalizeProfilePhotos } from "../../lib/profilePhotos";
 import { resolvePairUpProfileOpenKey } from "../../lib/people/resolvePairUpProfileOpenKey";
 import {
   createMineCandidateProfileOpenContext,
@@ -139,18 +171,56 @@ import {
   type PeopleEmbeddedProfileOpen,
 } from "../../lib/people/groupHostProfileOpenContext";
 import { runMinePairUpConnect } from "../../lib/people/runMinePairUpConnect";
+import { runDiscoverHeartAction } from "../../lib/people/discoverHeartActions";
 import {
-  PEOPLE_BACK_EDGE_INSET_PX,
-  PEOPLE_BACK_SIZE_PX,
-  peopleShellContentBottomPad,
-  peopleShellContentTopPad,
-  peopleShellMineContentBottomPad,
-  peopleShellMineContentTopPad,
+  getDiscoverHeartRevision,
+  readDiscoverHeartPhase,
+  subscribeDiscoverHeart,
+} from "../../lib/people/discoverHeartState";
+import {
+  peopleDuoModernScrollTopInset,
+  peopleFeedContentBottomPad,
+  peopleFeedContentTopPad,
+  peopleFeedCssVars,
+} from "../../lib/people/peopleFeedLayout";
+import {
+  PEOPLE_DUO_MODERN_ACTION_ROW_H_PX,
+  peopleDuoModernTabBandPad,
   type PeopleFlatDestination,
 } from "./peopleShellLayout";
 import type { PeopleShellPrimaryAction } from "./peopleShellPrimaryAction";
 import { resolvePairUpShellActionState } from "./peopleShellPrimaryAction";
-import { PiGlobe } from "react-icons/pi";
+import { openPeopleCommentComposer } from "../../lib/people/peopleCommentComposerStore";
+import {
+  resolveActivatedDuoComment,
+  routeDuoCommentTap,
+} from "../../lib/people/duoCommentActions";
+import {
+  duoHeartPressKind,
+  runDuoHeartWithdrawal,
+} from "../../lib/people/duoHeartActions";
+import {
+  DUO_HEART_FEEDBACK_MS,
+  duoHeartErrorFeedbackVisible,
+  duoHeartFeedbackShouldClear,
+  duoHeartFeedbackText,
+  type DuoHeartFeedback,
+} from "../../lib/people/duoHeartActionFeedback";
+import {
+  duoHeartPressStartsConnect,
+  pairUpIngestExcludesExpressedInterest,
+} from "../../lib/people/duoHeartVisibility";
+import {
+  applyDuoCommentListFlags,
+  duoCommentStateKey,
+  duoCommentVisual,
+  getDuoCommentRevision,
+  getDuoCommentSnapshot,
+  getDuoCommentViewerId,
+  subscribeDuoCommentState,
+} from "../../lib/people/duoCommentState";
+import { useTabActive } from "../../router/PersistentTabContainer.new";
+import type { MineEdgeNavCardsHandle } from "../../components/people/MineEdgeNavCards";
 import {
   DEV_MATCH_DECK_MOCKS,
   DEV_MOCK_PROFILE_BY_ID,
@@ -163,6 +233,7 @@ import {
 } from "./matchDeckDevMocks";
 import { peopleUiCopy } from "./peopleUiCopy";
 import { showDiscoverTurnedOnToast } from "../../lib/showDiscoverPrefToast";
+import { showDuoAlreadyMatchedToast } from "../../lib/showDuoAlreadyMatchedToast";
 import {
   peopleDebugBumpRender,
   peopleDebugRecord,
@@ -252,6 +323,145 @@ type DeckMode = MatchDeckSessionMode;
 type ActionPhase = "idle" | "expressing" | "completing" | "completeFailed";
 type DiscoverDialog = null | "intro";
 
+export type DuoMatchConfirm = {
+  conversationId: string;
+  otherUserId: string;
+  displayName: string | null;
+  viewerId: string;
+};
+
+export type DuoMatchCompleteDecision =
+  | Omit<DuoMatchConfirm, "displayName" | "viewerId">
+  | "navigate"
+  | "error";
+
+export const DUO_MATCH_TOAST_MS = 5000;
+export const DUO_MATCH_HEART_PULSE_MS = 480;
+
+/** Duo shows a toast. Discover and Profile still navigate immediately. */
+export function duoMatchConfirmAfterComplete(input: {
+  scope: string;
+  failed: boolean;
+  completion: { conversation_id: string; other_user_id: string } | null;
+}): DuoMatchCompleteDecision {
+  if (input.failed || !input.completion) return "error";
+  const conversationId = input.completion.conversation_id.trim();
+  const otherUserId = input.completion.other_user_id.trim();
+  if (!conversationId || !otherUserId) return "error";
+  if (input.scope !== "my_plans") return "navigate";
+  return { conversationId, otherUserId };
+}
+
+export function duoMatchHeartPulseMs(reducedMotion: boolean): number {
+  return reducedMotion ? 0 : DUO_MATCH_HEART_PULSE_MS;
+}
+
+export function duoMatchToastBody(displayName: string | null | undefined): string {
+  const name = displayName?.replace(/\s+/g, " ").trim() ?? "";
+  if (!name || name.length > 60) return "You matched with this person!";
+  return `You matched with ${name}!`;
+}
+
+export function duoMatchToastNavigationAllowed(input: {
+  toast: DuoMatchConfirm | null;
+  viewerId: string | null;
+  alreadyNavigated: boolean;
+}): boolean {
+  if (!input.toast || input.alreadyNavigated) return false;
+  if (!input.viewerId || input.toast.viewerId !== input.viewerId) return false;
+  return Boolean(input.toast.conversationId);
+}
+
+/** Duo success paints the toast and red Heart before the matched card leaves. */
+export const DUO_MATCH_REVEAL_STEPS = [
+  "toast",
+  "pulse",
+  "hold",
+  "remove",
+  "clear-pulse",
+  "idle",
+] as const;
+
+export type DuoMatchRevealStep = (typeof DUO_MATCH_REVEAL_STEPS)[number];
+
+export function duoMatchRevealKeepsCandidate(step: DuoMatchRevealStep): boolean {
+  return step === "toast" || step === "pulse" || step === "hold";
+}
+
+/**
+ * The hold may remove only the opportunity that started it.
+ * Viewer change and a newer match cancel removal. Message now still removes
+ * that same opportunity after navigation has begun.
+ */
+export function duoMatchHoldShouldRemove(input: {
+  holdGeneration: number;
+  liveGeneration: number;
+  holdViewerId: string;
+  liveViewerId: string | null;
+  navigated: boolean;
+}): boolean {
+  if (input.liveViewerId !== input.holdViewerId) return false;
+  if (input.liveGeneration !== input.holdGeneration && !input.navigated) return false;
+  return true;
+}
+
+/**
+ * A stale pin may restore a card only while completion is unfinished.
+ * Idle and expressing decks use the server list alone.
+ */
+export function matchDeckShouldRestorePinnedCandidate(input: {
+  phase: "idle" | "expressing" | "completing" | "completeFailed";
+  pinnedOpportunityId: string | null;
+  deckHasOpportunity: boolean;
+}): boolean {
+  if (!input.pinnedOpportunityId || input.deckHasOpportunity) return false;
+  return input.phase === "completing" || input.phase === "completeFailed";
+}
+
+/** An older completion may release only the pin it still owns. */
+export function matchPinReleaseAllowed(input: {
+  holdSequence: number;
+  liveSequence: number;
+  holdOpportunityId: string;
+  pinnedOpportunityId: string | null;
+}): boolean {
+  if (input.liveSequence !== input.holdSequence) return false;
+  return input.pinnedOpportunityId === input.holdOpportunityId;
+}
+
+/**
+ * A failed completion belongs to the viewer who started it.
+ * The first authenticated id and a repeat of the same id leave that state alone.
+ */
+export function duoMatchFailedCompletionShouldClear(input: {
+  previousViewerId: string | null;
+  nextViewerId: string | null;
+  phase: "idle" | "expressing" | "completing" | "completeFailed";
+}): boolean {
+  if (!input.previousViewerId) return false;
+  if (input.previousViewerId === input.nextViewerId) return false;
+  return input.phase === "completeFailed";
+}
+
+/** Pulse forces the matched Heart red. The next card keeps its own interest. */
+export function duoDeckHeartAfterMatchReveal(input: {
+  visibleOpportunityId: string | null;
+  matchedOpportunityId: string;
+  pulseOpportunityId: string | null;
+  expressedByMe: boolean;
+  completionLocked: boolean;
+}): "active" | "idle" | "disabled" {
+  if (!input.visibleOpportunityId) return "disabled";
+  if (
+    input.pulseOpportunityId === input.visibleOpportunityId &&
+    input.pulseOpportunityId === input.matchedOpportunityId
+  ) {
+    return "active";
+  }
+  if (input.completionLocked) return "disabled";
+  return input.expressedByMe ? "active" : "idle";
+}
+
 type DeckProps = Pick<
   UsePairUpCandidatesResult,
   | "candidates"
@@ -263,6 +473,8 @@ type DeckProps = Pick<
   | "hardRefresh"
   | "loadMore"
   | "express"
+  | "noteDiscoverHeartExpressed"
+  | "noteDuoHeartWithdrawn"
 >;
 
 const EMPTY_PAIR_UP_DECK: DeckProps = {
@@ -277,6 +489,8 @@ const EMPTY_PAIR_UP_DECK: DeckProps = {
   express: async () => {
     throw new Error("Deck not ready");
   },
+  noteDiscoverHeartExpressed: () => {},
+  noteDuoHeartWithdrawn: () => {},
 };
 
 const PROFILE_ID_RE = /^[0-9a-f-]{36}$/i;
@@ -331,12 +545,22 @@ export default function MatchDeckOverlay({
   const [restored] = useState(() => consumeMatchDeckSession());
   const [mode, setMode] = useState<DeckMode>(restored?.mode ?? "p2p");
   const [activeScope, setActiveScope] = useState<MatchDeckPairUpScope>(
-    restored?.activeScope ?? "my_plans"
+    restored?.activeScope ?? "discover"
   );
   /** Visual Duo pane scope (lags during vertical mode transition). */
   const [contentScope, setContentScope] = useState<MatchDeckPairUpScope>(
-    restored?.activeScope ?? "my_plans"
+    restored?.activeScope ?? "discover"
   );
+  /** Per-row heart in-flight (feed). */
+  const [heartBusyId, setHeartBusyId] = useState<string | null>(null);
+  const [duoActionFeedback, setDuoActionFeedback] = useState<DuoHeartFeedback | null>(
+    null
+  );
+  const duoActionFeedbackRef = useRef<DuoHeartFeedback | null>(null);
+  const duoActionFeedbackGenRef = useRef(0);
+  const duoActionFeedbackTimerRef = useRef<number | null>(null);
+  duoActionFeedbackRef.current = duoActionFeedback;
+  const isPeopleTabVisible = useTabActive("people");
   const [scopeState, setScopeState] = useState<
     Record<MatchDeckPairUpScope, MatchDeckScopeSnapshot>
   >(() => ({
@@ -351,16 +575,32 @@ export default function MatchDeckOverlay({
   /** Mine B3 / Groups host: embedded Profile open context (null = closed). */
   const [mineProfileOpen, setMineProfileOpen] =
     useState<PeopleEmbeddedProfileOpen | null>(null);
-  /** Mine shell wash — two-layer opacity crossfade (never blank on identity change). */
+  /** Duo-only shell wash — two-layer opacity crossfade. */
   const [mineAtmosphere, setMineAtmosphere] =
     useState<MineAtmosphereCrossfadeState>(createMineAtmosphereCrossfadeState);
   const mineAtmosphereIdentityRef = useRef<string | null>(null);
   const mineAtmosphereWarmWatchGenRef = useRef(0);
   const mineAtmosphereWarmPrevIdentityRef = useRef<string | null>(null);
   const [pinned, setPinned] = useState<PairUpCandidate | null>(null);
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  const completeSeqRef = useRef(0);
   const [discoverEnabled, setDiscoverEnabled] = useState(true);
   const [discoverDialog, setDiscoverDialog] = useState<DiscoverDialog>(null);
+  const [duoMatchConfirm, setDuoMatchConfirm] = useState<DuoMatchConfirm | null>(
+    null
+  );
+  const [duoMatchPulseId, setDuoMatchPulseId] = useState<string | null>(null);
+  const duoMatchConfirmRef = useRef<DuoMatchConfirm | null>(null);
+  const duoMatchNavRef = useRef(false);
+  const duoMatchTimerRef = useRef<number | null>(null);
+  const duoMatchGenRef = useRef(0);
+  const duoMatchToastGenRef = useRef(0);
+  const previousAuthUserIdRef = useRef<string | null>(null);
   const [discoverEnableBusy, setDiscoverEnableBusy] = useState(false);
+  /** One-shot Discover list scroll restore (enter category / remount) — not focus churn. */
+  const [discoverScrollRestoreToken, setDiscoverScrollRestoreToken] =
+    useState(0);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   /** Bumps when People seen history writes so visuals/order refresh. */
   const [pairUpSeenEpoch, setPairUpSeenEpoch] = useState(0);
@@ -377,6 +617,10 @@ export default function MatchDeckOverlay({
   const photoPromptOpen = useSyncExternalStore(
     subscribePairUpPhotoPrompt,
     isPairUpPhotoPromptOpen,
+  );
+  const discoverHeartRevision = useSyncExternalStore(
+    subscribeDiscoverHeart,
+    getDiscoverHeartRevision
   );
 
   const isOpenPlansScope = contentScope === "open_plans";
@@ -401,6 +645,7 @@ export default function MatchDeckOverlay({
     refresh,
     loadMore,
     express,
+    noteDiscoverHeartExpressed,
   } = activeDeck;
 
   const scopeSnap = scopeState[contentScope];
@@ -459,6 +704,8 @@ export default function MatchDeckOverlay({
   groupUpScopeRef.current = groupUpScope;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const contentScopeRef = useRef(contentScope);
+  contentScopeRef.current = contentScope;
 
   const patchScope = useCallback(
     (
@@ -523,10 +770,11 @@ export default function MatchDeckOverlay({
     };
   }, []);
 
-  // Cold open defaults to Mine; restore remounts prior lazy scopes when needed.
+  // Cold open defaults to Discover (does not toggle discoverability).
+  // Session restore remounts prior lazy scopes when needed.
   useEffect(() => {
-    const scope = restored?.activeScope ?? "my_plans";
-    if (scope === "discover") {
+    const scope = restored?.activeScope ?? "discover";
+    if (scope === "discover" || !restored) {
       onRequestDiscoverMount();
     }
     if (scope === "open_plans" || restored?.activeScope === "open_plans") {
@@ -1114,7 +1362,12 @@ export default function MatchDeckOverlay({
     for (const row of candidates) {
       if (ingested.has(row.opportunity_id)) continue;
       ingested.add(row.opportunity_id);
-      if (row.expressed_by_me) {
+      if (
+        pairUpIngestExcludesExpressedInterest(
+          contentScope,
+          row.expressed_by_me
+        )
+      ) {
         excluded.add(row.opportunity_id);
       }
     }
@@ -1178,14 +1431,15 @@ export default function MatchDeckOverlay({
     (foundIndex >= 0 ? deckRows[foundIndex] : null);
   const controlsLocked = phase === "expressing" || phase === "completing";
   const isDiscoverScope = contentScope === "discover";
+  const isDuoAtmosphereScope =
+    mode === "p2p" && contentScope === "my_plans";
+  const isDuoDeckScope = isDuoAtmosphereScope;
   /** Mine + Discover: PairUp data / Connect / profile owners. */
   const isCanonicalPairUpScope =
     mode === "p2p" &&
     (contentScope === "my_plans" || contentScope === "discover");
   /**
-   * Mine + Discover + Plans + Groups: shared canonical shell (padding, Back,
-   * compact action, atmosphere). Motion/edges for PairUp live below; Plans /
-   * Groups own deck-body motion with the same controller path.
+   * Mine + Discover + Plans + Groups: shared canonical feed shell.
    */
   const isCanonicalPeopleScope =
     mode === "groups" ||
@@ -1193,39 +1447,17 @@ export default function MatchDeckOverlay({
       (contentScope === "my_plans" ||
         contentScope === "discover" ||
         contentScope === "open_plans"));
+  void isCanonicalPeopleScope;
 
-  const [plansAtmosphereIdentityKey, setPlansAtmosphereIdentityKey] = useState<
-    string | null
-  >(null);
-  const [groupsAtmosphereIdentityKey, setGroupsAtmosphereIdentityKey] =
-    useState<string | null>(null);
-
-  /** Atmosphere identity — keep prior wash until the new front is ready. */
   const mineAtmosphereIdentityKey = useMemo(() => {
-    if (!isCanonicalPeopleScope) return null;
-    if (mode === "groups") return groupsAtmosphereIdentityKey;
-    if (contentScope === "open_plans") return plansAtmosphereIdentityKey;
+    if (!isDuoAtmosphereScope) return null;
     const row = current;
     if (!row) return null;
     return `${row.opportunity_id}:${pairUpPersonKey(row)}`;
-  }, [
-    contentScope,
-    current,
-    groupsAtmosphereIdentityKey,
-    isCanonicalPeopleScope,
-    mode,
-    plansAtmosphereIdentityKey,
-  ]);
+  }, [current, isDuoAtmosphereScope]);
 
-  /**
-   * Sync authoritative Mine atmosphere identity before child *passive* effects
-   * report readiness. Parent useLayoutEffect runs after child layout effects but
-   * still before all useEffects — fixing the A→B reject race (child reported B
-   * while ref was still A). Do not sync this gate only in useEffect.
-   */
   useLayoutEffect(() => {
     mineAtmosphereIdentityRef.current = mineAtmosphereIdentityKey;
-    // Leaving Mine / no candidate: clear both layers. Do not blank on A→B alone.
     if (!mineAtmosphereIdentityKey) {
       setMineAtmosphere((prev) => clearMineAtmosphereCrossfade(prev));
     }
@@ -1405,6 +1637,8 @@ export default function MatchDeckOverlay({
   ]);
 
   useEffect(() => {
+    /* Discover vertical feed: never prune above the viewport — shrinks DOM and jumps scroll. */
+    if (contentScope === "discover") return;
     const snap = scopeStateRef.current[contentScope];
     const pruned = pruneActiveOrderedIds(
       snap.activeOrderedIds,
@@ -1502,34 +1736,238 @@ export default function MatchDeckOverlay({
     }
   }, [candidates]);
 
+  const clearDuoMatchTimer = useCallback(() => {
+    if (duoMatchTimerRef.current != null) {
+      window.clearTimeout(duoMatchTimerRef.current);
+      duoMatchTimerRef.current = null;
+    }
+  }, []);
+
+  const clearDuoMatchHeartPulse = useCallback(() => {
+    setDuoMatchPulseId(null);
+    delete document.documentElement.dataset.duoMatchHeartPulse;
+  }, []);
+
+  const dismissDuoMatchToast = useCallback(() => {
+    if (duoMatchNavRef.current) return;
+    clearDuoMatchTimer();
+    duoMatchGenRef.current += 1;
+    duoMatchConfirmRef.current = null;
+    setDuoMatchConfirm(null);
+    clearDuoMatchHeartPulse();
+    setPhase("idle");
+  }, [clearDuoMatchHeartPulse, clearDuoMatchTimer]);
+
   const runComplete = useCallback(
-    async (opportunityId: string) => {
+    async (
+      opportunityId: string,
+      scope: "my_plans" | "discover",
+      displayName?: string | null,
+      onDuoConfirmed?: () => void
+    ) => {
+      if (duoMatchNavRef.current) return;
+      const viewerId = authUserIdRef.current;
+      const completeSeq = ++completeSeqRef.current;
+      const releaseOwnedPin = () => {
+        if (
+          matchPinReleaseAllowed({
+            holdSequence: completeSeq,
+            liveSequence: completeSeqRef.current,
+            holdOpportunityId: opportunityId,
+            pinnedOpportunityId: pinnedRef.current?.opportunity_id ?? null,
+          })
+        ) {
+          setPinned(null);
+        }
+      };
       setPhase("completing");
       try {
         const done = await completePairUpMatch(opportunityId);
-        navigate(messagesConversationPath(done.conversation_id), {
-          state: {
-            backgroundLocation: openLocationRef.current,
-            otherUserId: done.other_user_id,
-          },
+        const decision = duoMatchConfirmAfterComplete({
+          scope,
+          failed: false,
+          completion: done,
         });
+        if (decision === "error") {
+          setPhase("completeFailed");
+          toast.error(peopleUiCopy.deckCompleteError);
+          return;
+        }
+        if (decision === "navigate") {
+          if (completeSeqRef.current === completeSeq) {
+            releaseOwnedPin();
+            setPhase("idle");
+          }
+          navigate(messagesConversationPath(done.conversation_id), {
+            state: {
+              backgroundLocation: openLocationRef.current,
+              otherUserId: done.other_user_id,
+            },
+          });
+          return;
+        }
+        if (!viewerId || authUserIdRef.current !== viewerId) {
+          if (completeSeqRef.current === completeSeq) {
+            releaseOwnedPin();
+            setPhase("idle");
+          }
+          return;
+        }
+        const generation = duoMatchGenRef.current + 1;
+        duoMatchGenRef.current = generation;
+        clearDuoMatchTimer();
+        const confirm: DuoMatchConfirm = {
+          ...decision,
+          displayName: displayName?.trim() || null,
+          viewerId,
+        };
+        duoMatchConfirmRef.current = confirm;
+        duoMatchToastGenRef.current = generation;
+        setDuoMatchConfirm(confirm);
+        setDuoMatchPulseId(opportunityId);
+        const reduced =
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduced) {
+          document.documentElement.dataset.duoMatchHeartPulse = "1";
+        }
+        duoMatchTimerRef.current = window.setTimeout(() => {
+          if (duoMatchGenRef.current !== generation) return;
+          if (duoMatchNavRef.current) return;
+          duoMatchConfirmRef.current = null;
+          setDuoMatchConfirm(null);
+        }, DUO_MATCH_TOAST_MS);
+        const pulseMs = duoMatchHeartPulseMs(reduced);
+        await new Promise((resolve) => window.setTimeout(resolve, pulseMs));
+        if (
+          !duoMatchHoldShouldRemove({
+            holdGeneration: generation,
+            liveGeneration: duoMatchGenRef.current,
+            holdViewerId: viewerId,
+            liveViewerId: authUserIdRef.current,
+            navigated: duoMatchNavRef.current,
+          })
+        ) {
+          if (duoMatchToastGenRef.current === generation) {
+            clearDuoMatchTimer();
+            duoMatchConfirmRef.current = null;
+            setDuoMatchConfirm(null);
+            clearDuoMatchHeartPulse();
+            if (
+              authUserIdRef.current !== viewerId &&
+              completeSeqRef.current === completeSeq
+            ) {
+              releaseOwnedPin();
+              setPhase("idle");
+            }
+          }
+          return;
+        }
+        onDuoConfirmed?.();
+        clearDuoMatchHeartPulse();
+        if (completeSeqRef.current === completeSeq) {
+          releaseOwnedPin();
+          setPhase("idle");
+        }
       } catch {
+        clearDuoMatchHeartPulse();
         setPhase("completeFailed");
         toast.error(peopleUiCopy.deckCompleteError);
       }
     },
-    [navigate]
+    [clearDuoMatchHeartPulse, clearDuoMatchTimer, navigate]
   );
 
+  const openDuoMatchConversation = useCallback(() => {
+    const confirm = duoMatchConfirmRef.current;
+    if (
+      !duoMatchToastNavigationAllowed({
+        toast: confirm,
+        viewerId: authUserIdRef.current,
+        alreadyNavigated: duoMatchNavRef.current,
+      }) ||
+      !confirm
+    ) {
+      return;
+    }
+    duoMatchNavRef.current = true;
+    clearDuoMatchTimer();
+    duoMatchGenRef.current += 1;
+    duoMatchConfirmRef.current = null;
+    setDuoMatchConfirm(null);
+    clearDuoMatchHeartPulse();
+    if (duoActionFeedbackTimerRef.current != null) {
+      window.clearTimeout(duoActionFeedbackTimerRef.current);
+      duoActionFeedbackTimerRef.current = null;
+    }
+    duoActionFeedbackGenRef.current += 1;
+    duoActionFeedbackRef.current = null;
+    setDuoActionFeedback(null);
+    navigate(messagesConversationPath(confirm.conversationId), {
+      state: {
+        backgroundLocation: openLocationRef.current,
+        otherUserId: confirm.otherUserId,
+      },
+    });
+  }, [clearDuoMatchHeartPulse, clearDuoMatchTimer, navigate]);
+
+  useEffect(() => {
+    return () => {
+      duoMatchGenRef.current += 1;
+      if (duoMatchTimerRef.current != null) {
+        window.clearTimeout(duoMatchTimerRef.current);
+        duoMatchTimerRef.current = null;
+      }
+      delete document.documentElement.dataset.duoMatchHeartPulse;
+      if (duoActionFeedbackTimerRef.current != null) {
+        window.clearTimeout(duoActionFeedbackTimerRef.current);
+        duoActionFeedbackTimerRef.current = null;
+      }
+      duoActionFeedbackGenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentToast = duoMatchConfirmRef.current;
+    if (currentToast && currentToast.viewerId !== authUserId) {
+      dismissDuoMatchToast();
+    }
+  }, [authUserId, dismissDuoMatchToast]);
+
+  useEffect(() => {
+    const previousViewerId = previousAuthUserIdRef.current;
+    previousAuthUserIdRef.current = authUserId;
+    if (
+      !duoMatchFailedCompletionShouldClear({
+        previousViewerId,
+        nextViewerId: authUserId,
+        phase,
+      })
+    ) {
+      return;
+    }
+    setPhase("idle");
+    setPinned(null);
+  }, [authUserId, phase]);
+
   const carouselItems = useMemo(() => {
-    if (!pinned) return deckRows;
-    if (deckRows.some((row) => row.opportunity_id === pinned.opportunity_id)) {
+    const deckHasOpportunity = pinned
+      ? deckRows.some((row) => row.opportunity_id === pinned.opportunity_id)
+      : false;
+    if (
+      !matchDeckShouldRestorePinnedCandidate({
+        phase,
+        pinnedOpportunityId: pinned?.opportunity_id ?? null,
+        deckHasOpportunity,
+      }) ||
+      !pinned
+    ) {
       return deckRows;
     }
     const next = [...deckRows];
     next.splice(Math.min(index, next.length), 0, pinned);
     return next;
-  }, [deckRows, index, pinned]);
+  }, [deckRows, index, phase, pinned]);
 
   const goToIndex = useCallback(
     (next: number): boolean => {
@@ -1769,11 +2207,13 @@ export default function MatchDeckOverlay({
     startMineButtonStep(dest);
   }, [carouselItems.length, startMineButtonStep]);
   /**
-   * Production real-incoming portrait choreography — Mine + Discover
-   * (canonical PairUp). DEV proxy/probe fixtures stay my_plans-only below.
+   * Production real-incoming portrait choreography — Duo Embla only.
+   * Discover is vertical; DEV proxy/probe fixtures stay my_plans-only below.
    */
   const mineRealIncomingEnabled =
-    isCanonicalPairUpScope && isPeopleMineRealIncomingEnabled();
+    contentScope === "my_plans" &&
+    mode === "p2p" &&
+    isPeopleMineRealIncomingEnabled();
   /** DEV-only image proxy — Mine investigation; suppressed when real-incoming on. */
   const mineIncomingProxyEnabled =
     contentScope === "my_plans" &&
@@ -1862,26 +2302,143 @@ export default function MatchDeckOverlay({
     setMineProfileOpen(ctx);
   }, []);
 
+  const clearDuoActionFeedback = useCallback(() => {
+    if (duoActionFeedbackTimerRef.current != null) {
+      window.clearTimeout(duoActionFeedbackTimerRef.current);
+      duoActionFeedbackTimerRef.current = null;
+    }
+    duoActionFeedbackGenRef.current += 1;
+    duoActionFeedbackRef.current = null;
+    setDuoActionFeedback(null);
+  }, []);
+
+  const showDuoActionFeedback = useCallback(
+    (kind: DuoHeartFeedback["kind"], opportunityId: string, viewerId: string) => {
+      if (!opportunityId || !viewerId) return;
+      if (duoActionFeedbackTimerRef.current != null) {
+        window.clearTimeout(duoActionFeedbackTimerRef.current);
+        duoActionFeedbackTimerRef.current = null;
+      }
+      const generation = duoActionFeedbackGenRef.current + 1;
+      duoActionFeedbackGenRef.current = generation;
+      const next: DuoHeartFeedback = {
+        kind,
+        opportunityId,
+        viewerId,
+        generation,
+      };
+      duoActionFeedbackRef.current = next;
+      setDuoActionFeedback(next);
+      duoActionFeedbackTimerRef.current = window.setTimeout(() => {
+        if (duoActionFeedbackGenRef.current !== generation) return;
+        duoActionFeedbackRef.current = null;
+        setDuoActionFeedback(null);
+        duoActionFeedbackTimerRef.current = null;
+      }, DUO_HEART_FEEDBACK_MS);
+    },
+    []
+  );
+
+  useEffect(() => {
+    const feedback = duoActionFeedbackRef.current;
+    if (
+      !duoHeartFeedbackShouldClear({
+        feedback,
+        viewerId: authUserId,
+        scope: contentScope,
+        currentOpportunityId: current?.opportunity_id ?? null,
+      })
+    ) {
+      return;
+    }
+    clearDuoActionFeedback();
+  }, [authUserId, clearDuoActionFeedback, contentScope, current]);
+
+  const removeCompletedPairUpCandidate = useCallback(
+    (scope: "my_plans" | "discover", leavingId: string) => {
+      if (scope === "discover") releaseDiscoverCommentRetention(leavingId);
+      if (
+        authUserId &&
+        leavingId &&
+        (scope === "my_plans" || scope === "discover")
+      ) {
+        markLocalPeopleDeckSeenAndEnqueue(authUserId, scope, leavingId);
+        setPairUpSeenEpoch((n) => n + 1);
+      }
+      const snap = scopeStateRef.current[scope];
+      const preOrder =
+        snap.activeOrderedIds.length > 0
+          ? snap.activeOrderedIds
+          : orderedIdsRef.current[scope];
+      const remainingIds = preOrder.filter((id) => id !== leavingId);
+      const neighbor = resolveNearestOpportunityId(
+        preOrder,
+        remainingIds,
+        leavingId
+      );
+      const nextSnap: MatchDeckScopeSnapshot = {
+        ...snap,
+        removedIds: snap.removedIds.includes(leavingId)
+          ? snap.removedIds
+          : [...snap.removedIds, leavingId],
+        activeOrderedIds: remainingIds,
+        currentOpportunityId: neighbor,
+      };
+      const nextScopes = {
+        ...scopeStateRef.current,
+        [scope]: nextSnap,
+      };
+      scopeStateRef.current = nextScopes;
+      setScopeState(nextScopes);
+      suspendMatchDeckSession({
+        mode: modeRef.current,
+        activeScope: scope,
+        scopes: nextScopes,
+        groupUp: groupUpScopeRef.current,
+      });
+    },
+    [authUserId]
+  );
+
   const runPairUpConnectForTarget = useCallback(
     async (
       target: PairUpCandidate,
-      scope: "my_plans" | "discover"
+      scope: "my_plans" | "discover",
+      options?: { discoverHeart?: boolean }
     ) => {
-      if (controlsLocked || phase === "completeFailed") return;
+      if (duoMatchNavRef.current) return;
+      if (!options?.discoverHeart && (controlsLocked || phase === "completeFailed")) {
+        return;
+      }
 
+      const discoverHeart = options?.discoverHeart === true;
+      if (
+        scope === "my_plans" &&
+        !duoHeartPressStartsConnect(target.expressed_by_me)
+      ) {
+        return;
+      }
       await runMinePairUpConnect({
         target,
         scope,
+        heartAlreadyPending: discoverHeart,
         host: {
           shouldAbortBeforeStart: () =>
-            connectInFlightRef.current ||
-            connectResolving ||
-            photoPromptOpen,
+            discoverHeart
+              ? photoPromptOpen ||
+                readDiscoverHeartPhase(
+                  target.opportunity_id,
+                  target.expressed_by_me
+                ) === "pending"
+              : connectInFlightRef.current ||
+                connectResolving ||
+                photoPromptOpen,
           isDevMock: isDevMockCandidate,
           ensureAuthed,
           authUserId,
           express,
           applyUnmatchedRemoval: (leavingId) => {
+            if (scope === "discover") releaseDiscoverCommentRetention(leavingId);
             setScopeState((prev) => {
               const snap = prev[scope];
               if (snap.removedIds.includes(leavingId)) return prev;
@@ -1907,57 +2464,47 @@ export default function MatchDeckOverlay({
             });
           },
           applyMatchedAndComplete: async (leavingId) => {
-            if (
-              authUserId &&
-              leavingId &&
-              (scope === "my_plans" || scope === "discover")
-            ) {
-              markLocalPeopleDeckSeenAndEnqueue(authUserId, scope, leavingId);
-              setPairUpSeenEpoch((n) => n + 1);
+            const removeMatched = () => {
+              removeCompletedPairUpCandidate(scope, leavingId);
+            };
+            if (scope === "discover") {
+              removeMatched();
+              await runComplete(leavingId, scope);
+              return;
             }
-            const snap = scopeStateRef.current[scope];
-            const preOrder =
-              snap.activeOrderedIds.length > 0
-                ? snap.activeOrderedIds
-                : orderedIdsRef.current[scope];
-            const remainingIds = preOrder.filter((id) => id !== leavingId);
-            const neighbor = resolveNearestOpportunityId(
-              preOrder,
-              remainingIds,
-              leavingId
+            await runComplete(
+              leavingId,
+              scope,
+              target.display_name,
+              removeMatched
             );
-            const nextSnap: MatchDeckScopeSnapshot = {
-              ...snap,
-              removedIds: snap.removedIds.includes(leavingId)
-                ? snap.removedIds
-                : [...snap.removedIds, leavingId],
-              activeOrderedIds: remainingIds,
-              currentOpportunityId: neighbor,
-            };
-            const nextScopes = {
-              ...scopeStateRef.current,
-              [scope]: nextSnap,
-            };
-            scopeStateRef.current = nextScopes;
-            setScopeState(nextScopes);
-            suspendMatchDeckSession({
-              mode: modeRef.current,
-              activeScope: scope,
-              scopes: nextScopes,
-              groupUp: groupUpScopeRef.current,
-            });
-            await runComplete(leavingId);
           },
           setPinned,
-          setPhaseExpressing: () => setPhase("expressing"),
-          setPhaseIdle: () => setPhase("idle"),
+          setPhaseExpressing: () => {
+            if (!discoverHeart) setPhase("expressing");
+          },
+          setPhaseIdle: () => {
+            if (!discoverHeart) setPhase("idle");
+          },
           beginFlight: () => {
+            if (discoverHeart) return;
             connectInFlightRef.current = true;
             setConnectResolving(true);
           },
           endFlight: () => {
+            if (discoverHeart) return;
             connectInFlightRef.current = false;
             setConnectResolving(false);
+          },
+          onDiscoverHeartExpressed: (opportunityId, expressed) => {
+            if (scope !== "discover") return;
+            discover?.noteDiscoverHeartExpressed(opportunityId, expressed);
+          },
+          onDuoUnmatchedConfirmed: (opportunityId) => {
+            if (scope !== "my_plans") return;
+            const viewerId = authUserIdRef.current;
+            if (!viewerId) return;
+            showDuoActionFeedback("sent", opportunityId, viewerId);
           },
         },
       });
@@ -1966,20 +2513,363 @@ export default function MatchDeckOverlay({
       authUserId,
       connectResolving,
       controlsLocked,
+      discover,
       ensureAuthed,
       express,
       phase,
       photoPromptOpen,
+      removeCompletedPairUpCandidate,
       runComplete,
+      showDuoActionFeedback,
     ]
+  );
+
+  const dropMyPlansCandidate = useCallback((leavingId: string) => {
+    setScopeState((prev) => {
+      const snap = prev.my_plans;
+      if (snap.removedIds.includes(leavingId)) return prev;
+      const preOrder =
+        snap.activeOrderedIds.length > 0
+          ? snap.activeOrderedIds
+          : orderedIdsRef.current.my_plans;
+      const remainingIds = preOrder.filter((id) => id !== leavingId);
+      const neighbor = resolveNearestOpportunityId(
+        preOrder,
+        remainingIds,
+        leavingId
+      );
+      return {
+        ...prev,
+        my_plans: {
+          ...snap,
+          removedIds: [...snap.removedIds, leavingId],
+          activeOrderedIds: remainingIds,
+          currentOpportunityId: neighbor,
+        },
+      };
+    });
+  }, []);
+
+  const withdrawDuoHeart = useCallback(
+    async (target: PairUpCandidate) => {
+      const viewerId = authUserIdRef.current;
+      const opportunityId = target.opportunity_id;
+      if (!viewerId || !opportunityId) return;
+      const errorFeedbackVisible = () =>
+        duoHeartErrorFeedbackVisible({
+          capturedViewerId: viewerId,
+          capturedOpportunityId: opportunityId,
+          liveViewerId: authUserIdRef.current,
+          scope: contentScopeRef.current,
+          mode: modeRef.current,
+          currentOpportunityId:
+            scopeStateRef.current.my_plans.currentOpportunityId,
+        });
+      let owned = false;
+      try {
+        const result = await runDuoHeartWithdrawal({
+          viewerId,
+          liveViewerId: () => authUserIdRef.current,
+          opportunityId,
+          expressedByMe: target.expressed_by_me,
+          matchState: target.duo_match_state,
+          completionLocked:
+            controlsLocked ||
+            phase === "completeFailed" ||
+            duoMatchNavRef.current,
+          withdraw: () => withdrawDuoPairUpInterest(opportunityId),
+          onStart: () => {
+            owned = true;
+            setHeartBusyId(opportunityId);
+          },
+        });
+        if (result.type === "withdrawn") {
+          myPlans.noteDuoHeartWithdrawn(opportunityId, viewerId);
+          showDuoActionFeedback("withdrawn", opportunityId, viewerId);
+          return;
+        }
+        if (result.type === "matched-interest") {
+          if (errorFeedbackVisible()) showDuoAlreadyMatchedToast();
+          void myPlans.refresh();
+          return;
+        }
+        if (result.type === "discover-sourced") {
+          if (errorFeedbackVisible()) {
+            toast.error(peopleUiCopy.duoHeartDiscoverSourced);
+          }
+          return;
+        }
+        if (result.type === "failed") {
+          if (errorFeedbackVisible()) {
+            toast.error(
+              result.stale
+                ? peopleUiCopy.deckConnectUnavailable
+                : peopleUiCopy.duoHeartWithdrawError
+            );
+          }
+          if (result.stale) dropMyPlansCandidate(opportunityId);
+        }
+      } finally {
+        if (owned) {
+          setHeartBusyId((busy) =>
+            busy === target.opportunity_id ? null : busy
+          );
+        }
+      }
+    },
+    [controlsLocked, dropMyPlansCandidate, myPlans, phase, showDuoActionFeedback]
   );
 
   const handleConnect = useCallback(async () => {
     if (!current) return;
     const scope = contentScope;
     if (scope !== "my_plans" && scope !== "discover") return;
+    if (scope === "my_plans") {
+      const kind = duoHeartPressKind({
+        expressedByMe: current.expressed_by_me,
+        matchState: current.duo_match_state,
+        completionLocked:
+          controlsLocked || phase === "completeFailed" || duoMatchNavRef.current,
+        pending:
+          heartBusyId === current.opportunity_id ||
+          connectResolving ||
+          connectInFlightRef.current,
+      });
+      if (kind === "blocked") return;
+      if (kind === "withdraw") {
+        await withdrawDuoHeart(current);
+        return;
+      }
+      if (kind === "complete") {
+        const opportunityId = current.opportunity_id;
+        setPinned(current);
+        await runComplete(opportunityId, "my_plans", current.display_name, () =>
+          removeCompletedPairUpCandidate("my_plans", opportunityId)
+        );
+        return;
+      }
+    }
     await runPairUpConnectForTarget(current, scope);
-  }, [contentScope, current, runPairUpConnectForTarget]);
+  }, [
+    connectResolving,
+    contentScope,
+    controlsLocked,
+    current,
+    heartBusyId,
+    phase,
+    removeCompletedPairUpCandidate,
+    runComplete,
+    runPairUpConnectForTarget,
+    setPinned,
+    withdrawDuoHeart,
+  ]);
+
+  const handleFeedHeart = useCallback(
+    async (row: PairUpCandidate) => {
+      const scope = contentScope;
+      if (scope !== "my_plans" && scope !== "discover") return;
+      if (scope !== "discover") {
+        if (heartBusyId || connectResolving || controlsLocked) return;
+        setHeartBusyId(row.opportunity_id);
+        try {
+          await runPairUpConnectForTarget(row, scope);
+        } finally {
+          setHeartBusyId(null);
+        }
+        return;
+      }
+
+      if (!authUserId || !row.opportunity_id) return;
+      const phaseNow = readDiscoverHeartPhase(
+        row.opportunity_id,
+        row.expressed_by_me
+      );
+      if (phaseNow === "pending" || phaseNow === "unavailable") return;
+      if (phaseNow === "active") {
+        const result = await runDiscoverHeartAction({
+          viewerId: authUserId,
+          opportunityId: row.opportunity_id,
+          serverExpressed: true,
+          connect: async () => "ignored",
+          withdraw: () => withdrawDiscoverPairUpInterest(row.opportunity_id),
+        });
+        if (result.type === "withdrawn") {
+          noteDiscoverHeartExpressed(row.opportunity_id, false);
+          return;
+        }
+        if (result.type === "matched-interest") {
+          toast.error(peopleUiCopy.discoverHeartMatched);
+          void discover?.refresh();
+          return;
+        }
+        if (result.type === "failed") {
+          toast.error(
+            result.stale
+              ? peopleUiCopy.deckConnectUnavailable
+              : peopleUiCopy.discoverHeartWithdrawError
+          );
+        }
+        return;
+      }
+
+      await runPairUpConnectForTarget(row, "discover", { discoverHeart: true });
+    },
+    [
+      authUserId,
+      contentScope,
+      controlsLocked,
+      connectResolving,
+      discover,
+      heartBusyId,
+      noteDiscoverHeartExpressed,
+      runPairUpConnectForTarget,
+    ]
+  );
+
+  const handleFeedRowVisible = useCallback(
+    (opportunityId: string) => {
+      if (!authUserId || !isPairUpSeenScope) return;
+      if (!opportunityId) return;
+      markLocalPeopleDeckSeenAndEnqueue(
+        authUserId,
+        contentScope as PairUpSeenScope,
+        opportunityId
+      );
+      setPairUpSeenEpoch((n) => n + 1);
+    },
+    [authUserId, contentScope, isPairUpSeenScope]
+  );
+
+  const discoverAppearancesFreezeRef = useRef<
+    DiscoverPersonAppearance<PairUpCandidate>[] | null
+  >(null);
+
+  useEffect(() => {
+    if (contentScope !== "discover") {
+      discoverAppearancesFreezeRef.current = null;
+      return;
+    }
+    /* Entering Discover: restore scroll to saved opportunity once. */
+    setDiscoverScrollRestoreToken((n) => n + 1);
+  }, [contentScope]);
+
+  const discoverAppearances = useMemo(() => {
+    if (contentScope !== "discover") {
+      return [] as DiscoverPersonAppearance<PairUpCandidate>[];
+    }
+    return groupDiscoverOpportunities(deckRows, {
+      previous: discoverAppearancesFreezeRef.current,
+    });
+  }, [contentScope, deckRows]);
+
+  useEffect(() => {
+    if (contentScope === "discover") {
+      discoverAppearancesFreezeRef.current = discoverAppearances;
+    }
+  }, [contentScope, discoverAppearances]);
+
+  const discoverAppearancesRef = useRef(discoverAppearances);
+  discoverAppearancesRef.current = discoverAppearances;
+
+  const discoverIdentityByPersonKey = useMemo(() => {
+    if (contentScope !== "discover") {
+      return new Map<string, ProfileIdentityMediaSource>();
+    }
+    return buildDiscoverIdentityByPersonKey(deckRows);
+  }, [contentScope, deckRows]);
+
+  const [discoverFailedPhotoPathsByPersonKey, setDiscoverFailedPhotoPathsByPersonKey] =
+    useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (contentScope !== "discover") return;
+    setDiscoverFailedPhotoPathsByPersonKey((prev) => {
+      let next: Record<string, string[]> | null = null;
+      for (const [pk, source] of discoverIdentityByPersonKey) {
+        const photos = normalizeProfilePhotos(source.profile_photos);
+        const failed = (next ?? prev)[pk];
+        if (!failed?.length || photos.length === 0) continue;
+        if (photos.some((path) => !failed.includes(path))) {
+          if (!next) next = { ...prev };
+          delete next[pk];
+        }
+      }
+      return next ?? prev;
+    });
+  }, [contentScope, discoverIdentityByPersonKey]);
+
+  useEffect(() => {
+    if (contentScope !== "discover") return;
+    let indicesPatch: Record<string, number> | null = null;
+    for (const [pk, source] of discoverIdentityByPersonKey) {
+      const count = normalizeProfilePhotos(source.profile_photos).length;
+      const current = photoIndexByPersonKey[pk] ?? 0;
+      const clamped = clampDiscoverPhotoIndex(current, count);
+      if (clamped !== current) {
+        if (!indicesPatch) indicesPatch = {};
+        indicesPatch[pk] = clamped;
+      }
+    }
+    if (indicesPatch) {
+      patchScope("discover", {
+        photoIndexByPersonKey: {
+          ...photoIndexByPersonKey,
+          ...indicesPatch,
+        },
+      });
+    }
+  }, [
+    contentScope,
+    discoverIdentityByPersonKey,
+    patchScope,
+    photoIndexByPersonKey,
+  ]);
+
+  const handleDiscoverPhotoLoadFailure = useCallback(
+    (personKey: string, failedPath: string | null) => {
+      const pk = personKey.trim();
+      const path = typeof failedPath === "string" ? failedPath.trim() : "";
+      if (!pk || !path) return;
+      setDiscoverFailedPhotoPathsByPersonKey((prev) => {
+        const existing = prev[pk] ?? [];
+        if (existing.includes(path)) return prev;
+        return { ...prev, [pk]: [...existing, path] };
+      });
+    },
+    []
+  );
+
+  const focusedDiscoverAppearanceKey = useMemo(() => {
+    if (contentScope !== "discover") return null;
+    const cur = current?.opportunity_id;
+    if (cur) {
+      const hit = discoverAppearances.find((a) =>
+        a.opportunities.some((o) => o.opportunity_id === cur)
+      );
+      if (hit) return hit.appearanceKey;
+    }
+    return discoverAppearances[0]?.appearanceKey ?? null;
+  }, [contentScope, current?.opportunity_id, discoverAppearances]);
+
+  const handleFeedFocusedIdChange = useCallback(
+    (focusId: string) => {
+      if (!focusId) return;
+      if (contentScope === "discover") {
+        const appearance = discoverAppearancesRef.current.find(
+          (a) => a.appearanceKey === focusId
+        );
+        if (appearance) {
+          const first = appearance.opportunities[0]?.opportunity_id;
+          if (first) {
+            patchScope(contentScope, { currentOpportunityId: first });
+          }
+          return;
+        }
+      }
+      patchScope(contentScope, { currentOpportunityId: focusId });
+    },
+    [contentScope, patchScope]
+  );
 
   const handleMineProfileConnect = useCallback(async () => {
     if (!isMineCandidateProfileOpenContext(mineProfileOpen)) return;
@@ -1991,8 +2881,13 @@ export default function MatchDeckOverlay({
 
   const handleRetryComplete = useCallback(() => {
     if (!pinned || phase !== "completeFailed") return;
-    void runComplete(pinned.opportunity_id);
-  }, [phase, pinned, runComplete]);
+    if (duoMatchNavRef.current) return;
+    const scope = contentScope === "discover" ? "discover" : "my_plans";
+    const opportunityId = pinned.opportunity_id;
+    void runComplete(opportunityId, scope, pinned.display_name, () =>
+      removeCompletedPairUpCandidate(scope, opportunityId)
+    );
+  }, [contentScope, phase, pinned, removeCompletedPairUpCandidate, runComplete]);
 
   const identitySourceFor = useCallback(
     (row: PairUpCandidate): ProfileIdentityMediaSource => {
@@ -2003,6 +2898,8 @@ export default function MatchDeckOverlay({
           avatar_url: row.avatar_url,
           display_name: row.display_name,
           username: row.username,
+          user_id: row.creator_id,
+          profile_id: row.profile_id,
         };
       }
       return {
@@ -2011,18 +2908,25 @@ export default function MatchDeckOverlay({
         avatar_url: row.avatar_url,
         display_name: row.display_name,
         username: row.username,
+        user_id: row.creator_id,
+        profile_id: row.profile_id,
       };
     },
     []
   );
 
-  /** Front photo for warm watch — same photoIndexByPersonKey as portrait + ±2 warm. */
+  const identitySourceForDuoPresentation = useCallback(
+    (row: PairUpCandidate): ProfileIdentityMediaSource =>
+      adaptDuoPresentationIdentity(identitySourceFor(row)),
+    [identitySourceFor]
+  );
+
   const mineAtmosphereWarmTarget = useMemo(() => {
-    if (!isCanonicalPairUpScope) return null;
+    if (!isDuoAtmosphereScope) return null;
     if (!mineAtmosphereIdentityKey || !current) return null;
     const personKey = pairUpPersonKey(current);
     const photoIdx = photoIndexByPersonKey[personKey] ?? 0;
-    const source = identitySourceFor(current);
+    const source = identitySourceForDuoPresentation(current);
     const displayUrl = resolveMineFrontDisplayUrl(source, photoIdx);
     const path = resolveMineFrontPhotoPath(source, photoIdx);
     return {
@@ -2032,19 +2936,14 @@ export default function MatchDeckOverlay({
     };
   }, [
     current,
-    identitySourceFor,
-    isCanonicalPairUpScope,
+    identitySourceForDuoPresentation,
+    isDuoAtmosphereScope,
     mineAtmosphereIdentityKey,
     photoIndexByPersonKey,
   ]);
 
-  /**
-   * On candidate identity commit: apply atmosphere when existing warm succeeds
-   * (or is already done). Child paint-ready reports remain authoritative for
-   * photo cycling; whichever valid signal arrives first wins via apply dedupe.
-   */
   useEffect(() => {
-    if (!isCanonicalPairUpScope) return;
+    if (!isDuoAtmosphereScope) return;
 
     const nextIdentity = mineAtmosphereIdentityKey;
     if (
@@ -2080,7 +2979,6 @@ export default function MatchDeckOverlay({
       applyMineAtmospherePath(applyPath);
     };
 
-    // Genuine missing identity media — neutral wash. Not a warm failure.
     if (!path || !displayUrl) {
       if (watchGen === mineAtmosphereWarmWatchGenRef.current) {
         if (mineAtmosphereIdentityRef.current === identityKey) {
@@ -2101,22 +2999,20 @@ export default function MatchDeckOverlay({
 
     void warmMineFrontImage(displayUrl)
       .then(() => tryApplyFromWarmSuccess(path))
-      .catch(() => {
-        // Ignore warm rejection — portrait readiness remains authoritative.
-      });
+      .catch(() => {});
 
     return () => {
       mineAtmosphereWarmWatchGenRef.current += 1;
     };
   }, [
     applyMineAtmospherePath,
-    isCanonicalPairUpScope,
+    isDuoAtmosphereScope,
     mineAtmosphereIdentityKey,
     mineAtmosphereWarmTarget,
   ]);
 
   // Mine: warm front display URLs around the owned index (+ pending button target).
-  // ~10-candidate rolling window; ±2 mount radius unchanged. Does not block Embla.
+  // ~10-candidate rolling window; ±2 mount radius unchanged.
   warmMineAroundRef.current = (atIndex, extraIndices, direction) => {
     if (!isCanonicalPairUpScope) return;
     const dir = direction ?? mineWarmDirectionRef.current;
@@ -2125,7 +3021,10 @@ export default function MatchDeckOverlay({
         items: carouselItems,
         atIndex,
         photoIndexByPersonKey,
-        identitySourceFor,
+        identitySourceFor:
+          contentScope === "my_plans"
+            ? identitySourceForDuoPresentation
+            : identitySourceFor,
         direction: dir,
         extraIndices,
       })
@@ -2146,7 +3045,9 @@ export default function MatchDeckOverlay({
     );
   }, [
     carouselItems,
+    contentScope,
     identitySourceFor,
+    identitySourceForDuoPresentation,
     index,
     isCanonicalPairUpScope,
     photoIndexByPersonKey,
@@ -2173,7 +3074,11 @@ export default function MatchDeckOverlay({
       if (!cand) return null;
       const personKey = pairUpPersonKey(cand);
       const photoIdx = photoIndexByPersonKey[personKey] ?? 0;
-      return resolveMineProxyImageUrl(identitySourceFor(cand), photoIdx);
+      const source =
+        contentScope === "my_plans"
+          ? identitySourceForDuoPresentation(cand)
+          : identitySourceFor(cand);
+      return resolveMineProxyImageUrl(source, photoIdx);
     };
 
     const armSide = (
@@ -2239,6 +3144,8 @@ export default function MatchDeckOverlay({
     index,
     photoIndexByPersonKey,
     identitySourceFor,
+    identitySourceForDuoPresentation,
+    contentScope,
   ]);
 
   const sourceContextMap = useMemo(
@@ -2373,6 +3280,111 @@ export default function MatchDeckOverlay({
   const connectInteractionLocked =
     controlsLocked || connectResolving || photoPromptOpen;
 
+  const openPairUpCommentComposer = useCallback(
+    (
+      row: PairUpCandidate,
+      identitySource: ProfileIdentityMediaSource,
+      displayName: string
+    ) => {
+      const scope = contentScope;
+      if (scope !== "my_plans" && scope !== "discover") return;
+      if (connectInteractionLocked || photoPromptOpen) return;
+      if (!ensureAuthed()) return;
+
+      const recipientUserId = row.creator_id?.trim();
+      const sourcePostId = row.source_post_id?.trim();
+      if (!recipientUserId || !sourcePostId) {
+        toast.error(peopleUiCopy.commentComposerUnavailable);
+        return;
+      }
+
+      const source = sourceForCandidate(row);
+      const sourceType =
+        row.source_type === "hangout" || row.source_type === "experience"
+          ? row.source_type
+          : null;
+      const commentDisplayName = displayName.trim() || "Someone";
+
+      const openWritable = () => {
+        openPeopleCommentComposer({
+          surface: scope === "discover" ? "discover" : "duo",
+          opportunityId: row.opportunity_id,
+          sourcePostId,
+          recipientUserId,
+          displayName: commentDisplayName,
+          identitySource,
+          caption: source.caption || null,
+          scheduleLabel: source.scheduleLabel || null,
+          scheduleLabelKind: source.scheduleLabelKind ?? null,
+          sourceType,
+          expressedByMe: Boolean(row.expressed_by_me),
+          onDiscoverCommentJoined:
+            scope === "discover"
+              ? (opportunityId) => {
+                  if (opportunityId !== row.opportunity_id) return;
+                  retainDiscoverCommentCandidate(row);
+                }
+              : undefined,
+          onAfterMessageDelivered:
+            scope === "discover" && !row.expressed_by_me
+              ? async () => {
+                  await runPairUpConnectForTarget(row, "discover");
+                }
+              : undefined,
+        });
+      };
+
+      if (scope === "my_plans") {
+        void routeDuoCommentTap({
+          rowCommented: row.duo_commented_by_me ?? null,
+          identity: {
+            surface: "duo",
+            opportunityId: row.opportunity_id,
+            sourcePostId,
+            recipientUserId,
+            displayName: commentDisplayName,
+            identitySource,
+            caption: source.caption || null,
+            scheduleLabel: source.scheduleLabel || null,
+            scheduleLabelKind: source.scheduleLabelKind ?? null,
+            sourceType,
+          },
+          openComposer: openWritable,
+        }).then((outcome) => {
+          if (outcome === "unavailable") {
+            toast.error(peopleUiCopy.commentComposerUnavailable);
+          } else if (outcome === "failed") {
+            toast.error("Couldn't open that comment.");
+          } else if (outcome === "reopened-join-failed") {
+            toast.error(peopleUiCopy.commentComposerSentInterestFailed);
+          }
+        });
+        return;
+      }
+
+      openWritable();
+    },
+    [
+      connectInteractionLocked,
+      contentScope,
+      ensureAuthed,
+      photoPromptOpen,
+      runPairUpConnectForTarget,
+      sourceForCandidate,
+    ]
+  );
+
+  const handleFeedMessage = useCallback(
+    (
+      row: PairUpCandidate,
+      identitySource: ProfileIdentityMediaSource,
+      displayName: string
+    ) => {
+      openPairUpCommentComposer(row, identitySource, displayName);
+    },
+    [openPairUpCommentComposer]
+  );
+
   const pairUpPrimaryAction = useMemo((): PeopleShellPrimaryAction | null => {
     if (mode === "groups" || isOpenPlansScope) return null;
     if (showLoading || showError || showEmpty) {
@@ -2449,14 +3461,114 @@ export default function MatchDeckOverlay({
           icon: mode === "groups" ? ("request" as const) : ("im_down" as const),
         }
       : pairUpPrimaryAction;
+  void primaryAction;
 
-  const mineCompactConnect = isCanonicalPeopleScope;
+  const duoBottomHeartState = useMemo((): import("../../components/people/PeopleFeedActionRail").PeopleFeedHeartState => {
+    if (!current || showEmpty) return "disabled";
+    if (duoMatchPulseId === current.opportunity_id) return "active";
+    const heartBusy =
+      heartBusyId === current.opportunity_id || connectResolving;
+    if (heartBusy) return "busy";
+    if (connectInteractionLocked || phase === "completeFailed") {
+      return "disabled";
+    }
+    if (current.expressed_by_me) return "active";
+    return "idle";
+  }, [
+    connectInteractionLocked,
+    connectResolving,
+    current,
+    duoMatchPulseId,
+    heartBusyId,
+    phase,
+    showEmpty,
+  ]);
+
+  const duoCommentRevision = useSyncExternalStore(
+    subscribeDuoCommentState,
+    getDuoCommentRevision,
+    getDuoCommentRevision
+  );
+  const duoCommentViewerId = getDuoCommentViewerId();
+  const duoCommentSourcePostId = current?.source_post_id?.trim() || "";
+  const duoCommentRecipientId = current?.creator_id?.trim() || "";
+
+  useEffect(() => {
+    if (!isDuoDeckScope || !duoCommentViewerId) return;
+    if (!duoCommentSourcePostId || !duoCommentRecipientId) return;
+    const commented = current?.duo_commented_by_me ?? null;
+    applyDuoCommentListFlags({
+      viewerId: duoCommentViewerId,
+      sourcePostId: duoCommentSourcePostId,
+      recipientUserId: duoCommentRecipientId,
+      commented,
+      viewerHasActivePairUp: current?.viewer_has_active_pair_up ?? null,
+    });
+    if (commented !== null) return;
+    void resolveActivatedDuoComment({
+      viewerId: duoCommentViewerId,
+      sourcePostId: duoCommentSourcePostId,
+      recipientUserId: duoCommentRecipientId,
+      listCommented: commented,
+    });
+  }, [
+    isDuoDeckScope,
+    duoCommentViewerId,
+    duoCommentSourcePostId,
+    duoCommentRecipientId,
+    current?.duo_commented_by_me,
+    current?.viewer_has_active_pair_up,
+    current?.opportunity_id,
+  ]);
+
+  const duoBottomCommentVisual = useMemo(() => {
+    void duoCommentRevision;
+    if (!current || showEmpty || !duoCommentSourcePostId || !duoCommentRecipientId) {
+      return {
+        state: "disabled" as const,
+        confirmedState: "idle" as const,
+        disabled: true,
+      };
+    }
+    const snapshot = duoCommentViewerId
+      ? getDuoCommentSnapshot(
+          duoCommentStateKey(
+            duoCommentViewerId,
+            duoCommentSourcePostId,
+            duoCommentRecipientId
+          )
+        )
+      : null;
+    return duoCommentVisual({
+      snapshot: snapshot ?? {
+        state: "unknown",
+        pending: false,
+        body: null,
+        viewerHasActivePairUp: null,
+        confirmedBySend: false,
+      },
+      listCommented: current.duo_commented_by_me ?? null,
+    });
+  }, [
+    current,
+    duoCommentRecipientId,
+    duoCommentRevision,
+    duoCommentSourcePostId,
+    duoCommentViewerId,
+    showEmpty,
+  ]);
+
+  const duoBottomCommentBusy = duoBottomCommentVisual.state === "pending";
+
+  const duoBottomNavDisabled =
+    showEmpty || showLoading || showError || !current;
 
   return (
     <div
-      className="relative flex min-h-0 w-full flex-1 flex-col overflow-x-hidden bg-[var(--bg)]"
+      className="relative flex min-h-0 w-full flex-1 flex-col overflow-x-hidden bg-transparent"
       aria-label={peopleUiCopy.matchDeck}
       data-people-match-deck-overlay="true"
+      data-people-feed-canvas="true"
     >
       {ptrEnabled && (peoplePullPx > 2 || peoplePtrRefreshing) ? (
         <div
@@ -2487,21 +3599,21 @@ export default function MatchDeckOverlay({
         </div>
       ) : null}
 
-      {isCanonicalPeopleScope ? (
+      {isDuoAtmosphereScope ? (
         <MineAtmosphereCrossfade
           state={mineAtmosphere}
           onFadeComplete={handleMineAtmosphereFadeComplete}
         />
       ) : null}
 
-      {isCanonicalPairUpScope &&
-      (carouselItems.length > 0 || showEmpty) ? (
+      {isDuoDeckScope && (carouselItems.length > 0 || showEmpty) ? (
         <MineEdgeNavCards
           canGoPrev={showEmpty ? false : canMineGoPrev}
           canGoNext={showEmpty ? false : canMineGoNext}
           onPrev={goMinePrev}
           onNext={goMineNext}
           fixedRailsGeometry
+          visuallyHidden
           cardsRef={
             mineRealIncomingEnabled ? mineEdgeNavCardsRef : undefined
           }
@@ -2547,67 +3659,29 @@ export default function MatchDeckOverlay({
         />
       ) : null}
 
-      {/* Groups secondary: text-only "Yours" in discovery; globe circle in Yours.
-          Stays in upper-left safe band (caption uses SOURCE_PAD_LEFT clearance). */}
+      <PeopleFeedTopNav
+        frostedScrollThrough={isDuoDeckScope}
+        activeDestination={flatActiveDestination}
+        discoverEnabled={discoverEnabled}
+        groupsPillState={
+          mode !== "groups"
+            ? "inactive"
+            : groupUpScope.browseTab === "yours"
+              ? "yours"
+              : "new"
+        }
+        onSelectDuo={selectDuoMode}
+        onSelectDiscover={handleSelectDiscover}
+        onSelectPlans={handleSelectOpenPlans}
+        onSelectGroups={selectGroupsMode}
+      />
+
+      {/* Groups secondary: centered New | Yours under category nav. */}
       {mode === "groups" ? (
-        groupUpScope.browseTab === "yours" ? (
-          <button
-            type="button"
-            onClick={toggleGroupsYoursBrowse}
-            aria-label={peopleUiCopy.groupUpDiscoverControlAria}
-            aria-pressed={true}
-            data-people-groups-yours-control="true"
-            data-people-groups-yours-active="true"
-            data-people-groups-yours-slot="former-back"
-            data-people-groups-yours-shape="globe-circle"
-            className={[
-              "absolute z-[32] inline-flex items-center justify-center rounded-full",
-              "transition active:scale-[0.94]",
-              "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-              "[-webkit-backdrop-filter:blur(var(--glass-blur))]",
-              "border border-transparent",
-              "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
-              "text-[var(--text)]",
-            ].join(" ")}
-            style={{
-              top: `calc(var(--safe-area-top-layout, 0px) + ${PEOPLE_BACK_EDGE_INSET_PX}px)`,
-              left: PEOPLE_BACK_EDGE_INSET_PX,
-              width: PEOPLE_BACK_SIZE_PX,
-              height: PEOPLE_BACK_SIZE_PX,
-              maxWidth: PEOPLE_BACK_SIZE_PX,
-            }}
-          >
-            <PiGlobe className="h-5 w-5" aria-hidden />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={toggleGroupsYoursBrowse}
-            aria-label={peopleUiCopy.groupUpYoursControlAria}
-            aria-pressed={false}
-            data-people-groups-yours-control="true"
-            data-people-groups-yours-active="false"
-            data-people-groups-yours-slot="former-back"
-            data-people-groups-yours-shape="text-pill"
-            className={[
-              "absolute z-[32] inline-flex h-8 max-w-[4.5rem] items-center justify-center rounded-full",
-              "px-2.5 transition active:scale-[0.94]",
-              "bg-[var(--glass-bg)] backdrop-blur-[var(--glass-blur)]",
-              "[-webkit-backdrop-filter:blur(var(--glass-blur))]",
-              "border border-transparent",
-              "shadow-[0_0_0_2px_var(--bottom-tab-pill-ring)]",
-              "text-[var(--text)]",
-            ].join(" ")}
-            style={{
-              top: `calc(var(--safe-area-top-layout, 0px) + ${PEOPLE_BACK_EDGE_INSET_PX}px)`,
-              left: PEOPLE_BACK_EDGE_INSET_PX,
-            }}
-          >
-            <span className="text-[12px] font-semibold leading-none tracking-tight">
-              {peopleUiCopy.groupUpYoursControlLabel}
-            </span>
-          </button>
-        )
+        <PeopleGroupsBrowseToggle
+          browseTab={groupUpScope.browseTab}
+          onToggle={toggleGroupsYoursBrowse}
+        />
       ) : null}
 
       <div
@@ -2616,14 +3690,10 @@ export default function MatchDeckOverlay({
         data-people-shell-content-pane="true"
         data-people-ptr-surface="true"
         style={{
-          // Mine + Discover + Plans: start at Back top so in-slide caption can share that Y.
-          // Groups keep the Back-row reserve.
-          paddingTop: isCanonicalPeopleScope
-            ? peopleShellMineContentTopPad()
-            : peopleShellContentTopPad(),
-          paddingBottom: isCanonicalPeopleScope
-            ? peopleShellMineContentBottomPad()
-            : peopleShellContentBottomPad(),
+          ...peopleFeedCssVars(),
+          /* Top chrome pad lives on list scrollers (scroll-under). Duo inset is in-slide. */
+          paddingTop: 0,
+          paddingBottom: isDuoDeckScope ? 0 : peopleFeedContentBottomPad(),
         }}
       >
         <div
@@ -2646,16 +3716,18 @@ export default function MatchDeckOverlay({
                     onRemoveCandidate={handleRemoveGroupUpCandidate}
                     onSuspendSession={suspendDeckSession}
                     onPrimaryActionChange={setDeckPrimaryAction}
-                    onAtmosphereChange={handleMineAtmosphereChange}
-                    onAtmosphereIdentityKeyChange={
-                      setGroupsAtmosphereIdentityKey
-                    }
                     onOpenHostProfile={openGroupHostProfile}
                     seenEpoch={pairUpSeenEpoch}
                     onSeenMarked={bumpPairUpSeenEpoch}
                   />
                 ) : (
-                  <p className="m-auto text-[15px] text-[var(--text)]/60">
+                  <p
+                    className="m-auto px-6 text-center text-[15px] text-[var(--text)]/60"
+                    style={{
+                      paddingTop: `calc(${peopleFeedContentTopPad()} + ${PEOPLE_GROUPS_BROWSE_TOGGLE_CLEARANCE_PX}px)`,
+                    }}
+                    data-people-feed-out-of-list-chrome="true"
+                  >
                     Loading…
                   </p>
                 )
@@ -2667,25 +3739,37 @@ export default function MatchDeckOverlay({
                     patchScope={patchOpenPlansScope}
                     onRemoveCandidate={handleRemoveOpenPlanCandidate}
                     onPrimaryActionChange={setDeckPrimaryAction}
-                    onAtmosphereChange={handleMineAtmosphereChange}
-                    onAtmosphereIdentityKeyChange={
-                      setPlansAtmosphereIdentityKey
-                    }
                     authUserId={authUserId}
                     seenEpoch={pairUpSeenEpoch}
                     onSeenMarked={bumpPairUpSeenEpoch}
                   />
                 ) : (
-                  <p className="m-auto text-[15px] text-[var(--text)]/60">
+                  <p
+                    className="m-auto px-6 text-center text-[15px] text-[var(--text)]/60"
+                    style={{ paddingTop: peopleFeedContentTopPad() }}
+                    data-people-feed-out-of-list-chrome="true"
+                  >
                     Loading…
                   </p>
                 )
               ) : showLoading ? (
-                <p className="m-auto text-[15px] text-[var(--text)]/60">
-                  Loading…
-                </p>
+                isDiscoverScope ? (
+                  <div
+                    className="min-h-0 w-full flex-1 overflow-y-auto"
+                    style={{ paddingTop: peopleFeedContentTopPad() }}
+                    data-people-feed-out-of-list-chrome="true"
+                  >
+                    <PeopleDiscoverFeedSkeleton variant="initial" />
+                  </div>
+                ) : (
+                  <PeopleDuoCardSkeleton />
+                )
               ) : showError ? (
-                <div className="m-auto flex flex-col items-center gap-3 px-4 text-center">
+                <div
+                  className="m-auto flex flex-col items-center gap-3 px-4 text-center"
+                  style={{ paddingTop: peopleFeedContentTopPad() }}
+                  data-people-feed-out-of-list-chrome="true"
+                >
                   <p className="text-[15px] text-[var(--text)]/80">
                     {peopleUiCopy.deckLoadError}
                   </p>
@@ -2698,108 +3782,360 @@ export default function MatchDeckOverlay({
                   </button>
                 </div>
               ) : showEmpty ? (
-                <PeopleDeckEmptyCard
-                  kind={emptyKind}
-                  title={
-                    isDiscoverScope
-                      ? peopleUiCopy.discoverEmpty
-                      : peopleUiCopy.deckEmpty
-                  }
-                  body={
-                    isDiscoverScope
-                      ? peopleUiCopy.discoverEmptyBody
-                      : peopleUiCopy.deckEmptyBody
-                  }
-                  ctaLabel={
-                    isDiscoverScope
-                      ? undefined
-                      : peopleUiCopy.deckEmptyCtaExplore
-                  }
-                  onCta={
-                    isDiscoverScope ? undefined : handleEmptyExploreHome
-                  }
-                />
-              ) : (
-                <>
-                  {/* Mine + Discover: no flex spacers; note→Connect gap lives in
-                      peopleShellMineContentBottomPad. */}
-                  <MatchDeckCarousel
-                    items={carouselItems}
-                    index={index}
-                    onIndexChange={goToIndex}
-                    onCardTap={undefined}
-                    layout="duo"
-                    duoInFlowChrome
-                    duoPresentation="mine"
-                    mineMotionProbeRef={
-                      mineMotionSurfaceEnabled
-                        ? mineMotionProbeCtrlRef
-                        : undefined
+                <div
+                  className="relative flex min-h-0 w-full flex-1 flex-col"
+                  style={{ paddingTop: peopleFeedContentTopPad() }}
+                  data-people-feed-out-of-list-chrome="true"
+                >
+                  <PeopleDeckEmptyCard
+                    kind={emptyKind}
+                    title={
+                      isDiscoverScope
+                        ? peopleUiCopy.discoverEmpty
+                        : peopleUiCopy.deckEmpty
                     }
-                    mineProxyProgrammaticPrepareRef={
-                      mineMotionSurfaceEnabled
-                        ? mineProxyProgrammaticPrepareRef
-                        : undefined
+                    body={
+                      isDiscoverScope
+                        ? peopleUiCopy.discoverEmptyBody
+                        : peopleUiCopy.deckEmptyBody
                     }
-                    mineEdgeNavCardsRef={
-                      mineRealIncomingEnabled
-                        ? mineEdgeNavCardsRef
-                        : undefined
+                    ctaLabel={
+                      isDiscoverScope
+                        ? undefined
+                        : peopleUiCopy.deckEmptyCtaExplore
                     }
-                    locked={
-                      connectInteractionLocked || phase === "completeFailed"
+                    onCta={
+                      isDiscoverScope ? undefined : handleEmptyExploreHome
                     }
-                    renderItem={(candidate, meta) => {
-                      const mock = isDevMockCandidate(candidate)
-                        ? DEV_MOCK_PROFILE_BY_ID[candidate.opportunity_id]
-                        : undefined;
-                      const source = sourceForCandidate(candidate);
-                      const personKey = pairUpPersonKey(candidate);
-                      return (
-                        <PeopleDuoCandidateSlide
-                          candidate={candidate}
-                          identitySource={identitySourceFor(candidate)}
-                          photoIndex={
-                            photoIndexByPersonKey[personKey] ?? 0
-                          }
-                          onPhotoIndexChange={(next) =>
-                            setPhotoIndexForPerson(personKey, next)
-                          }
-                          isCurrent={meta.isCurrent}
-                          withPhoto={meta.withPhoto}
-                          scheduleLabel={source.scheduleLabel || null}
-                          scheduleLabelKind={source.scheduleLabelKind}
-                          caption={source.caption || null}
-                          onSeePost={
-                            meta.isCurrent && canSeePostFor(candidate)
-                              ? () => handleSeePostFor(candidate)
-                              : undefined
-                          }
-                          about={mock?.about}
-                          presentation="mine"
-                          onOpenProfile={
-                            meta.isCurrent &&
-                            resolvePairUpProfileOpenKey(candidate)
-                              ? () => openMineProfileForCandidate(candidate)
-                              : undefined
-                          }
-                          onMineAtmosphereChange={
-                            handleMineAtmosphereChange
-                          }
-                          isUnseen={
-                            isPairUpSeenScope &&
-                            !pairUpSeenIds.has(candidate.opportunity_id)
-                          }
-                        />
-                      );
-                    }}
                   />
-                </>
+                </div>
+              ) : isDiscoverScope ? (
+                <PeopleFeedList
+                  topChromePad={peopleFeedContentTopPad()}
+                  orderedIds={deckRows.map((r) => r.opportunity_id)}
+                  hasMore={useDevMocks ? false : hasMore}
+                  loadMoreInFlight={loadMoreInFlight}
+                  loadMorePlaceholder="discover"
+                  onLoadMore={() => {
+                    if (useDevMocks || loadMoreInFlight || !hasMore) return;
+                    loadMoreInFlightRef.current = true;
+                    setLoadMoreInFlight(true);
+                    void loadMore()
+                      .catch(() => {})
+                      .finally(() => {
+                        loadMoreInFlightRef.current = false;
+                        setLoadMoreInFlight(false);
+                      });
+                  }}
+                  onRowVisible={handleFeedRowVisible}
+                  focusedId={focusedDiscoverAppearanceKey}
+                  onFocusedIdChange={handleFeedFocusedIdChange}
+                  scrollToId={scopeSnap.currentOpportunityId}
+                  scrollRestoreToken={discoverScrollRestoreToken}
+                >
+                  {discoverAppearances.map((appearance) => {
+                    const lead = appearance.opportunities[0]!;
+                    const personKey = appearance.personKey;
+                    const displayName =
+                      lead.display_name?.trim() || "Someone";
+                    const isFocused =
+                      appearance.appearanceKey ===
+                      focusedDiscoverAppearanceKey;
+                    const mergedIdentity =
+                      discoverIdentityByPersonKey.get(personKey) ??
+                      identitySourceFor(lead);
+                    const discoverFailedPhotoPaths = new Set(
+                      discoverFailedPhotoPathsByPersonKey[personKey] ?? []
+                    );
+                    return (
+                      <PeopleDiscoverPersonRow
+                        key={appearance.appearanceKey}
+                        appearanceKey={appearance.appearanceKey}
+                        personKey={personKey}
+                        displayName={displayName}
+                        identitySource={mergedIdentity}
+                        photoIndex={photoIndexByPersonKey[personKey] ?? 0}
+                        onPhotoIndexChange={(next) =>
+                          setPhotoIndexForPerson(personKey, next)
+                        }
+                        isFocused={isFocused}
+                        withPhoto
+                        onOpenProfile={
+                          resolvePairUpProfileOpenKey(lead)
+                            ? () => openMineProfileForCandidate(lead)
+                            : undefined
+                        }
+                        feedNeutralEchoSeed={discoverNeutralEchoSeedForPerson(
+                          personKey
+                        )}
+                        failedPhotoPaths={discoverFailedPhotoPaths}
+                        onPhotoLoadFailure={(path) =>
+                          handleDiscoverPhotoLoadFailure(personKey, path)
+                        }
+                      >
+                        {appearance.opportunities.map((candidate) => {
+                          const source = sourceForCandidate(candidate);
+                          const heartBusy =
+                            heartBusyId === candidate.opportunity_id ||
+                            (connectResolving &&
+                              current?.opportunity_id ===
+                                candidate.opportunity_id);
+                          const discoverHeartPhase = readDiscoverHeartPhase(
+                            candidate.opportunity_id,
+                            candidate.expressed_by_me
+                          );
+                          const discoverHeartState =
+                            discoverHeartPhase === "pending" || heartBusy
+                              ? "busy"
+                              : discoverHeartPhase === "unavailable" ||
+                                  phase === "completing" ||
+                                  phase === "completeFailed"
+                                ? "disabled"
+                                : discoverHeartPhase === "active"
+                                  ? "active"
+                                  : "idle";
+                          void discoverHeartRevision;
+                          return (
+                            <PeopleDiscoverOpportunityBox
+                              key={candidate.opportunity_id}
+                              opportunityId={candidate.opportunity_id}
+                              postType={
+                                candidate.source_type === "hangout" ||
+                                candidate.source_type === "experience"
+                                  ? candidate.source_type
+                                  : "hangout"
+                              }
+                              caption={source.caption || null}
+                              scheduleLabel={source.scheduleLabel || null}
+                              scheduleLabelKind={source.scheduleLabelKind}
+                              note={candidate.description?.trim() || null}
+                              displayName={displayName}
+                              personKey={personKey}
+                              isUnseen={
+                                isPairUpSeenScope &&
+                                !pairUpSeenIds.has(candidate.opportunity_id)
+                              }
+                              onSeePost={
+                                canSeePostFor(candidate)
+                                  ? () => handleSeePostFor(candidate)
+                                  : undefined
+                              }
+                              heartLabel={peopleUiCopy.deckConnectLabel}
+                              heartState={discoverHeartState}
+                              onHeart={() => {
+                                void handleFeedHeart(candidate);
+                              }}
+                              messageLabel="Message"
+                              messageBusy={false}
+                              messageDisabled={
+                                connectInteractionLocked || photoPromptOpen
+                              }
+                              sourcePostId={candidate.source_post_id}
+                              recipientUserId={candidate.creator_id}
+                              duoCommentedByMe={candidate.duo_commented_by_me}
+                              viewerHasActivePairUp={
+                                candidate.viewer_has_active_pair_up
+                              }
+                              identitySource={mergedIdentity}
+                              onCommentPoolJoined={() => {
+                                retainDiscoverCommentCandidate(candidate);
+                              }}
+                              onMessage={() => {
+                                handleFeedMessage(
+                                  candidate,
+                                  mergedIdentity,
+                                  displayName
+                                );
+                              }}
+                            />
+                          );
+                        })}
+                      </PeopleDiscoverPersonRow>
+                    );
+                  })}
+                </PeopleFeedList>
+              ) : (
+                <div
+                  className="relative flex min-h-0 w-full flex-1 flex-col"
+                  data-people-duo-deck="true"
+                  data-people-presentation="horizontal"
+                >
+                  <div
+                    className="relative flex min-h-0 w-full flex-1 flex-col"
+                    data-people-duo-carousel-slot="true"
+                  >
+                    <MatchDeckCarousel
+                      items={carouselItems}
+                      index={Math.max(
+                        0,
+                        Math.min(index, Math.max(0, carouselItems.length - 1))
+                      )}
+                      onIndexChange={(next) => {
+                        void goToIndex(next);
+                      }}
+                      onCardTap={undefined}
+                      layout="duo"
+                      duoInFlowChrome
+                      duoLayoutModern
+                      resolveDuoModernDisplayPhotoCount={(candidate) =>
+                        peopleDuoModernDisplayPhotoCount(
+                          identitySourceForDuoPresentation(candidate)
+                        )
+                      }
+                      duoPresentation="mine"
+                      mineMotionProbeRef={
+                        mineMotionSurfaceEnabled
+                          ? mineMotionProbeCtrlRef
+                          : undefined
+                      }
+                      mineProxyProgrammaticPrepareRef={
+                        mineMotionSurfaceEnabled
+                          ? mineProxyProgrammaticPrepareRef
+                          : undefined
+                      }
+                      mineEdgeNavCardsRef={
+                        mineRealIncomingEnabled
+                          ? mineEdgeNavCardsRef
+                          : undefined
+                      }
+                      locked={
+                        connectInteractionLocked || phase === "completeFailed"
+                      }
+                      renderItem={(candidate, meta) => (
+                        <div
+                          className="relative h-full w-full"
+                          data-people-duo-slide-shell="true"
+                          data-people-duo-current={
+                            meta.isCurrent ? "true" : "false"
+                          }
+                        >
+                          <PeopleDuoCandidateSlide
+                            candidate={candidate}
+                            identitySource={identitySourceForDuoPresentation(
+                              candidate
+                            )}
+                            photoIndex={clampDiscoverPhotoIndex(
+                              photoIndexByPersonKey[
+                                pairUpPersonKey(candidate)
+                              ] ?? 0,
+                              normalizeProfilePhotos(
+                                identitySourceForDuoPresentation(candidate)
+                                  .profile_photos
+                              ).length
+                            )}
+                            onPhotoIndexChange={(next) =>
+                              setPhotoIndexForPerson(
+                                pairUpPersonKey(candidate),
+                                next
+                              )
+                            }
+                            isCurrent={meta.isCurrent}
+                            withPhoto={meta.withPhoto}
+                            neighborSide={meta.neighborSide}
+                            scheduleLabel={
+                              sourceForCandidate(candidate).scheduleLabel ||
+                              null
+                            }
+                            scheduleLabelKind={
+                              sourceForCandidate(candidate).scheduleLabelKind
+                            }
+                            caption={
+                              sourceForCandidate(candidate).caption || null
+                            }
+                            onSeePost={
+                              canSeePostFor(candidate)
+                                ? () => handleSeePostFor(candidate)
+                                : undefined
+                            }
+                            postType={
+                              candidate.source_type === "hangout" ||
+                              candidate.source_type === "experience"
+                                ? candidate.source_type
+                                : null
+                            }
+                            layoutVariant="duoModern"
+                            presentation="mine"
+                            onOpenProfile={
+                              resolvePairUpProfileOpenKey(candidate)
+                                ? () =>
+                                    openMineProfileForCandidate(candidate)
+                                : undefined
+                            }
+                            onMineAtmosphereChange={
+                              meta.isCurrent
+                                ? handleMineAtmosphereChange
+                                : undefined
+                            }
+                            isUnseen={
+                              isPairUpSeenScope &&
+                              !pairUpSeenIds.has(candidate.opportunity_id)
+                            }
+                          />
+                        </div>
+                      )}
+                    />
+                  </div>
+                </div>
               )
             }
           </PeopleDuoModeTransition>
         </div>
       </div>
+
+      {duoActionFeedback &&
+      contentScope === "my_plans" &&
+      duoActionFeedback.viewerId === authUserId &&
+      current?.opportunity_id === duoActionFeedback.opportunityId ? (
+        <div
+          className="pointer-events-none fixed inset-x-0 z-[46] flex justify-center px-3"
+          style={{
+            bottom: `calc(${peopleDuoModernTabBandPad()} + ${PEOPLE_DUO_MODERN_ACTION_ROW_H_PX}px + 8px)`,
+          }}
+          data-duo-heart-action-feedback="true"
+        >
+          <p className="duo-heart-action-feedback" role="status" aria-live="polite">
+            {duoHeartFeedbackText(duoActionFeedback.kind)}
+          </p>
+        </div>
+      ) : null}
+
+      {isDuoDeckScope && isPeopleTabVisible ? (
+        <PeopleDuoBottomActionRow
+          canGoPrev={!duoBottomNavDisabled && canMineGoPrev}
+          canGoNext={!duoBottomNavDisabled && canMineGoNext}
+          onPrev={goMinePrev}
+          onNext={goMineNext}
+          edgeNavCardsRef={
+            mineRealIncomingEnabled ? mineEdgeNavCardsRef : undefined
+          }
+          connectLabel={peopleUiCopy.deckConnectLabel}
+          heartState={duoBottomHeartState}
+          onHeart={() => {
+            void handleConnect();
+          }}
+          messageLabel="Message"
+          commentState={duoBottomCommentVisual.state}
+          commentConfirmedState={duoBottomCommentVisual.confirmedState}
+          messageBusy={duoBottomCommentBusy}
+          messageDisabled={
+            duoBottomNavDisabled ||
+            connectInteractionLocked ||
+            photoPromptOpen ||
+            !current?.creator_id?.trim() ||
+            !current?.source_post_id?.trim() ||
+            duoBottomCommentVisual.disabled
+          }
+          onMessage={() => {
+            if (!current) return;
+            handleFeedMessage(
+              current,
+              identitySourceForDuoPresentation(current),
+              current.display_name?.trim() || "Someone"
+            );
+          }}
+          navDisabled={duoBottomNavDisabled || connectInteractionLocked}
+        />
+      ) : null}
 
       <MineCandidateProfileOverlay
         open={mineProfileOpen}
@@ -2818,28 +4154,6 @@ export default function MatchDeckOverlay({
         onClose={closeMineProfileOverlay}
       />
 
-      <PeopleBottomDock
-        activeDestination={flatActiveDestination}
-        discoverEnabled={discoverEnabled}
-        groupsYoursActive={
-          mode === "groups" && groupUpScope.browseTab === "yours"
-        }
-        groupsPillState={
-          mode !== "groups"
-            ? "inactive"
-            : groupUpScope.browseTab === "yours"
-              ? "yours"
-              : "new"
-        }
-        onBack={onClose}
-        onSelectDuo={selectDuoMode}
-        onSelectDiscover={handleSelectDiscover}
-        onSelectPlans={handleSelectOpenPlans}
-        onSelectGroups={selectGroupsMode}
-        primaryAction={primaryAction}
-        mineCompactConnect={mineCompactConnect}
-      />
-
       <ConfirmDialog
         open={discoverDialog === "intro"}
         onClose={() => setDiscoverDialog(null)}
@@ -2850,6 +4164,70 @@ export default function MatchDeckOverlay({
         confirmVariant="primary"
         onConfirm={handleIntroContinue}
       />
+      {duoMatchConfirm ? (
+        <div
+          className="pointer-events-none fixed inset-0 z-[34]"
+          data-duo-match-toast="true"
+        >
+          <div
+            className="duo-match-toast-wash pointer-events-none absolute inset-x-0 bottom-0"
+            style={{ top: peopleDuoModernScrollTopInset() }}
+            aria-hidden
+            data-duo-match-toast-wash="true"
+          />
+          <div
+            className="pointer-events-none absolute inset-x-0 flex justify-center px-3"
+            style={{ top: `calc(${peopleDuoModernScrollTopInset()} + 8px)` }}
+            data-duo-match-toast-stage="true"
+          >
+            <div className="relative inline-flex items-center justify-center overflow-visible">
+              <span
+                className="duo-match-toast-ripple pointer-events-none absolute left-1/2 top-1/2 z-0"
+                aria-hidden
+                data-duo-match-toast-ripple="true"
+              />
+              <div
+                className={[
+                  "duo-match-toast relative z-10 pointer-events-auto inline-flex h-10 max-w-[min(100vw-24px,17.5rem)]",
+                  "items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--bottom-tab-border)] p-1",
+                  "bg-[color-mix(in_oklab,var(--surface-2)_78%,var(--surface))] text-[var(--text)] backdrop-blur-xl",
+                  "shadow-[0_4px_18px_rgba(0,0,0,0.16)]",
+                  "app-dark:border-white/24 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_62%,transparent)]",
+                  "app-dark:shadow-[0_6px_22px_rgba(0,0,0,0.42)]",
+                ].join(" ")}
+                role="status"
+                aria-live="polite"
+                aria-label={duoMatchToastBody(duoMatchConfirm.displayName)}
+                data-duo-match-toast-compact="true"
+              >
+                <span
+                  className="inline-flex h-8 w-7 shrink-0 items-center justify-center text-[var(--brand)]"
+                  aria-hidden
+                  data-duo-match-toast-heart="true"
+                >
+                  <PiHeartFill className="h-3.5 w-3.5" />
+                </span>
+                <p className="min-w-0 shrink truncate px-0.5 text-[13px] font-medium leading-none">
+                  It's a Match!
+                </p>
+                <button
+                  type="button"
+                  className={[
+                    "inline-flex h-8 shrink-0 items-center justify-center rounded-full px-2.5",
+                    "text-xs font-semibold",
+                    "bg-[var(--bottom-tab-create-active-bg)] text-[var(--bottom-tab-create-active-fg)]",
+                    "shadow-[0_1px_0_rgba(0,0,0,0.08)]",
+                    "app-dark:shadow-[0_1px_0_rgba(255,255,255,0.12)]",
+                  ].join(" ")}
+                  onClick={openDuoMatchConversation}
+                >
+                  Chat now
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -22,15 +22,16 @@ import {
 } from "../../lib/people/peopleDeckDebug";
 
 /**
- * Persistent person-first People tab. My Plans always mounts; Discover and
- * Open Plans data start only after first open (`enabled`), then stay warm.
+ * Persistent People tab — vertical feed + global BottomTab.
+ * Discover mounts warm by default; Plans/Groups stay lazy until first open.
  */
 function PeoplePage() {
   peopleDebugBumpRender("peoplePage");
 
   const isPeopleVisible = useTabActive("people");
   const { closePeople } = useClosePeople();
-  const [discoverOpened, setDiscoverOpened] = useState(false);
+  /** Discover is the default category — keep its hook warm from first paint. */
+  const [discoverOpened, setDiscoverOpened] = useState(true);
   const [openPlansOpened, setOpenPlansOpened] = useState(false);
   const [groupUpsOpened, setGroupUpsOpened] = useState(false);
   const myPlans = usePairUpCandidates();
@@ -72,6 +73,7 @@ function PeoplePage() {
       if (shouldSuppressUnderlyingBackForPhotoPrompt()) return;
       if (shouldSuppressUnderlyingBackForMediaGalleryLightbox()) return;
       if (shouldSuppressUnderlyingBackForMineCandidateProfile()) return;
+      /* Leave People tab — BottomTab remains the primary nav affordance. */
       closePeople();
     });
   }, [isPeopleVisible, closePeople]);
@@ -80,17 +82,17 @@ function PeoplePage() {
     <div
       className={[
         "people-route-surface flex h-screen max-h-screen w-full flex-col overflow-x-hidden overflow-y-hidden bg-[var(--app-canvas)] text-[var(--text)]",
-        /* Hide phone-shell scrollbar track while People is the active surface. */
         "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
         isPeopleVisible ? "people-route-surface--active" : "",
       ].join(" ")}
       data-people-route-surface
       data-people-route-active={isPeopleVisible ? "true" : "false"}
+      data-people-feed-shell="true"
       style={{
         height: "100dvh",
         maxHeight: "100dvh",
-        /* Above global BottomTab (z-40). No transform here — would trap fixed shell. */
-        zIndex: isPeopleVisible ? 45 : undefined,
+        /* Below BottomTab (z-40) so global nav stays clickable. */
+        zIndex: isPeopleVisible ? 30 : undefined,
         position: "relative",
       }}
     >
@@ -107,7 +109,6 @@ function PeoplePage() {
         />
       </div>
       <style>{`
-        /* Opacity-only on the route surface (safe with fixed People chrome). */
         @media (prefers-reduced-motion: no-preference) {
           .people-route-surface--active {
             animation: peopleRouteEnter 180ms ease-out;

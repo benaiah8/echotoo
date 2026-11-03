@@ -24,10 +24,11 @@ export const peopleUiCopy = {
   noteSheetTitleAdd: "Add a note",
   noteSheetTitleEdit: "Edit note",
   noteSheetHelper: "Anything people should know?",
-  noteSheetPlaceholder:
-    "Say what kind of person you’d vibe with… #What’s your energy?",
-  noteSheetPlaceholderLine1: "Say what kind of person you’d vibe with…",
-  noteSheetPlaceholderLine2: "#What’s your energy?",
+  /** Shared public Duo / Place Open Plan note guide (one continuous line). */
+  noteSheetPlaceholder: "What's on your mind? What are you looking for?",
+  /** @deprecated Prefer noteSheetPlaceholder — kept equal for legacy aria/refs. */
+  noteSheetPlaceholderLine1: "What's on your mind? What are you looking for?",
+  noteSheetPlaceholderLine2: "",
   noteSheetSave: "Save",
   noteSheetCancel: "Cancel",
   noteSheetClear: "Clear",
@@ -58,7 +59,7 @@ export const peopleUiCopy = {
   planScheduleAddDateTime: "Add date & time",
   openPlanNoteLabel: "Note",
   openPlanNoteOptional: "(optional)",
-  openPlanNotePlaceholder: "Optional note",
+  openPlanNotePlaceholder: "What's on your mind? What are you looking for?",
   openPlanPastError: "Pick a future date.",
   openPlanManageTitle: "Duo",
   openPlanDiscardTitle: "You’re exiting Duo",
@@ -89,7 +90,7 @@ export const peopleUiCopy = {
   scopeOpenPlans: "Plans",
   openPlansEmpty: "No open plans yet",
   openPlansEmptyBody:
-    "There aren’t any plans to join right now. Start one and find people who want to join you.",
+    "Open Plans will appear here as people start making plans. You can start one from a place post.",
   openPlansEmptyCta: "Create a plan",
   openPlansImDown: "I'm down",
   openPlansRequested: "Requested",
@@ -103,13 +104,29 @@ export const peopleUiCopy = {
   openPlansNoteLabel: "Note",
   openPlansNoteExpand: "Expand plan note",
   openPlansNoteCollapse: "Collapse plan note",
-  openPlansNoteEmpty: "No plan note",
-  /** Creator Messages → Requests (incoming Open Plan) */
-  openPlanIncomingAccept: "Accept",
+  openPlansNoteEmpty: "No note on this plan",
+  openPlanRequestTitle: "Request to join",
+  openPlanRequestNoteLabel: "Message to the host (optional)",
+  openPlanRequestNotePlaceholder:
+    "Say hi and share why you'd like to join…",
+  openPlanRequestSend: "Send request",
+  openPlanRequestSending: "Sending…",
+  /**
+   * Creator Messages → Requests (incoming Open Plan).
+   * Label for accept → DM; handler remains acceptOpenPlanRequest.
+   */
+  openPlanIncomingAccept: "Chat",
   /** Legacy flat host row (unused by grouped inbox). */
   openPlanIncomingPrivacyLine: "Name is revealed after acceptance.",
+  /** Intentional privacy: identity_visible_to_host was false / undisclosed. */
   openPlanRequesterNameHidden: "Name hidden",
+  /**
+   * Identity was disclosed (profile_open_key present) but display_name empty.
+   * Not a privacy restriction — do not use Name hidden.
+   */
+  openPlanRequesterNameMissing: "Someone",
   openPlanIncomingUnavailable: "This plan is no longer available.",
+  openPlanIncomingRequestUnavailable: "This request is no longer available.",
   openPlanIncomingAcceptError: "Couldn't accept request.",
   openPlanIncomingAcceptMissingDm:
     "Couldn't open the conversation. Try again.",
@@ -128,6 +145,13 @@ export const peopleUiCopy = {
   discoverEmptyBody:
     "New people will appear here as they become available. Check back soon or pull down to refresh.",
   discoverAddedToP2p: "Added to P2P",
+  discoverHeartMatched: "You already matched on this plan.",
+  discoverHeartWithdrawError: "Couldn't update that heart. Try again.",
+  duoHeartConnectionSent: "Connection sent.",
+  duoHeartConnectionWithdrawn: "Connection withdrawn.",
+  duoHeartMatched: "You're already matched!",
+  duoHeartDiscoverSourced: "This heart was added from Discover.",
+  duoHeartWithdrawError: "Couldn't update that heart. Try again.",
   discoverToggleError: "Couldn't update People discoverability.",
   discoverToggleOnSuccess: "Discover turned on",
   discoverToggleOffSuccess: "Discover turned off",
@@ -143,9 +167,10 @@ export const peopleUiCopy = {
   groupUpCreateError: "Couldn't create group. Try again.",
   groupUpSourceLabel: "Source",
   groupUpNameLabel: "Group name",
-  groupUpNamePlaceholder: "Group name",
+  groupUpNamePlaceholder: "e.g. Saturday hiking crew",
   groupUpDescriptionLabel: "Description",
-  groupUpDescriptionPlaceholder: "Write your group description here",
+  groupUpDescriptionPlaceholder:
+    "What's the plan? Share what the group will do and who can join…",
   groupUpDiscardTitle: "You’re exiting Group",
   groupUpDiscardBody: "Save it before you go?",
   groupUpDiscardKeep: "Keep editing",
@@ -181,12 +206,20 @@ export const peopleUiCopy = {
   groupUpBrowseTabYours: "Yours",
   groupUpBrowseNewEmpty: "No groups to join yet",
   groupUpBrowseNewEmptyBody:
-    "New groups will appear here as people start planning together. Explore posts to start or join something new.",
+    "Start a Group Up from a post, or explore what others are planning.",
   groupUpBrowseNewEmptyCta: "Explore posts",
-  groupUpBrowseYoursEmpty: "Your requests and groups will show here.",
+  groupUpBrowseYoursEmptyTitle: "No groups yet",
+  groupUpBrowseYoursEmpty:
+    "Groups you've joined or requested to join will appear here.",
   groupUpBrowseHostLabel: "Host",
   groupUpBrowseMemberLabel: "Member",
   groupUpRequestSentToast: "Request sent",
+  groupUpRequestTitle: "Request to join",
+  groupUpRequestNoteLabel: "Message to the host (optional)",
+  groupUpRequestNotePlaceholder:
+    "Say hi and share why you'd like to join…",
+  groupUpRequestSend: "Send request",
+  groupUpRequestSending: "Sending…",
   groupUpBrowseJoin: "Join",
   groupUpBrowseRequested: "Requested",
   groupUpBrowseWithdraw: "Withdraw",
@@ -208,6 +241,7 @@ export const peopleUiCopy = {
   groupUpIncomingAcceptError: "Couldn't accept this request.",
   groupUpIncomingDeclineError: "Couldn't decline this request.",
   groupUpIncomingUnavailable: "This Group Up is no longer available.",
+  groupUpIncomingRequestUnavailable: "This request is no longer available.",
   groupUpIncomingAcceptSuccess: "Accepted — they're in the group.",
   groupUpIncomingDeclineSuccess: "Request declined.",
   groupUpRequestGroupLabel: "Group Up",
@@ -216,11 +250,11 @@ export const peopleUiCopy = {
   groupUpRequestersTitle: "Requests",
   groupUpRequestersEmpty: "No pending requests.",
   groupUpRequestersLoadError: "Couldn't load requests.",
-  groupUpCreateNameRequired: "Group name is required.",
-  groupUpCreateDescriptionRequired: "Description is required.",
+  groupUpCreateNameRequired: "Add a group name.",
+  groupUpCreateDescriptionRequired: "Add a short description.",
   p2pNoteLabel: "P2P",
   /** Empty Duo note spacer — no invented intent. */
-  duoNoteEmpty: "No note added",
+  duoNoteEmpty: "No note yet",
   duoNoteExpand: "Expand opportunity note",
   duoNoteCollapse: "Collapse opportunity note",
   duoNoteClose: "Close opportunity note",
@@ -228,7 +262,7 @@ export const peopleUiCopy = {
   duoNoteSectionLabel: "Note",
   /** Groups floating note header section. */
   groupUpNoteSectionLabel: "About",
-  groupUpNoteEmpty: "No description",
+  groupUpNoteEmpty: "No description yet",
   duoNoteExpandAffordance: "More",
   duoNoteCollapseAffordance: "Less",
   deckRetryComplete: "Retry",
@@ -238,7 +272,7 @@ export const peopleUiCopy = {
   deckNoActive: "Join a P2P plan to start matching.",
   deckEmpty: "No Duos yet",
   deckEmptyBody:
-    "Find an event you’re interested in, then tap Duo to meet people who want to go too.",
+    "Find an event you'd like to attend and tap Duo to meet others going too.",
   deckEmptyCtaExplore: "Explore events",
   deckCompleteError: "Couldn't open the conversation.",
   deckExpressError: "Couldn't connect right now. Try again.",
@@ -254,6 +288,18 @@ export const peopleUiCopy = {
   deckOpenProfile: "Open profile",
   deckCloseLabel: "Close",
   deckConnectLabel: "Connect",
+  commentComposerCancel: "Cancel",
+  commentComposerSend: "Send comment",
+  commentComposerSending: "Sending…",
+  commentComposerSent: "Message sent.",
+  commentComposerSendError: "Couldn't send your comment.",
+  commentComposerSentInterestFailed:
+    "Your message was sent, but we couldn't add this to your Duo pool.",
+  commentComposerUnavailable: "Messaging isn't available for this opportunity.",
+  /** Comment composer — anonymous or restricted recipient. */
+  commentComposerPlaceholderBreakTheIce: "Say hi…",
+  /** `{name}` replaced with a permitted, display-safe recipient label. */
+  commentComposerPlaceholderBreakTheIceWith: "Say hi to {name}…",
   deckConnectedLabel: "Connected",
   /** Profile rail Connect success (same Duo toast layout). */
   profileConnectToast: "You're connected",

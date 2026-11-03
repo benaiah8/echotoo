@@ -41,22 +41,23 @@ describe("People Groups-state + nav-spacing cleanup", () => {
     expect(overlay).toContain(': "new"');
   });
 
-  it("5–10: New = text-only Yours; Yours = globe circle; caption band", () => {
+  it("5–10: centered New|Yours segmented control under Groups nav", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
-    expect(overlay).toContain('data-people-groups-yours-shape="text-pill"');
-    expect(overlay).toContain('data-people-groups-yours-shape="globe-circle"');
-    expect(overlay).toContain("groupUpYoursControlLabel");
-    expect(overlay).toContain("PiGlobe");
-    expect(overlay).not.toContain("PiUsersThree");
-    expect(overlay).not.toContain("groupUpDiscoverControlLabel");
-    expect(overlay).toContain("groupUpYoursControlAria");
-    expect(overlay).toContain("groupUpDiscoverControlAria");
+    const toggle = read("components/people/PeopleGroupsBrowseToggle.tsx");
+    expect(overlay).toContain("PeopleGroupsBrowseToggle");
+    expect(overlay).toContain("PEOPLE_GROUPS_BROWSE_TOGGLE_CLEARANCE_PX");
+    expect(overlay).not.toContain("PiGlobe");
+    expect(overlay).not.toContain("former-back");
+    expect(overlay).not.toContain("PEOPLE_BACK_EDGE_INSET_PX");
+    expect(toggle).toContain("groupUpBrowseTabNew");
+    expect(toggle).toContain("groupUpBrowseTabYours");
+    expect(toggle).toContain("groupUpYoursControlAria");
+    expect(toggle).toContain('data-people-groups-browse-toggle-align="center"');
+    expect(toggle).toContain("justify-center");
     expect(peopleUiCopy.groupUpYoursControlAria).toBe("Your groups");
     expect(peopleUiCopy.groupUpDiscoverControlAria).toBe("Discover groups");
-    /* Compact left slot — does not expand into caption pad-left band. */
-    expect(overlay).toContain("max-w-[4.5rem]");
-    expect(overlay).toContain("PEOPLE_BACK_SIZE_PX");
-    expect(overlay).toContain("PEOPLE_BACK_EDGE_INSET_PX");
+    expect(peopleUiCopy.groupUpBrowseTabNew).toBe("New");
+    expect(peopleUiCopy.groupUpBrowseTabYours).toBe("Yours");
   });
 
   it("11: Your groups context only in Yours", () => {
@@ -103,8 +104,8 @@ describe("People Groups-state + nav-spacing cleanup", () => {
 
   it("21–24: regressions — destinations/data/actions/cards frozen", () => {
     expect([...PEOPLE_FLAT_DESTINATION_ORDER]).toEqual([
-      "duo",
       "discover",
+      "duo",
       "plans",
       "groups",
     ]);
@@ -112,10 +113,6 @@ describe("People Groups-state + nav-spacing cleanup", () => {
     expect(body).toContain("requestGroupUp");
     expect(body).toContain("withdrawGroupUpRequest");
     expect(body).toContain("groupUpRowMatchesBrowseTab");
-
-    const dock = read("pages/people/PeopleBottomDock.tsx");
-    expect(dock).toContain('data-people-action-single-layer="true"');
-    expect(dock).not.toContain("var(--gradient-from-bottom)");
 
     const group = read(
       "components/people/PeopleGroupUpCandidatePresentation.tsx"
@@ -125,5 +122,6 @@ describe("People Groups-state + nav-spacing cleanup", () => {
 
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
     expect(overlay).toContain("MineCandidateProfileOverlay");
+    expect(overlay).toContain("PeopleFeedTopNav");
   });
 });

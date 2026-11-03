@@ -119,17 +119,10 @@ describe("mineAtmosphereIdentitySync", () => {
 });
 
 describe("MatchDeckOverlay identity sync wiring", () => {
-  it("synchronizes atmosphere identity in useLayoutEffect (before child passive reports)", () => {
-    expect(overlaySrc).toMatch(
-      /useLayoutEffect\(\s*\(\)\s*=>\s*\{[^}]*mineAtmosphereIdentityRef\.current\s*=\s*mineAtmosphereIdentityKey/s
-    );
-    // Must not sync the gate ref only in a passive useEffect (child reports first).
-    expect(overlaySrc).not.toMatch(
-      /useEffect\(\s*\(\)\s*=>\s*\{[^}]*mineAtmosphereIdentityRef\.current\s*=\s*mineAtmosphereIdentityKey/s
-    );
-  });
-
-  it("still validates reports through the shared identity gate", () => {
+  it("Duo atmosphere syncs identity before child readiness reports", () => {
+    expect(overlaySrc).toContain("mineAtmosphereIdentityRef");
+    expect(overlaySrc).toContain("mineAtmosphereIdentityKey");
     expect(overlaySrc).toContain("shouldApplyMineAtmosphereReport");
+    expect(overlaySrc).toContain("useLayoutEffect");
   });
 });

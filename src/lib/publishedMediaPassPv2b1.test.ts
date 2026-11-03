@@ -21,7 +21,10 @@ describe("PASS PV2B.1 — nested fullscreen / Detail dismiss isolation", () => {
   it("B/S: inactive video tears down HLS", () => {
     const player = read("src/components/detail/PublishedVideoPlayer.tsx");
     expect(player).toContain("tearDownPlayback");
-    expect(player).toMatch(/if \(!isActive && !isWarm\) \{[\s\S]*tearDownPlayback\(\)/);
+    expect(player).toContain("resolveIdlePublishedVideoCleanup");
+    expect(player).toMatch(
+      /resolveIdlePublishedVideoCleanup\([\s\S]*tearDownPlayback\(\)/,
+    );
     expect(player).toContain("destroyHls");
   });
 

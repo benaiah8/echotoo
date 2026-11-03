@@ -21,10 +21,17 @@ import {
   type ProfileIdentityMediaSource,
 } from "../../lib/profileIdentityMedia";
 import {
+  PEOPLE_FEED_ECHO_SHELL_CLASS,
+  PEOPLE_FEED_MEDIA_RADIUS,
+  resolvePeopleFeedEchoPreset,
+} from "../../lib/people/peopleFeedLayout";
+import {
   PEOPLE_DUO_FRONT_RADIUS,
   PEOPLE_DUO_FRONT_ROTATE_DEG,
   PEOPLE_DUO_PHOTO_BORDER_FRONT_CSS,
   PEOPLE_DUO_PHOTO_BORDER_REAR_CSS,
+  PEOPLE_DUO_MODERN_FRAME_RADIUS,
+  PEOPLE_DUO_MODERN_REAR_RADIUS,
   PEOPLE_DUO_REAR_OPACITY,
   PEOPLE_DUO_REAR_RADIUS,
   PEOPLE_MINE_CARD_TRANSFORM_ORIGIN,
@@ -34,15 +41,20 @@ import {
   PEOPLE_PHOTO_CROSSFADE_EASE,
   PEOPLE_PHOTO_CROSSFADE_MS,
   PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX,
+  applyMineStackImgNode,
   ensureMountedPhotoDecoded,
   isMountedPhotoPaintReady,
+  nextMineFrontPaintReady,
   peopleDuoPeekTransformOrigin,
   peopleDuoPhotoPeekTransform,
+  peopleDuoModernCardTransform,
+  peopleDuoModernCardOpacity,
   peopleMineCardTransform,
   peopleMineCardZIndex,
   peopleMineStackAssignments,
   peopleMineUnseenEdgeRingStyle,
   peoplePhotoStackPeeks,
+  reduceMineSlotPaintReady,
   prefersPeopleMotionReduce,
   shouldAcceptMountedFrontDecode,
   type PeopleDuoPeekDirection,
@@ -98,6 +110,24 @@ export type PeopleCandidateMediaProps = {
    * Seen / default keeps the neutral edge. Geometry unchanged.
    */
   isUnseen?: boolean;
+  /**
+   * People vertical feed — prefer compact Echo when no photos (no giant initials).
+   * Deck presentation unchanged when false.
+   */
+  feedLayout?: boolean;
+  /**
+   * Neutral Echo seed when no person id is permitted (e.g. Open Plan opportunity_id).
+   * Never a restricted creator username/id.
+   */
+  feedNeutralEchoSeed?: string | null;
+  /** Discover Echo-only frame — short slot; no fullscreen expand. */
+  feedDiscoverCompact?: boolean;
+  /** Discover feed: report a failed photo/legacy path (parent decides person-level fallback). */
+  onFeedCharacterFallback?: (failedPath: string | null) => void;
+  /** Mine/Duo carousel: hide top photo indicator bars (tap-cycle unchanged). */
+  hideMinePhotoIndicators?: boolean;
+  /** Duo modern: side-peek pose; default Mine upward stack. */
+  mineStackPose?: "mine" | "duoModern";
 };
 
 const PRESET_SHELL =
@@ -106,6 +136,24 @@ const PRESET_SHELL =
 const FACE_IN_FROM = "translateX(6px) scale(0.99)";
 const FACE_OUT_TO = "translateX(-5px) scale(0.99)";
 const FACE_SETTLED = "translateX(0) scale(1)";
+
+function DuoFrontPaintLoader({
+  show,
+}: {
+  show: boolean;
+  reduceMotion?: boolean;
+}) {
+  if (!show) return null;
+  return (
+    <div
+      className="people-duo-portrait-shimmer pointer-events-none absolute inset-0 z-[3]"
+      data-people-duo-front-paint-loading="true"
+      data-people-duo-front-paint-pulse="true"
+      data-people-duo-front-paint-shimmer="true"
+      aria-hidden
+    />
+  );
+}
 
 /**
  * People Duo portrait media — Profile-style fan for Discover;
@@ -125,12 +173,48 @@ export default function PeopleCandidateMedia({
   tapIdentityKey,
   onMineAtmosphereChange,
   isUnseen = false,
+  feedLayout = false,
+  feedNeutralEchoSeed = null,
+  feedDiscoverCompact = false,
+  onFeedCharacterFallback,
+  hideMinePhotoIndicators = false,
+  mineStackPose = "mine",
 }: PeopleCandidateMediaProps) {
   const isMine = presentation === "mine";
   const frontShadow = isUnseen
     ? PEOPLE_MINE_UNSEEN_FRONT_SHADOW
     : PEOPLE_MINE_FRONT_SHADOW;
-  const resolved = resolveProfileIdentityMedia(source);
+  const resolvedRaw = resolveProfileIdentityMedia(source);
+  const echoPresetSource = {
+    profile_photos: source.profile_photos,
+    echo_preset: source.echo_preset,
+    avatar_url: source.avatar_url,
+    user_id: source.user_id,
+    profile_id: source.profile_id,
+  };
+  const feedEchoPreset = feedLayout
+    ? resolvePeopleFeedEchoPreset(echoPresetSource, feedNeutralEchoSeed)
+    : null;
+  /** Duo Mine: Echo fallback for filtered-out or failed portrait URLs. */
+  const mineEchoPreset =
+    isMine && !feedLayout
+      ? resolvePeopleFeedEchoPreset(echoPresetSource, null)
+      : null;
+  /**
+   * Feed: never intentionally show giant initials.
+   * - empty → compact Echo (assigned / deterministic / neutral).
+   * - legacy-photo kept when URL loads (may be a real photo); onError → Echo.
+   * Do not blanket-replace all legacy URLs (cannot distinguish letter images).
+   */
+  const resolved =
+    feedLayout && resolvedRaw.kind === "empty" && feedEchoPreset
+      ? {
+          ...resolvedRaw,
+          kind: "echo" as const,
+          echoPreset: feedEchoPreset,
+          fallbackAvatar: feedEchoPreset,
+        }
+      : resolvedRaw;
   const photos = resolved.photos.slice(0, 3);
   const photoCount = photos.length;
   const safeIndex =
@@ -142,39 +226,35 @@ export default function PeopleCandidateMedia({
   const identityKey = tapIdentityKey ?? photosKey;
   const usesMinePhotoStack =
     isMine && withPhoto && resolved.kind === "photos" && photoCount > 0;
+  const feedMediaRadius = feedLayout
+    ? PEOPLE_FEED_MEDIA_RADIUS
+    : PEOPLE_MINE_CARD_RADIUS;
+  const mineStackMediaRadius = hideMinePhotoIndicators
+    ? PEOPLE_DUO_MODERN_FRAME_RADIUS
+    : PEOPLE_MINE_CARD_RADIUS;
+  const mineStackRearRadius = hideMinePhotoIndicators
+    ? PEOPLE_DUO_MODERN_REAR_RADIUS
+    : PEOPLE_DUO_REAR_RADIUS;
 
-  // Mine echo / legacy / empty — report when current (photo stack reports itself).
-  useEffect(() => {
-    if (!isMine || !onMineAtmosphereChange || usesMinePhotoStack) return;
-    if (!isCurrent) return;
-    let path: string | null = null;
-    if (resolved.kind === "echo" && resolved.echoPreset) {
-      path = resolved.echoPreset;
-    } else if (resolved.kind === "legacy-photo" && resolved.primaryPhoto) {
-      path = resolved.primaryPhoto;
-    }
-    const ready = Boolean(path && avatarDisplayUrl(path));
-    onMineAtmosphereChange({
-      identityKey,
-      path: ready ? path : null,
-      ready,
-    });
-  }, [
-    identityKey,
-    isCurrent,
-    isMine,
-    onMineAtmosphereChange,
-    resolved.echoPreset,
-    resolved.kind,
-    resolved.primaryPhoto,
-    usesMinePhotoStack,
-  ]);
+  // Mine echo / legacy / empty: DiscoverLegacyMedia reports paint-true atmosphere.
 
+  /**
+   * Feed Discover: allow tap-cycle on visible rows without Embla "current" focus.
+   * Duo Mine carousel still gates on isCurrent so off-slide peeks do not steal taps.
+   */
+  const feedTapCycleUnlocked = Boolean(feedLayout && enableTapCycle);
   /** Discover: handlers only while current. Mine: track presses early; activate on up. */
   const trackPhotoPointers =
-    photoCount > 1 && withPhoto && (isMine || (enableTapCycle && isCurrent));
+    photoCount > 1 &&
+    withPhoto &&
+    (isMine ||
+      (enableTapCycle && isCurrent) ||
+      feedTapCycleUnlocked);
   const canCyclePhotos =
-    enableTapCycle && photoCount > 1 && withPhoto && isCurrent;
+    enableTapCycle &&
+    photoCount > 1 &&
+    withPhoto &&
+    (isCurrent || feedTapCycleUnlocked);
 
   const isCurrentRef = useRef(isCurrent);
   isCurrentRef.current = isCurrent;
@@ -307,7 +387,9 @@ export default function PeopleCandidateMedia({
   const initial = profileIdentityInitial(source);
 
   const shellProps = {
-    className: `relative h-full w-full overflow-visible ${className}`.trim(),
+    className: `relative h-full w-full ${
+      feedLayout ? "overflow-hidden" : "overflow-visible"
+    } ${className}`.trim(),
     onPointerDown: trackPhotoPointers ? onPointerDown : undefined,
     onPointerUp: trackPhotoPointers ? onPointerUp : undefined,
     onPointerCancel: trackPhotoPointers ? onPointerCancel : undefined,
@@ -351,9 +433,20 @@ export default function PeopleCandidateMedia({
         identityOverlay={identityOverlay}
         initial={initial}
         atmosphereIdentityKey={identityKey}
-        onMineAtmosphereChange={onMineAtmosphereChange}
+        onMineAtmosphereChange={
+          feedLayout ? undefined : onMineAtmosphereChange
+        }
         onActiveIndexChange={onActiveIndexChange}
         onRevertActiveIndex={onActiveIndexChange}
+        feedLayout={feedLayout}
+        feedDiscoverCompact={feedDiscoverCompact}
+        feedEchoPreset={feedEchoPreset}
+        mineEchoPreset={mineEchoPreset}
+        mediaRadius={mineStackMediaRadius}
+        rearMediaRadius={mineStackRearRadius}
+        onFeedCharacterFallback={onFeedCharacterFallback}
+        hideMinePhotoIndicators={hideMinePhotoIndicators}
+        mineStackPose={mineStackPose}
       />
     );
   }
@@ -371,7 +464,18 @@ export default function PeopleCandidateMedia({
       peekDirection={peekDirection}
       identityOverlay={identityOverlay}
       initial={initial}
-    />
+      feedLayout={feedLayout}
+      feedDiscoverCompact={feedDiscoverCompact}
+        feedEchoPreset={feedEchoPreset}
+        mineEchoPreset={mineEchoPreset}
+        mediaRadius={feedMediaRadius}
+        onFeedCharacterFallback={onFeedCharacterFallback}
+        duoModernPaintGate={mineStackPose === "duoModern"}
+        atmosphereIdentityKey={identityKey}
+        onMineAtmosphereChange={
+          isMine && !feedLayout ? onMineAtmosphereChange : undefined
+        }
+      />
   );
 }
 
@@ -391,6 +495,15 @@ function MinePhotoStack({
   onMineAtmosphereChange,
   onActiveIndexChange,
   onRevertActiveIndex,
+  feedLayout = false,
+  feedDiscoverCompact = false,
+  feedEchoPreset = null,
+  mineEchoPreset = null,
+  onFeedCharacterFallback,
+  hideMinePhotoIndicators = false,
+  mineStackPose = "mine",
+  mediaRadius = PEOPLE_MINE_CARD_RADIUS,
+  rearMediaRadius = PEOPLE_DUO_REAR_RADIUS,
   ...shellProps
 }: {
   photos: string[];
@@ -404,6 +517,15 @@ function MinePhotoStack({
   onMineAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
   onActiveIndexChange?: (index: number) => void;
   onRevertActiveIndex?: (index: number) => void;
+  feedLayout?: boolean;
+  feedDiscoverCompact?: boolean;
+  feedEchoPreset?: string | null;
+  mineEchoPreset?: string | null;
+  onFeedCharacterFallback?: (failedPath: string | null) => void;
+  hideMinePhotoIndicators?: boolean;
+  mineStackPose?: "mine" | "duoModern";
+  mediaRadius?: string;
+  rearMediaRadius?: string;
 } & Record<string, unknown>) {
   const photoCount = photos.length;
   const reduceMotion = prefersPeopleMotionReduce();
@@ -417,6 +539,10 @@ function MinePhotoStack({
   const [galleryOpen, setGalleryOpen] = useState(false);
   /** Front photo paint-ready for gallery open; never gates icon visibility. */
   const [frontPaintReady, setFrontPaintReady] = useState(false);
+  /** Per-slot mounted paint readiness (not warm-cache). */
+  const [slotPaintReady, setSlotPaintReady] = useState<Set<number>>(
+    () => new Set()
+  );
 
   const imgRefs = useRef<Map<number, HTMLImageElement>>(new Map());
   const genRef = useRef(0);
@@ -446,6 +572,10 @@ function MinePhotoStack({
     }
   }, []);
 
+  const [mineFailedPhotos, setMineFailedPhotos] = useState<Set<number>>(
+    () => new Set()
+  );
+
   // Person / photo-list change: reset to controlled index.
   useEffect(() => {
     invalidate();
@@ -454,6 +584,9 @@ function MinePhotoStack({
     setPromotingIndex(null);
     setDemotingIndex(null);
     setGalleryOpen(false);
+    setMineFailedPhotos(new Set());
+    setFrontPaintReady(false);
+    setSlotPaintReady(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on list identity
   }, [photosKey, invalidate]);
 
@@ -487,7 +620,9 @@ function MinePhotoStack({
   // Swallow residual clicks is armed synchronously in closeGallery.
 
   const openGallery = useCallback(() => {
-    if (!isCurrent || photoCount <= 0) return;
+    if (photoCount <= 0) return;
+    /* Discover feed: visible rows may open fullscreen without Embla isCurrent. */
+    if (!isCurrent && !feedLayout) return;
     const startIndex = displayedRef.current;
     const img = imgRefs.current.get(startIndex) ?? null;
     if (!isMountedPhotoPaintReady(img)) return;
@@ -501,7 +636,7 @@ function MinePhotoStack({
     }
     galleryOpenRef.current = true;
     setGalleryOpen(true);
-  }, [isCurrent, onActiveIndexChange, photoCount, safeIndex]);
+  }, [feedLayout, isCurrent, onActiveIndexChange, photoCount, safeIndex]);
 
   // Android hardware Back closes gallery before People/deck.
   // Browser Back: synthetic history while open; pop deferred after close so
@@ -638,6 +773,22 @@ function MinePhotoStack({
         settleTimerRef.current = 0;
       }
 
+      /*
+       * Discover feedLayout mounts only role=front. The next photo's <img> is
+       * never in the DOM until displayedIndex advances, so readiness-gated
+       * promote would wait forever. Sync display index immediately (no hidden
+       * stack mounts, no new Image() warm). Duo (!feedLayout) keeps the
+       * original readiness-gated promotion path below.
+       */
+      if (feedLayout) {
+        setPromotingIndex(null);
+        setDemotingIndex(null);
+        setPhase("idle");
+        setDisplayedIndex(requested);
+        setFrontPaintReady(false);
+        return;
+      }
+
       setPhase("pending");
       const img = imgRefs.current.get(requested) ?? null;
 
@@ -654,7 +805,7 @@ function MinePhotoStack({
       }
       beginPromote(from, requested, gen);
     },
-    [beginPromote, failPromote]
+    [beginPromote, failPromote, feedLayout]
   );
 
   // Controlled index → request promote (rapid taps retarget latest).
@@ -663,28 +814,98 @@ function MinePhotoStack({
     void tryPromoteTo(safeIndex);
   }, [safeIndex, photosKey, tryPromoteTo]);
 
+  const markSlotPaintReady = useCallback((photoIndex: number, ready: boolean) => {
+    setSlotPaintReady((prev) => {
+      const next = reduceMineSlotPaintReady(prev, photoIndex, ready);
+      return next === prev ? prev : (next as Set<number>);
+    });
+    setFrontPaintReady((prev) =>
+      nextMineFrontPaintReady(prev, photoIndex, displayedRef.current, ready)
+    );
+  }, []);
+  const markSlotPaintReadyRef = useRef(markSlotPaintReady);
+  markSlotPaintReadyRef.current = markSlotPaintReady;
+  const imgBinderByIndexRef = useRef(
+    new Map<number, (node: HTMLImageElement | null) => void>()
+  );
+  const bindImgNode = useCallback((photoIndex: number) => {
+    let fn = imgBinderByIndexRef.current.get(photoIndex);
+    if (!fn) {
+      fn = (node) => {
+        applyMineStackImgNode({
+          photoIndex,
+          node,
+          imgRefs: imgRefs.current,
+          onReady: (index, ready) => markSlotPaintReadyRef.current(index, ready),
+        });
+      };
+      imgBinderByIndexRef.current.set(photoIndex, fn);
+    }
+    return fn;
+  }, []);
+
   const onImgLoad = useCallback(
     (photoIndex: number) => {
-      if (photoIndex === displayedRef.current) {
-        setFrontPaintReady(true);
-      }
+      markSlotPaintReady(photoIndex, true);
       if (photoIndex !== safeIndex) return;
       if (safeIndex === displayedRef.current) return;
       void tryPromoteTo(safeIndex);
     },
-    [safeIndex, tryPromoteTo]
+    [markSlotPaintReady, safeIndex, tryPromoteTo]
   );
+
+  const [feedFailedPhotos, setFeedFailedPhotos] = useState<Set<number>>(
+    () => new Set()
+  );
+  useEffect(() => {
+    setFeedFailedPhotos(new Set());
+  }, [photosKey]);
 
   const onImgError = useCallback(
     (photoIndex: number) => {
-      if (photoIndex === displayedRef.current) {
-        setFrontPaintReady(false);
+      if (feedLayout) {
+        setFeedFailedPhotos((prev) => {
+          if (prev.has(photoIndex)) return prev;
+          const next = new Set(prev);
+          next.add(photoIndex);
+          return next;
+        });
+        const failedPath = photos[photoIndex] ?? null;
+        if (failedPath) onFeedCharacterFallback?.(failedPath);
+      } else {
+        setMineFailedPhotos((prev) => {
+          if (prev.has(photoIndex)) return prev;
+          const next = new Set(prev);
+          next.add(photoIndex);
+          const targetsDisplayed =
+            photoIndex === displayedRef.current || photoIndex === safeIndex;
+          if (targetsDisplayed && onActiveIndexChange) {
+            const remaining = photos
+              .map((_, i) => i)
+              .filter((i) => !next.has(i));
+            if (remaining.length > 0) {
+              const pick =
+                remaining.find((i) => i !== photoIndex) ?? remaining[0];
+              queueMicrotask(() => onActiveIndexChange(pick));
+            }
+          }
+          return next;
+        });
       }
+      markSlotPaintReady(photoIndex, false);
       if (photoIndex !== safeIndex) return;
       if (safeIndex === displayedRef.current) return;
       failPromote(genRef.current, displayedRef.current);
     },
-    [failPromote, safeIndex]
+    [
+      failPromote,
+      feedLayout,
+      markSlotPaintReady,
+      onActiveIndexChange,
+      onFeedCharacterFallback,
+      photos,
+      safeIndex,
+    ]
   );
 
   const roleByPhoto = new Map<number, PeopleMineStackRole>();
@@ -692,24 +913,13 @@ function MinePhotoStack({
     roleByPhoto.set(a.photoIndex, a.role);
   }
 
-  const setImgRef = useCallback(
-    (photoIndex: number, node: HTMLImageElement | null) => {
-      if (node) imgRefs.current.set(photoIndex, node);
-      else imgRefs.current.delete(photoIndex);
-      if (photoIndex === displayedRef.current) {
-        setFrontPaintReady(isMountedPhotoPaintReady(node));
-      }
-    },
-    []
-  );
-
   // Sync front readiness from the mounted <img> — including when a neighbor
   // becomes current (cached images may skip a second onLoad).
   // Do not treat warm-cache alone as ready; only the real element counts.
   useLayoutEffect(() => {
     const img = imgRefs.current.get(displayedIndex) ?? null;
     const ready = isMountedPhotoPaintReady(img);
-    setFrontPaintReady(ready);
+    markSlotPaintReady(displayedIndex, ready);
 
     if (!isCurrent || !ready || !img) return;
 
@@ -728,20 +938,28 @@ function MinePhotoStack({
         return;
       }
       if (decoded) {
-        setFrontPaintReady(true);
+        markSlotPaintReady(photoIndex, true);
       }
     });
 
     return () => {
       frontDecodeGenRef.current += 1;
     };
-  }, [displayedIndex, photosKey, isCurrent]);
+  }, [displayedIndex, photosKey, isCurrent, markSlotPaintReady]);
 
   // Shell atmosphere: only current slide; ready follows displayed front (not speculative index).
   useEffect(() => {
     if (!onMineAtmosphereChange || !isCurrent) return;
-    const path = photos[displayedIndex] ?? null;
-    const ready = Boolean(path && frontPaintReady);
+    const failed = !feedLayout && mineFailedPhotos.has(displayedIndex);
+    let path = photos[displayedIndex] ?? null;
+    if (failed && mineEchoPreset) {
+      path = mineEchoPreset;
+    }
+    const ready = failed
+      ? mineEchoPreset
+        ? frontPaintReady
+        : true
+      : Boolean(path && frontPaintReady);
     onMineAtmosphereChange({
       identityKey: atmosphereIdentityKey,
       path: ready ? path : null,
@@ -750,13 +968,17 @@ function MinePhotoStack({
   }, [
     atmosphereIdentityKey,
     displayedIndex,
+    feedLayout,
     frontPaintReady,
     isCurrent,
+    mineEchoPreset,
+    mineFailedPhotos,
     onMineAtmosphereChange,
     photos,
   ]);
 
-  const fullscreenCanActivate = isCurrent && frontPaintReady;
+  const fullscreenCanActivate =
+    (isCurrent || feedLayout) && frontPaintReady;
 
   const onGalleryIndexChange = useCallback(
     (index: number) => {
@@ -835,6 +1057,8 @@ function MinePhotoStack({
       {photos.map((path, photoIndex) => {
         const role = roleByPhoto.get(photoIndex);
         if (!role) return null;
+        /* Feed: single visible frame — rear stack layers stay hidden. */
+        if (feedLayout && role !== "front") return null;
         const src = avatarDisplayUrl(path);
         const motion =
           photoIndex === promotingIndex
@@ -851,19 +1075,46 @@ function MinePhotoStack({
           photoIndex,
           displayedIndex,
         });
+        const mineSlotFailed =
+          !feedLayout && mineFailedPhotos.has(photoIndex);
+        const slotReady = slotPaintReady.has(photoIndex);
+        const showMinePending =
+          !feedLayout &&
+          phase === "pending" &&
+          photoIndex === displayedIndex &&
+          role === "front" &&
+          !mineSlotFailed;
+        const showDuoFrontPaintLoader =
+          mineStackPose === "duoModern" &&
+          isCurrent &&
+          role === "front" &&
+          !mineSlotFailed &&
+          !slotReady &&
+          Boolean(src) &&
+          phase !== "pending";
+
+        const cardRadius =
+          role === "front" ? mediaRadius : rearMediaRadius;
 
         return (
           <div
             key={path}
             className="pointer-events-none absolute left-1/2 top-1/2 h-full w-full overflow-hidden bg-[var(--surface-2)]"
             style={{
-              borderRadius: PEOPLE_MINE_CARD_RADIUS,
+              borderRadius: cardRadius,
               border: "none",
               zIndex: z,
-              opacity: 1,
+              opacity:
+                !feedLayout && mineStackPose === "duoModern"
+                  ? peopleDuoModernCardOpacity(role)
+                  : 1,
               transformOrigin: PEOPLE_MINE_CARD_TRANSFORM_ORIGIN,
-              transform: peopleMineCardTransform(role),
-              boxShadow: frontShadow,
+              transform: feedLayout
+                ? "translate(-50%, -50%)"
+                : mineStackPose === "duoModern"
+                  ? peopleDuoModernCardTransform(role)
+                  : peopleMineCardTransform(role),
+              boxShadow: feedLayout ? undefined : frontShadow,
               transition: reduceMotion
                 ? undefined
                 : `transform ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}`,
@@ -872,32 +1123,76 @@ function MinePhotoStack({
             data-people-mine-photo-index={photoIndex}
             data-people-mine-motion={motion}
             data-people-mine-unseen={isUnseen ? "true" : "false"}
+            data-people-feed-single-frame={feedLayout ? "true" : undefined}
             aria-hidden
           >
-            {isUnseen ? (
+            {isUnseen && !feedLayout ? (
               <div
                 aria-hidden
                 data-people-mine-unseen-edge="true"
                 className="absolute inset-0 z-[2]"
-                style={peopleMineUnseenEdgeRingStyle(PEOPLE_MINE_CARD_RADIUS)}
+                style={peopleMineUnseenEdgeRingStyle(mediaRadius)}
               />
             ) : null}
-            {src ? (
+            {src &&
+            !mineSlotFailed &&
+            !(feedLayout && feedFailedPhotos.has(photoIndex)) ? (
               <img
-                ref={(node) => setImgRef(photoIndex, node)}
+                ref={bindImgNode(photoIndex)}
                 src={src}
                 alt=""
-                className="pointer-events-none h-full w-full object-cover object-center"
+                className={[
+                  "pointer-events-none h-full w-full object-cover object-center",
+                  slotReady ? "" : "opacity-0",
+                ].join(" ")}
                 draggable={false}
                 loading={loadAttrs.loading}
                 decoding="async"
                 fetchPriority={loadAttrs.fetchPriority}
+                data-people-duo-photo-paint-ready={slotReady ? "true" : "false"}
                 onLoad={() => onImgLoad(photoIndex)}
                 onError={() => onImgError(photoIndex)}
+              />
+            ) : feedLayout ? (
+              <FeedEchoCompact
+                preset={feedEchoPreset ?? "preset:echo-owl-1"}
+                discoverCompact={feedDiscoverCompact}
+              />
+            ) : mineSlotFailed && mineEchoPreset ? (
+              <FeedEchoCompact
+                preset={mineEchoPreset}
+                discoverCompact={false}
+                paintGate={mineStackPose === "duoModern"}
+                showLoader={
+                  mineStackPose === "duoModern" &&
+                  isCurrent &&
+                  role === "front" &&
+                  phase !== "pending"
+                }
+                reduceMotion={reduceMotion}
+                onPaintReady={
+                  role === "front"
+                    ? (ready) => {
+                        setFrontPaintReady(ready);
+                      }
+                    : undefined
+                }
               />
             ) : (
               <EmptyFallback initial={initial} />
             )}
+            {showDuoFrontPaintLoader ? (
+              <DuoFrontPaintLoader show reduceMotion={reduceMotion} />
+            ) : null}
+            {showMinePending ? (
+              <div
+                className="absolute inset-0 z-[3] flex items-center justify-center bg-[var(--surface-2)]/45"
+                data-people-mine-photo-pending="true"
+                aria-hidden
+              >
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--text)]/70" />
+              </div>
+            ) : null}
           </div>
         );
       })}
@@ -906,49 +1201,113 @@ function MinePhotoStack({
       <div
         className="pointer-events-none absolute left-1/2 top-1/2 z-[10] h-full w-full overflow-hidden"
         style={{
-          borderRadius: PEOPLE_MINE_CARD_RADIUS,
+          borderRadius: mediaRadius,
           transform: `translate(-50%, -50%) rotate(${PEOPLE_DUO_FRONT_ROTATE_DEG}deg)`,
         }}
         data-people-duo-photo-frame="true"
         data-people-mine-identity-plate="true"
       >
         {identityOverlay}
-        {/* Always mount with photo portraits — visibility must not wait for isCurrent. */}
-        <button
-          ref={isCurrent ? fullscreenBtnRef : undefined}
-          type="button"
-          data-people-mine-fullscreen-hit={isCurrent ? "true" : undefined}
-          data-people-mine-identity-hit={isCurrent ? "true" : undefined}
-          aria-label="View full screen"
-          aria-hidden={isCurrent ? undefined : true}
-          tabIndex={isCurrent ? 0 : -1}
-          disabled={!fullscreenCanActivate}
-          className={[
-            "absolute top-1 right-1 z-[12] flex h-11 w-11 items-center justify-center touch-manipulation",
-            "disabled:opacity-100",
-            isCurrent ? "pointer-events-auto" : "pointer-events-none",
-          ].join(" ")}
-          onPointerDown={isCurrent ? isolateFullscreenPointer : undefined}
-          onPointerUp={isCurrent ? isolateFullscreenPointer : undefined}
-          onPointerCancel={isCurrent ? isolateFullscreenPointer : undefined}
-          onClick={
-            isCurrent
-              ? (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openGallery();
-                }
-              : undefined
-          }
-        >
-          <span
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-sm backdrop-blur-md"
-            aria-hidden
+        {/* Feed: interactive while mounted; Duo carousel still gates on isCurrent. */}
+        {!feedDiscoverCompact ? (
+          <button
+            ref={isCurrent || feedLayout ? fullscreenBtnRef : undefined}
+            type="button"
+            data-people-mine-fullscreen-hit={
+              isCurrent || feedLayout ? "true" : undefined
+            }
+            data-people-mine-identity-hit={
+              isCurrent || feedLayout ? "true" : undefined
+            }
+            aria-label="View full screen"
+            aria-hidden={isCurrent || feedLayout ? undefined : true}
+            tabIndex={isCurrent || feedLayout ? 0 : -1}
+            disabled={!fullscreenCanActivate}
+            className={[
+              "absolute top-1 right-1 z-[12] flex h-11 w-11 items-center justify-center touch-manipulation",
+              "disabled:opacity-100",
+              isCurrent || feedLayout
+                ? "pointer-events-auto"
+                : "pointer-events-none",
+            ].join(" ")}
+            onPointerDown={
+              isCurrent || feedLayout ? isolateFullscreenPointer : undefined
+            }
+            onPointerUp={
+              isCurrent || feedLayout ? isolateFullscreenPointer : undefined
+            }
+            onPointerCancel={
+              isCurrent || feedLayout ? isolateFullscreenPointer : undefined
+            }
+            onClick={
+              isCurrent || feedLayout
+                ? (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openGallery();
+                  }
+                : undefined
+            }
           >
-            <PiArrowsOut className="h-4 w-4" />
-          </span>
-        </button>
+            <span
+              className={
+                feedLayout
+                  ? "flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/28 text-white/85 opacity-70"
+                  : "flex h-8 w-8 items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-sm backdrop-blur-md"
+              }
+              aria-hidden
+            >
+              <PiArrowsOut className={feedLayout ? "h-3.5 w-3.5" : "h-4 w-4"} />
+            </span>
+          </button>
+        ) : null}
       </div>
+
+      {/*
+        Feed Discover: bottom-center dots above the identity plate (z-10).
+        Duo/Mine carousel: keep subtle top bars while current.
+      */}
+      {feedLayout && photoCount > 1 ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-2.5 z-[12] flex justify-center"
+          aria-hidden
+          data-people-photo-indicators="true"
+          data-people-photo-indicators-placement="bottom"
+        >
+          <div className="flex items-center gap-1.5 rounded-full bg-black/35 px-2 py-1 backdrop-blur-[2px] app-light:bg-black/28">
+            {photos.map((photo, i) => (
+              <span
+                key={`${photo}-${i}`}
+                className={[
+                  "h-1.5 w-1.5 rounded-full ring-1 ring-black/25",
+                  i === displayedIndex
+                    ? "bg-white shadow-sm"
+                    : "bg-white/45",
+                ].join(" ")}
+                data-people-photo-indicator-active={
+                  i === displayedIndex ? "true" : "false"
+                }
+              />
+            ))}
+          </div>
+        </div>
+      ) : isCurrent && photoCount > 1 && !hideMinePhotoIndicators ? (
+        <div
+          className="pointer-events-none absolute inset-x-3 top-2.5 z-[12] flex gap-1"
+          aria-hidden
+          data-people-photo-indicators="true"
+          data-people-photo-indicators-placement="top"
+        >
+          {photos.map((photo, i) => (
+            <span
+              key={`${photo}-${i}`}
+              className={`h-[3px] flex-1 rounded-full ${
+                i === safeIndex ? "bg-white/95" : "bg-white/35"
+              }`}
+            />
+          ))}
+        </div>
+      ) : null}
 
       <MediaGalleryLightbox
         images={photos}
@@ -986,6 +1345,15 @@ function DiscoverLegacyMedia({
   peekDirection,
   identityOverlay,
   initial,
+  feedLayout = false,
+  feedDiscoverCompact = false,
+  feedEchoPreset = null,
+  mineEchoPreset = null,
+  onFeedCharacterFallback,
+  mediaRadius = PEOPLE_DUO_FRONT_RADIUS,
+  duoModernPaintGate = false,
+  atmosphereIdentityKey = "",
+  onMineAtmosphereChange,
   ...shellProps
 }: {
   source: ProfileIdentityMediaSource;
@@ -998,10 +1366,99 @@ function DiscoverLegacyMedia({
   peekDirection: PeopleDuoPeekDirection;
   identityOverlay?: ReactNode;
   initial: string;
+  feedLayout?: boolean;
+  feedDiscoverCompact?: boolean;
+  feedEchoPreset?: string | null;
+  mineEchoPreset?: string | null;
+  onFeedCharacterFallback?: (failedPath: string | null) => void;
+  mediaRadius?: string;
+  duoModernPaintGate?: boolean;
+  atmosphereIdentityKey?: string;
+  onMineAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
 } & Record<string, unknown>) {
   const reduceMotion = prefersPeopleMotionReduce();
   const [displayIndex, setDisplayIndex] = useState(safeIndex);
   const [frontMotion, setFrontMotion] = useState<"idle" | "out" | "in">("idle");
+  /** Feed: image URL failed → compact Echo (do not show giant initials). */
+  const [feedLegacyFailed, setFeedLegacyFailed] = useState(false);
+  const [legacyFacePaintReady, setLegacyFacePaintReady] = useState(false);
+  const [mineLegacyFailed, setMineLegacyFailed] = useState(false);
+  useEffect(() => {
+    setFeedLegacyFailed(false);
+    setMineLegacyFailed(false);
+    setLegacyFacePaintReady(false);
+  }, [resolved.primaryPhoto, resolved.kind, resolved.echoPreset, safeIndex]);
+
+  const feedEchoOrEmpty = (preset: string | null | undefined) =>
+    feedLayout ? (
+      <FeedEchoCompact
+        preset={preset ?? "preset:echo-owl-1"}
+        discoverCompact={feedDiscoverCompact}
+      />
+    ) : duoModernPaintGate && (preset || mineEchoPreset) ? (
+      <FeedEchoCompact
+        preset={preset ?? mineEchoPreset ?? "preset:echo-owl-1"}
+        discoverCompact={false}
+        paintGate
+        showLoader={isCurrent}
+        reduceMotion={reduceMotion}
+        onPaintReady={setLegacyFacePaintReady}
+      />
+    ) : (
+      <EmptyFallback initial={initial} />
+    );
+
+  useEffect(() => {
+    if (!onMineAtmosphereChange || !isCurrent) return;
+    if (resolved.kind === "echo" && resolved.echoPreset) {
+      const src = avatarDisplayUrl(resolved.echoPreset);
+      if (!src) {
+        onMineAtmosphereChange({
+          identityKey: atmosphereIdentityKey,
+          path: null,
+          ready: true,
+        });
+        return;
+      }
+      onMineAtmosphereChange({
+        identityKey: atmosphereIdentityKey,
+        path: legacyFacePaintReady ? resolved.echoPreset : null,
+        ready: legacyFacePaintReady,
+      });
+      return;
+    }
+    if (resolved.kind === "legacy-photo" && resolved.primaryPhoto) {
+      if (mineLegacyFailed) {
+        onMineAtmosphereChange({
+          identityKey: atmosphereIdentityKey,
+          path: mineEchoPreset,
+          ready: mineEchoPreset ? legacyFacePaintReady : true,
+        });
+        return;
+      }
+      onMineAtmosphereChange({
+        identityKey: atmosphereIdentityKey,
+        path: legacyFacePaintReady ? resolved.primaryPhoto : null,
+        ready: legacyFacePaintReady,
+      });
+      return;
+    }
+    onMineAtmosphereChange({
+      identityKey: atmosphereIdentityKey,
+      path: null,
+      ready: true,
+    });
+  }, [
+    atmosphereIdentityKey,
+    isCurrent,
+    legacyFacePaintReady,
+    mineEchoPreset,
+    mineLegacyFailed,
+    onMineAtmosphereChange,
+    resolved.echoPreset,
+    resolved.kind,
+    resolved.primaryPhoto,
+  ]);
 
   useEffect(() => {
     if (photoCount <= 1 || reduceMotion) {
@@ -1029,8 +1486,10 @@ function DiscoverLegacyMedia({
   const peeks = peoplePhotoStackPeeks(photoCount, isCurrent && withPhoto);
 
   const frontRadiusStyle = {
-    borderRadius: PEOPLE_DUO_FRONT_RADIUS,
-    border: `1px solid ${PEOPLE_DUO_PHOTO_BORDER_FRONT_CSS}`,
+    borderRadius: mediaRadius,
+    border: feedLayout
+      ? "none"
+      : `1px solid ${PEOPLE_DUO_PHOTO_BORDER_FRONT_CSS}`,
   } as const;
   const rearRadiusStyle = {
     borderRadius: PEOPLE_DUO_REAR_RADIUS,
@@ -1076,49 +1535,55 @@ function DiscoverLegacyMedia({
 
     stack = (
       <>
-        {peeks.map((peek, i) => {
-          const path = rearPaths[i];
-          if (!path) return null;
-          const src = avatarDisplayUrl(path);
-          if (!src) return null;
-          return (
-            <div
-              key={`peek-${path}-${peek.side}-${peek.depth}`}
-              className="pointer-events-none absolute left-1/2 top-1/2 z-[1] h-full w-full overflow-hidden bg-[var(--surface-2)] shadow-[0_6px_18px_rgba(0,0,0,0.16)]"
-              style={{
-                ...rearRadiusStyle,
-                zIndex: peek.zIndex,
-                opacity: PEOPLE_DUO_REAR_OPACITY,
-                transformOrigin: peopleDuoPeekTransformOrigin(peekDirection),
-                transform: peopleDuoPhotoPeekTransform(
-                  peek.side,
-                  peek.depth,
-                  peekDirection
-                ),
-                transition: reduceMotion
-                  ? undefined
-                  : `transform ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}, opacity ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}`,
-              }}
-              aria-hidden
-            >
-              <img
-                src={src}
-                alt=""
-                className="pointer-events-none h-full w-full object-cover object-center"
-                draggable={false}
-                loading="lazy"
-                decoding="async"
-              />
-            </div>
-          );
-        })}
+        {!feedLayout
+          ? peeks.map((peek, i) => {
+              const path = rearPaths[i];
+              if (!path) return null;
+              const src = avatarDisplayUrl(path);
+              if (!src) return null;
+              return (
+                <div
+                  key={`peek-${path}-${peek.side}-${peek.depth}`}
+                  className="pointer-events-none absolute left-1/2 top-1/2 z-[1] h-full w-full overflow-hidden bg-[var(--surface-2)] shadow-[0_6px_18px_rgba(0,0,0,0.16)]"
+                  style={{
+                    ...rearRadiusStyle,
+                    zIndex: peek.zIndex,
+                    opacity: PEOPLE_DUO_REAR_OPACITY,
+                    transformOrigin: peopleDuoPeekTransformOrigin(peekDirection),
+                    transform: peopleDuoPhotoPeekTransform(
+                      peek.side,
+                      peek.depth,
+                      peekDirection
+                    ),
+                    transition: reduceMotion
+                      ? undefined
+                      : `transform ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}, opacity ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}`,
+                  }}
+                  aria-hidden
+                >
+                  <img
+                    src={src}
+                    alt=""
+                    className="pointer-events-none h-full w-full object-cover object-center"
+                    draggable={false}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </div>
+              );
+            })
+          : null}
         <div
-          className="absolute left-1/2 top-1/2 z-[2] h-full w-full overflow-hidden bg-[var(--surface-2)] shadow-[0_10px_28px_rgba(0,0,0,0.24)]"
+          className={[
+            "absolute left-1/2 top-1/2 z-[2] h-full w-full overflow-hidden bg-[var(--surface-2)]",
+            feedLayout ? "" : "shadow-[0_10px_28px_rgba(0,0,0,0.24)]",
+          ].join(" ")}
           style={{
             ...frontRadiusStyle,
             transform: `translate(-50%, -50%) rotate(${PEOPLE_DUO_FRONT_ROTATE_DEG}deg)`,
           }}
           data-people-duo-photo-frame="true"
+          data-people-feed-single-frame={feedLayout ? "true" : undefined}
         >
           <div
             className="absolute inset-0"
@@ -1128,7 +1593,7 @@ function DiscoverLegacyMedia({
               transition: faceTransition,
             }}
           >
-            {frontSrc ? (
+            {frontSrc && !(feedLayout && feedLegacyFailed) ? (
               <img
                 src={frontSrc}
                 alt=""
@@ -1137,9 +1602,17 @@ function DiscoverLegacyMedia({
                 loading={isCurrent ? "eager" : "lazy"}
                 decoding="async"
                 fetchPriority={isCurrent ? "high" : "auto"}
+                onError={() => {
+                  if (feedLayout) {
+                    setFeedLegacyFailed(true);
+                    if (resolved.primaryPhoto) {
+                      onFeedCharacterFallback?.(resolved.primaryPhoto);
+                    }
+                  }
+                }}
               />
             ) : (
-              <EmptyFallback initial={initial} />
+              feedEchoOrEmpty(feedEchoPreset)
             )}
           </div>
           {identityOverlay}
@@ -1148,61 +1621,147 @@ function DiscoverLegacyMedia({
     );
   } else if (resolved.kind === "echo" && resolved.echoPreset) {
     const src = avatarDisplayUrl(resolved.echoPreset);
+    const echoShell = feedLayout ? PEOPLE_FEED_ECHO_SHELL_CLASS : PRESET_SHELL;
     stack = (
       <div
-        className="absolute left-1/2 top-1/2 z-[2] flex h-full w-full -translate-x-1/2 -translate-y-1/2 items-center justify-center overflow-hidden bg-[var(--surface)] shadow-[0_10px_28px_rgba(0,0,0,0.24)]"
+        className={[
+          "absolute left-1/2 top-1/2 z-[2] flex h-full w-full -translate-x-1/2 -translate-y-1/2 items-center justify-center overflow-hidden bg-[var(--surface)]",
+          feedLayout ? "" : "shadow-[0_10px_28px_rgba(0,0,0,0.24)]",
+        ].join(" ")}
         style={frontRadiusStyle}
         data-people-duo-photo-frame="true"
+        data-people-feed-echo={feedLayout ? "true" : undefined}
       >
         {src ? (
-          <div className={PRESET_SHELL}>
+          <div className={echoShell}>
             <img
               src={src}
               alt=""
-              className="pointer-events-none h-[86%] w-[86%] object-contain"
+              className={[
+                "pointer-events-none h-[86%] w-[86%] object-contain",
+                duoModernPaintGate && !legacyFacePaintReady ? "opacity-0" : "",
+              ].join(" ")}
               draggable={false}
               loading={isCurrent ? "eager" : "lazy"}
               decoding="async"
+              data-people-duo-echo-paint-ready={
+                duoModernPaintGate
+                  ? legacyFacePaintReady
+                    ? "true"
+                    : "false"
+                  : undefined
+              }
+              ref={(node) => {
+                if (!duoModernPaintGate || !node) return;
+                const ready = isMountedPhotoPaintReady(node);
+                setLegacyFacePaintReady((prev) => (prev === ready ? prev : ready));
+              }}
+              onLoad={() => {
+                if (duoModernPaintGate) {
+                  setLegacyFacePaintReady((prev) => (prev === true ? prev : true));
+                }
+              }}
+              onError={() => {
+                if (duoModernPaintGate) {
+                  setLegacyFacePaintReady((prev) => (prev === true ? prev : true));
+                }
+              }}
             />
           </div>
         ) : (
-          <EmptyFallback initial={initial} />
+          feedEchoOrEmpty(feedEchoPreset ?? resolved.echoPreset)
         )}
+        <DuoFrontPaintLoader
+          show={Boolean(
+            duoModernPaintGate && isCurrent && src && !legacyFacePaintReady
+          )}
+          reduceMotion={reduceMotion}
+        />
         {identityOverlay}
       </div>
     );
   } else if (resolved.kind === "legacy-photo" && resolved.primaryPhoto) {
     const src = avatarDisplayUrl(resolved.primaryPhoto);
+    const showLegacyImg =
+      Boolean(src) &&
+      !(feedLayout && feedLegacyFailed) &&
+      !mineLegacyFailed;
     stack = (
       <div
-        className="absolute left-1/2 top-1/2 z-[2] h-full w-full -translate-x-1/2 -translate-y-1/2 overflow-hidden bg-[var(--surface-2)] shadow-[0_10px_28px_rgba(0,0,0,0.24)]"
+        className={[
+          "absolute left-1/2 top-1/2 z-[2] h-full w-full -translate-x-1/2 -translate-y-1/2 overflow-hidden bg-[var(--surface-2)]",
+          feedLayout ? "" : "shadow-[0_10px_28px_rgba(0,0,0,0.24)]",
+        ].join(" ")}
         style={frontRadiusStyle}
         data-people-duo-photo-frame="true"
+        data-people-feed-legacy={feedLayout ? "true" : undefined}
       >
-        {src ? (
+        {showLegacyImg ? (
           <img
             src={src}
             alt=""
-            className="pointer-events-none h-full w-full object-cover object-center"
+            className={[
+              "pointer-events-none h-full w-full object-cover object-center",
+              duoModernPaintGate && !legacyFacePaintReady ? "opacity-0" : "",
+            ].join(" ")}
             draggable={false}
             loading={isCurrent ? "eager" : "lazy"}
             decoding="async"
             fetchPriority={isCurrent ? "high" : "auto"}
+            data-people-duo-legacy-paint-ready={
+              duoModernPaintGate
+                ? legacyFacePaintReady
+                  ? "true"
+                  : "false"
+                : undefined
+            }
+            ref={(node) => {
+              if (!duoModernPaintGate || !node) return;
+              const ready = isMountedPhotoPaintReady(node);
+              setLegacyFacePaintReady((prev) => (prev === ready ? prev : ready));
+            }}
+            onLoad={() => {
+              if (duoModernPaintGate) setLegacyFacePaintReady(true);
+            }}
+            onError={() => {
+              if (feedLayout) {
+                setFeedLegacyFailed(true);
+                if (resolved.primaryPhoto) {
+                  onFeedCharacterFallback?.(resolved.primaryPhoto);
+                }
+                return;
+              }
+              setMineLegacyFailed(true);
+              setLegacyFacePaintReady(false);
+            }}
           />
         ) : (
-          <EmptyFallback initial={initial} />
+          feedEchoOrEmpty(feedEchoPreset ?? mineEchoPreset)
         )}
+        <DuoFrontPaintLoader
+          show={Boolean(
+            duoModernPaintGate &&
+              isCurrent &&
+              showLegacyImg &&
+              !legacyFacePaintReady
+          )}
+          reduceMotion={reduceMotion}
+        />
         {identityOverlay}
       </div>
     );
   } else {
     stack = (
       <div
-        className="absolute left-1/2 top-1/2 z-[2] h-full w-full -translate-x-1/2 -translate-y-1/2 overflow-hidden bg-[var(--surface)] shadow-[0_10px_28px_rgba(0,0,0,0.24)]"
+        className={[
+          "absolute left-1/2 top-1/2 z-[2] h-full w-full -translate-x-1/2 -translate-y-1/2 overflow-hidden bg-[var(--surface)]",
+          feedLayout ? "" : "shadow-[0_10px_28px_rgba(0,0,0,0.24)]",
+        ].join(" ")}
         style={frontRadiusStyle}
         data-people-duo-photo-frame="true"
+        data-people-feed-echo={feedLayout ? "true" : undefined}
       >
-        <EmptyFallback initial={initial} />
+        {feedEchoOrEmpty(feedEchoPreset)}
         {identityOverlay}
       </div>
     );
@@ -1211,10 +1770,31 @@ function DiscoverLegacyMedia({
   return (
     <div {...shellProps}>
       {stack}
-      {isCurrent && withPhoto && photoCount > 1 ? (
+      {feedLayout && withPhoto && photoCount > 1 ? (
         <div
-          className="pointer-events-none absolute inset-x-3 top-2.5 z-[3] flex gap-1"
+          className="pointer-events-none absolute inset-x-0 bottom-2.5 z-[12] flex justify-center"
           aria-hidden
+          data-people-photo-indicators="true"
+          data-people-photo-indicators-placement="bottom"
+        >
+          <div className="flex items-center gap-1.5 rounded-full bg-black/35 px-2 py-1 backdrop-blur-[2px]">
+            {photos.map((photo, i) => (
+              <span
+                key={`${photo}-${i}`}
+                className={[
+                  "h-1.5 w-1.5 rounded-full ring-1 ring-black/25",
+                  i === safeIndex ? "bg-white shadow-sm" : "bg-white/45",
+                ].join(" ")}
+              />
+            ))}
+          </div>
+        </div>
+      ) : isCurrent && withPhoto && photoCount > 1 ? (
+        <div
+          className="pointer-events-none absolute inset-x-3 top-2.5 z-[12] flex gap-1"
+          aria-hidden
+          data-people-photo-indicators="true"
+          data-people-photo-indicators-placement="top"
         >
           {photos.map((photo, i) => (
             <span
@@ -1241,6 +1821,98 @@ function EmptyFallback({ initial }: { initial: string }) {
       <div className="flex h-[38%] max-h-[9rem] w-[38%] max-w-[9rem] items-center justify-center rounded-full bg-[var(--brand)] font-semibold text-[var(--brand-ink)] ring-1 ring-[var(--border)]/40">
         <span className="text-[28px] leading-none">{initial}</span>
       </div>
+    </div>
+  );
+}
+
+/** Feed-only compact Echo — never enlarges initials into a portrait. */
+function FeedEchoCompact({
+  preset,
+  discoverCompact = false,
+  paintGate = false,
+  showLoader = false,
+  reduceMotion = false,
+  onPaintReady,
+}: {
+  preset: string;
+  discoverCompact?: boolean;
+  paintGate?: boolean;
+  showLoader?: boolean;
+  reduceMotion?: boolean;
+  onPaintReady?: (ready: boolean) => void;
+}) {
+  const src = avatarDisplayUrl(preset);
+  const shellClass = PEOPLE_FEED_ECHO_SHELL_CLASS;
+  const [paintReady, setPaintReady] = useState(!paintGate);
+  const paintReadyRef = useRef(paintReady);
+  paintReadyRef.current = paintReady;
+  const onPaintReadyRef = useRef(onPaintReady);
+  onPaintReadyRef.current = onPaintReady;
+  useEffect(() => {
+    if (!paintGate) {
+      setPaintReady(true);
+      onPaintReadyRef.current?.(true);
+      return;
+    }
+    if (!src) {
+      setPaintReady(true);
+      onPaintReadyRef.current?.(true);
+      return;
+    }
+    setPaintReady(false);
+    onPaintReadyRef.current?.(false);
+  }, [paintGate, src]);
+
+  const commitReady = (ready: boolean) => {
+    if (paintReadyRef.current === ready) return;
+    paintReadyRef.current = ready;
+    setPaintReady(ready);
+    onPaintReadyRef.current?.(ready);
+  };
+
+  return (
+    <div
+      className={
+        discoverCompact
+          ? "flex h-full w-full items-center justify-center bg-transparent"
+          : "absolute inset-0 flex items-center justify-center bg-[var(--surface)]"
+      }
+      data-people-feed-echo-fallback="true"
+      data-people-discover-echo-compact={discoverCompact ? "true" : undefined}
+    >
+      {src ? (
+        <div className={shellClass}>
+          <img
+            src={src}
+            alt=""
+            className={[
+              "pointer-events-none h-[86%] w-[86%] object-contain",
+              paintGate && !paintReady ? "opacity-0" : "",
+            ].join(" ")}
+            draggable={false}
+            decoding="async"
+            data-people-duo-echo-paint-ready={
+              paintGate ? (paintReady ? "true" : "false") : undefined
+            }
+            ref={(node) => {
+              if (!paintGate || !node) return;
+              commitReady(isMountedPhotoPaintReady(node));
+            }}
+            onLoad={() => {
+              if (paintGate) commitReady(true);
+            }}
+            onError={() => {
+              if (paintGate) commitReady(true);
+            }}
+          />
+        </div>
+      ) : (
+        <div className={shellClass} aria-hidden />
+      )}
+      <DuoFrontPaintLoader
+        show={Boolean(paintGate && showLoader && src && !paintReady)}
+        reduceMotion={reduceMotion}
+      />
     </div>
   );
 }

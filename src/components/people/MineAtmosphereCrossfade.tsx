@@ -187,29 +187,30 @@ export default function MineAtmosphereCrossfade({
           </FadeLayer>
         ) : null}
         <div className={SCRIM_CLASS} />
-        {/* Edge fades into --bg. Light: stronger top cushion for caption/date. */}
+        {/* Duo: vertical darkening toward info + fixed controls (photo wash stays visible above). */}
         <div
           className="absolute inset-0 app-light:hidden"
           style={{
             background: [
-              "linear-gradient(to bottom, var(--bg) 0%, color-mix(in oklab, var(--bg) 38%, transparent) 6%, transparent 14%)",
-              "linear-gradient(to bottom, transparent 0%, transparent 68%, color-mix(in oklab, var(--bg) 22%, transparent) 78%, color-mix(in oklab, var(--bg) 62%, transparent) 88%, var(--bg) 96%, var(--bg) 100%)",
+              "linear-gradient(to bottom, var(--bg) 0%, color-mix(in oklab, var(--bg) 35%, transparent) 8%, transparent 14%)",
+              "linear-gradient(to bottom, transparent 0%, transparent 62%, color-mix(in oklab, var(--bg) 22%, transparent) 72%, color-mix(in oklab, var(--bg) 40%, transparent) 85%, color-mix(in oklab, var(--bg) 58%, transparent) 100%)",
             ].join(", "),
           }}
           aria-hidden
           data-people-mine-atmosphere-edge-fade="dark"
+          data-people-duo-atmosphere-vertical-fade="true"
         />
         <div
           className="absolute inset-0 hidden app-light:block"
           style={{
             background: [
-              // Soft white atmospheric band behind Back / caption / date — no box edges.
-              "linear-gradient(to bottom, color-mix(in oklab, var(--bg) 97%, white) 0%, color-mix(in oklab, var(--bg) 88%, transparent) 10%, color-mix(in oklab, var(--bg) 52%, transparent) 18%, color-mix(in oklab, var(--bg) 18%, transparent) 26%, transparent 34%)",
-              "linear-gradient(to bottom, transparent 0%, transparent 68%, color-mix(in oklab, var(--bg) 22%, transparent) 78%, color-mix(in oklab, var(--bg) 62%, transparent) 88%, var(--bg) 96%, var(--bg) 100%)",
+              "linear-gradient(to bottom, color-mix(in oklab, var(--bg) 97%, white) 0%, color-mix(in oklab, var(--bg) 70%, transparent) 12%, color-mix(in oklab, var(--bg) 28%, transparent) 18%, transparent 22%)",
+              "linear-gradient(to bottom, transparent 0%, transparent 62%, color-mix(in oklab, var(--bg) 18%, transparent) 72%, color-mix(in oklab, var(--bg) 36%, transparent) 86%, color-mix(in oklab, var(--bg) 52%, transparent) 100%)",
             ].join(", "),
           }}
           aria-hidden
           data-people-mine-atmosphere-edge-fade="light"
+          data-people-duo-atmosphere-vertical-fade="true"
         />
       </div>
 

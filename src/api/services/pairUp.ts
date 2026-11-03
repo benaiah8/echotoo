@@ -2,12 +2,15 @@
  * Pair Up RPC wrappers (no UI).
  */
 
+import { parseOptionalBoolean } from "../../lib/people/duoCommentFields";
 import { supabase } from "../../lib/supabaseClient";
 import { requestManager } from "../../lib/requestManager";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 import type {
   PairUpCandidate,
   PairUpCandidatesPage,
+  DiscoverHeartWithdrawResult,
+  DuoHeartWithdrawResult,
   PairUpDiscoverConnectResult,
   PairUpExpressResult,
   PairUpMatchCompletion,
@@ -416,6 +419,20 @@ function parseOpaqueCursor(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function parseDuoMatchState(
+  value: unknown
+): PairUpCandidate["duo_match_state"] {
+  if (
+    value === "none" ||
+    value === "outgoing" ||
+    value === "mutual_pending" ||
+    value === "completed"
+  ) {
+    return value;
+  }
+  return "none";
+}
+
 function parseCandidate(raw: unknown): PairUpCandidate | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Record<string, unknown>;
@@ -437,6 +454,9 @@ function parseCandidate(raw: unknown): PairUpCandidate | null {
     profile_photos: normalizeProfilePhotos(row.profile_photos),
     echo_preset: normalizeEchoPreset(row.echo_preset),
     expressed_by_me: row.expressed_by_me === true,
+    duo_match_state: parseDuoMatchState(row.duo_match_state),
+    duo_commented_by_me: parseOptionalBoolean(row.duo_commented_by_me),
+    viewer_has_active_pair_up: parseOptionalBoolean(row.viewer_has_active_pair_up),
     profile_id: typeof row.profile_id === "string" ? row.profile_id : null,
     bio: typeof row.bio === "string" ? row.bio : null,
     source_caption: typeof row.source_caption === "string" ? row.source_caption : null,
@@ -685,5 +705,72 @@ export async function completePairUpMatch(
     other_user_id,
     source_post_id,
     created: row?.created === true,
+  };
+}
+
+/**
+ * Remove one Discover outgoing interest. Requires the caller's Discover pin.
+ * Does not close the viewer's Pair Up and does not touch conversations.
+ */
+export async function withdrawDiscoverPairUpInterest(
+  toOpportunityId: string
+): Promise<DiscoverHeartWithdrawResult> {
+  if (!toOpportunityId) throw new Error("Missing target opportunity");
+
+  const userId = await requireSessionUserId();
+  const { data, error } = await supabase.rpc(
+    "withdraw_discover_pair_up_interest",
+    { p_to_opportunity_id: toOpportunityId }
+  );
+  if (error) throw toPairUpRpcError(error);
+
+  const row = data as Record<string, unknown> | null;
+  if (
+    !row ||
+    row.to_opportunity_id !== toOpportunityId ||
+    typeof row.from_opportunity_id !== "string" ||
+    typeof row.withdrawn !== "boolean"
+  ) {
+    throw new Error("Discover withdrawal failed");
+  }
+
+  invalidatePairUpDeck(userId);
+  return {
+    to_opportunity_id: row.to_opportunity_id,
+    from_opportunity_id: row.from_opportunity_id,
+    withdrawn: row.withdrawn,
+  };
+}
+
+/**
+ * Remove one unmatched Duo outgoing interest.
+ * Does not withdraw Discover-sourced interests and does not close the Pair Up.
+ */
+export async function withdrawDuoPairUpInterest(
+  toOpportunityId: string
+): Promise<DuoHeartWithdrawResult> {
+  if (!toOpportunityId) throw new Error("Missing target opportunity");
+
+  const userId = await requireSessionUserId();
+  const { data, error } = await supabase.rpc("withdraw_duo_pair_up_interest", {
+    p_to_opportunity_id: toOpportunityId,
+  });
+  if (error) throw toPairUpRpcError(error);
+
+  const row = data as Record<string, unknown> | null;
+  if (
+    !row ||
+    row.to_opportunity_id !== toOpportunityId ||
+    typeof row.from_opportunity_id !== "string" ||
+    typeof row.withdrawn !== "boolean"
+  ) {
+    throw new Error("Duo withdrawal failed");
+  }
+
+  invalidatePairUpDeckKind(userId, PAIR_UP_DECK_KIND_MY_PLANS);
+  return {
+    to_opportunity_id: row.to_opportunity_id,
+    from_opportunity_id: row.from_opportunity_id,
+    withdrawn: row.withdrawn,
   };
 }

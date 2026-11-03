@@ -585,7 +585,7 @@ describe("Mine portrait stack poses + readiness", () => {
     );
     expect(mediaSrc).toContain("shouldAcceptMountedFrontDecode");
     expect(mediaSrc).toMatch(
-      /useLayoutEffect\(\s*\(\)\s*=>\s*\{[\s\S]*?isMountedPhotoPaintReady[\s\S]*?\},\s*\[displayedIndex,\s*photosKey,\s*isCurrent\]/
+      /useLayoutEffect\(\s*\(\)\s*=>\s*\{[\s\S]*?isMountedPhotoPaintReady[\s\S]*?\},\s*\[displayedIndex,\s*photosKey,\s*isCurrent,\s*markSlotPaintReady\]/
     );
     // Mount window unchanged — still ±2 via shared constant.
     expect(MINE_PHOTO_MOUNT_RADIUS).toBe(2);

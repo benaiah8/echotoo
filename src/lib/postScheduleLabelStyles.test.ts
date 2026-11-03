@@ -42,16 +42,25 @@ describe("postScheduleLabelStyles semantic buckets", () => {
     );
   });
 
-  it("next_weekday is violet; in_days is a neutral scheduled chip", () => {
-    const near = getPostScheduleLabelClasses("next_weekday", "feed");
-    const later = getPostScheduleLabelClasses("in_days", "feed");
-    expect(near).toContain("violet");
-    expect(later).toContain("rounded-md");
-    expect(later).toContain("border");
-    expect(later).toContain("bg-[var(--text)]/8");
-    expect(later).not.toContain("violet");
-    expect(later).not.toContain("green-500");
-    expect(later).not.toContain("blue-bg");
+  it("next_weekday and in_days share violet styling on feed, rail, railCover, and text", () => {
+    expect(getPostScheduleLabelClasses("next_weekday", "feed")).toBe(
+      getPostScheduleLabelClasses("in_days", "feed"),
+    );
+    expect(getPostScheduleLabelClasses("next_weekday", "rail")).toBe(
+      getPostScheduleLabelClasses("in_days", "rail"),
+    );
+    expect(getPostScheduleLabelClasses("next_weekday", "railCover")).toBe(
+      getPostScheduleLabelClasses("in_days", "railCover"),
+    );
+    expect(getPostScheduleLabelTextClass("next_weekday")).toBe(
+      getPostScheduleLabelTextClass("in_days"),
+    );
+
+    const feedViolet = getPostScheduleLabelClasses("in_days", "feed");
+    expect(feedViolet).toContain("violet");
+    expect(feedViolet).not.toContain("green-500");
+    expect(feedViolet).not.toContain("blue-bg");
+    expect(feedViolet).not.toContain("bg-[var(--text)]/8");
   });
 
   it("passed is muted gray; posted_ago stays plain non-pill", () => {

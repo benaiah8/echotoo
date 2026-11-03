@@ -45,6 +45,11 @@ describe("People universal See post + video/detail parity", () => {
     expect(plans).not.toContain("onSeePost");
     expect(plans).toContain("identityVisible={false}");
     expect(plans).toContain("onOpenProfile={undefined}");
+    const body = read("pages/people/OpenPlanDeckBody.tsx");
+    const card = read("components/people/PeopleOpenPlanFeedCard.tsx");
+    expect(body).not.toContain("onSeePost");
+    expect(card).not.toContain("onSeePost");
+    expect(card).toContain("data-people-open-plan-anonymous");
   });
 
   it("4–6: Groups uses shared See post; no duplicates; same open path", () => {

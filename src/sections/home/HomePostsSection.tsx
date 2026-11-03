@@ -117,6 +117,7 @@ interface Props {
   /** Date spotlight (Today / Tomorrow) above normal feed â€” unused in explicit filtered Home. */
   dateSpotlightActive?: boolean;
   dateFilter?: HomeDateFilter;
+  customOccursOn?: string | null;
   dateSpotlightItems?: FeedItem[];
   dateSpotlightFallbackFilter?: HomeDateFilterChip | null;
   dateSpotlightFallbackItems?: FeedItem[];
@@ -172,6 +173,7 @@ export default function HomePostsSection({
   listReplaceCountIsAuthoritative,
   dateSpotlightActive = false,
   dateFilter = "none",
+  customOccursOn = null,
   dateSpotlightItems = [],
   dateSpotlightFallbackFilter = null,
   dateSpotlightFallbackItems = [],
@@ -399,6 +401,7 @@ export default function HomePostsSection({
   const filterEndCopy = explicitContentFilters
     ? getHomeFilterEndCopy({
         dateFilter,
+        customOccursOn,
         viewMode,
         friendsFilter: Boolean(feedOptions?.friendsFilter),
         variant: "zero",
@@ -408,6 +411,7 @@ export default function HomePostsSection({
   const filterExhaustedCopy = explicitContentFilters
     ? getHomeFilterEndCopy({
         dateFilter,
+        customOccursOn,
         viewMode,
         friendsFilter: Boolean(feedOptions?.friendsFilter),
         variant: "exhausted",

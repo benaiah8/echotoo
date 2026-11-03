@@ -33,6 +33,8 @@ export default function PeopleDuoCandidateSlide({
   onOpenProfile,
   onMineAtmosphereChange,
   isUnseen = false,
+  layoutVariant = "duoModern",
+  postType = null,
 }: {
   candidate: PairUpCandidate;
   identitySource: ProfileIdentityMediaSource;
@@ -52,6 +54,8 @@ export default function PeopleDuoCandidateSlide({
   onMineAtmosphereChange?: (report: PeopleMineAtmosphereReport) => void;
   /** Unseen opportunity — subtle brand photo edge. */
   isUnseen?: boolean;
+  layoutVariant?: "legacy" | "duoModern";
+  postType?: "hangout" | "experience" | null;
 }) {
   void _presentation;
   const name = candidate.display_name?.trim() || "Someone";
@@ -80,6 +84,8 @@ export default function PeopleDuoCandidateSlide({
       onOpenProfile={onOpenProfile}
       onAtmosphereChange={onMineAtmosphereChange}
       isUnseen={isUnseen}
+      layoutVariant={layoutVariant}
+      postType={postType}
     />
   );
 }

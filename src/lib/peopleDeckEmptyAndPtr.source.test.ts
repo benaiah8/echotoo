@@ -24,26 +24,21 @@ describe("People PTR ownership + empty cards", () => {
   const nav = read("lib/people/matchDeckNavigation.ts");
 
   it("1–4: PTR can begin on populated Duo/Discover/Plans/Groups New surfaces", () => {
-    // Shared Embla carousel — must not block PTR on every pointerDown.
-    expect(carousel).toContain("Do NOT acquire PTR block here");
-    expect(carousel).toContain("emblaPtrPointerDownRef");
-    expect(carousel).toMatch(
-      /const onScroll = \(\) => \{[\s\S]*acquirePullToRefreshBlock\(\)/
-    );
-    // All four scopes share MatchDeckOverlay PTR surface + hard refresh.
+    // Vertical feed scroll root — PTR still owned by MatchDeckOverlay surface.
     expect(overlay).toContain("data-people-ptr-surface");
     expect(overlay).toContain("useHomePullToRefresh");
     expect(overlay).toContain('kind: "groups_new"');
     expect(overlay).toContain("hardRefreshPeopleDeckScope");
-    expect(plans).toContain("MatchDeckCarousel");
-    expect(groups).toContain("MatchDeckCarousel");
+    expect(overlay).toContain("PeopleFeedList");
+    expect(plans).toContain("PeopleFeedList");
+    expect(groups).toContain("PeopleFeedList");
   });
 
-  it("5–6: axis lock + Embla horizontal ownership", () => {
+  it("5–6: axis lock remains on shared PTR hook", () => {
     expect(ptr).toContain("dy > 10 && dy > Math.abs(dx) * 1.2");
     expect(ptr).toContain("Math.abs(dx) > 10 && Math.abs(dx) > dy");
-    expect(carousel).toContain("Embla scrolled while pointer is down");
-    expect(carousel).toContain("acquirePullToRefreshBlock");
+    // Legacy Embla file still documents PTR non-block on pointerDown (unused by feed).
+    expect(carousel).toContain("Do NOT acquire PTR block here");
   });
 
   it("7–8: lightbox/fullscreen + Create cover still block PTR", () => {
@@ -92,19 +87,12 @@ describe("People PTR ownership + empty cards", () => {
     expect(media).toContain("export function peopleMineUnseenEdgeRingStyle");
   });
 
-  it("16: PREVIOUS/NEXT visible but inert on zero state", () => {
-    expect(overlay).toContain("canGoPrev={showEmpty ? false : canMineGoPrev}");
-    expect(overlay).toContain("canGoNext={showEmpty ? false : canMineGoNext}");
-    expect(plans).toContain("canGoPrev={false}");
-    expect(plans).toContain("canGoNext={false}");
-    expect(groups).toContain("canGoPrev={false}");
-    expect(groups).toContain("canGoNext={false}");
-    expect(plans).toMatch(
-      /isTrueCaughtUpState\([\s\S]*?MineEdgeNavCards[\s\S]*?canGoPrev=\{false\}/
-    );
-    expect(groups).toMatch(
-      /browseTab === "new"[\s\S]*?MineEdgeNavCards[\s\S]*?canGoPrev=\{false\}/
-    );
+  it("16: empty states use shared empty card (no edge-nav zero state)", () => {
+    expect(overlay).toContain("<PeopleDeckEmptyCard");
+    expect(plans).toContain("<PeopleDeckEmptyCard");
+    expect(groups).toContain("<PeopleDeckEmptyCard");
+    expect(plans).toContain("isTrueCaughtUpState");
+    expect(groups).toContain("isTrueCaughtUpState");
   });
 
   it("17: empty card remains inside PTR surface + card-stack peeks", () => {
@@ -124,6 +112,8 @@ describe("People PTR ownership + empty cards", () => {
     expect(overlay).toContain("!showLoading");
     expect(overlay).toContain("!showError");
     expect(overlay).toContain("trueCaughtUp");
+    expect(overlay).toContain("PeopleDuoCardSkeleton");
+    expect(overlay).toContain("isDiscoverScope");
     expect(plans).toContain("isTrueCaughtUpState");
     expect(plans).toContain("deckLoadError");
     expect(groups).toContain("isTrueCaughtUpState");
@@ -135,6 +125,9 @@ describe("People PTR ownership + empty cards", () => {
 
   it("22–25: copy + CTAs", () => {
     expect(copy).toContain('deckEmpty: "No Duos yet"');
+    expect(copy).toContain(
+      "Find an event you'd like to attend and tap Duo to meet others going too."
+    );
     expect(copy).toContain("Explore events");
     expect(overlay).toContain("handleEmptyExploreHome");
     expect(overlay).toContain("Paths.home");
@@ -143,11 +136,22 @@ describe("People PTR ownership + empty cards", () => {
       /isDiscoverScope[\s\S]*ctaLabel=\{[\s\S]*undefined/
     );
     expect(copy).toContain('openPlansEmpty: "No open plans yet"');
+    expect(copy).toContain(
+      "Open Plans will appear here as people start making plans. You can start one from a place post."
+    );
     expect(copy).toContain("Create a plan");
     expect(plans).toContain("enterCreateAsDefaultPost");
     expect(copy).toContain('groupUpBrowseNewEmpty: "No groups to join yet"');
+    expect(copy).toContain(
+      "Start a Group Up from a post, or explore what others are planning."
+    );
+    expect(copy).toContain('groupUpBrowseYoursEmptyTitle: "No groups yet"');
+    expect(copy).toContain(
+      "Groups you've joined or requested to join will appear here."
+    );
     expect(copy).toContain("Explore posts");
     expect(groups).toContain("Paths.home");
+    expect(groups).toContain("groupUpBrowseYoursEmptyTitle");
     expect(emptyCard).toContain('duo: "🤝"');
     expect(emptyCard).toContain('discover: "✨"');
     expect(emptyCard).toContain('plans: "🗓️"');
