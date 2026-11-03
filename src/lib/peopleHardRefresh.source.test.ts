@@ -60,13 +60,15 @@ describe("People hard refresh", () => {
     resetPeopleHardRefreshForTests();
   });
 
-  it("1–2: Duo hardRefresh replaces; soft merge remains in source", () => {
+  it("1–2: Duo hardRefresh replaces; soft my_plans also replaces (no merge-tail)", () => {
     const hook = read("hooks/usePairUpCandidates.ts");
     expect(hook).toContain("const hardRefresh = useCallback");
     expect(hook).toMatch(
-      /hardRefresh[\s\S]*setCandidates\(uniqueByOpportunityId\(page\.candidates\)\)/
+      /hardRefresh[\s\S]*uniqueByOpportunityId\(page\.candidates\)/
     );
     expect(hook).toContain("mergeMyPlansDeckPage(prev, page.candidates)");
+    expect(hook).toContain("return uniqueByOpportunityId(incoming)");
+    expect(hook).not.toContain("const tail = prev.filter");
     expect(hook).not.toContain("PEOPLE_TAB_REFRESH_EVENT");
   });
 
@@ -247,11 +249,19 @@ describe("People hard refresh", () => {
     expect(navIdx).toBeGreaterThan(-1);
     expect(navIdx).toBeLessThan(ptrIdx);
 
+    // Live feed scrollTop — never the mid-feed-stealing stub.
+    expect(overlay).toContain('querySelector("[data-people-feed-list]")');
+    expect(overlay).toContain("list.scrollTop");
+    expect(overlay).not.toContain("getScrollTop: () => 0");
+
     const ptr = read("hooks/useHomePullToRefresh.ts");
     expect(ptr).toContain("COMMIT_DAMPED_PX = 52");
+    expect(ptr).toContain("SCROLL_TOP_TOLERANCE = 6");
     expect(ptr).toContain("MIN_INTERVAL_MS = 1400");
     expect(ptr).toContain("Math.abs(dx) > dy");
     expect(ptr).toContain("dy > Math.abs(dx) * 1.2");
+    expect(ptr).toContain("readScrollTop() > SCROLL_TOP_TOLERANCE");
+    expect(ptr).toContain("e.preventDefault()");
   });
 
   it("25–26: tab retap hard refresh; Groups Yours excluded", () => {

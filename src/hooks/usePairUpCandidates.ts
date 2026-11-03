@@ -58,16 +58,6 @@ export type UsePairUpCandidatesResult = {
   noteDuoHeartWithdrawn: (opportunityId: string, viewerId: string) => void;
 };
 
-function mergeMyPlansDeckPage(
-  prev: PairUpCandidate[],
-  incoming: PairUpCandidate[]
-): PairUpCandidate[] {
-  if (prev.length === 0) return incoming;
-  const seen = new Set(incoming.map((row) => row.opportunity_id));
-  const tail = prev.filter((row) => !seen.has(row.opportunity_id));
-  return tail.length === 0 ? incoming : [...incoming, ...tail];
-}
-
 function uniqueByOpportunityId(rows: PairUpCandidate[]): PairUpCandidate[] {
   const seen = new Set<string>();
   const out: PairUpCandidate[] = [];
@@ -77,6 +67,18 @@ function uniqueByOpportunityId(rows: PairUpCandidate[]): PairUpCandidate[] {
     out.push(row);
   }
   return out;
+}
+
+/**
+ * Soft page-0 My Duo replace. Server page is authoritative: cards the RPC
+ * omits (expired sources, closed windows) must drop — do not preserve a
+ * merge-tail that can keep ineligible opportunities indefinitely.
+ */
+export function mergeMyPlansDeckPage(
+  _prev: PairUpCandidate[],
+  incoming: PairUpCandidate[]
+): PairUpCandidate[] {
+  return uniqueByOpportunityId(incoming);
 }
 
 export function appendDiscoverPage(
@@ -339,7 +341,8 @@ export function usePairUpCandidates(options?: {
 
   /**
    * Explicit manual hard refresh — always REPLACE page 0 (Duo included).
-   * Soft `revalidate`/`refresh` keep merge-tail for my_plans.
+   * Soft `revalidate`/`refresh` also REPLACE page 0 for my_plans so expired
+   * cards cannot linger via a merge-tail.
    */
   const hardRefresh = useCallback(async () => {
     if (!enabledRef.current) return;

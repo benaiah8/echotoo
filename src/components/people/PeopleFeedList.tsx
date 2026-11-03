@@ -83,7 +83,8 @@ export default function PeopleFeedList({
    * Session restore only.
    * Token mode (Discover): scroll when scrollRestoreToken changes — not on
    * every focus/currentOpportunityId update during browsing.
-   * Legacy mode (Plans/Groups): scroll when scrollToId changes.
+   * Align to start (not center) so tall Discover rows are not clipped under nav.
+   * Legacy mode (Plans/Groups): scroll when scrollToId changes; keep center.
    */
   useEffect(() => {
     if (!scrollToId || !rootRef.current) return;
@@ -92,12 +93,25 @@ export default function PeopleFeedList({
       if (lastRestoreTokenRef.current === scrollRestoreToken) return;
       lastRestoreTokenRef.current = scrollRestoreToken;
     }
-    const el = rootRef.current.querySelector(
+    const root = rootRef.current;
+    const el = root.querySelector(
       `[data-people-feed-opportunity="${CSS.escape(scrollToId)}"]`
     );
-    if (el instanceof HTMLElement) {
-      el.scrollIntoView({ block: "center", behavior: "auto" });
+    if (!(el instanceof HTMLElement)) return;
+
+    if (useTokenRestore) {
+      /* Feed-relative top align under chrome pad — avoids center clipping on Android. */
+      const rootRect = root.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const padTop = parseFloat(getComputedStyle(root).paddingTop) || 0;
+      const delta = elRect.top - rootRect.top - padTop;
+      if (Math.abs(delta) > 1) {
+        root.scrollTop += delta;
+      }
+      return;
     }
+
+    el.scrollIntoView({ block: "center", behavior: "auto" });
   }, [scrollToId, scrollRestoreToken, useTokenRestore]);
 
   const tryLoadMore = useCallback(() => {

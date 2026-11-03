@@ -65,6 +65,21 @@ describe("peopleDiscoverPolish", () => {
     expect(overlay).toContain("scrollRestoreToken={discoverScrollRestoreToken}");
   });
 
+  it("Discover token restore top-aligns in the feed; Plans/Groups keep center", () => {
+    const list = read("components/people/PeopleFeedList.tsx");
+    expect(list).toContain("useTokenRestore");
+    expect(list).toContain("root.scrollTop += delta");
+    expect(list).toContain("paddingTop");
+    expect(list).toContain('el.scrollIntoView({ block: "center", behavior: "auto" })');
+    // Token path must not center tall Discover rows.
+    const tokenBranch = list.slice(
+      list.indexOf("if (useTokenRestore) {"),
+      list.indexOf("el.scrollIntoView({ block: \"center\"")
+    );
+    expect(tokenBranch).toContain("root.scrollTop += delta");
+    expect(tokenBranch).not.toContain('block: "center"');
+  });
+
   it("skips pruneActiveOrderedIds while browsing Discover", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
     expect(overlay).toMatch(

@@ -41,6 +41,14 @@ describe("People PTR ownership + empty cards", () => {
     expect(carousel).toContain("Do NOT acquire PTR block here");
   });
 
+  it("5b: People PTR reads live feed-list scrollTop (Duo falls back to 0)", () => {
+    expect(overlay).toContain('querySelector("[data-people-feed-list]")');
+    expect(overlay).toContain("list instanceof HTMLElement ? list.scrollTop : 0");
+    expect(overlay).not.toContain("getScrollTop: () => 0");
+    expect(ptr).toContain("SCROLL_TOP_TOLERANCE");
+    expect(ptr).toContain("readScrollTop() > SCROLL_TOP_TOLERANCE");
+  });
+
   it("7–8: lightbox/fullscreen + Create cover still block PTR", () => {
     expect(overlay).toContain("acquirePullToRefreshBlock");
     expect(overlay).toContain("peopleTabsCovered");

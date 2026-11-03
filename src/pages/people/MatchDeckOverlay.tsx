@@ -1166,7 +1166,17 @@ export default function MatchDeckOverlay({
       return hardRefreshPeopleDeckScopeRef.current(scope);
     },
     refreshEpoch: peopleRefreshEpoch,
-    getScrollTop: () => 0,
+    /**
+     * Discover / Plans / Groups scroll inside `[data-people-feed-list]`.
+     * Read live each gesture — never stub 0 (that stole mid-feed scrolls on Android).
+     * Duo has no feed list → 0 so PTR still works on the carousel surface.
+     */
+    getScrollTop: () => {
+      const surface = ptrSurfaceEl;
+      if (!surface) return 0;
+      const list = surface.querySelector("[data-people-feed-list]");
+      return list instanceof HTMLElement ? list.scrollTop : 0;
+    },
     touchTarget: ptrSurfaceEl,
   });
 
