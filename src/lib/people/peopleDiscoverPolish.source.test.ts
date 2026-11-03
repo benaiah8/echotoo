@@ -55,29 +55,44 @@ describe("peopleDiscoverPolish", () => {
     expect(media).toContain("isCurrent || feedTapCycleUnlocked");
   });
 
-  it("Discover scroll restore uses a token; focus churn does not scrollIntoView alone", () => {
-    const list = read("components/people/PeopleFeedList.tsx");
-    expect(list).toContain("scrollRestoreToken");
-    expect(list).toContain("useTokenRestore");
-    expect(list).toContain("lastRestoreTokenRef");
+  it("Discover entry resets to scrollTop 0; does not restore opportunity ids", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
-    expect(overlay).toContain("discoverScrollRestoreToken");
-    expect(overlay).toContain("scrollRestoreToken={discoverScrollRestoreToken}");
+    const discoverList = overlay.slice(
+      overlay.indexOf(") : isDiscoverScope ? ("),
+      overlay.indexOf("</PeopleFeedList>")
+    );
+    expect(discoverList).toContain("<PeopleFeedList");
+    expect(discoverList).not.toContain("scrollToId=");
+    expect(discoverList).not.toContain("scrollRestoreToken=");
+    expect(overlay).not.toContain("discoverScrollRestoreToken");
+    expect(overlay).toContain('querySelector("[data-people-feed-list]")');
+    expect(overlay).toContain("list.scrollTop = 0");
+    // Opportunity boxes still carry data-people-feed-opportunity (not scroll targets on entry).
+    const box = read("components/people/PeopleDiscoverOpportunityBox.tsx");
+    expect(box).toContain("data-people-feed-opportunity={opportunityId}");
   });
 
-  it("Discover token restore top-aligns in the feed; Plans/Groups keep center", () => {
+  it("portrait renders before associated opportunity cards in a person row", () => {
+    const row = read("components/people/PeopleDiscoverPersonRow.tsx");
+    const portraitAt = row.indexOf('data-people-discover-portrait="true"');
+    const identityAt = row.indexOf('data-people-discover-identity="true"');
+    const oppStackAt = row.indexOf('data-people-discover-opp-stack="true"');
+    const childrenAt = row.indexOf("{children}");
+    expect(identityAt).toBeGreaterThan(0);
+    expect(oppStackAt).toBeGreaterThan(identityAt);
+    expect(childrenAt).toBeGreaterThan(oppStackAt);
+    expect(portraitAt === -1 || portraitAt < oppStackAt).toBe(true);
+  });
+
+  it("Plans/Groups keep legacy scrollIntoView center; Discover does not use token restore", () => {
     const list = read("components/people/PeopleFeedList.tsx");
-    expect(list).toContain("useTokenRestore");
-    expect(list).toContain("root.scrollTop += delta");
-    expect(list).toContain("paddingTop");
     expect(list).toContain('el.scrollIntoView({ block: "center", behavior: "auto" })');
-    // Token path must not center tall Discover rows.
-    const tokenBranch = list.slice(
-      list.indexOf("if (useTokenRestore) {"),
-      list.indexOf("el.scrollIntoView({ block: \"center\"")
-    );
-    expect(tokenBranch).toContain("root.scrollTop += delta");
-    expect(tokenBranch).not.toContain('block: "center"');
+    const plans = read("pages/people/OpenPlanDeckBody.tsx");
+    const groups = read("pages/people/GroupUpDeckBody.tsx");
+    expect(plans).toContain("scrollToId={scopeSnap.currentOpportunityId}");
+    expect(plans).not.toContain("scrollRestoreToken");
+    expect(groups).toContain("scrollToId=");
+    expect(groups).not.toContain("scrollRestoreToken");
   });
 
   it("skips pruneActiveOrderedIds while browsing Discover", () => {

@@ -253,6 +253,8 @@ describe("People hard refresh", () => {
     expect(overlay).toContain('querySelector("[data-people-feed-list]")');
     expect(overlay).toContain("list.scrollTop");
     expect(overlay).not.toContain("getScrollTop: () => 0");
+    // Discover entry still zeroes the list; PTR continues to read the same node.
+    expect(overlay).toContain("list.scrollTop = 0");
 
     const ptr = read("hooks/useHomePullToRefresh.ts");
     expect(ptr).toContain("COMMIT_DAMPED_PX = 52");

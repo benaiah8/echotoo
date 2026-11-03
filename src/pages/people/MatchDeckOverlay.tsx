@@ -598,9 +598,6 @@ export default function MatchDeckOverlay({
   const duoMatchToastGenRef = useRef(0);
   const previousAuthUserIdRef = useRef<string | null>(null);
   const [discoverEnableBusy, setDiscoverEnableBusy] = useState(false);
-  /** One-shot Discover list scroll restore (enter category / remount) — not focus churn. */
-  const [discoverScrollRestoreToken, setDiscoverScrollRestoreToken] =
-    useState(0);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   /** Bumps when People seen history writes so visuals/order refresh. */
   const [pairUpSeenEpoch, setPairUpSeenEpoch] = useState(0);
@@ -2757,11 +2754,25 @@ export default function MatchDeckOverlay({
   useEffect(() => {
     if (contentScope !== "discover") {
       discoverAppearancesFreezeRef.current = null;
-      return;
     }
-    /* Entering Discover: restore scroll to saved opportunity once. */
-    setDiscoverScrollRestoreToken((n) => n + 1);
   }, [contentScope]);
+
+  /**
+   * Normal Discover entry: always start at the feed top (portrait first).
+   * Do not restore currentOpportunityId — that id lives on opportunity boxes
+   * under the portrait and was scrolling event cards into the nav band.
+   * Fresh PeopleFeedList mounts already at 0; this clears any stale reuse.
+   */
+  useLayoutEffect(() => {
+    if (contentScope !== "discover") return;
+    const resetTop = () => {
+      const list = ptrSurfaceEl?.querySelector("[data-people-feed-list]");
+      if (list instanceof HTMLElement) list.scrollTop = 0;
+    };
+    resetTop();
+    const raf = window.requestAnimationFrame(resetTop);
+    return () => window.cancelAnimationFrame(raf);
+  }, [contentScope, ptrSurfaceEl]);
 
   const discoverAppearances = useMemo(() => {
     if (contentScope !== "discover") {
@@ -3840,8 +3851,6 @@ export default function MatchDeckOverlay({
                   onRowVisible={handleFeedRowVisible}
                   focusedId={focusedDiscoverAppearanceKey}
                   onFocusedIdChange={handleFeedFocusedIdChange}
-                  scrollToId={scopeSnap.currentOpportunityId}
-                  scrollRestoreToken={discoverScrollRestoreToken}
                 >
                   {discoverAppearances.map((appearance) => {
                     const lead = appearance.opportunities[0]!;

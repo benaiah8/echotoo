@@ -80,10 +80,9 @@ export default function PeopleFeedList({
   }, [orderedIds.join("|")]);
 
   /**
-   * Session restore only.
-   * Token mode (Discover): scroll when scrollRestoreToken changes — not on
-   * every focus/currentOpportunityId update during browsing.
-   * Align to start (not center) so tall Discover rows are not clipped under nav.
+   * Session restore only (Plans/Groups pass scrollToId without a token).
+   * Token mode: optional intentional deep-link restore; Discover does not use it
+   * (normal Discover entry always starts at scrollTop 0).
    * Legacy mode (Plans/Groups): scroll when scrollToId changes; keep center.
    */
   useEffect(() => {
