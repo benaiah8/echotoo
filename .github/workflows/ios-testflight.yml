@@ -424,9 +424,22 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           set -eo pipefail
-          xcrun altool --upload-app \
+          # Read version info from the exported IPA so the upload matches the build exactly.
+          TMP_UNZIP="${RUNNER_TEMP}/ipa_unzip"
+          rm -rf "$TMP_UNZIP" && mkdir -p "$TMP_UNZIP"
+          unzip -q "${IPA_PATH}" -d "$TMP_UNZIP"
+          APP_PLIST="$(find "$TMP_UNZIP/Payload" -maxdepth 2 -name Info.plist | head -n 1)"
+          SHORT_VER="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP_PLIST")"
+          BUILD_VER="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$APP_PLIST")"
+          echo "Uploading ${SHORT_VER} (${BUILD_VER})"
+          # --upload-package with an explicit Apple ID avoids altool's bundle-ID lookup
+          # ("Cannot determine the Apple ID from Bundle ID", error 19).
+          xcrun altool --upload-package "${IPA_PATH}" \
             --type ios \
-            --file "${IPA_PATH}" \
+            --apple-id 6764676789 \
+            --bundle-id com.echotoo.app \
+            --bundle-short-version-string "$SHORT_VER" \
+            --bundle-version "$BUILD_VER" \
             --apiKey "$APP_STORE_CONNECT_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
 
