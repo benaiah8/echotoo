@@ -7,6 +7,7 @@ import type { IconType } from "react-icons";
 import {
   PiCalendarBlankBold,
   PiCompassBold,
+  PiInfo,
   PiLockSimpleBold,
   PiUsersBold,
   PiUsersThreeBold,
@@ -36,6 +37,8 @@ export type PeopleFeedTopNavProps = {
   onSelectDiscover: () => void;
   onSelectPlans: () => void;
   onSelectGroups: () => void;
+  /** Optional Discover help — icon-only; never auto-opens. */
+  onDiscoverInfo?: () => void;
 };
 
 const LABEL: Record<PeopleFlatDestination, string> = {
@@ -61,6 +64,7 @@ export default function PeopleFeedTopNav({
   onSelectDiscover,
   onSelectPlans,
   onSelectGroups,
+  onDiscoverInfo,
 }: PeopleFeedTopNavProps) {
   const select = (id: PeopleFlatDestination) => {
     if (id === "duo") onSelectDuo();
@@ -122,47 +126,70 @@ export default function PeopleFeedTopNav({
               id === "groups" && groupsPillState === "yours" && active;
             const Icon = DEST_ICON[id];
             return (
-              <button
+              <div
                 key={id}
-                type="button"
-                onClick={() => select(id)}
-                aria-current={active ? "page" : undefined}
-                aria-label={LABEL[id]}
-                data-people-feed-dest={id}
-                data-people-feed-dest-active={active ? "true" : "false"}
-                data-people-duo-dest={id === "duo" ? "true" : undefined}
-                className={[
-                  "relative inline-flex h-8 min-h-[32px] shrink-0 items-center justify-center",
-                  "gap-1 max-[360px]:gap-0.5",
-                  "rounded-full px-2.5 max-[360px]:px-1.5",
-                  "text-[13px] max-[360px]:text-[12px] font-semibold leading-none tracking-tight",
-                  "touch-manipulation transition active:scale-[0.97]",
-                  "whitespace-nowrap",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-                  "focus-visible:outline-[var(--brand)]",
-                  active
-                    ? groupsYours
-                      ? "bg-[rgb(34,197,94)] text-white"
-                      : "bg-[var(--brand)] text-[var(--brand-ink)]"
-                    : id === "duo"
-                      ? "bg-transparent font-bold text-[var(--text)]/80"
-                      : "bg-transparent text-[var(--text)]/72",
-                ].join(" ")}
+                className="inline-flex shrink-0 items-center"
+                data-people-feed-dest-cluster={id}
               >
-                {locked ? (
-                  <PiLockSimpleBold
-                    className="h-3.5 w-3.5 shrink-0 opacity-70"
-                    aria-hidden
-                  />
-                ) : (
-                  <Icon
-                    className="h-3.5 w-3.5 shrink-0 opacity-90"
-                    aria-hidden
-                    data-people-feed-dest-icon={id}
-                  />
-                )}
-                <span className="whitespace-nowrap">{LABEL[id]}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => select(id)}
+                  aria-current={active ? "page" : undefined}
+                  aria-label={LABEL[id]}
+                  data-people-feed-dest={id}
+                  data-people-feed-dest-active={active ? "true" : "false"}
+                  data-people-duo-dest={id === "duo" ? "true" : undefined}
+                  className={[
+                    "relative inline-flex h-8 min-h-[32px] shrink-0 items-center justify-center",
+                    "gap-1 max-[360px]:gap-0.5",
+                    "rounded-full px-2.5 max-[360px]:px-1.5",
+                    "text-[13px] max-[360px]:text-[12px] font-semibold leading-none tracking-tight",
+                    "touch-manipulation transition active:scale-[0.97]",
+                    "whitespace-nowrap",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+                    "focus-visible:outline-[var(--brand)]",
+                    active
+                      ? groupsYours
+                        ? "bg-[rgb(34,197,94)] text-white"
+                        : "bg-[var(--brand)] text-[var(--brand-ink)]"
+                      : id === "duo"
+                        ? "bg-transparent font-bold text-[var(--text)]/80"
+                        : "bg-transparent text-[var(--text)]/72",
+                  ].join(" ")}
+                >
+                  {locked ? (
+                    <PiLockSimpleBold
+                      className="h-3.5 w-3.5 shrink-0 opacity-70"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Icon
+                      className="h-3.5 w-3.5 shrink-0 opacity-90"
+                      aria-hidden
+                      data-people-feed-dest-icon={id}
+                    />
+                  )}
+                  <span className="whitespace-nowrap">{LABEL[id]}</span>
+                </button>
+                {id === "discover" && onDiscoverInfo ? (
+                  <button
+                    type="button"
+                    onClick={onDiscoverInfo}
+                    aria-label={peopleUiCopy.discoverInfoAria}
+                    title={peopleUiCopy.discoverInfoAria}
+                    data-people-discover-info="true"
+                    className={[
+                      "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+                      "touch-manipulation transition active:scale-[0.97]",
+                      "text-[var(--text)]/45 hover:text-[var(--text)]/85 hover:bg-[var(--surface-2)]",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+                      "focus-visible:outline-[var(--brand)]",
+                    ].join(" ")}
+                  >
+                    <PiInfo className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                ) : null}
+              </div>
             );
           })}
         </div>

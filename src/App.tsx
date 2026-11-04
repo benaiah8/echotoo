@@ -124,6 +124,38 @@ function App() {
           });
         });
 
+        // People / Discover: drop account-scoped deck caches + in-memory session.
+        import("./lib/pairUpCache")
+          .then(({ invalidateAllPairUpCache }) => {
+            invalidateAllPairUpCache();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear Pair Up cache on logout:",
+              error
+            );
+          });
+        import("./lib/matchDeckSession")
+          .then(({ clearMatchDeckSession }) => {
+            clearMatchDeckSession();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear Match Deck session on logout:",
+              error
+            );
+          });
+        import("./lib/people/discoverCandidateRotation")
+          .then(({ clearDiscoverRecentSeenHistory }) => {
+            clearDiscoverRecentSeenHistory();
+          })
+          .catch((error) => {
+            console.warn(
+              "[App] Failed to clear Discover recent-seen on logout:",
+              error
+            );
+          });
+
         // [PHASE 2.3 - FIX] Clear profile cache and my_profile_id on explicit logout
         // Why: Prevents stale profile cache from reviving soft-deleted accounts on re-login
         try {

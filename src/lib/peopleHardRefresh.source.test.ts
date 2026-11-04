@@ -63,9 +63,11 @@ describe("People hard refresh", () => {
   it("1–2: Duo hardRefresh replaces; soft my_plans also replaces (no merge-tail)", () => {
     const hook = read("hooks/usePairUpCandidates.ts");
     expect(hook).toContain("const hardRefresh = useCallback");
-    expect(hook).toMatch(
-      /hardRefresh[\s\S]*uniqueByOpportunityId\(page\.candidates\)/
-    );
+    const hardAt = hook.indexOf("const hardRefresh = useCallback");
+    const hardFn = hook.slice(hardAt, hardAt + 5500);
+    expect(hardFn).toContain("uniqueByOpportunityId(");
+    expect(hardFn).toContain("accumulated");
+    expect(hardFn).toContain("force: true");
     expect(hook).toContain("mergeMyPlansDeckPage(prev, page.candidates)");
     expect(hook).toContain("return uniqueByOpportunityId(incoming)");
     expect(hook).not.toContain("const tail = prev.filter");
@@ -155,6 +157,7 @@ describe("People hard refresh", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
     expect(overlay).toContain("firstUnseenOpportunityId");
     expect(overlay).toContain("allLoadedSeen");
+    expect(overlay).toContain('contentScope !== "discover"');
     expect(overlay).toContain("PEOPLE_DECK_PREFETCH_REMAINING");
     expect(PEOPLE_DECK_PREFETCH_REMAINING).toBe(8);
     expect(read("hooks/usePairUpCandidates.ts")).toContain(

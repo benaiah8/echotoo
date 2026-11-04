@@ -56,7 +56,11 @@ describe("profile social opportunities usage optimization (source)", () => {
     expect(body).toContain("profileOwnerUserId");
     expect(body).not.toContain("invalidateProfileSocialOpportunitiesForViewer");
     expect(body).not.toContain("listProfileSocialOpportunities");
-    expect(src).toContain("PROFILE_SOCIAL_OPPORTUNITY_LIMIT = 8");
+    expect(src).toContain("PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE = 8");
+    expect(src).toContain("p_limit");
+    expect(src).toContain("p_cursor");
+    expect(src).toContain("parseProfileSocialOpportunitiesPage");
+    expect(src).not.toContain("slice(0, PROFILE_SOCIAL_OPPORTUNITY");
   });
 
   it("hook does not force RPC on profile:updated; no polling/timers", () => {
@@ -67,16 +71,21 @@ describe("profile social opportunities usage optimization (source)", () => {
     expect(src).not.toContain("setTimeout");
     expect(src).toContain("isCachedProfileSocialOpportunitiesSoftStale");
     expect(src).toContain("getCachedProfileSocialOpportunities");
+    expect(src).toContain("loadMore");
+    expect(src).toContain("mergeProfileSocialOpportunitiesBySourcePostId");
+    expect(src).toContain("requestGenRef");
   });
 
-  it("rail mounts at most PROFILE_SOCIAL_OPPORTUNITY_LIMIT cards", () => {
+  it("rail pages on horizontal scroll near end without hard 8-card slice", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityRail.tsx"
     );
-    expect(src).toContain("PROFILE_SOCIAL_OPPORTUNITY_LIMIT");
-    expect(src).toContain(
-      "opportunities.slice(0, PROFILE_SOCIAL_OPPORTUNITY_LIMIT)"
-    );
+    expect(src).toContain("loadMore");
+    expect(src).toContain("onScroll");
+    expect(src).toContain("LOAD_MORE_THRESHOLD_PX");
+    expect(src).toContain("data-profile-social-loading-more");
+    expect(src).not.toContain("PROFILE_SOCIAL_OPPORTUNITY_LIMIT");
+    expect(src).not.toContain("opportunities.slice(");
   });
 });
 
@@ -202,7 +211,7 @@ describe("cache TTL / dedupe contracts", () => {
       "src/api/services/profileSocialOpportunities.ts"
     );
     expect(serviceSrc).toContain(
-      "`profile_social_opps:${viewerUserId}:${profileUserId}`"
+      "profile_social_opps:${viewerUserId}:${profileUserId}"
     );
     expect(serviceSrc).toContain("requestManager.execute");
   });
@@ -383,17 +392,19 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     const service = readSrc(
       "src/api/services/profileSocialOpportunities.ts"
     );
-    expect(service).toContain(
-      "`profile_social_opps:${viewerUserId}:${profileUserId}`"
-    );
+    expect(service).toContain("profile_social_opps:${viewerUserId}:${profileUserId}");
+    expect(service).toContain(":start");
+    expect(service).toContain(":cursor:");
   });
 
   it("rail keeps unified Home-style skeleton; keys by source_post_id", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityRail.tsx"
     );
-    expect(src).toContain("loading && visible.length === 0 ? skeleton : row");
-    expect(src).toContain("(!loading && visible.length === 0)");
+    expect(src).toContain(
+      "loading && opportunities.length === 0 ? skeleton : row"
+    );
+    expect(src).toContain("(!loading && opportunities.length === 0)");
     expect(src).toContain("useProfileSocialOpportunities");
     expect(src).toContain("border-y");
     expect(src).toContain("key={item.source_post_id}");

@@ -8,7 +8,6 @@
 
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { PiX } from "react-icons/pi";
 import { useOverlayBackgroundScrollLock } from "../../hooks/useOverlayBackgroundScrollLock";
 import { useOverlayContentSwipeDismiss } from "../../hooks/useOverlayContentSwipeDismiss";
 import { useOverlayEdgeSwipeDismiss } from "../../hooks/useOverlayEdgeSwipeDismiss";
@@ -46,6 +45,23 @@ const socialToDateDividerClass =
 /** Month nav only — date cells participate in content swipe-to-dismiss. */
 const HOME_FILTERS_CONTENT_SWIPE_EXCLUDE =
   ".rdp-button_previous, .rdp-button_next, .rdp-nav";
+
+/** Anchored footer — no panel chrome; overlay glass stays continuous behind buttons. */
+const footerBarClass = [
+  "relative z-[1] shrink-0",
+  "flex items-center justify-center gap-3",
+  "p-3.5",
+].join(" ");
+
+/** EchoToo yellow primary — Done always uses brand fill. */
+const doneButtonClass = [
+  "inline-flex h-8 min-w-[4.5rem] items-center justify-center whitespace-nowrap px-3.5",
+  "rounded-full border border-[color-mix(in_oklab,var(--brand-ink)_22%,transparent)]",
+  "bg-[var(--brand)] text-[11px] font-medium leading-none text-[var(--brand-ink)]",
+  "shadow-[0_2px_10px_rgba(0,0,0,0.18),0_0_14px_color-mix(in_oklab,var(--brand)_28%,transparent)]",
+  "transition-[box-shadow,transform,background-color] active:scale-[0.99]",
+  "touch-manipulation",
+].join(" ");
 
 const chipButtonClass = (
   isSelected: boolean,
@@ -203,7 +219,7 @@ export default function HomeFiltersOverlay({
             "max(0.75rem, calc(0.5rem + var(--safe-area-bottom-layout, 0px)))",
         }}
       >
-        {/* Content-height panel: shrinks when short; scrolls at 90% of safe shell. */}
+        {/* Content-height panel: scroll body + anchored Clear/Done footer. */}
         <div
           {...panelSwipeProps}
           role="dialog"
@@ -213,149 +229,159 @@ export default function HomeFiltersOverlay({
           className={[
             "pointer-events-auto self-center h-fit max-h-[90%]",
             "flex w-full max-w-[640px] flex-col",
-            "overflow-y-auto overflow-x-hidden overscroll-contain scroll-hide",
-            "px-4 [-webkit-overflow-scrolling:touch]",
+            "overflow-hidden",
+            "px-4",
           ].join(" ")}
-          style={{ touchAction: "pan-y" }}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <h2
-            id="home-filters-overlay-title"
-            className="w-full shrink-0 pb-4 text-center text-[15px] font-semibold tracking-tight text-[var(--text)]"
-          >
-            Filters
-          </h2>
-
-          <section aria-labelledby="home-filters-social-heading">
-            <h3 id="home-filters-social-heading" className={sectionLabelClass}>
-              Social
-            </h3>
-            <div className="mx-auto flex max-w-[min(100%,22rem)] flex-wrap items-center justify-center gap-1.5">
-              <button
-                type="button"
-                onClick={onToggleFriends}
-                className={chipButtonClass(friendsFilter)}
-                aria-pressed={friendsFilter || undefined}
-              >
-                Friends
-              </button>
-              <button
-                type="button"
-                onClick={() => onToggleTypeFilter("hangouts")}
-                className={chipButtonClass(eventsSelected)}
-                aria-pressed={eventsSelected || undefined}
-              >
-                Events
-              </button>
-              <button
-                type="button"
-                onClick={() => onToggleTypeFilter("experiences")}
-                className={chipButtonClass(placesSelected)}
-                aria-pressed={placesSelected || undefined}
-              >
-                Posts
-              </button>
-            </div>
-          </section>
-
           <div
-            className={socialToDateDividerClass}
-            role="separator"
-            aria-hidden
-            data-home-filters-divider="social-date"
-          />
-
-          <section
-            data-tour-target="home-filter-dates"
-            aria-labelledby="home-filters-date-heading"
+            data-home-filters-scroll="true"
+            className={[
+              "min-h-0 flex-1",
+              "overflow-y-auto overflow-x-hidden overscroll-contain scroll-hide",
+              "pb-2 [-webkit-overflow-scrolling:touch]",
+            ].join(" ")}
+            style={{ touchAction: "pan-y" }}
           >
-            <h3
-              id="home-filters-date-heading"
-              className={dateSectionLabelClass}
+            <h2
+              id="home-filters-overlay-title"
+              className="w-full shrink-0 pb-4 text-center text-[15px] font-semibold tracking-tight text-[var(--text)]"
             >
-              Date
-            </h3>
-            <div className="mx-auto flex max-w-[min(100%,26rem)] flex-wrap items-center justify-center gap-1.5">
-              {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
-                const isSelected =
-                  option.enabled &&
-                  isHomeDateFilterActive(dateFilter, option.value);
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    disabled={!option.enabled}
-                    aria-disabled={!option.enabled || undefined}
-                    aria-pressed={isSelected || undefined}
-                    title={option.enabled ? undefined : "Coming soon"}
-                    onClick={() => {
-                      if (!option.enabled) return;
-                      onToggleDateFilter(option.value);
-                    }}
-                    className={chipButtonClass(isSelected, {
-                      disabled: !option.enabled,
-                    })}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+              Filters
+            </h2>
 
-          <div
-            className={sectionDividerClass}
-            role="separator"
-            aria-hidden
-            data-home-filters-divider="date-calendar"
-          />
+            <section aria-labelledby="home-filters-social-heading">
+              <h3 id="home-filters-social-heading" className={sectionLabelClass}>
+                Social
+              </h3>
+              <div className="mx-auto flex max-w-[min(100%,22rem)] flex-wrap items-center justify-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={onToggleFriends}
+                  className={chipButtonClass(friendsFilter)}
+                  aria-pressed={friendsFilter || undefined}
+                >
+                  Friends
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleTypeFilter("hangouts")}
+                  className={chipButtonClass(eventsSelected)}
+                  aria-pressed={eventsSelected || undefined}
+                >
+                  Events
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleTypeFilter("experiences")}
+                  className={chipButtonClass(placesSelected)}
+                  aria-pressed={placesSelected || undefined}
+                >
+                  Posts
+                </button>
+              </div>
+            </section>
 
-          <section aria-labelledby="home-filters-calendar-heading">
-            <h3
-              id="home-filters-calendar-heading"
-              className={sectionLabelClass}
-            >
-              Calendar
-            </h3>
-            <div className="w-full min-w-0">
-              <HomeFilterCalendarPanel
-                customOccursOn={customOccursOn}
-                onSelectCustomDate={onSelectCustomDate}
-                calendarVisible={open}
-                friendsFilter={friendsFilter}
-                homeRefreshEpoch={homeRefreshEpoch}
-                resetToken={open}
-              />
-            </div>
-            <p
-              className="mx-auto mt-2.5 max-w-[22rem] text-center text-[10px] leading-snug text-[var(--text)]/55"
-              role="note"
-            >
-              Numbers show how many events are available on that day.
-            </p>
             <div
-              className="mt-4 flex items-center justify-center gap-3 pb-2"
-              data-home-filters-bottom-actions="true"
+              className={socialToDateDividerClass}
+              role="separator"
+              aria-hidden
+              data-home-filters-divider="social-date"
+            />
+
+            <section
+              data-tour-target="home-filter-dates"
+              aria-labelledby="home-filters-date-heading"
             >
-              <button
-                type="button"
-                onClick={onClearAllFilters}
-                aria-pressed={hasActiveFilters || undefined}
-                className={chipButtonClass(hasActiveFilters)}
+              <h3
+                id="home-filters-date-heading"
+                className={dateSectionLabelClass}
               >
-                Clear all filters
-              </button>
-              <button
-                type="button"
-                className={`${glassPill} flex h-9 w-9 shrink-0 items-center justify-center p-0 text-[var(--text)] hover:bg-[var(--glass-active-bg)]`}
-                aria-label="Close filters"
-                onClick={() => playAnimatedDismiss()}
+                Date
+              </h3>
+              <div className="mx-auto flex max-w-[min(100%,26rem)] flex-wrap items-center justify-center gap-1.5">
+                {HOME_DATE_FILTER_DRAWER_OPTIONS.map((option) => {
+                  const isSelected =
+                    option.enabled &&
+                    isHomeDateFilterActive(dateFilter, option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={!option.enabled}
+                      aria-disabled={!option.enabled || undefined}
+                      aria-pressed={isSelected || undefined}
+                      title={option.enabled ? undefined : "Coming soon"}
+                      onClick={() => {
+                        if (!option.enabled) return;
+                        onToggleDateFilter(option.value);
+                      }}
+                      className={chipButtonClass(isSelected, {
+                        disabled: !option.enabled,
+                      })}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <div
+              className={sectionDividerClass}
+              role="separator"
+              aria-hidden
+              data-home-filters-divider="date-calendar"
+            />
+
+            <section aria-labelledby="home-filters-calendar-heading">
+              <h3
+                id="home-filters-calendar-heading"
+                className={sectionLabelClass}
               >
-                <PiX size={18} aria-hidden />
-              </button>
-            </div>
-          </section>
+                Calendar
+              </h3>
+              <div className="w-full min-w-0">
+                <HomeFilterCalendarPanel
+                  customOccursOn={customOccursOn}
+                  onSelectCustomDate={onSelectCustomDate}
+                  calendarVisible={open}
+                  friendsFilter={friendsFilter}
+                  homeRefreshEpoch={homeRefreshEpoch}
+                  resetToken={open}
+                />
+              </div>
+              <p
+                className="mx-auto mt-2.5 max-w-[22rem] text-center text-[10px] leading-snug text-[var(--text)]/55"
+                role="note"
+              >
+                Numbers show how many events are available on that day.
+              </p>
+            </section>
+          </div>
+
+          <div
+            className={footerBarClass}
+            data-home-filters-bottom-actions="true"
+          >
+            <button
+              type="button"
+              onClick={onClearAllFilters}
+              aria-pressed={hasActiveFilters || undefined}
+              className={chipButtonClass(hasActiveFilters)}
+            >
+              Clear all filters
+            </button>
+            <button
+              type="button"
+              className={doneButtonClass}
+              aria-label="Done"
+              onClick={() => playAnimatedDismiss()}
+            >
+              Done
+            </button>
+          </div>
         </div>
       </div>
 

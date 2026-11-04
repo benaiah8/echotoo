@@ -32,8 +32,15 @@ import {
 } from "../../hooks/usePairUpCandidates";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import { interleavePairUpCandidates } from "../../lib/interleavePairUpCandidates";
+import {
+  clearDiscoverRecentSeenHistory,
+  noteDiscoverOpportunitiesDisplayed,
+  orderDiscoverCandidates,
+} from "../../lib/people/discoverCandidateRotation";
+import { discoverDiagMeasureRender } from "../../lib/people/discoverCompletenessDiag";
 import type { GroupUpCandidate, PairUpCandidate } from "../../lib/people/types";
 import {
+  clearMatchDeckSession,
   consumeMatchDeckSession,
   emptyGroupUpDeckScopeSnapshot,
   emptyMatchDeckScopeSnapshot,
@@ -79,10 +86,6 @@ import { PEOPLE_TAB_REFRESH_EVENT } from "../../lib/homeRefreshEvents";
 import { useHomePullToRefresh } from "../../hooks/useHomePullToRefresh";
 import { acquirePullToRefreshBlock } from "../../lib/pullToRefreshBlock";
 import { supabase } from "../../lib/supabaseClient";
-import {
-  hasP2pDiscoverIntroSeen,
-  setP2pDiscoverIntroSeen,
-} from "../../lib/p2pDiscoverIntroSeen";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
 import {
   getPairUpJoinStatus,
@@ -321,7 +324,8 @@ function collectMineWarmFrontUrls(args: {
 
 type DeckMode = MatchDeckSessionMode;
 type ActionPhase = "idle" | "expressing" | "completing" | "completeFailed";
-type DiscoverDialog = null | "intro";
+/** Icon-tap Discover help only — never auto-opened on login/nav. */
+type DiscoverDialog = null | "info";
 
 export type DuoMatchConfirm = {
   conversationId: string;
@@ -687,6 +691,12 @@ export default function MatchDeckOverlay({
     discover: [] as string[],
     open_plans: [] as string[],
   });
+  /** Tracks which auth user owns overlay deck UI state. */
+  const accountDeckUserRef = useRef<string | null | undefined>(undefined);
+  /** Latch so exhausted Discover rotates once per visit to the end. */
+  const discoverEndRotateLatchRef = useRef(false);
+  /** Bumps Discover ordering when an exhausted pool rotates. */
+  const [discoverRotateEpoch, setDiscoverRotateEpoch] = useState(0);
   const loadMoreInFlightRef = useRef(false);
   const openLocationRef = useRef(location);
   const activeScopeRef = useRef(activeScope);
@@ -721,6 +731,7 @@ export default function MatchDeckOverlay({
     let cancelled = false;
     const applyPref = (value: boolean | null | undefined) => {
       if (cancelled) return;
+      // Preserve explicit OFF; missing/null → ON (schema DEFAULT true).
       const enabled = value !== false;
       setDiscoverEnabled(enabled);
       if (!enabled && activeScopeRef.current === "discover") {
@@ -767,6 +778,71 @@ export default function MatchDeckOverlay({
     };
   }, []);
 
+  /**
+   * Account isolation for overlay-owned Discover/Duo window state.
+   * Does not flip persistent Discover OFF preferences — only reloads them.
+   */
+  useEffect(() => {
+    const prev = accountDeckUserRef.current;
+    if (prev === authUserId) return;
+    // Stay unresolved through the initial null before getSession settles.
+    if (prev === undefined && authUserId === null) return;
+
+    accountDeckUserRef.current = authUserId;
+
+    const isFirstAuthResolve = prev === undefined;
+    const restoredMismatchesAccount =
+      Boolean(authUserId) &&
+      Boolean(restored?.userId) &&
+      restored!.userId !== authUserId;
+
+    if (!isFirstAuthResolve || restoredMismatchesAccount) {
+      setScopeState({
+        my_plans: emptyMatchDeckScopeSnapshot(),
+        discover: emptyMatchDeckScopeSnapshot(),
+        open_plans: emptyMatchDeckScopeSnapshot(),
+      });
+      setGroupUpScope(emptyGroupUpDeckScopeSnapshot());
+      ingestedIdsRef.current = {
+        my_plans: new Set(),
+        discover: new Set(),
+        open_plans: new Set(),
+      };
+      excludedOnIngestRef.current = {
+        my_plans: new Set(),
+        discover: new Set(),
+        open_plans: new Set(),
+      };
+      orderedIdsRef.current = {
+        my_plans: [],
+        discover: [],
+        open_plans: [],
+      };
+      discoverEndRotateLatchRef.current = false;
+      setDiscoverRotateEpoch((n) => n + 1);
+      if (prev) clearDiscoverRecentSeenHistory(prev);
+      clearMatchDeckSession();
+    }
+
+    let cancelled = false;
+    if (!authUserId) {
+      setDiscoverEnabled(true);
+      return;
+    }
+    void getProfileByUserId(authUserId).then((me) => {
+      if (cancelled) return;
+      const enabled = me?.p2p_discover_enabled !== false;
+      setDiscoverEnabled(enabled);
+      if (!enabled && activeScopeRef.current === "discover") {
+        setActiveScope("my_plans");
+        setMode("p2p");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId, restored?.userId]);
+
   // Cold open defaults to Discover (does not toggle discoverability).
   // Session restore remounts prior lazy scopes when needed.
   useEffect(() => {
@@ -789,6 +865,7 @@ export default function MatchDeckOverlay({
   ]);
 
   const selectDuoMode = useCallback(() => {
+    setDiscoverDialog(null);
     setMode("p2p");
     setActiveScope("my_plans");
   }, []);
@@ -801,6 +878,7 @@ export default function MatchDeckOverlay({
 
   const handleSelectDiscover = useCallback(() => {
     if (discoverEnableBusy) return;
+    setDiscoverDialog(null);
 
     if (!discoverEnabled) {
       setDiscoverEnableBusy(true);
@@ -813,10 +891,6 @@ export default function MatchDeckOverlay({
               setDiscoverEnabled(false);
             },
           });
-          if (authUserId && !hasP2pDiscoverIntroSeen(authUserId)) {
-            setDiscoverDialog("intro");
-            return;
-          }
           enterDiscover();
         } catch {
           toast.error(peopleUiCopy.discoverToggleError);
@@ -827,24 +901,23 @@ export default function MatchDeckOverlay({
       return;
     }
 
-    if (authUserId && !hasP2pDiscoverIntroSeen(authUserId)) {
-      setDiscoverDialog("intro");
-      return;
-    }
     enterDiscover();
-  }, [authUserId, discoverEnableBusy, discoverEnabled, enterDiscover]);
+  }, [discoverEnableBusy, discoverEnabled, enterDiscover]);
 
   const handleSelectOpenPlans = useCallback(() => {
+    setDiscoverDialog(null);
     onRequestOpenPlansMount();
     setMode("p2p");
     setActiveScope("open_plans");
   }, [onRequestOpenPlansMount]);
 
-  const handleIntroContinue = useCallback(() => {
-    if (authUserId) setP2pDiscoverIntroSeen(authUserId);
+  const handleDiscoverInfo = useCallback(() => {
+    setDiscoverDialog("info");
+  }, []);
+
+  const dismissDiscoverInfo = useCallback(() => {
     setDiscoverDialog(null);
-    enterDiscover();
-  }, [authUserId, enterDiscover]);
+  }, []);
 
   /** One shared removal path: hook list + session removedIds stay in sync. */
   const handleRemoveOpenPlanCandidate = useCallback(
@@ -909,6 +982,7 @@ export default function MatchDeckOverlay({
   }, [groupUpScope.browseTab, handleSelectGroupsBrowseTab]);
 
   const selectGroupsMode = useCallback(() => {
+    setDiscoverDialog(null);
     onRequestGroupUpsMount();
     if (mode === "groups") {
       /* Already on Groups: re-tap toggles New ↔ Yours (same browseTab as top). */
@@ -1051,6 +1125,12 @@ export default function MatchDeckOverlay({
           [scope]: emptyMatchDeckScopeSnapshot(),
         }));
         orderedIdsRef.current[scope] = [];
+        if (scope === "discover") {
+          ingestedIdsRef.current.discover = new Set();
+          excludedOnIngestRef.current.discover = new Set();
+          discoverEndRotateLatchRef.current = false;
+          setDiscoverRotateEpoch((n) => n + 1);
+        }
         invalidateMatchDeckSessionScopeAfterHardRefresh({
           kind: "pairUp",
           scope,
@@ -1317,6 +1397,7 @@ export default function MatchDeckOverlay({
     markSettledCurrentSeen();
     void flushAllPeopleDeckSeenOutboxes(authUserId);
     suspendMatchDeckSession({
+      userId: authUserId,
       mode,
       activeScope,
       scopes: scopeState,
@@ -1385,14 +1466,52 @@ export default function MatchDeckOverlay({
   }, [contentScope, candidates, removedIds]);
 
   const interleaved = useMemo(() => {
-    const next = interleavePairUpCandidates(
-      browsable,
-      orderedIdsRef.current[contentScope],
-      retiredIds
-    );
+    void discoverRotateEpoch;
+    const previousOrdered = orderedIdsRef.current[contentScope];
+    const next =
+      contentScope === "discover" && authUserId
+        ? orderDiscoverCandidates({
+            userId: authUserId,
+            candidates: browsable,
+            previousOrderedIds: previousOrdered,
+            retiredIds,
+            hasMore,
+            rotateExhausted: !hasMore && discoverEndRotateLatchRef.current,
+            rotationEpoch: discoverRotateEpoch,
+          })
+        : interleavePairUpCandidates(browsable, previousOrdered, retiredIds);
     orderedIdsRef.current[contentScope] = next.map((row) => row.opportunity_id);
     return next;
-  }, [contentScope, browsable, retiredIds]);
+  }, [
+    authUserId,
+    browsable,
+    contentScope,
+    discoverRotateEpoch,
+    hasMore,
+    retiredIds,
+  ]);
+
+  useEffect(() => {
+    if (contentScope !== "discover" || !import.meta.env.DEV) return;
+    const renderDiag = discoverDiagMeasureRender({
+      received: candidates,
+      afterFilter: browsable,
+      removedOrRetiredIds: [...removedIds, ...retiredIds],
+      hasMore,
+    });
+    peopleDebugRecord("discover:renderDiag", {
+      ...renderDiag,
+      deckRows: interleaved.length,
+    });
+  }, [
+    browsable,
+    candidates,
+    contentScope,
+    hasMore,
+    interleaved.length,
+    removedIds,
+    retiredIds,
+  ]);
 
   // Fixtures only when explicitly forced in DEV — never substitute for empty Mine.
   const useDevMocks =
@@ -1692,8 +1811,12 @@ export default function MatchDeckOverlay({
       hasMore: useDevMocks ? false : hasMore,
       loadMoreInFlight,
     });
+    // Discover: do not cascade loadMore when every loaded row is already seen —
+    // that pulled the full eligible pool on open/refresh. Near-end prefetch and
+    // empty-window recovery still load the next cursor page while scrolling.
     const allLoadedSeen =
       isPairUpSeenScope &&
+      contentScope !== "discover" &&
       !useDevMocks &&
       deckRows.length > 0 &&
       deckRows.every((row) => pairUpSeenIds.has(row.opportunity_id));
@@ -1712,6 +1835,7 @@ export default function MatchDeckOverlay({
       index,
       deckRowsLen: deckRows.length,
       scope: activeScope,
+      contentScope,
       emptyNeedsPage,
       allLoadedSeen,
     });
@@ -1727,6 +1851,7 @@ export default function MatchDeckOverlay({
       });
   }, [
     activeScope,
+    contentScope,
     deckRows,
     hasMore,
     index,
@@ -2398,6 +2523,7 @@ export default function MatchDeckOverlay({
       scopeStateRef.current = nextScopes;
       setScopeState(nextScopes);
       suspendMatchDeckSession({
+        userId: authUserIdRef.current,
         mode: modeRef.current,
         activeScope: scope,
         scopes: nextScopes,
@@ -2757,6 +2883,70 @@ export default function MatchDeckOverlay({
     }
   }, [contentScope]);
 
+  useEffect(() => {
+    discoverAppearancesFreezeRef.current = null;
+  }, [authUserId, discoverRotateEpoch]);
+
+  /**
+   * Hard refresh / exhausted rotation bump `discoverRotateEpoch` and reorder
+   * `deckRows`. Appearance freeze must drop in the same render — the effect
+   * above runs too late, so a stale Ben-first freeze would win over the new
+   * ordered lead (effects after paint).
+   */
+  const discoverAppearancesFreezeEpochRef = useRef(discoverRotateEpoch);
+  if (discoverAppearancesFreezeEpochRef.current !== discoverRotateEpoch) {
+    discoverAppearancesFreezeRef.current = null;
+    discoverAppearancesFreezeEpochRef.current = discoverRotateEpoch;
+  }
+  if (contentScope !== "discover") {
+    discoverAppearancesFreezeRef.current = null;
+  }
+
+  /** Bound recent-seen from visited Discover ids (account-scoped, memory only). */
+  useEffect(() => {
+    if (!authUserId || contentScope !== "discover") return;
+    noteDiscoverOpportunitiesDisplayed(authUserId, scopeSnap.visitedIds);
+  }, [authUserId, contentScope, scopeSnap.visitedIds]);
+
+  useEffect(() => {
+    if (hasMore) discoverEndRotateLatchRef.current = false;
+  }, [hasMore]);
+
+  /**
+   * Exhausted Discover pool: one lightweight reorder of still-eligible cards
+   * (no new ids / network). Latch clears once the viewer leaves the end so
+   * repeated scrolling can rotate again without unbounded DOM growth.
+   */
+  useEffect(() => {
+    if (contentScope !== "discover") return;
+    if (useDevMocks || loadMoreInFlight || hasMore) return;
+    if (candidates.length <= 1 || deckRows.length === 0) return;
+    const remaining = deckRows.length - index - 1;
+    if (remaining > 0) {
+      discoverEndRotateLatchRef.current = false;
+      return;
+    }
+    if (remaining !== 0) return;
+    if (discoverEndRotateLatchRef.current) return;
+    discoverEndRotateLatchRef.current = true;
+    orderedIdsRef.current.discover = [];
+    patchScope("discover", {
+      activeOrderedIds: [],
+      currentOpportunityId: null,
+      retiredIds: [],
+    });
+    setDiscoverRotateEpoch((n) => n + 1);
+  }, [
+    candidates.length,
+    contentScope,
+    deckRows.length,
+    hasMore,
+    index,
+    loadMoreInFlight,
+    patchScope,
+    useDevMocks,
+  ]);
+
   /**
    * Normal Discover entry: always start at the feed top (portrait first).
    * Do not restore currentOpportunityId — that id lives on opportunity boxes
@@ -2781,7 +2971,7 @@ export default function MatchDeckOverlay({
     return groupDiscoverOpportunities(deckRows, {
       previous: discoverAppearancesFreezeRef.current,
     });
-  }, [contentScope, deckRows]);
+  }, [contentScope, deckRows, discoverRotateEpoch]);
 
   useEffect(() => {
     if (contentScope === "discover") {
@@ -3695,6 +3885,7 @@ export default function MatchDeckOverlay({
         onSelectDiscover={handleSelectDiscover}
         onSelectPlans={handleSelectOpenPlans}
         onSelectGroups={selectGroupsMode}
+        onDiscoverInfo={handleDiscoverInfo}
       />
 
       {/* Groups secondary: centered New | Yours under category nav. */}
@@ -4174,14 +4365,14 @@ export default function MatchDeckOverlay({
       />
 
       <ConfirmDialog
-        open={discoverDialog === "intro"}
-        onClose={() => setDiscoverDialog(null)}
-        title={peopleUiCopy.discoverIntroTitle}
-        message={peopleUiCopy.discoverIntroBody}
-        cancelLabel={peopleUiCopy.discoverIntroNotNow}
-        confirmLabel={peopleUiCopy.discoverIntroContinue}
+        open={discoverDialog === "info"}
+        onClose={dismissDiscoverInfo}
+        title={peopleUiCopy.discoverInfoTitle}
+        message={peopleUiCopy.discoverInfoBody}
+        hideCancel
+        confirmLabel={peopleUiCopy.discoverInfoDismiss}
         confirmVariant="primary"
-        onConfirm={handleIntroContinue}
+        onConfirm={dismissDiscoverInfo}
       />
       {duoMatchConfirm ? (
         <div

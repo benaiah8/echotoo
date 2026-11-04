@@ -1,6 +1,7 @@
 /**
  * Profile social-opportunity read + Profile Connect RPC wrappers.
  * Post-centric list_profile_social_opportunities: one row per source_post.
+ * Keyset pages via p_limit / p_cursor (default page size 8).
  */
 
 import { supabase } from "../../lib/supabaseClient";
@@ -23,8 +24,12 @@ import {
 } from "../../lib/pairUpCache";
 import { toPairUpRpcError } from "./pairUp";
 
-/** Launch Profile rail preview hard cap (matches list_profile_social_opportunities LIMIT). */
-export const PROFILE_SOCIAL_OPPORTUNITY_LIMIT = 8;
+/** Default Profile rail page size (matches RPC DEFAULT p_limit). Not a hard ceiling. */
+export const PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE = 8;
+
+/** @deprecated Use PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE — kept for existing imports/tests. */
+export const PROFILE_SOCIAL_OPPORTUNITY_LIMIT =
+  PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE;
 
 function parseStringArray(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
@@ -121,17 +126,53 @@ export function parseProfileSocialOpportunity(
   };
 }
 
-function parsePage(data: unknown): ProfileSocialOpportunitiesPage {
-  if (!data || typeof data !== "object") {
-    return { opportunities: [] };
+/** Deduplicate by source_post_id preserving first-seen order. */
+export function mergeProfileSocialOpportunitiesBySourcePostId(
+  existing: readonly ProfileSocialOpportunity[],
+  incoming: readonly ProfileSocialOpportunity[]
+): ProfileSocialOpportunity[] {
+  const seen = new Set<string>();
+  const out: ProfileSocialOpportunity[] = [];
+  for (const row of existing) {
+    if (seen.has(row.source_post_id)) continue;
+    seen.add(row.source_post_id);
+    out.push(row);
   }
-  const rows = (data as { opportunities?: unknown }).opportunities;
-  if (!Array.isArray(rows)) return { opportunities: [] };
+  for (const row of incoming) {
+    if (seen.has(row.source_post_id)) continue;
+    seen.add(row.source_post_id);
+    out.push(row);
+  }
+  return out;
+}
+
+/** Parse RPC page payload. Exported for focused contract tests. */
+export function parseProfileSocialOpportunitiesPage(
+  data: unknown
+): ProfileSocialOpportunitiesPage {
+  if (!data || typeof data !== "object") {
+    return { opportunities: [], has_more: false, next_cursor: null };
+  }
+  const payload = data as {
+    opportunities?: unknown;
+    has_more?: unknown;
+    next_cursor?: unknown;
+  };
+  const rows = payload.opportunities;
+  const opportunities = Array.isArray(rows)
+    ? rows
+        .map(parseProfileSocialOpportunity)
+        .filter((row): row is ProfileSocialOpportunity => row != null)
+    : [];
+  const hasMore = payload.has_more === true;
+  const nextCursor =
+    typeof payload.next_cursor === "string" && payload.next_cursor.trim()
+      ? payload.next_cursor
+      : null;
   return {
-    opportunities: rows
-      .map(parseProfileSocialOpportunity)
-      .filter((row): row is ProfileSocialOpportunity => row != null)
-      .slice(0, PROFILE_SOCIAL_OPPORTUNITY_LIMIT),
+    opportunities,
+    has_more: hasMore && !!nextCursor,
+    next_cursor: hasMore ? nextCursor : null,
   };
 }
 
@@ -148,14 +189,31 @@ async function requireSessionUserId(): Promise<string> {
 export async function listProfileSocialOpportunities(options: {
   profileUserId: string;
   force?: boolean;
+  /** Omit / null = first page. */
+  cursor?: string | null;
+  limit?: number;
+  /** When true, skip read-through cache (loadMore / force refresh). */
+  bypassCache?: boolean;
 }): Promise<ProfileSocialOpportunitiesPage> {
   const profileUserId = options.profileUserId?.trim();
-  if (!profileUserId) return { opportunities: [] };
+  if (!profileUserId) {
+    return { opportunities: [], has_more: false, next_cursor: null };
+  }
 
   const viewerUserId = await requireSessionUserId();
   const force = options.force === true;
+  const bypassCache = options.bypassCache === true || force;
+  const cursor =
+    typeof options.cursor === "string" && options.cursor.trim()
+      ? options.cursor.trim()
+      : null;
+  const limit = Math.min(
+    Math.max(options.limit ?? PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE, 1),
+    50
+  );
 
-  if (!force) {
+  // Cache holds the accumulated first-page-anchored rail snapshot only.
+  if (!bypassCache && !cursor) {
     const cached = getCachedProfileSocialOpportunities(
       viewerUserId,
       profileUserId
@@ -163,22 +221,39 @@ export async function listProfileSocialOpportunities(options: {
     if (cached) return cached;
   }
 
+  const requestKey = cursor
+    ? `profile_social_opps:${viewerUserId}:${profileUserId}:cursor:${cursor}`
+    : `profile_social_opps:${viewerUserId}:${profileUserId}:start`;
+
   const result = await requestManager.execute(
-    `profile_social_opps:${viewerUserId}:${profileUserId}`,
+    requestKey,
     async () => {
       const { data, error } = await supabase.rpc(
         "list_profile_social_opportunities",
-        { p_profile_user_id: profileUserId }
+        {
+          p_profile_user_id: profileUserId,
+          p_limit: limit,
+          p_cursor: cursor,
+        }
       );
       if (error) throw toPairUpRpcError(error);
-      return parsePage(data);
+      return parseProfileSocialOpportunitiesPage(data);
     },
     "high"
   );
 
   if (result.error) throw toPairUpRpcError(result.error);
-  const page = result.data ?? { opportunities: [] };
-  setCachedProfileSocialOpportunities(viewerUserId, profileUserId, page);
+  const page = result.data ?? {
+    opportunities: [],
+    has_more: false,
+    next_cursor: null,
+  };
+
+  // Seed / replace cache only for first-page fetches (accumulated state is
+  // written by the hook after merge).
+  if (!cursor) {
+    setCachedProfileSocialOpportunities(viewerUserId, profileUserId, page);
+  }
   return page;
 }
 

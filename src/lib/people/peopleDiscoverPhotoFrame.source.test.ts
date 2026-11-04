@@ -41,7 +41,8 @@ describe("Discover photo frame clip", () => {
     expect(row).toContain('data-people-discover-photo-border="true"');
     expect(row).toContain("pointer-events-none absolute inset-0 z-20");
     expect(row).toContain("boxShadow: PEOPLE_DISCOVER_MEDIA_INSET_BORDER");
-    expect(row).toContain("enableTapCycle");
+    expect(row).toContain("enableTapCycle={false}");
+    expect(row).toContain("enableHorizontalPhotoSwipe");
     expect(row).toContain("onFeedCharacterFallback");
   });
 

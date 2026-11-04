@@ -210,15 +210,18 @@ describe("parseProfileSocialOpportunity post-centric contract", () => {
     ).toBeNull();
   });
 
-  it("F/K: client LIMIT is source-post cap; no N+1 fetch helpers in service", () => {
+  it("F/K: client default page size is 8; no N+1 fetch helpers; no hard slice ceiling", () => {
     expect(PROFILE_SOCIAL_OPPORTUNITY_LIMIT).toBe(8);
     const service = readFileSync(
       resolve(process.cwd(), "src/api/services/profileSocialOpportunities.ts"),
       "utf8"
     );
     expect(service).toContain("parseProfileSocialOpportunity");
+    expect(service).toContain("PROFILE_SOCIAL_OPPORTUNITY_PAGE_SIZE");
+    expect(service).toContain("p_limit");
+    expect(service).toContain("p_cursor");
     expect(service).not.toContain("list_my_group_up_memberships");
     expect(service).not.toMatch(/for\s*\(.*opportunity.*\)\s*\{[\s\S]*supabase\.rpc/);
-    expect(service).toContain("slice(0, PROFILE_SOCIAL_OPPORTUNITY_LIMIT)");
+    expect(service).not.toContain("slice(0, PROFILE_SOCIAL_OPPORTUNITY");
   });
 });

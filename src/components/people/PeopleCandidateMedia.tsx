@@ -63,6 +63,12 @@ import {
 } from "../../lib/people/peopleCandidateMediaPresentation";
 import { peopleDebugRecord } from "../../lib/people/peopleDeckDebug";
 import { mineStackImageLoadingAttrs } from "../../lib/people/mineCandidateImageWarm";
+import {
+  resolveDiscoverPhotoSwipeAxis,
+  resolveDiscoverPhotoSwipeNextIndex,
+  type DiscoverPhotoSwipeAxis,
+} from "../../lib/people/discoverPhotoSwipeGesture";
+import DiscoverFeedPhotoTrack from "./DiscoverFeedPhotoTrack";
 
 const MINE_GALLERY_HISTORY_MARKER = "minePortraitGallery";
 
@@ -84,6 +90,11 @@ export type PeopleCandidateMediaProps = {
   isCurrent?: boolean;
   className?: string;
   enableTapCycle?: boolean;
+  /**
+   * Discover feed only — horizontal swipe changes photos; disables tap-cycle
+   * when used with `feedLayout`. Never enable on Duo Embla slides.
+   */
+  enableHorizontalPhotoSwipe?: boolean;
   /** Explicit Mine vs Discover presentation (preferred over peekDirection alone). */
   presentation?: PeopleDuoPresentationVariant;
   /**
@@ -167,6 +178,7 @@ export default function PeopleCandidateMedia({
   isCurrent = false,
   className = "",
   enableTapCycle = true,
+  enableHorizontalPhotoSwipe = false,
   presentation = "discover",
   peekDirection = "down",
   identityOverlay,
@@ -239,19 +251,28 @@ export default function PeopleCandidateMedia({
   // Mine echo / legacy / empty: DiscoverLegacyMedia reports paint-true atmosphere.
 
   /**
-   * Feed Discover: allow tap-cycle on visible rows without Embla "current" focus.
-   * Duo Mine carousel still gates on isCurrent so off-slide peeks do not steal taps.
+   * Discover-only horizontal photo swipe (feedLayout + opt-in).
+   * Duo keeps tap-cycle; never enable swipe on Embla slides.
+   */
+  const feedSwipeNav = Boolean(
+    feedLayout && enableHorizontalPhotoSwipe && photoCount > 1 && withPhoto
+  );
+  /**
+   * Feed Discover legacy tap-cycle unlock (kept for non-Discover feed callers).
+   * Discover person rows pass enableTapCycle={false} with swipe instead.
    */
   const feedTapCycleUnlocked = Boolean(feedLayout && enableTapCycle);
-  /** Discover: handlers only while current. Mine: track presses early; activate on up. */
+  /** Discover swipe or Duo/Mine tap: track presses; Duo still gates cycle on isCurrent. */
   const trackPhotoPointers =
     photoCount > 1 &&
     withPhoto &&
     (isMine ||
       (enableTapCycle && isCurrent) ||
-      feedTapCycleUnlocked);
+      feedTapCycleUnlocked ||
+      feedSwipeNav);
   const canCyclePhotos =
     enableTapCycle &&
+    !feedSwipeNav &&
     photoCount > 1 &&
     withPhoto &&
     (isCurrent || feedTapCycleUnlocked);
@@ -260,6 +281,14 @@ export default function PeopleCandidateMedia({
   isCurrentRef.current = isCurrent;
   const canCycleRef = useRef(canCyclePhotos);
   canCycleRef.current = canCyclePhotos;
+  const feedSwipeNavRef = useRef(feedSwipeNav);
+  feedSwipeNavRef.current = feedSwipeNav;
+  const safeIndexRef = useRef(safeIndex);
+  safeIndexRef.current = safeIndex;
+  const photoCountRef = useRef(photoCount);
+  photoCountRef.current = photoCount;
+  const onActiveIndexChangeRef = useRef(onActiveIndexChange);
+  onActiveIndexChangeRef.current = onActiveIndexChange;
   const identityKeyRef = useRef(identityKey);
   identityKeyRef.current = identityKey;
 
@@ -269,15 +298,24 @@ export default function PeopleCandidateMedia({
     id: number;
     identityKey: string;
   } | null>(null);
+  const swipeAxisRef = useRef<DiscoverPhotoSwipeAxis>("undecided");
 
   const clearTapOrigin = useCallback(() => {
     tapOriginRef.current = null;
+    swipeAxisRef.current = "undecided";
   }, []);
 
   const cycle = useCallback(() => {
-    if (!enableTapCycle || photoCount <= 1 || !onActiveIndexChange) return;
+    if (!enableTapCycle || feedSwipeNav || photoCount <= 1 || !onActiveIndexChange)
+      return;
     onActiveIndexChange((safeIndex + 1) % photoCount);
-  }, [enableTapCycle, onActiveIndexChange, photoCount, safeIndex]);
+  }, [
+    enableTapCycle,
+    feedSwipeNav,
+    onActiveIndexChange,
+    photoCount,
+    safeIndex,
+  ]);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -292,6 +330,7 @@ export default function PeopleCandidateMedia({
         clearTapOrigin();
         return;
       }
+      swipeAxisRef.current = "undecided";
       tapOriginRef.current = {
         x: e.clientX,
         y: e.clientY,
@@ -302,10 +341,25 @@ export default function PeopleCandidateMedia({
     [clearTapOrigin, trackPhotoPointers]
   );
 
+  const onPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!feedSwipeNavRef.current) return;
+      const origin = tapOriginRef.current;
+      if (!origin || origin.id !== e.pointerId) return;
+      if (swipeAxisRef.current !== "undecided") return;
+      const dx = e.clientX - origin.x;
+      const dy = e.clientY - origin.y;
+      swipeAxisRef.current = resolveDiscoverPhotoSwipeAxis(dx, dy);
+    },
+    []
+  );
+
   const onPointerUp = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       const origin = tapOriginRef.current;
+      const axis = swipeAxisRef.current;
       tapOriginRef.current = null;
+      swipeAxisRef.current = "undecided";
       if (!origin || origin.id !== e.pointerId) {
         if (import.meta.env.DEV && trackPhotoPointers) {
           peopleDebugRecord("mine:photoTap", {
@@ -330,18 +384,59 @@ export default function PeopleCandidateMedia({
         }
         return;
       }
-      const dx = Math.abs(e.clientX - origin.x);
-      const dy = Math.abs(e.clientY - origin.y);
+
+      const dx = e.clientX - origin.x;
+      const dy = e.clientY - origin.y;
+
+      // Discover swipe-only: never advance on tap; commit horizontal only.
+      if (feedSwipeNavRef.current) {
+        const resolvedAxis =
+          axis === "undecided" ? resolveDiscoverPhotoSwipeAxis(dx, dy) : axis;
+        const next = resolveDiscoverPhotoSwipeNextIndex({
+          dx,
+          dy,
+          axis: resolvedAxis,
+          photoCount: photoCountRef.current,
+          currentIndex: safeIndexRef.current,
+        });
+        if (next == null || next === safeIndexRef.current) {
+          if (import.meta.env.DEV) {
+            peopleDebugRecord("discover:photoSwipe", {
+              outcome: "reject",
+              reason: resolvedAxis === "vertical" ? "vertical" : "no-commit",
+              dx,
+              dy,
+              axis: resolvedAxis,
+              identityKey: identityKeyRef.current,
+            });
+          }
+          return;
+        }
+        onActiveIndexChangeRef.current?.(next);
+        if (import.meta.env.DEV) {
+          peopleDebugRecord("discover:photoSwipe", {
+            outcome: "commit",
+            next,
+            dx,
+            dy,
+            identityKey: identityKeyRef.current,
+          });
+        }
+        return;
+      }
+
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
       if (
-        dx > PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX ||
-        dy > PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX
+        adx > PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX ||
+        ady > PEOPLE_PHOTO_TAP_MOVE_THRESHOLD_PX
       ) {
         if (import.meta.env.DEV) {
           peopleDebugRecord("mine:photoTap", {
             outcome: "reject",
             reason: "moved",
-            dx,
-            dy,
+            dx: adx,
+            dy: ady,
             isCurrent: isCurrentRef.current,
             identityKey: identityKeyRef.current,
           });
@@ -374,12 +469,15 @@ export default function PeopleCandidateMedia({
 
   const onPointerCancel = useCallback(() => {
     if (import.meta.env.DEV && tapOriginRef.current) {
-      peopleDebugRecord("mine:photoTap", {
-        outcome: "reject",
-        reason: "cancelled",
-        isCurrent: isCurrentRef.current,
-        identityKey: identityKeyRef.current,
-      });
+      peopleDebugRecord(
+        feedSwipeNavRef.current ? "discover:photoSwipe" : "mine:photoTap",
+        {
+          outcome: "reject",
+          reason: "cancelled",
+          isCurrent: isCurrentRef.current,
+          identityKey: identityKeyRef.current,
+        }
+      );
     }
     clearTapOrigin();
   }, [clearTapOrigin]);
@@ -390,7 +488,10 @@ export default function PeopleCandidateMedia({
     className: `relative h-full w-full ${
       feedLayout ? "overflow-hidden" : "overflow-visible"
     } ${className}`.trim(),
+    style: feedSwipeNav ? ({ touchAction: "pan-y" } as const) : undefined,
+    "data-people-discover-photo-swipe": feedSwipeNav ? "true" : undefined,
     onPointerDown: trackPhotoPointers ? onPointerDown : undefined,
+    onPointerMove: feedSwipeNav ? onPointerMove : undefined,
     onPointerUp: trackPhotoPointers ? onPointerUp : undefined,
     onPointerCancel: trackPhotoPointers ? onPointerCancel : undefined,
     onKeyDown: canCyclePhotos
@@ -410,16 +511,59 @@ export default function PeopleCandidateMedia({
             cycle();
           }
         }
-      : undefined,
+      : feedSwipeNav
+        ? (e: React.KeyboardEvent<HTMLDivElement>) => {
+            const t = e.target;
+            if (
+              t instanceof Element &&
+              (t.closest("[data-people-mine-identity-hit]") ||
+                t.closest("[data-people-mine-fullscreen-hit]"))
+            ) {
+              return;
+            }
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            if (photoCount <= 1 || !onActiveIndexChange) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const delta = e.key === "ArrowLeft" ? 1 : -1;
+            onActiveIndexChange(
+              ((safeIndex + delta) % photoCount + photoCount) % photoCount
+            );
+          }
+        : undefined,
     // Mine hosts an expandable bio <button>; avoid nested button semantics.
     role: canCyclePhotos
       ? isMine
         ? ("group" as const)
         : ("button" as const)
-      : undefined,
-    tabIndex: canCyclePhotos ? 0 : undefined,
-    "aria-label": canCyclePhotos ? "Show next photo" : undefined,
+      : feedSwipeNav
+        ? ("group" as const)
+        : undefined,
+    tabIndex: canCyclePhotos || feedSwipeNav ? 0 : undefined,
+    "aria-label": canCyclePhotos
+      ? "Show next photo"
+      : feedSwipeNav
+        ? "Photo gallery, swipe for more"
+        : undefined,
   };
+
+  /**
+   * Discover multi-photo: dedicated finger-following track (isolated from Duo
+   * MinePhotoStack). Single-photo Discover and all Duo paths keep Mine stack.
+   */
+  if (usesMinePhotoStack && feedSwipeNav && onActiveIndexChange) {
+    return (
+      <DiscoverFeedPhotoTrack
+        photos={photos}
+        activeIndex={safeIndex}
+        onActiveIndexChange={onActiveIndexChange}
+        identityOverlay={identityOverlay}
+        className={className}
+        mediaRadius={feedMediaRadius}
+        tapIdentityKey={identityKey}
+      />
+    );
+  }
 
   if (usesMinePhotoStack) {
     return (
@@ -998,6 +1142,9 @@ function MinePhotoStack({
   const shellOnPointerDown = shellProps.onPointerDown as
     | ((e: ReactPointerEvent<HTMLDivElement>) => void)
     | undefined;
+  const shellOnPointerMove = shellProps.onPointerMove as
+    | ((e: ReactPointerEvent<HTMLDivElement>) => void)
+    | undefined;
   const shellOnPointerUp = shellProps.onPointerUp as
     | ((e: ReactPointerEvent<HTMLDivElement>) => void)
     | undefined;
@@ -1017,6 +1164,15 @@ function MinePhotoStack({
       }
       shellOnPointerDown?.(e);
     },
+    onPointerMove: shellOnPointerMove
+      ? (e: ReactPointerEvent<HTMLDivElement>) => {
+          if (Date.now() < galleryClickThroughGuardUntilRef.current) {
+            e.stopPropagation();
+            return;
+          }
+          shellOnPointerMove(e);
+        }
+      : undefined,
     onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => {
       if (Date.now() < galleryClickThroughGuardUntilRef.current) {
         e.stopPropagation();

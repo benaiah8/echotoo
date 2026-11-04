@@ -52,10 +52,11 @@ describe("list_profile_social_opportunities source author identity (source)", ()
     expect(body).not.toContain("v_owner.avatar_url AS source_author");
   });
 
-  it("keeps post-centric aggregation, LIMIT 8, privacy, and hosted-only Groups", () => {
+  it("keeps post-centric aggregation, privacy, and hosted-only Groups (LIMIT 8 lived here pre-pagination)", () => {
     const body = sqlBody(readSql(IDENTITY_MIG));
     expect(body).toContain("aggregated AS");
     expect(body).toContain("FROM aggregated a");
+    // Historical identity mig still had the preview LIMIT; pagination supersedes it.
     expect(body).toContain("LIMIT 8");
     expect(body).toContain("v_is_self := (v_me = p_profile_user_id)");
     expect(body).toContain(

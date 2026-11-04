@@ -136,11 +136,12 @@ export const peopleUiCopy = {
   openPlanRequestGroupViewPost: "View post",
   openPlanRequestersEmpty: "No pending requests.",
   openPlanRequestersLoadError: "Couldn't load requests.",
-  discoverIntroTitle: "Meet people outside your plans",
-  discoverIntroBody:
-    "Discover lets you meet people outside your shared plans. When People discoverability is on, your eligible Duos for public events can also appear to others in Discover, and your active Duos and hosted Groups may show on your Profile.",
-  discoverIntroContinue: "Continue",
-  discoverIntroNotNow: "Not now",
+  /** Icon-only Discover help (no auto popup). */
+  discoverInfoTitle: "Discover",
+  discoverInfoBody:
+    "Discover helps you meet people beyond your existing plans. You can turn it on or off anytime in Profile Settings.",
+  discoverInfoDismiss: "Got it",
+  discoverInfoAria: "About Discover",
   discoverEmpty: "Nothing to discover yet",
   discoverEmptyBody:
     "New people will appear here as they become available. Check back soon or pull down to refresh.",

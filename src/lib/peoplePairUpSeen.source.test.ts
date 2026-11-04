@@ -190,6 +190,10 @@ describe("People unseen-first browsing (Duo/Discover/Plans/Groups New)", () => {
       expect(src).toContain("!hasMore");
       expect(src).toContain("PEOPLE_DECK_PREFETCH_REMAINING");
     }
+    // Discover must not cascade-fetch the full pool when all loaded rows are seen.
+    expect(read("pages/people/MatchDeckOverlay.tsx")).toContain(
+      'contentScope !== "discover"'
+    );
   });
 
   it("14: Plans uses opportunity_id", () => {

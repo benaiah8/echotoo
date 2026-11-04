@@ -194,7 +194,7 @@ describe("Own Profile mixed Duo+Group rail sides", () => {
       getCachedProfileSocialOpportunities("me", "me")?.opportunities ?? []
     ).toEqual([]);
     const rail = readSrc("components/profile/ProfileSocialOpportunityRail.tsx");
-    expect(rail).toContain("visible.length === 0");
+    expect(rail).toContain("opportunities.length === 0");
     expect(rail).toContain("return null");
   });
 });

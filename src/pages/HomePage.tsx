@@ -619,7 +619,7 @@ export default function HomePage() {
     setHomeSearchShellOpen(false);
     setSearch("");
     setSearchMode("posts");
-    setFiltersOpen(false);
+    // Keep filters overlay open so Clear resets without dismissing (Done closes).
     blurHomeSearchInput();
     setHomeSearchFocused(false);
     scheduleScrollHomeFeedToTop();

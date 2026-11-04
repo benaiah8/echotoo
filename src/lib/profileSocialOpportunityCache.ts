@@ -73,7 +73,16 @@ export function setCachedProfileSocialOpportunities(
 ): void {
   cache.set(profileSocialOpportunityCacheKey(viewerUserId, profileUserId), {
     ts: Date.now(),
-    value,
+    value: {
+      opportunities: value.opportunities,
+      has_more: value.has_more === true,
+      next_cursor:
+        value.has_more === true &&
+        typeof value.next_cursor === "string" &&
+        value.next_cursor.trim()
+          ? value.next_cursor
+          : null,
+    },
   });
   emit();
 }

@@ -49,10 +49,16 @@ describe("peopleDiscoverPolish", () => {
     expect(media).toContain("z-[10]");
   });
 
-  it("keeps tap-to-cycle unlocked in Discover feedLayout", () => {
+  it("Discover feed uses swipe-only photo nav; tap unlock remains for other feeds", () => {
     const media = read("components/people/PeopleCandidateMedia.tsx");
+    expect(media).toContain("feedSwipeNav");
+    expect(media).toContain('data-people-discover-photo-swipe');
+    expect(media).toContain('touchAction: "pan-y"');
     expect(media).toContain("feedTapCycleUnlocked");
     expect(media).toContain("isCurrent || feedTapCycleUnlocked");
+    const row = read("components/people/PeopleDiscoverPersonRow.tsx");
+    expect(row).toContain("enableHorizontalPhotoSwipe");
+    expect(row).toContain("enableTapCycle={false}");
   });
 
   it("Discover entry resets to scrollTop 0; does not restore opportunity ids", () => {

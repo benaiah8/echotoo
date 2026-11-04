@@ -339,6 +339,10 @@ export type ProfileSocialOpportunity = {
 
 export type ProfileSocialOpportunitiesPage = {
   opportunities: ProfileSocialOpportunity[];
+  /** Keyset continuation; false when exhausted or empty. Omitted in older cache seeds → treated as false. */
+  has_more?: boolean;
+  /** Opaque server cursor; null when has_more is false. */
+  next_cursor?: string | null;
 };
 
 /** Group Up browse deck row (G2+). */

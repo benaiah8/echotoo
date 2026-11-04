@@ -308,6 +308,8 @@ export default function PairUpActiveOverlay() {
     setLeaveBusy(true);
     const revert = setOptimisticPairUpJoinState(postId, false);
     try {
+      // closed:true = newly closed; closed:false = already inactive (idempotent).
+      // Both mean local state should reflect no active Duo — leavePairUp syncs caches.
       await leavePairUp(postId);
       closePairUpManage();
     } catch {

@@ -54,7 +54,8 @@ describe("peopleHybridPresentation", () => {
     expect(row).toContain('data-people-discover-appearance={appearanceKey}');
     expect(row).not.toContain("PeopleFeedActionRail");
     expect(row).not.toContain("data-people-discover-name");
-    expect(row).toContain("enableTapCycle");
+    expect(row).toContain("enableHorizontalPhotoSwipe");
+    expect(row).toContain("enableTapCycle={false}");
   });
 
   it("overlay mounts Discover groups and historical Duo carousel + connect dock", () => {
@@ -83,10 +84,17 @@ describe("peopleHybridPresentation", () => {
     expect(nav).toContain("data-people-duo-dest");
   });
 
-  it("feed media allows Discover tap-cycle without isCurrent gate", () => {
+  it("feed media unlocks Discover swipe without isCurrent; Duo keeps tap-cycle", () => {
     const media = read("components/people/PeopleCandidateMedia.tsx");
+    expect(media).toContain("feedSwipeNav");
+    expect(media).toContain("enableHorizontalPhotoSwipe");
     expect(media).toContain("feedTapCycleUnlocked");
     expect(media).toContain("isCurrent || feedTapCycleUnlocked");
+    const canonical = read(
+      "components/people/PeopleCanonicalCandidatePresentation.tsx"
+    );
+    expect(canonical).toContain("enableTapCycle={isCurrent}");
+    expect(canonical).not.toContain("enableHorizontalPhotoSwipe");
   });
 
   it("Plans uses Discover-style card; Groups use text-first Group Up card", () => {

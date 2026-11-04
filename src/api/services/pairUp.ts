@@ -323,7 +323,21 @@ export async function setP2pDiscoverEnabled(
   return next;
 }
 
-export async function leavePairUp(sourcePostId: string): Promise<void> {
+export type LeavePairUpResult = {
+  /**
+   * True when the RPC closed at least one active pair_up row this call.
+   * False means none were active (idempotent already-left) — not a failed Leave.
+   */
+  closed: boolean;
+};
+
+/**
+ * Leave Duo for a source. Syncs local caches to "not joined" whenever the
+ * server reports no remaining active row (closed or already inactive).
+ */
+export async function leavePairUp(
+  sourcePostId: string
+): Promise<LeavePairUpResult> {
   if (!sourcePostId) throw new Error("Missing source post");
 
   const userId = await requireSessionUserId();
@@ -337,17 +351,23 @@ export async function leavePairUp(sourcePostId: string): Promise<void> {
       ? prior.id
       : null;
 
-  const { error } = await supabase.rpc("leave_pair_up", {
+  const { data, error } = await supabase.rpc("leave_pair_up", {
     p_source_post_id: sourcePostId,
   });
-  if (error) throw error;
+  if (error) throw toPairUpRpcError(error);
 
+  const payload = data as OpportunityRpcResult | null;
+  const closed = payload?.closed === true;
+
+  // Align local state with server: no active own Duo for this source.
   invalidatePairUpForPost(sourcePostId);
   const { markLocalPairUpMutation } = await import("../../lib/pairUpJoinStore");
   markLocalPairUpMutation(sourcePostId, false);
   setCachedPairUp(userId, sourcePostId, null);
   invalidatePairUpDeck(userId);
   syncCachesAfterOwnDuoLeave(userId, sourcePostId, opportunityId);
+
+  return { closed };
 }
 
 /** Max length for Pair Up notes (parity with invite notes). */
@@ -398,12 +418,27 @@ function parseSourceType(value: unknown): "hangout" | "experience" | null {
   return value === "hangout" || value === "experience" ? value : null;
 }
 
-/** Missing/old cache treats Discover as ON (same as People chip). */
-export function isOwnP2pDiscoverDisabled(): boolean {
+/**
+ * Missing/old cache treats Discover as ON (same as People chip).
+ * When `viewerUserId` is provided, ignore a cached profile that belongs to
+ * another account (account-switch safety).
+ */
+export function isOwnP2pDiscoverDisabled(
+  viewerUserId?: string | null
+): boolean {
   const storedProfileId = localStorage.getItem("my_profile_id");
   if (!storedProfileId) return false;
   const existing = getCachedProfile(storedProfileId);
-  return existing?.p2p_discover_enabled === false;
+  if (!existing) return false;
+  if (
+    viewerUserId &&
+    typeof existing.user_id === "string" &&
+    existing.user_id &&
+    existing.user_id !== viewerUserId
+  ) {
+    return false;
+  }
+  return existing.p2p_discover_enabled === false;
 }
 
 function parsePageCandidates(payload: {
@@ -490,7 +525,7 @@ export async function listPairUpCandidates(options?: {
   const userId = await requireSessionUserId();
 
   if (kind === PAIR_UP_DECK_KIND_DISCOVER) {
-    if (isOwnP2pDiscoverDisabled()) {
+    if (isOwnP2pDiscoverDisabled(userId)) {
       return { candidates: [], has_more: false, next_cursor: null };
     }
 
@@ -500,8 +535,9 @@ export async function listPairUpCandidates(options?: {
       if (cached) return cached;
     }
 
+    // Dedupe key must include auth user — never share in-flight pages across accounts.
     const result = await requestManager.execute(
-      `pair_up_candidates:${kind}:mixed:${cursor ?? "start"}`,
+      `pair_up_candidates:${userId}:${kind}:mixed:${cursor ?? "start"}`,
       async () => {
         const { data, error } = await supabase.rpc(
           "list_discover_pair_up_candidates",
@@ -542,7 +578,7 @@ export async function listPairUpCandidates(options?: {
 
   const filter = sourcePostId ?? "mixed";
   const result = await requestManager.execute(
-    `pair_up_candidates:${kind}:${filter}:${offset}`,
+    `pair_up_candidates:${userId}:${kind}:${filter}:${offset}`,
     async () => {
       const { data, error } = await supabase.rpc("list_pair_up_candidates", {
         p_source_post_id: sourcePostId,

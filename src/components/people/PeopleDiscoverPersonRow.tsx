@@ -116,7 +116,8 @@ export default function PeopleDiscoverPersonRow({
                 onActiveIndexChange={onPhotoIndexChange}
                 withPhoto={withPhoto}
                 isCurrent={isFocused}
-                enableTapCycle
+                enableTapCycle={false}
+                enableHorizontalPhotoSwipe
                 presentation="mine"
                 peekDirection="up"
                 identityOverlay={photoIdentityOverlay}

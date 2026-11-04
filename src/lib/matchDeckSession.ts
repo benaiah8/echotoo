@@ -43,6 +43,8 @@ export type MatchDeckScopeSnapshot = {
 };
 
 export type MatchDeckSessionSnapshot = {
+  /** Auth user that owned this snapshot — restore refuses cross-account reuse. */
+  userId?: string | null;
   mode: MatchDeckSessionMode;
   activeScope: MatchDeckPairUpScope;
   scopes: Record<MatchDeckPairUpScope, MatchDeckScopeSnapshot>;
@@ -191,10 +193,25 @@ export function hasMatchDeckSession(): boolean {
   return isFresh();
 }
 
-/** Reads and clears, so a snapshot can only restore the deck once. */
-export function consumeMatchDeckSession(): MatchDeckSessionSnapshot | null {
+/**
+ * Reads and clears, so a snapshot can only restore the deck once.
+ * When `expectedUserId` is provided and the snapshot belongs to another
+ * account, the snapshot is dropped (no cross-account restore).
+ */
+export function consumeMatchDeckSession(
+  expectedUserId?: string | null
+): MatchDeckSessionSnapshot | null {
   if (!isFresh() || !snapshot) return null;
+  if (
+    expectedUserId != null &&
+    snapshot.userId != null &&
+    snapshot.userId !== expectedUserId
+  ) {
+    snapshot = null;
+    return null;
+  }
   const restored: MatchDeckSessionSnapshot = {
+    userId: snapshot.userId ?? null,
     mode: snapshot.mode,
     activeScope: normalizeScope(snapshot.activeScope),
     scopes: {

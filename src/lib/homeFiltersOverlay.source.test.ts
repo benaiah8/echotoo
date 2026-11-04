@@ -23,6 +23,7 @@ describe("HomeFiltersOverlay", () => {
     expect(overlay).toContain("h-fit");
     expect(overlay).toContain("self-center");
     expect(overlay).toContain("max-h-[90%]");
+    expect(overlay).toContain('data-home-filters-scroll="true"');
     expect(overlay).toContain("overflow-y-auto");
     expect(overlay).toContain("overscroll-contain");
     expect(overlay).not.toMatch(
@@ -49,25 +50,66 @@ describe("HomeFiltersOverlay", () => {
     expect(overlay).toContain("[-webkit-backdrop-filter:blur(12px)]");
     expect(overlay).toContain("useOverlayBackgroundScrollLock");
     expect(overlay).not.toContain("bg-black/50");
-    expect(overlay).not.toContain("bg-[var(--bg)]");
+    expect(overlay).not.toMatch(/\bbg-\[var\(--bg\)\](?:\s|"|$)/);
     expect(overlay).not.toContain("bg-black/90");
   });
 
-  it("centers Filters title and places Clear + X in a bottom action row", () => {
+  it("centers Filters title and places Clear + Done in an anchored footer", () => {
     expect(overlay).toContain('id="home-filters-overlay-title"');
     expect(overlay).toContain("text-center text-[15px] font-semibold");
     expect(overlay).toMatch(/<h2[\s\S]*?>\s*Filters\s*<\/h2>/);
     expect(overlay).not.toContain("justify-between gap-2 pb-3");
     expect(overlay).toContain('data-home-filters-bottom-actions="true"');
-    expect(overlay).toContain('aria-label="Close filters"');
+    expect(overlay).toContain("justify-center gap-3");
+    expect(overlay).toContain("p-3.5");
+    expect(overlay).toContain('aria-label="Done"');
+    expect(overlay).toMatch(/>\s*Done\s*<\/button>/);
+    expect(overlay).toContain("doneButtonClass");
+    expect(overlay).toContain("bg-[var(--brand)]");
+    expect(overlay).not.toContain("PiX");
+    expect(overlay).not.toContain('aria-label="Close filters"');
     const titleAt = overlay.indexOf("home-filters-overlay-title");
     const socialAt = overlay.indexOf("home-filters-social-heading");
     const clearAt = overlay.indexOf("Clear all filters");
-    const closeAt = overlay.indexOf('aria-label="Close filters"');
+    const doneAt = overlay.indexOf('aria-label="Done"');
     expect(titleAt).toBeGreaterThan(-1);
     expect(titleAt).toBeLessThan(socialAt);
     expect(clearAt).toBeGreaterThan(socialAt);
-    expect(closeAt).toBeGreaterThan(clearAt);
+    expect(doneAt).toBeGreaterThan(clearAt);
+  });
+
+  it("keeps the footer outside the scrollable filter content without a footer panel", () => {
+    expect(overlay).toContain('data-home-filters-scroll="true"');
+    expect(overlay).toContain('data-home-filters-bottom-actions="true"');
+    expect(overlay).toContain("footerBarClass");
+    expect(overlay).toContain("overflow-hidden");
+    const footerClassStart = overlay.indexOf("const footerBarClass");
+    const footerClassEnd = overlay.indexOf("].join(\" \");", footerClassStart);
+    const footerClass = overlay.slice(footerClassStart, footerClassEnd);
+    expect(footerClass).toContain("justify-center gap-3");
+    expect(footerClass).toContain("p-3.5");
+    expect(footerClass).not.toContain("bg-[");
+    expect(footerClass).not.toContain("backdrop-blur");
+    expect(footerClass).not.toContain("backdrop-filter");
+    expect(footerClass).not.toContain("border");
+    expect(footerClass).not.toContain("shadow");
+    expect(footerClass).not.toContain("gradient");
+    const scrollAt = overlay.indexOf('data-home-filters-scroll="true"');
+    const footerAt = overlay.indexOf('data-home-filters-bottom-actions="true"');
+    const calendarAt = overlay.indexOf("home-filters-calendar-heading");
+    const noteAt = overlay.indexOf(
+      "Numbers show how many events are available on that day.",
+    );
+    expect(scrollAt).toBeGreaterThan(-1);
+    expect(footerAt).toBeGreaterThan(scrollAt);
+    expect(calendarAt).toBeGreaterThan(scrollAt);
+    expect(calendarAt).toBeLessThan(footerAt);
+    expect(noteAt).toBeGreaterThan(calendarAt);
+    expect(noteAt).toBeLessThan(footerAt);
+    const scrollBlock = overlay.slice(scrollAt, footerAt);
+    expect(scrollBlock).toContain("overflow-y-auto");
+    expect(scrollBlock).not.toContain("Clear all filters");
+    expect(scrollBlock).not.toContain('aria-label="Done"');
   });
 
   it("does not render scroll-edge fades or Profile scroll-edge wiring", () => {
@@ -147,7 +189,7 @@ describe("HomeFiltersOverlay", () => {
     expect(panel).not.toContain("data-no-overlay-swipe");
   });
 
-  it("keeps overlay open on filter apply; close does not clear", () => {
+  it("keeps overlay open on filter apply and Clear; Done closes without clearing", () => {
     expect(home).toContain("handleCloseHomeFilters");
     expect(home).toContain("onCloseFilters={handleCloseHomeFilters}");
     const applyStart = home.indexOf("const applyHomeFilterAction");
@@ -158,11 +200,19 @@ describe("HomeFiltersOverlay", () => {
     expect(applyFn).not.toContain("setFiltersOpen(false)");
     const clearEnd = home.indexOf("const handleToggleDateFilter", clearStart);
     const clearFn = home.slice(clearStart, clearEnd);
-    expect(clearFn).toContain("setFiltersOpen(false)");
+    expect(clearFn).not.toContain("setFiltersOpen(false)");
     expect(clearFn).toContain('setSearch("")');
+    const closeEnd = home.indexOf("const clearAllHomeFilters", closeStart);
+    const closeFn = home.slice(closeStart, closeEnd);
+    expect(closeFn).toContain("setFiltersOpen(false)");
+    expect(closeFn).not.toContain("applyHomeFilterTransition");
+    expect(overlay).toContain("onClick={() => playAnimatedDismiss()}");
+    expect(overlay).toMatch(
+      /aria-label="Done"[\s\S]*?onClick=\{\(\) => playAnimatedDismiss\(\)\}|onClick=\{\(\) => playAnimatedDismiss\(\)\}[\s\S]*?aria-label="Done"/,
+    );
   });
 
-  it("preserves Escape, Android back, tour targets and borderless calendar", () => {
+  it("preserves Escape, Android back, tour targets, safe-area shell and borderless calendar", () => {
     expect(overlay).toContain('e.key === "Escape"');
     expect(overlay).toContain("subscribeAndroidHardwareBack");
     expect(overlay).toContain('data-tour-target="home-filter-panel"');
@@ -171,5 +221,9 @@ describe("HomeFiltersOverlay", () => {
     expect(topBar).toContain('data-tour-target="home-filter-shortcuts"');
     expect(panel).toContain('data-tour-target="home-filter-calendar"');
     expect(panel).toContain('dayPickerClassName="rdp-theme--full-width"');
+    expect(overlay).toContain("env(safe-area-inset-top, 0px)");
+    expect(overlay).toContain("var(--safe-area-bottom-layout, 0px)");
+    expect(overlay).toContain("useOverlayEdgeSwipeDismiss");
+    expect(overlay).toContain("useOverlayContentSwipeDismiss");
   });
 });

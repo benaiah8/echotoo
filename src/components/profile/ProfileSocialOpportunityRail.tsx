@@ -1,10 +1,12 @@
+import { useCallback, useEffect, useRef } from "react";
 import ProfileSocialOpportunityCard from "./ProfileSocialOpportunityCard";
-import { PROFILE_SOCIAL_OPPORTUNITY_LIMIT } from "../../api/services/profileSocialOpportunities";
 import { useProfileSocialOpportunities } from "../../hooks/useProfileSocialOpportunities";
+
+const LOAD_MORE_THRESHOLD_PX = 200;
 
 /**
  * Shared Profile horizontal rail of current Duo + hosted Group opportunities
- * (Own + Other). Hidden when empty. Cap = 8.
+ * (Own + Other). Hidden when empty. Pages incrementally via keyset RPC.
  * Other viewers: Discover OFF → server []. Self: Discover OFF still lists own actives.
  *
  * Must `self-stretch w-full` inside Profile's `items-center` column so the
@@ -21,14 +23,42 @@ export default function ProfileSocialOpportunityRail({
   profileUserId: string | null | undefined;
   enabled: boolean;
 }) {
-  const { opportunities, loading, viewerUserId } = useProfileSocialOpportunities({
+  const {
+    opportunities,
+    hasMore,
+    loading,
+    loadingMore,
+    loadMore,
+    viewerUserId,
+  } = useProfileSocialOpportunities({
     profileUserId,
     enabled,
   });
 
-  const visible = opportunities.slice(0, PROFILE_SOCIAL_OPPORTUNITY_LIMIT);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef(loadMore);
+  loadMoreRef.current = loadMore;
+  const hasMoreRef = useRef(hasMore);
+  hasMoreRef.current = hasMore;
+  const loadingMoreRef = useRef(loadingMore);
+  loadingMoreRef.current = loadingMore;
 
-  if (!enabled || (!loading && visible.length === 0)) {
+  const maybeLoadMore = useCallback(() => {
+    if (!hasMoreRef.current || loadingMoreRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const remaining = el.scrollWidth - el.scrollLeft - el.clientWidth;
+    if (remaining <= LOAD_MORE_THRESHOLD_PX) {
+      void loadMoreRef.current();
+    }
+  }, []);
+
+  useEffect(() => {
+    // After append / first paint, content may still fit without a scroll event.
+    maybeLoadMore();
+  }, [opportunities.length, hasMore, maybeLoadMore]);
+
+  if (!enabled || (!loading && opportunities.length === 0)) {
     return null;
   }
 
@@ -72,7 +102,7 @@ export default function ProfileSocialOpportunityRail({
 
   const row = (
     <div className={`flex w-max gap-3 ${rowPadClass}`}>
-      {visible.map((item) => (
+      {opportunities.map((item) => (
         <div key={item.source_post_id} className="shrink-0">
           <ProfileSocialOpportunityCard
             row={item}
@@ -81,6 +111,15 @@ export default function ProfileSocialOpportunityRail({
           />
         </div>
       ))}
+      {loadingMore ? (
+        <div
+          className="flex w-10 shrink-0 items-center justify-center self-stretch"
+          data-profile-social-loading-more
+          aria-hidden
+        >
+          <div className="h-5 w-5 rounded-full border-2 border-[var(--text)]/15 border-t-[var(--text)]/45 animate-spin" />
+        </div>
+      ) : null}
     </div>
   );
 
@@ -89,8 +128,12 @@ export default function ProfileSocialOpportunityRail({
       className="mt-5 mb-0 w-full min-w-0 max-w-full self-stretch border-y border-[var(--border)]/55"
       data-profile-social-opportunity-rail
     >
-      <div className="w-full min-w-0 max-w-full overflow-x-auto scroll-hide pt-2.5 pb-3.5">
-        {loading && visible.length === 0 ? skeleton : row}
+      <div
+        ref={scrollRef}
+        className="w-full min-w-0 max-w-full overflow-x-auto scroll-hide pt-2.5 pb-3.5"
+        onScroll={maybeLoadMore}
+      >
+        {loading && opportunities.length === 0 ? skeleton : row}
       </div>
     </section>
   );

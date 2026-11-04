@@ -33,6 +33,15 @@ import {
   setDiscoverHeartViewer,
   startDiscoverHeartListFetch,
 } from "../lib/people/discoverHeartState";
+import { clearDiscoverRecentSeenHistory } from "../lib/people/discoverCandidateRotation";
+import {
+  appendDiscoverHardRefreshPage,
+  shouldFetchDiscoverHardRefreshBoostPage,
+} from "../lib/people/discoverHardRefreshPrefetch";
+import {
+  discoverDiagNotePage,
+  discoverDiagResetSession,
+} from "../lib/people/discoverCompletenessDiag";
 
 export type UsePairUpCandidatesResult = {
   candidates: PairUpCandidate[];
@@ -46,7 +55,8 @@ export type UsePairUpCandidatesResult = {
   hasLoaded: boolean;
   refresh: () => Promise<void>;
   /**
-   * Manual hard refresh: fetch page 0 and REPLACE the list (no Duo merge-tail).
+   * Manual hard refresh: force page 0 and REPLACE (no Duo merge-tail / retention).
+   * Discover may fetch one boost page only when page 0 is a single-creator monopoly.
    * Bumps list generation so stale loadMore/soft results cannot append afterward.
    */
   hardRefresh: () => Promise<void>;
@@ -171,6 +181,58 @@ export function applyDiscoverServerPage(
   return applyDiscoverPageReplacement(prev, reconciled, retained);
 }
 
+/**
+ * Soft page-0 revalidate after loadMore: refresh first-page rows without
+ * dropping already-fetched later pages. Hard refresh still pure-replaces.
+ */
+export function mergeDiscoverSoftRevalidate(
+  prev: PairUpCandidate[],
+  incoming: PairUpCandidate[],
+  firstPageIds: ReadonlySet<string>,
+  fetchSeq: number
+): PairUpCandidate[] {
+  const reconciled = incoming.map((row) =>
+    reconcileDiscoverHeartCandidate(row, fetchSeq)
+  );
+  const incomingIds = new Set(reconciled.map((row) => row.opportunity_id));
+  const out: PairUpCandidate[] = [];
+  const used = new Set<string>();
+
+  for (const row of reconciled) {
+    out.push(row);
+    used.add(row.opportunity_id);
+  }
+
+  for (const row of prev) {
+    if (used.has(row.opportunity_id)) continue;
+    if (firstPageIds.has(row.opportunity_id)) {
+      if (
+        discoverCommentRetainedRows.has(row.opportunity_id) ||
+        discoverHeartShouldHold(row.opportunity_id, fetchSeq)
+      ) {
+        out.push(row);
+        used.add(row.opportunity_id);
+      }
+      continue;
+    }
+    // Later-page row — keep through soft revalidate.
+    out.push(
+      incomingIds.has(row.opportunity_id)
+        ? reconcileDiscoverHeartCandidate(row, fetchSeq)
+        : row
+    );
+    used.add(row.opportunity_id);
+  }
+
+  for (const [id, row] of discoverCommentRetainedRows) {
+    if (used.has(id)) continue;
+    out.push(row);
+    used.add(id);
+  }
+
+  return out;
+}
+
 export function usePairUpCandidates(options?: {
   sourcePostId?: string | null;
   limit?: number;
@@ -218,8 +280,46 @@ export function usePairUpCandidates(options?: {
   const nextCursorRef = useRef(nextCursor);
   nextCursorRef.current = nextCursor;
   const inflightRef = useRef<Promise<void> | null>(null);
-  /** Bumped by hardRefresh; stale soft/loadMore applies are discarded. */
+  /** Bumped by hardRefresh and account changes; stale applies are discarded. */
   const listGenerationRef = useRef(0);
+  /** Last auth user applied to local deck state (detect A→B without relying on null). */
+  const scopedUserIdRef = useRef<string | null | undefined>(undefined);
+  /** Opportunity ids received across the current Discover pagination cycle. */
+  const discoverCycleReceivedIdsRef = useRef<Set<string>>(new Set());
+  /** Ids from the latest authoritative page-0 response (soft revalidate boundary). */
+  const discoverFirstPageIdsRef = useRef<Set<string>>(new Set());
+  /** 0-based Discover page index for DEV completeness diagnostics. */
+  const discoverPageIndexRef = useRef(0);
+
+  const resetDeckLocalState = useCallback(
+    (opts?: { hasLoaded?: boolean; clearRetention?: boolean }) => {
+      candidatesRef.current = [];
+      hasLoadedRef.current = opts?.hasLoaded === true;
+      nextCursorRef.current = null;
+      discoverCycleReceivedIdsRef.current = new Set();
+      discoverFirstPageIdsRef.current = new Set();
+      discoverPageIndexRef.current = 0;
+      setCandidates([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(opts?.hasLoaded === true);
+      setLoading(false);
+      setIsValidating(false);
+      setError(null);
+      if (opts?.clearRetention !== false && isDiscoverRef.current) {
+        clearDiscoverCommentRetention();
+      }
+    },
+    []
+  );
+
+  const noteDiscoverCycleReceived = useCallback((rows: PairUpCandidate[]) => {
+    if (!isDiscoverRef.current) return;
+    for (const row of rows) {
+      const id = row.opportunity_id?.trim();
+      if (id) discoverCycleReceivedIdsRef.current.add(id);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -235,28 +335,42 @@ export function usePairUpCandidates(options?: {
     };
   }, []);
 
+  /** Account change: invalidate generations and drop previous user's deck state. */
+  useEffect(() => {
+    if (userId === undefined) return;
+    const prev = scopedUserIdRef.current;
+    if (prev === userId) return;
+    scopedUserIdRef.current = userId;
+    listGenerationRef.current += 1;
+    inflightRef.current = null;
+    if (prev != null && prev !== userId) {
+      clearDiscoverRecentSeenHistory(prev);
+    }
+    if (!userId) {
+      if (isDiscover) {
+        clearDiscoverCommentRetention();
+        setDiscoverHeartViewer(null);
+        clearDiscoverRecentSeenHistory();
+      }
+      resetDeckLocalState({ hasLoaded: false });
+      return;
+    }
+    if (isDiscover) {
+      discoverDiagResetSession(userId);
+    }
+    resetDeckLocalState({ hasLoaded: false });
+  }, [userId, isDiscover, resetDeckLocalState]);
+
   const revalidate = useCallback(async (force = false) => {
     if (!enabledRef.current) return;
     const uid = userIdRef.current;
     if (uid === undefined) return;
     if (!uid) {
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setHasLoaded(false);
-      setLoading(false);
-      setIsValidating(false);
+      resetDeckLocalState({ hasLoaded: false });
       return;
     }
-    if (isDiscoverRef.current && isOwnP2pDiscoverDisabled()) {
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setHasLoaded(true);
-      hasLoadedRef.current = true;
-      setLoading(false);
-      setIsValidating(false);
-      setError(null);
+    if (isDiscoverRef.current && isOwnP2pDiscoverDisabled(uid)) {
+      resetDeckLocalState({ hasLoaded: true });
       return;
     }
     if (inflightRef.current) return inflightRef.current;
@@ -287,28 +401,101 @@ export function usePairUpCandidates(options?: {
           kind: kindRef.current,
         });
         if (genAtStart !== listGenerationRef.current) return;
+        if (userIdRef.current !== uid) return;
         if (kindRef.current === PAIR_UP_DECK_KIND_DISCOVER) {
-          setCandidates((prev) =>
-            applyDiscoverServerPage(prev, page.candidates, fetchSeq)
+          const incomingIds = new Set(
+            page.candidates.map((row) => row.opportunity_id)
           );
-          setNextCursor(page.next_cursor ?? null);
+          const hasAppendedTail = candidatesRef.current.some(
+            (row) => !incomingIds.has(row.opportunity_id)
+          );
+          const previousFirstPageIds = discoverFirstPageIdsRef.current;
+          const preserveTail = force && hasAppendedTail;
+          discoverFirstPageIdsRef.current = incomingIds;
+          discoverPageIndexRef.current = 0;
+
+          if (preserveTail) {
+            // Soft force after loadMore: keep later pages + cursor/hasMore.
+            noteDiscoverCycleReceived(page.candidates);
+            setCandidates((prev) =>
+              mergeDiscoverSoftRevalidate(
+                prev,
+                page.candidates,
+                previousFirstPageIds.size > 0
+                  ? previousFirstPageIds
+                  : incomingIds,
+                fetchSeq
+              )
+            );
+          } else {
+            if (force) {
+              discoverCycleReceivedIdsRef.current = new Set();
+            }
+            noteDiscoverCycleReceived(page.candidates);
+            setCandidates((prev) =>
+              applyDiscoverServerPage(prev, page.candidates, fetchSeq)
+            );
+            nextCursorRef.current = page.next_cursor ?? null;
+            setNextCursor(page.next_cursor ?? null);
+            setHasMore(page.has_more);
+          }
+
+          discoverDiagNotePage({
+            accountKey: uid,
+            pageIndex: 0,
+            fromCache: false,
+            opportunityIds: page.candidates.map((r) => r.opportunity_id),
+            creatorIds: page.candidates.map((r) => r.creator_id),
+            hasMore: preserveTail
+              ? Boolean(nextCursorRef.current) || page.has_more
+              : page.has_more,
+            hasCursor: Boolean(
+              preserveTail ? nextCursorRef.current : page.next_cursor
+            ),
+            loadMoreTriggered: false,
+            loadMoreSkipReason: preserveTail
+              ? "softRevalidatePreservedTail"
+              : null,
+          });
+          peopleDebugRecord("fetch:complete", {
+            hook: "pairUp",
+            kind: kindRef.current,
+            count: page.candidates.length,
+            hasMore: page.has_more,
+            hasCursor: Boolean(page.next_cursor),
+            cycleReceived: discoverCycleReceivedIdsRef.current.size,
+            softTailPreserved: preserveTail,
+          });
         } else {
           setCandidates((prev) => mergeMyPlansDeckPage(prev, page.candidates));
+          setHasMore(page.has_more);
+          peopleDebugRecord("fetch:complete", {
+            hook: "pairUp",
+            kind: kindRef.current,
+            count: page.candidates.length,
+            hasMore: page.has_more,
+            hasCursor: Boolean(page.next_cursor),
+          });
         }
-        setHasMore(page.has_more);
         setHasLoaded(true);
         hasLoadedRef.current = true;
         setError(null);
-        peopleDebugRecord("fetch:complete", {
-          hook: "pairUp",
-          kind: kindRef.current,
-          count: page.candidates.length,
-          hasMore: page.has_more,
-          hasCursor: Boolean(page.next_cursor),
-        });
       } catch (err) {
         if (genAtStart !== listGenerationRef.current) return;
+        if (userIdRef.current !== uid) return;
         const rpcErr = toPairUpRpcError(err);
+        if (isDiscoverRef.current) {
+          discoverDiagNotePage({
+            accountKey: uid,
+            pageIndex: discoverPageIndexRef.current,
+            fromCache: false,
+            rpcFailed: true,
+            opportunityIds: [],
+            creatorIds: [],
+            hasMore: true,
+            hasCursor: Boolean(nextCursorRef.current),
+          });
+        }
         if (usable) {
           if (import.meta.env.DEV) {
             console.warn("[pair-up-deck] background revalidate failed", rpcErr);
@@ -318,12 +505,15 @@ export function usePairUpCandidates(options?: {
           setCandidates([]);
           setHasMore(false);
           setNextCursor(null);
+          nextCursorRef.current = null;
           setHasLoaded(false);
           hasLoadedRef.current = false;
         }
       } finally {
-        setLoading(false);
-        setIsValidating(false);
+        if (genAtStart === listGenerationRef.current) {
+          setLoading(false);
+          setIsValidating(false);
+        }
       }
     })();
 
@@ -333,44 +523,44 @@ export function usePairUpCandidates(options?: {
     } finally {
       if (inflightRef.current === run) inflightRef.current = null;
     }
-  }, []);
+  }, [resetDeckLocalState, noteDiscoverCycleReceived]);
 
   const refresh = useCallback(async () => {
     await revalidate(true);
   }, [revalidate]);
 
   /**
-   * Explicit manual hard refresh — always REPLACE page 0 (Duo included).
-   * Soft `revalidate`/`refresh` also REPLACE page 0 for my_plans so expired
-   * cards cannot linger via a merge-tail.
+   * Explicit manual hard refresh — REPLACE from a forced page 0.
+   * Discover stays incremental (scroll loadMore); optional one boost page only
+   * when page 0 is a single-creator monopoly. Soft revalidate never boosts.
    */
   const hardRefresh = useCallback(async () => {
     if (!enabledRef.current) return;
     const uid = userIdRef.current;
     if (uid === undefined) return;
     if (!uid) {
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setHasLoaded(false);
-      setLoading(false);
-      setIsValidating(false);
+      resetDeckLocalState({ hasLoaded: false });
       return;
     }
-    if (isDiscoverRef.current && isOwnP2pDiscoverDisabled()) {
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setHasLoaded(true);
-      hasLoadedRef.current = true;
-      setLoading(false);
-      setIsValidating(false);
-      setError(null);
+    if (isDiscoverRef.current && isOwnP2pDiscoverDisabled(uid)) {
+      resetDeckLocalState({ hasLoaded: true });
       return;
     }
 
     const gen = ++listGenerationRef.current;
+    inflightRef.current = null;
     const fetchSeq = isDiscoverRef.current ? startDiscoverHeartListFetch() : 0;
+    // Hard refresh always starts a new paging cycle from a forced page-0.
+    nextCursorRef.current = null;
+    setNextCursor(null);
+    // Discover hard refresh must not resurrect Heart/comment-retained rows the
+    // server omitted (left Duo, expired source, etc.).
+    if (isDiscoverRef.current) {
+      clearDiscoverCommentRetention();
+      discoverCycleReceivedIdsRef.current = new Set();
+      discoverFirstPageIdsRef.current = new Set();
+      discoverPageIndexRef.current = 0;
+    }
     const usable =
       candidatesRef.current.length > 0 || hasLoadedRef.current;
     peopleDebugRecord("fetch:start", {
@@ -395,26 +585,96 @@ export function usePairUpCandidates(options?: {
         kind: kindRef.current,
       });
       if (gen !== listGenerationRef.current) return;
-      setCandidates((prev) =>
+      if (userIdRef.current !== uid) return;
+
+      let accumulated = page.candidates;
+      let pageHasMore = page.has_more;
+      let pageCursor = page.next_cursor ?? null;
+      let pagesFetched = 1;
+
+      if (kindRef.current === PAIR_UP_DECK_KIND_DISCOVER) {
+        discoverFirstPageIdsRef.current = new Set(
+          page.candidates.map((row) => row.opportunity_id)
+        );
+        noteDiscoverCycleReceived(page.candidates);
+        discoverDiagNotePage({
+          accountKey: uid,
+          pageIndex: 0,
+          fromCache: false,
+          opportunityIds: page.candidates.map((r) => r.opportunity_id),
+          creatorIds: page.candidates.map((r) => r.creator_id),
+          hasMore: page.has_more,
+          hasCursor: Boolean(page.next_cursor),
+        });
+
+        // Narrow boost: only when page 0 is one creator and more pages exist.
+        if (
+          shouldFetchDiscoverHardRefreshBoostPage({
+            pagesFetched,
+            candidates: accumulated,
+            hasMore: pageHasMore,
+            nextCursor: pageCursor,
+            allowSingleCreatorBoost: true,
+          }) &&
+          pageCursor
+        ) {
+          const nextPage = await listPairUpCandidates({
+            kind: PAIR_UP_DECK_KIND_DISCOVER,
+            limit: limitRef.current,
+            cursor: pageCursor,
+          });
+          if (gen !== listGenerationRef.current) return;
+          if (userIdRef.current !== uid) return;
+          pagesFetched = 2;
+          discoverPageIndexRef.current = 1;
+          accumulated = appendDiscoverHardRefreshPage(
+            accumulated,
+            nextPage.candidates
+          );
+          pageHasMore = nextPage.has_more;
+          pageCursor = nextPage.next_cursor ?? null;
+          noteDiscoverCycleReceived(nextPage.candidates);
+          discoverDiagNotePage({
+            accountKey: uid,
+            pageIndex: 1,
+            fromCache: false,
+            opportunityIds: nextPage.candidates.map((r) => r.opportunity_id),
+            creatorIds: nextPage.candidates.map((r) => r.creator_id),
+            hasMore: nextPage.has_more,
+            hasCursor: Boolean(nextPage.next_cursor),
+            loadMoreTriggered: true,
+          });
+        }
+      }
+
+      setCandidates(() =>
         kindRef.current === PAIR_UP_DECK_KIND_DISCOVER
-          ? applyDiscoverServerPage(prev, page.candidates, fetchSeq)
-          : uniqueByOpportunityId(page.candidates)
+          ? uniqueByOpportunityId(
+              accumulated.map((row) =>
+                reconcileDiscoverHeartCandidate(row, fetchSeq)
+              )
+            )
+          : uniqueByOpportunityId(accumulated)
       );
-      setNextCursor(page.next_cursor ?? null);
-      setHasMore(page.has_more);
+      nextCursorRef.current = pageCursor;
+      setNextCursor(pageCursor);
+      setHasMore(pageHasMore);
       setHasLoaded(true);
       hasLoadedRef.current = true;
       setError(null);
       peopleDebugRecord("fetch:complete", {
         hook: "pairUp",
         kind: kindRef.current,
-        count: page.candidates.length,
-        hasMore: page.has_more,
-        hasCursor: Boolean(page.next_cursor),
+        count: accumulated.length,
+        hasMore: pageHasMore,
+        hasCursor: Boolean(pageCursor),
         hard: true,
+        pagesFetched,
+        cycleReceived: discoverCycleReceivedIdsRef.current.size,
       });
     } catch (err) {
       if (gen !== listGenerationRef.current) return;
+      if (userIdRef.current !== uid) return;
       const rpcErr = toPairUpRpcError(err);
       if (usable) {
         if (import.meta.env.DEV) {
@@ -426,6 +686,7 @@ export function usePairUpCandidates(options?: {
       setCandidates([]);
       setHasMore(false);
       setNextCursor(null);
+      nextCursorRef.current = null;
       setHasLoaded(false);
       hasLoadedRef.current = false;
       throw rpcErr;
@@ -435,7 +696,7 @@ export function usePairUpCandidates(options?: {
         setIsValidating(false);
       }
     }
-  }, []);
+  }, [resetDeckLocalState, noteDiscoverCycleReceived]);
 
   useEffect(() => {
     if (!isDiscover) return;
@@ -455,35 +716,11 @@ export function usePairUpCandidates(options?: {
       return;
     }
     if (userId === undefined) return;
-    if (!userId) {
-      if (isDiscover) {
-        clearDiscoverCommentRetention();
-        setDiscoverHeartViewer(null);
-      }
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setHasLoaded(false);
-      setLoading(false);
-      setIsValidating(false);
-      hasLoadedRef.current = false;
-      candidatesRef.current = [];
-      nextCursorRef.current = null;
-      return;
-    }
+    if (!userId) return;
     if (!peopleActive) return;
 
-    if (isDiscover && isOwnP2pDiscoverDisabled()) {
-      clearDiscoverCommentRetention();
-      candidatesRef.current = [];
-      hasLoadedRef.current = true;
-      nextCursorRef.current = null;
-      setCandidates([]);
-      setHasMore(false);
-      setNextCursor(null);
-      setLoading(false);
-      setHasLoaded(true);
-      setError(null);
+    if (isDiscover && isOwnP2pDiscoverDisabled(userId)) {
+      resetDeckLocalState({ hasLoaded: true });
       return;
     }
 
@@ -496,6 +733,22 @@ export function usePairUpCandidates(options?: {
       candidatesRef.current = cachedRows;
       hasLoadedRef.current = true;
       nextCursorRef.current = cached.next_cursor ?? null;
+      if (isDiscover) {
+        discoverFirstPageIdsRef.current = new Set(
+          cachedRows.map((row) => row.opportunity_id)
+        );
+        discoverPageIndexRef.current = 0;
+        noteDiscoverCycleReceived(cachedRows);
+        discoverDiagNotePage({
+          accountKey: userId,
+          pageIndex: 0,
+          fromCache: true,
+          opportunityIds: cachedRows.map((r) => r.opportunity_id),
+          creatorIds: cachedRows.map((r) => r.creator_id),
+          hasMore: cached.has_more,
+          hasCursor: Boolean(cached.next_cursor),
+        });
+      }
       setCandidates(cachedRows);
       setHasMore(cached.has_more);
       setNextCursor(cached.next_cursor ?? null);
@@ -518,7 +771,17 @@ export function usePairUpCandidates(options?: {
     if (isPairUpDeckSoftStale(userId, cacheSourcePostId, 0, kind)) {
       void revalidate(true);
     }
-  }, [enabled, userId, sourcePostId, peopleActive, kind, isDiscover, revalidate]);
+  }, [
+    enabled,
+    userId,
+    sourcePostId,
+    peopleActive,
+    kind,
+    isDiscover,
+    revalidate,
+    resetDeckLocalState,
+    noteDiscoverCycleReceived,
+  ]);
 
   useEffect(() => {
     const maybeRevalidateIfStale = () => {
@@ -588,51 +851,86 @@ export function usePairUpCandidates(options?: {
   useEffect(() => {
     if (!isDiscover) return;
     const onProfileUpdated = () => {
-      if (isOwnP2pDiscoverDisabled()) {
-        candidatesRef.current = [];
-        nextCursorRef.current = null;
-        setCandidates([]);
-        setHasMore(false);
-        setNextCursor(null);
-        setHasLoaded(true);
-        hasLoadedRef.current = true;
-        setLoading(false);
-        setIsValidating(false);
-        setError(null);
+      const uid = userIdRef.current;
+      if (isOwnP2pDiscoverDisabled(uid)) {
+        resetDeckLocalState({ hasLoaded: true });
         return;
       }
       if (!peopleActiveRef.current) return;
-      if (!userIdRef.current) return;
+      if (!uid) return;
       void revalidate(true);
     };
     window.addEventListener("profile:updated", onProfileUpdated);
     return () => {
       window.removeEventListener("profile:updated", onProfileUpdated);
     };
-  }, [isDiscover, revalidate]);
+  }, [isDiscover, revalidate, resetDeckLocalState]);
 
   const loadMore = useCallback(async () => {
     if (!enabledRef.current) return;
-    if (!userId || !hasMore) return;
+    const uid = userIdRef.current;
+    if (!uid || !hasMore) {
+      if (isDiscoverRef.current) {
+        discoverDiagNotePage({
+          accountKey: uid ?? "anon",
+          pageIndex: discoverPageIndexRef.current,
+          fromCache: false,
+          opportunityIds: [],
+          creatorIds: [],
+          hasMore: Boolean(hasMore),
+          hasCursor: Boolean(nextCursorRef.current),
+          loadMoreTriggered: false,
+          loadMoreSkipReason: !uid
+            ? "noUser"
+            : !hasMore
+              ? "hasMoreFalse"
+              : "skipped",
+        });
+      }
+      return;
+    }
     const gen = listGenerationRef.current;
     const fetchSeq = isDiscoverRef.current ? startDiscoverHeartListFetch() : 0;
     setError(null);
     peopleDebugRecord("loadMore:start", {
       hook: "pairUp",
       kind,
-      prevCount: candidates.length,
-      hasCursor: Boolean(nextCursor),
+      prevCount: candidatesRef.current.length,
+      hasCursor: Boolean(nextCursorRef.current),
     });
     try {
       if (kind === PAIR_UP_DECK_KIND_DISCOVER) {
-        const cursor = nextCursor;
-        if (!cursor) return;
+        const cursor = nextCursorRef.current;
+        if (!cursor) {
+          // Desynced paging state: recover with a forced first page instead of latching.
+          peopleDebugRecord("loadMore:missingCursor", {
+            hook: "pairUp",
+            kind,
+            hasMore: true,
+          });
+          discoverDiagNotePage({
+            accountKey: uid,
+            pageIndex: discoverPageIndexRef.current,
+            fromCache: false,
+            opportunityIds: [],
+            creatorIds: [],
+            hasMore: true,
+            hasCursor: false,
+            loadMoreTriggered: true,
+            loadMoreSkipReason: "missingCursorRecover",
+          });
+          await revalidate(true);
+          return;
+        }
         const page = await listPairUpCandidates({
           kind,
           limit,
           cursor,
         });
         if (gen !== listGenerationRef.current) return;
+        if (userIdRef.current !== uid) return;
+        discoverPageIndexRef.current += 1;
+        noteDiscoverCycleReceived(page.candidates);
         setCandidates((prev) =>
           appendDiscoverPage(
             prev,
@@ -642,23 +940,42 @@ export function usePairUpCandidates(options?: {
           )
         );
         setHasMore(page.has_more);
+        nextCursorRef.current = page.next_cursor ?? null;
         setNextCursor(page.next_cursor ?? null);
+        discoverDiagNotePage({
+          accountKey: uid,
+          pageIndex: discoverPageIndexRef.current,
+          fromCache: false,
+          opportunityIds: page.candidates.map((r) => r.opportunity_id),
+          creatorIds: page.candidates.map((r) => r.creator_id),
+          hasMore: page.has_more,
+          hasCursor: Boolean(page.next_cursor),
+          loadMoreTriggered: true,
+        });
         peopleDebugRecord("loadMore:complete", {
           hook: "pairUp",
           kind,
           added: page.candidates.length,
           hasMore: page.has_more,
+          cycleReceived: discoverCycleReceivedIdsRef.current.size,
         });
         return;
       }
       const page = await listPairUpCandidates({
         sourcePostId,
         limit,
-        offset: candidates.length,
+        offset: candidatesRef.current.length,
         kind,
       });
       if (gen !== listGenerationRef.current) return;
-      setCandidates((prev) => [...prev, ...page.candidates]);
+      if (userIdRef.current !== uid) return;
+      setCandidates((prev) => {
+        const seen = new Set(prev.map((row) => row.opportunity_id));
+        const added = page.candidates.filter(
+          (row) => !seen.has(row.opportunity_id)
+        );
+        return added.length === 0 ? prev : [...prev, ...added];
+      });
       setHasMore(page.has_more);
       peopleDebugRecord("loadMore:complete", {
         hook: "pairUp",
@@ -668,10 +985,12 @@ export function usePairUpCandidates(options?: {
       });
     } catch (err) {
       if (gen !== listGenerationRef.current) return;
+      if (userIdRef.current !== uid) return;
+      // Keep hasMore true so near-end / prefetch can retry — no permanent latch.
       setError(toPairUpRpcError(err));
       throw err;
     }
-  }, [userId, hasMore, sourcePostId, limit, candidates.length, kind, nextCursor]);
+  }, [userId, hasMore, sourcePostId, limit, kind, revalidate, noteDiscoverCycleReceived]);
 
   const express = useCallback(
     async (toOpportunityId: string) => {

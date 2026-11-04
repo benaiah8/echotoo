@@ -173,4 +173,29 @@ describe("groupDiscoverOpportunities", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0]?.personKey).not.toBe(groups[1]?.personKey);
   });
+
+  it("stale previous freeze keeps the old lead even when ordered rows rotate", () => {
+    const benFirst = [
+      row("b1", "ben"),
+      row("b2", "ben"),
+      row("a1", "aman"),
+    ];
+    const frozen = groupDiscoverOpportunities(benFirst);
+    expect(frozen[0]?.personKey).toBe("ben");
+
+    const amanFirst = [
+      row("a1", "aman"),
+      row("b1", "ben"),
+      row("b2", "ben"),
+    ];
+    const withStaleFreeze = groupDiscoverOpportunities(amanFirst, {
+      previous: frozen,
+    });
+    expect(withStaleFreeze[0]?.personKey).toBe("ben");
+
+    const afterClear = groupDiscoverOpportunities(amanFirst, {
+      previous: null,
+    });
+    expect(afterClear[0]?.personKey).toBe("aman");
+  });
 });
