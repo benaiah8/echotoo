@@ -66,6 +66,8 @@ const IDENTITY_CHIP_FEED_CLASS = [
 ].join(" ");
 
 const BIO_TEXT_CLASS = "text-[13px] leading-relaxed text-white/88";
+const BIO_TEXT_FLAT_LIGHT_CLASS =
+  "text-[13px] leading-relaxed text-[var(--text)]";
 
 /** Expanded bio stays inside the front plate; scrolls internally. */
 const BIO_EXPANDED_MAX_CLASS =
@@ -82,6 +84,64 @@ const GRADIENT_COLLAPSED =
 const GRADIENT_EXPANDED =
   "linear-gradient(to top, rgba(0,0,0,0.96) 0%, rgba(0,0,0,0.94) 48%, rgba(0,0,0,0.72) 72%, rgba(0,0,0,0.28) 88%, transparent 100%)";
 
+/**
+ * Modern Duo light-mode photo only. Dark mode and Discover keep the constants above.
+ * Bottom stop stays in the 55–62% band so white bio text still reads.
+ */
+const GRADIENT_COLLAPSED_DUO_LIGHT_PHOTO =
+  "linear-gradient(to top, rgba(0,0,0,0.58) 0%, rgba(0,0,0,0.32) 46%, rgba(0,0,0,0.10) 74%, transparent 100%)";
+
+const GRADIENT_EXPANDED_DUO_LIGHT_PHOTO =
+  "linear-gradient(to top, rgba(0,0,0,0.70) 0%, rgba(0,0,0,0.50) 48%, rgba(0,0,0,0.20) 76%, transparent 100%)";
+
+/** Modern Duo only. `flat` is Echo, empty, or a failed legacy photo that paints Echo. */
+export type DuoPortraitScrim = "photo" | "flat";
+
+export function resolveDuoPortraitScrim(options: {
+  duoPortraitScrim?: DuoPortraitScrim | null;
+  light: boolean;
+  expanded: boolean;
+}): { background: string | null; bioClass: string } {
+  const { duoPortraitScrim, light, expanded } = options;
+  if (!duoPortraitScrim || !light) {
+    return {
+      background: expanded ? GRADIENT_EXPANDED : GRADIENT_COLLAPSED,
+      bioClass: BIO_TEXT_CLASS,
+    };
+  }
+  if (duoPortraitScrim === "flat") {
+    return { background: null, bioClass: BIO_TEXT_FLAT_LIGHT_CLASS };
+  }
+  return {
+    background: expanded
+      ? GRADIENT_EXPANDED_DUO_LIGHT_PHOTO
+      : GRADIENT_COLLAPSED_DUO_LIGHT_PHOTO,
+    bioClass: BIO_TEXT_CLASS,
+  };
+}
+
+function readThemeLight(): boolean {
+  return (
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("theme-light")
+  );
+}
+
+function useThemeLight(active: boolean): boolean {
+  const [light, setLight] = useState(readThemeLight);
+  useEffect(() => {
+    if (!active || typeof document === "undefined") return;
+    const read = () => setLight(readThemeLight());
+    read();
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => obs.disconnect();
+  }, [active]);
+  return active ? light : false;
+}
 
 export default function MinePortraitIdentityOverlay({
   name,
@@ -90,6 +150,7 @@ export default function MinePortraitIdentityOverlay({
   interactive = true,
   onOpenProfile,
   feedLayout = false,
+  duoPortraitScrim = null,
 }: {
   name: string;
   bio: string | null;
@@ -101,6 +162,11 @@ export default function MinePortraitIdentityOverlay({
   onOpenProfile?: () => void;
   /** People vertical feed — subtler upper-right chip (clears fullscreen). */
   feedLayout?: boolean;
+  /**
+   * Modern Duo paint only. Omitted for Discover and legacy Mine so those
+   * keep {@link GRADIENT_COLLAPSED} / {@link GRADIENT_EXPANDED}.
+   */
+  duoPortraitScrim?: DuoPortraitScrim | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
@@ -109,6 +175,12 @@ export default function MinePortraitIdentityOverlay({
   const nameOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressBioToggleRef = useRef(false);
   const suppressProfileRef = useRef(false);
+  const themeLight = useThemeLight(duoPortraitScrim != null);
+  const portraitScrim = resolveDuoPortraitScrim({
+    duoPortraitScrim,
+    light: themeLight,
+    expanded,
+  });
 
   useEffect(() => {
     setExpanded(false);
@@ -327,17 +399,20 @@ export default function MinePortraitIdentityOverlay({
         >
           <div
             className="pointer-events-none absolute inset-0"
-            style={{
-              background: expanded ? GRADIENT_EXPANDED : GRADIENT_COLLAPSED,
-            }}
+            style={
+              portraitScrim.background
+                ? { background: portraitScrim.background }
+                : undefined
+            }
             aria-hidden
             data-people-mine-identity-bio-scrim="true"
+            data-people-duo-portrait-scrim={duoPortraitScrim ?? undefined}
           />
           {bio ? (
             showBioControl ? (
               <button
                 type="button"
-                className={`pointer-events-auto relative w-full cursor-pointer border-0 bg-transparent p-0 text-left outline-none ${BIO_TEXT_CLASS} ${
+                className={`pointer-events-auto relative w-full cursor-pointer border-0 bg-transparent p-0 text-left outline-none ${portraitScrim.bioClass} ${
                   expanded ? BIO_EXPANDED_MAX_CLASS : ""
                 }`}
                 style={expanded ? { touchAction: "pan-y" } : undefined}
@@ -369,7 +444,7 @@ export default function MinePortraitIdentityOverlay({
                 ref={(node) => {
                   measureRef.current = node;
                 }}
-                className={`relative line-clamp-2 ${BIO_TEXT_CLASS}`}
+                className={`relative line-clamp-2 ${portraitScrim.bioClass}`}
               >
                 {bio}
               </p>

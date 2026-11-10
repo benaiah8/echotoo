@@ -29,21 +29,30 @@ describe("peopleFeedScrollUnderChrome", () => {
     expect(page).toContain("bg-[var(--app-canvas)]");
   });
 
-  it("non-Duo outer content pane has zero top padding; bottom pad preserved", () => {
+  it("content pane has zero bottom padding so cards scroll under the shared fade", () => {
     expect(overlay).toContain("paddingTop: 0");
-    expect(overlay).toContain(
+    expect(overlay).toContain("paddingBottom: 0");
+    expect(overlay).not.toContain(
       "paddingBottom: isDuoDeckScope ? 0 : peopleFeedContentBottomPad()"
     );
-    expect(overlay).not.toContain(
-      "paddingTop: isDuoDeckScope"
-    );
+    expect(overlay).not.toContain("paddingTop: isDuoDeckScope");
+    const tab = read("components/BottomTab.tsx");
+    expect(tab).toContain('background: "var(--gradient-from-bottom)"');
+    expect(tab).toContain('background: "var(--gradient-bottom-system-scrim)"');
   });
 
-  it("PeopleFeedList applies topChromePad on the scrolling root only", () => {
+  it("PeopleFeedList owns top chrome and the existing bottom clearance", () => {
     expect(list).toContain("topChromePad?: string");
     expect(list).toContain("data-people-feed-list-top-chrome");
     expect(list).toContain("paddingTop: chromePad");
+    expect(list).toContain("paddingBottom: peopleFeedContentBottomPad()");
+    expect(list).toContain('data-people-feed-list-bottom-chrome="true"');
     expect(list).toContain("overflow-y-auto");
+    expect(list).toContain("intersectionRatio < 0.55");
+    expect(list).toContain("0px 0px -${bottomPx}px 0px");
+    expect(read("lib/people/peopleFeedLayout.ts")).toContain(
+      "calc(64px + var(--safe-area-bottom-layout, 0px) + 12px)"
+    );
   });
 
   it("Discover / Plans / Groups wire scroller top clearance without doubling", () => {

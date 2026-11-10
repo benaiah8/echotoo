@@ -1,14 +1,18 @@
 import {
+  cloneElement,
+  isValidElement,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { PiArrowsOut } from "react-icons/pi";
 import MediaGalleryLightbox from "../MediaGalleryLightbox";
+import type { DuoPortraitScrim } from "./MinePortraitIdentityOverlay";
 import { avatarDisplayUrl } from "../../lib/avatarDisplayUrl";
 import {
   notifyMediaGalleryLightboxClosed,
@@ -620,6 +624,18 @@ export default function PeopleCandidateMedia({
           isMine && !feedLayout ? onMineAtmosphereChange : undefined
         }
       />
+  );
+}
+
+/** Modern Duo only. Discover and legacy Mine pass the overlay through unchanged. */
+function paintDuoIdentityOverlay(
+  node: ReactNode | undefined,
+  scrim: DuoPortraitScrim | null
+): ReactNode {
+  if (!scrim || !isValidElement(node)) return node ?? null;
+  return cloneElement(
+    node as ReactElement<{ duoPortraitScrim?: DuoPortraitScrim }>,
+    { duoPortraitScrim: scrim }
   );
 }
 
@@ -1363,7 +1379,15 @@ function MinePhotoStack({
         data-people-duo-photo-frame="true"
         data-people-mine-identity-plate="true"
       >
-        {identityOverlay}
+        {paintDuoIdentityOverlay(
+          identityOverlay,
+          mineStackPose === "duoModern"
+            ? !avatarDisplayUrl(photos[displayedIndex] ?? "") ||
+              mineFailedPhotos.has(displayedIndex)
+              ? "flat"
+              : "photo"
+            : null
+        )}
         {/* Feed: interactive while mounted; Duo carousel still gates on isCurrent. */}
         {!feedDiscoverCompact ? (
           <button
@@ -1656,6 +1680,18 @@ function DiscoverLegacyMedia({
     ? undefined
     : `opacity ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}, transform ${PEOPLE_PHOTO_CROSSFADE_MS}ms ${PEOPLE_PHOTO_CROSSFADE_EASE}`;
 
+  const legacyShowsPhoto =
+    resolved.kind === "legacy-photo" &&
+    Boolean(resolved.primaryPhoto && avatarDisplayUrl(resolved.primaryPhoto)) &&
+    !(feedLayout && feedLegacyFailed) &&
+    !mineLegacyFailed;
+  const duoScrim: DuoPortraitScrim | null = !duoModernPaintGate
+    ? null
+    : resolved.kind === "photos" || legacyShowsPhoto
+      ? "photo"
+      : "flat";
+  const paintedIdentity = paintDuoIdentityOverlay(identityOverlay, duoScrim);
+
   let stack: ReactNode;
 
   if (!withPhoto) {
@@ -1771,7 +1807,7 @@ function DiscoverLegacyMedia({
               feedEchoOrEmpty(feedEchoPreset)
             )}
           </div>
-          {identityOverlay}
+          {paintedIdentity}
         </div>
       </>
     );
@@ -1833,7 +1869,7 @@ function DiscoverLegacyMedia({
           )}
           reduceMotion={reduceMotion}
         />
-        {identityOverlay}
+        {paintedIdentity}
       </div>
     );
   } else if (resolved.kind === "legacy-photo" && resolved.primaryPhoto) {
@@ -1903,7 +1939,7 @@ function DiscoverLegacyMedia({
           )}
           reduceMotion={reduceMotion}
         />
-        {identityOverlay}
+        {paintedIdentity}
       </div>
     );
   } else {
@@ -1918,7 +1954,7 @@ function DiscoverLegacyMedia({
         data-people-feed-echo={feedLayout ? "true" : undefined}
       >
         {feedEchoOrEmpty(feedEchoPreset)}
-        {identityOverlay}
+        {paintedIdentity}
       </div>
     );
   }

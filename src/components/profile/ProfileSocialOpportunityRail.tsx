@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import ProfileSocialOpportunityCard from "./ProfileSocialOpportunityCard";
 import { useProfileSocialOpportunities } from "../../hooks/useProfileSocialOpportunities";
+import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
 
 const LOAD_MORE_THRESHOLD_PX = 200;
 
@@ -19,9 +20,12 @@ const LOAD_MORE_THRESHOLD_PX = 200;
 export default function ProfileSocialOpportunityRail({
   profileUserId,
   enabled,
+  profileIdentity = null,
 }: {
   profileUserId: string | null | undefined;
   enabled: boolean;
+  /** Profile owner identity for Other Profile comments. Own Profile omits it. */
+  profileIdentity?: ProfileIdentityMediaSource | null;
 }) {
   const {
     opportunities,
@@ -108,6 +112,7 @@ export default function ProfileSocialOpportunityRail({
             row={item}
             profileUserId={profileUserId!}
             viewerUserId={viewerUserId}
+            profileIdentity={profileIdentity}
           />
         </div>
       ))}

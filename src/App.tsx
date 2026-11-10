@@ -29,6 +29,7 @@ import { networkRecovery } from "./lib/networkRecovery";
 import { initAppSafeAreaBottom } from "./lib/appSafeAreaBottom";
 import AppUpdateRuntimeController from "./components/AppUpdateRuntimeController";
 import CompanyAnnouncementRuntimeController from "./components/CompanyAnnouncementRuntimeController";
+import UsageAnalyticsMount from "./components/UsageAnalyticsMount";
 import PostEngagementRealtimeMount from "./components/PostEngagementRealtimeMount";
 import MessagesUnreadRealtimeMount from "./components/MessagesUnreadRealtimeMount";
 import MessagesActivitiesAttentionMount from "./components/MessagesActivitiesAttentionMount";
@@ -317,6 +318,7 @@ function App() {
       <BrowserRouter>
         {!showSplash && isNativeApp() && <NativePushTapNavigationBridge />}
         {!showSplash && isNativeApp() && <NativePushForegroundBridge />}
+        <UsageAnalyticsMount />
         <PostEngagementRealtimeMount />
         <MessagesUnreadRealtimeMount />
         <MessagesActivitiesAttentionMount />

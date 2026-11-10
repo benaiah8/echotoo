@@ -1,8 +1,9 @@
 /**
  * Profile social-opportunity card — Home Event-rail geometry.
- * One card per source_post_id; always shows Duo + Group.
- * Own: manage/create via shared social pills/hooks.
- * Other: viewer Duo join/leave + Connect; hosted Group Request/Requested/Member.
+ * One card per source_post_id.
+ * Own: manage/create via shared Duo + Group pills.
+ * Other: Heart (Profile Connect) + Comment (Duo composer). Group-only rows
+ * render both disabled. Duo/Group participation stays on Post Detail.
  * No source cover image (avoids Profile-rail image egress).
  */
 
@@ -13,24 +14,18 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent,
-  type ReactNode,
+  type KeyboardEvent,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { PiCheck, PiDotsThreeBold, PiHandPeace } from "react-icons/pi";
+import { PiDotsThreeBold } from "react-icons/pi";
 import {
   completePairUpMatch,
   expressPairUpInterest,
-  joinPairUp,
-  leavePairUp,
 } from "../../api/services/pairUp";
 import { connectProfilePairUp } from "../../api/services/profileSocialOpportunities";
-import {
-  requestGroupUp,
-  withdrawGroupUpRequest,
-} from "../../api/services/groupUp";
 import type { ProfileSocialOpportunity } from "../../lib/people/types";
+import type { ProfileIdentityMediaSource } from "../../lib/profileIdentityMedia";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
 import { getPostScheduleLabel } from "../../lib/postScheduleLabel";
 import {
@@ -46,11 +41,7 @@ import {
   PAIR_UP_CONNECT_PHOTO_PROMPT_TITLE,
 } from "../../lib/pairUpPhotoPromptCopy";
 import { showPairUpJoinToast } from "../../lib/showPairUpJoinToast";
-import {
-  dismissProfileConnectToast,
-  showProfileConnectToast,
-  showProfileDisconnectedToast,
-} from "../../lib/showProfileConnectToast";
+import { showProfileConnectToast } from "../../lib/showProfileConnectToast";
 import {
   seedKnownActiveGroupUpBeforeDetail,
 } from "../../lib/groupUpOwnStore";
@@ -72,7 +63,6 @@ import {
   retryProfileMatchCompletion,
   settleProfileConnect,
 } from "../../lib/profileConnectCompletion";
-import { socialUiCopy } from "../../lib/social/socialUiCopy";
 import { messagesConversationPath } from "../../router/Paths";
 import useAuthActionGate from "../../hooks/useAuthActionGate";
 import ReportModal from "../ui/ReportModal";
@@ -94,15 +84,23 @@ import SocialGroupPill from "../social/SocialGroupPill";
 import { SocialShelfSurfaceProvider } from "../../lib/social/socialShelfSurfaceContext";
 import {
   socialContrastShelfClusterClassName,
-  socialPillActiveGlowClassName,
-  socialPillExtrusionClassName,
-  socialPillHitClassName,
-  socialPillRippleClassName,
-  socialPillStackClassName,
   socialRailBareRowClassName,
-  SOCIAL_PILL_RADIUS,
-  type SocialPillTone,
 } from "../../lib/socialActionUi";
+import PeopleActionStateButton, {
+  type PeopleActionConfirmedState,
+} from "../people/PeopleActionStateButton";
+import "./ProfileSocialOpportunityActions.css";
+import { openPeopleCommentComposer } from "../../lib/people/peopleCommentComposerStore";
+import { routeDuoCommentTap, resolveActivatedDuoComment } from "../../lib/people/duoCommentActions";
+import {
+  applyDuoCommentListFlags,
+  duoCommentStateKey,
+  duoCommentVisual,
+  getDuoCommentRevision,
+  getDuoCommentSnapshot,
+  getDuoCommentViewerId,
+  subscribeDuoCommentState,
+} from "../../lib/people/duoCommentState";
 import Avatar from "../ui/Avatar";
 
 /** Home Event rail date row footprint. */
@@ -115,228 +113,23 @@ const DATE_PILL_FACE_CLASS =
 const DATE_PILL_LIFT_CLASS =
   "shadow-[var(--rail-card-pill-shadow)] backdrop-blur-[var(--glass-blur)]";
 
-/**
- * Compact Connect secondary control (Other + owner Duo only).
- * Kept distinct from shared yellow Duo/Group pills.
- */
-function ProfileConnectPill({
-  label,
-  icon,
-  active,
-  busy,
-  onPress,
-}: {
-  label: string;
-  icon?: ReactNode;
-  active?: boolean;
-  busy?: boolean;
-  onPress: () => void;
-}) {
-  const tone: SocialPillTone = busy
-    ? "loading"
-    : active
-      ? "active"
-      : "inactive";
-
-  const handleClick = (e: MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (busy || active) return;
-    onPress();
-  };
-
-  const faceBase = [
-    "relative z-[1] inline-flex h-7 items-center justify-center",
-    SOCIAL_PILL_RADIUS,
-    "border box-border gap-0.5 px-2 text-[10px] leading-none",
-    "min-w-[3.25rem]",
-  ];
-
-  const faceClass =
-    tone === "active"
-      ? [
-          ...faceBase,
-          "font-bold border-[#1a1a1c] bg-white text-[#0a0a0a]",
-        ].join(" ")
-      : tone === "loading"
-        ? [
-            ...faceBase,
-            "font-semibold opacity-55 border-[#b8b8c0] bg-[#cfd0d6]",
-          ].join(" ")
-        : [
-            ...faceBase,
-            "font-semibold border-[#9a9aa2] bg-[#c8c9d0] text-[#1a1a1c]",
-          ].join(" ");
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      aria-pressed={!!active}
-      aria-busy={busy === true}
-      aria-disabled={busy === true || active === true}
-      aria-label={label}
-      disabled={busy || active}
-      data-social-pill="profile-connect"
-      data-profile-social-connect
-      className={[
-        socialPillHitClassName("shrink-0"),
-        busy || active ? "pointer-events-none" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <span className={socialPillStackClassName()}>
-        {tone === "active" ? (
-          <span
-            data-social-glow
-            className={socialPillActiveGlowClassName()}
-            aria-hidden
-          />
-        ) : null}
-        <span
-          data-social-ripple
-          className={socialPillRippleClassName()}
-          aria-hidden
-        />
-        <span
-          className={
-            tone === "active"
-              ? socialPillExtrusionClassName("active")
-              : [
-                  "pointer-events-none absolute inset-0 z-0",
-                  SOCIAL_PILL_RADIUS,
-                  "border box-border translate-x-[-2.5px] translate-y-[2.5px]",
-                  "bg-[#d8d8de] border-[#c8c8d0]",
-                ].join(" ")
-          }
-          aria-hidden
-        />
-        <span data-social-face className={faceClass} aria-hidden>
-          {icon ? (
-            <span className="inline-flex items-center gap-0.5">
-              {icon}
-              <span>{label}</span>
-            </span>
-          ) : (
-            label
-          )}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-/** Other Profile hosted-Group Request / Requested / Member. */
-function ProfileGroupRequestPill({
-  label,
-  active,
-  busy,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  active?: boolean;
-  busy?: boolean;
-  disabled?: boolean;
-  onPress: () => void;
-}) {
-  const tone: SocialPillTone = busy
-    ? "loading"
-    : disabled
-      ? "disabled"
-      : active
-        ? "active"
-        : "inactive";
-
-  const handleClick = (e: MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    if (busy || disabled) return;
-    onPress();
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      aria-pressed={!!active}
-      aria-busy={busy === true}
-      aria-disabled={busy === true || disabled === true}
-      aria-label={label}
-      disabled={busy || disabled}
-      data-social-pill="profile-group-request"
-      className={[
-        socialPillHitClassName("shrink-0"),
-        busy || disabled ? "pointer-events-none" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <span className={socialPillStackClassName()}>
-        {tone === "active" ? (
-          <span
-            data-social-glow
-            className={socialPillActiveGlowClassName()}
-            aria-hidden
-          />
-        ) : null}
-        <span
-          data-social-ripple
-          className={socialPillRippleClassName()}
-          aria-hidden
-        />
-        <span
-          className={
-            tone === "active"
-              ? socialPillExtrusionClassName("active")
-              : [
-                  "pointer-events-none absolute inset-0 z-0",
-                  SOCIAL_PILL_RADIUS,
-                  "border box-border translate-x-[-2.5px] translate-y-[2.5px]",
-                  "bg-[#d8d8de] border-[#c8c8d0]",
-                ].join(" ")
-          }
-          aria-hidden
-        />
-        <span
-          data-social-face
-          className={[
-            "relative z-[1] inline-flex h-7 items-center justify-center",
-            SOCIAL_PILL_RADIUS,
-            "border box-border px-2.5 text-[10px] leading-none font-semibold",
-            "min-w-[3.25rem]",
-            tone === "active"
-              ? "border-[#1a1a1c] bg-white text-[#0a0a0a] font-bold"
-              : tone === "disabled"
-                ? "opacity-40 border-[#b8b8c0] bg-[#cfd0d6]"
-                : "border-[#9a9aa2] bg-[#c8c9d0] text-[#1a1a1c]",
-          ].join(" ")}
-          aria-hidden
-        >
-          {label}
-        </span>
-      </span>
-    </button>
-  );
-}
-
 export default function ProfileSocialOpportunityCard({
   row,
   profileUserId,
   viewerUserId,
+  profileIdentity = null,
 }: {
   row: ProfileSocialOpportunity;
   profileUserId: string;
   viewerUserId: string | null;
+  /** Other Profile owner. Comment recipient identity. Own Profile omits it. */
+  profileIdentity?: ProfileIdentityMediaSource | null;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { ensureAuthed } = useAuthActionGate();
   const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
-  const [duoBusy, setDuoBusy] = useState(false);
   const [connectBusy, setConnectBusy] = useState(false);
-  const [groupBusy, setGroupBusy] = useState(false);
   const [pendingMatchOpportunityId, setPendingMatchOpportunityId] = useState<
     string | null
   >(null);
@@ -349,7 +142,8 @@ export default function ProfileSocialOpportunityCard({
   const viewerDuoJoined = duoPayload?.viewer_duo_joined === true;
   const viewerProfileConnected =
     duoPayload?.viewer_profile_connected === true;
-  const viewerGroupState = groupPayload?.viewer_group_state ?? null;
+  const heartActive =
+    duoPayload?.viewer_duo_interested === true || viewerProfileConnected;
   const groupTitle = groupPayload?.group_title ?? null;
   const occursAt = groupPayload?.occurs_at ?? null;
   const occursTimeExplicit = groupPayload?.occurs_time_explicit ?? null;
@@ -425,7 +219,44 @@ export default function ProfileSocialOpportunityCard({
     pairStatus === "joined" ||
     (pairStatus === "pending" && viewerDuoJoined);
 
-  const connectActive = duoJoined && viewerProfileConnected;
+  const duoCommentRevision = useSyncExternalStore(
+    subscribeDuoCommentState,
+    getDuoCommentRevision,
+    getDuoCommentRevision
+  );
+  const duoCommentViewerId = getDuoCommentViewerId();
+  const commentKey =
+    !isSelf && hasOwnerDuo && duoCommentViewerId
+      ? duoCommentStateKey(
+          duoCommentViewerId,
+          row.source_post_id,
+          profileUserId
+        )
+      : "";
+
+  useEffect(() => {
+    if (isSelf || !hasOwnerDuo || !duoCommentViewerId) return;
+    applyDuoCommentListFlags({
+      viewerId: duoCommentViewerId,
+      sourcePostId: row.source_post_id,
+      recipientUserId: profileUserId,
+      commented: null,
+      viewerHasActivePairUp: viewerDuoJoined,
+    });
+    void resolveActivatedDuoComment({
+      viewerId: duoCommentViewerId,
+      sourcePostId: row.source_post_id,
+      recipientUserId: profileUserId,
+      listCommented: null,
+    });
+  }, [
+    isSelf,
+    hasOwnerDuo,
+    duoCommentViewerId,
+    row.source_post_id,
+    profileUserId,
+    viewerDuoJoined,
+  ]);
 
   const clearProfilePairActionState = useCallback(() => {
     if (!viewerUserId || !duoPayload) return;
@@ -433,35 +264,14 @@ export default function ProfileSocialOpportunityCard({
       viewerUserId,
       profileUserId,
       duoPayload.opportunity_id,
-      { viewer_duo_joined: false, viewer_profile_connected: false }
+      {
+        viewer_duo_joined: false,
+        viewer_duo_interested: false,
+        viewer_profile_connected: false,
+      }
     );
   }, [viewerUserId, profileUserId, duoPayload]);
 
-  const markProfileDuoJoined = useCallback(() => {
-    if (!viewerUserId || !duoPayload) return;
-    patchCachedProfileSocialOpportunity(
-      viewerUserId,
-      profileUserId,
-      duoPayload.opportunity_id,
-      { viewer_duo_joined: true }
-    );
-  }, [viewerUserId, profileUserId, duoPayload]);
-
-  const restoreProfilePairActionState = useCallback(
-    (state: {
-      viewer_duo_joined: true;
-      viewer_profile_connected: boolean;
-    }) => {
-      if (!viewerUserId || !duoPayload) return;
-      patchCachedProfileSocialOpportunity(
-        viewerUserId,
-        profileUserId,
-        duoPayload.opportunity_id,
-        state
-      );
-    },
-    [viewerUserId, profileUserId, duoPayload]
-  );
 
   const openDetail = useCallback(() => {
     if (viewerUserId) {
@@ -524,76 +334,6 @@ export default function ProfileSocialOpportunityCard({
     groupPayload?.opportunity_id,
   ]);
 
-  const handleOtherDuo = useCallback(async () => {
-    if (!ensureAuthed()) return;
-    if (duoBusy || !hasOwnerDuo || !duoPayload) return;
-
-    const duoOppId = duoPayload.opportunity_id;
-
-    if (duoJoined) {
-      const restoreConnect = connectActive;
-      setDuoBusy(true);
-      const revert = setOptimisticPairUpJoinState(row.source_post_id, false);
-      try {
-        await leavePairUp(row.source_post_id);
-        clearProfilePairActionState();
-        dismissProfileConnectToast(duoOppId);
-        showProfileDisconnectedToast({
-          opportunityId: duoOppId,
-          sourcePostId: row.source_post_id,
-          restoreConnect,
-          onRestored: restoreProfilePairActionState,
-        });
-      } catch {
-        revert?.();
-        toast.error(peopleUiCopy.leaveError);
-      } finally {
-        setDuoBusy(false);
-      }
-      return;
-    }
-
-    setDuoBusy(true);
-    const revert = setOptimisticPairUpJoinState(row.source_post_id, true);
-    try {
-      await joinPairUp(row.source_post_id);
-      showPairUpJoinToast(row.source_post_id, {
-        onLeft: clearProfilePairActionState,
-      });
-      markProfileDuoJoined();
-      const uid = viewerUserId;
-      if (uid) {
-        const profile = resolvePhotoPromptOffer(uid, "pair_up_join", false);
-        if (profile) {
-          openPairUpPhotoPrompt({
-            intentKey: `join-done:${row.source_post_id}`,
-            profileId: profile.profileId,
-            userId: profile.userId,
-            photos: profile.photos,
-            onContinue: () => {},
-          });
-        }
-      }
-    } catch {
-      revert?.();
-      toast.error(peopleUiCopy.joinError);
-    } finally {
-      setDuoBusy(false);
-    }
-  }, [
-    ensureAuthed,
-    duoBusy,
-    hasOwnerDuo,
-    duoPayload,
-    duoJoined,
-    connectActive,
-    row.source_post_id,
-    clearProfilePairActionState,
-    restoreProfilePairActionState,
-    markProfileDuoJoined,
-    viewerUserId,
-  ]);
-
   const markProfileInterestOnly = useCallback(
     (opportunityId: string) => {
       if (!viewerUserId) return;
@@ -601,7 +341,11 @@ export default function ProfileSocialOpportunityCard({
         viewerUserId,
         profileUserId,
         opportunityId,
-        { viewer_duo_joined: true }
+        {
+          viewer_duo_joined: true,
+          viewer_duo_interested: true,
+          viewer_profile_connected: true,
+        }
       );
     },
     [viewerUserId, profileUserId]
@@ -614,7 +358,11 @@ export default function ProfileSocialOpportunityCard({
         viewerUserId,
         profileUserId,
         opportunityId,
-        { viewer_duo_joined: true, viewer_profile_connected: true }
+        {
+          viewer_duo_joined: true,
+          viewer_duo_interested: true,
+          viewer_profile_connected: true,
+        }
       );
     },
     [viewerUserId, profileUserId]
@@ -656,7 +404,7 @@ export default function ProfileSocialOpportunityCard({
       await runComplete(pendingMatchOpportunityId);
       return;
     }
-    if (connectActive) return;
+    if (heartActive) return;
 
     const duoOppId = duoPayload.opportunity_id;
 
@@ -774,7 +522,7 @@ export default function ProfileSocialOpportunityCard({
     connectBusy,
     viewerUserId,
     isSelf,
-    connectActive,
+    heartActive,
     pendingMatchOpportunityId,
     markProfileInterestOnly,
     markProfileConnected,
@@ -788,101 +536,68 @@ export default function ProfileSocialOpportunityCard({
     navigate,
   ]);
 
-  const handleGroupRequest = useCallback(async () => {
+  const handleComment = useCallback(() => {
     if (!ensureAuthed()) return;
-    if (groupBusy || !viewerUserId || !groupPayload) return;
-
-    const state = viewerGroupState ?? "none";
-    if (state === "member") return;
-    const groupOppId = groupPayload.opportunity_id;
-
-    const run = async () => {
-      setGroupBusy(true);
-      try {
-        if (state === "pending") {
-          patchCachedProfileSocialOpportunity(
-            viewerUserId,
-            profileUserId,
-            groupOppId,
-            { viewer_group_state: "none", request_id: null }
-          );
-          await withdrawGroupUpRequest(groupOppId);
-          toast.success(socialUiCopy.sourceGroupsRequestRemoved);
-        } else {
-          patchCachedProfileSocialOpportunity(
-            viewerUserId,
-            profileUserId,
-            groupOppId,
-            { viewer_group_state: "pending", request_id: null }
-          );
-          const request = await requestGroupUp(groupOppId);
-          patchCachedProfileSocialOpportunity(
-            viewerUserId,
-            profileUserId,
-            groupOppId,
-            {
-              viewer_group_state: "pending",
-              request_id: request.id,
-            }
-          );
-          toast.success(peopleUiCopy.groupUpRequestSentToast);
-        }
-      } catch {
-        invalidateProfileSocialOpportunities(viewerUserId, profileUserId);
-        toast.error(
-          state === "pending"
-            ? peopleUiCopy.groupUpBrowseWithdrawError
-            : peopleUiCopy.groupUpBrowseRequestError
-        );
-      } finally {
-        setGroupBusy(false);
-      }
+    if (isSelf || !hasOwnerDuo || !duoPayload || !viewerUserId) return;
+    const recipientUserId = profileUserId.trim();
+    const sourcePostId = row.source_post_id.trim();
+    if (!recipientUserId || !sourcePostId || !profileIdentity) {
+      toast.error(peopleUiCopy.commentComposerUnavailable);
+      return;
+    }
+    const displayName =
+      profileIdentity.display_name?.trim() ||
+      profileIdentity.username?.trim() ||
+      "Someone";
+    const identity = {
+      surface: "duo" as const,
+      opportunityId: duoPayload.opportunity_id,
+      sourcePostId,
+      recipientUserId,
+      displayName,
+      identitySource: profileIdentity,
+      caption: row.source_caption,
+      scheduleLabel: schedule.label || null,
+      scheduleLabelKind: schedule.kind,
+      sourceType: row.source_type,
     };
-
-    if (state === "pending" || isPeoplePhotoPromptBypassed()) {
-      await run();
-      return;
-    }
-
-    const profile = resolvePhotoPromptOffer(
-      viewerUserId,
-      "group_up_request",
-      false
-    );
-    if (!profile) {
-      await run();
-      return;
-    }
-
-    setGroupBusy(true);
-    const opened = openPairUpPhotoPrompt({
-      intentKey: `group-request:${groupOppId}:profile`,
-      profileId: profile.profileId,
-      userId: profile.userId,
-      photos: profile.photos,
-      onContinue: () => {
-        void run();
-      },
-      onDismiss: () => {
-        setGroupBusy(false);
-      },
+    const openWritable = () => {
+      openPeopleCommentComposer({
+        ...identity,
+        expressedByMe: false,
+      });
+    };
+    void routeDuoCommentTap({
+      rowCommented: null,
+      identity,
+      openComposer: openWritable,
+    }).then((outcome) => {
+      if (outcome === "unavailable") {
+        toast.error(peopleUiCopy.commentComposerUnavailable);
+      } else if (outcome === "failed") {
+        toast.error("Couldn't open that comment.");
+      } else if (outcome === "reopened-join-failed") {
+        toast.error(peopleUiCopy.commentComposerSentInterestFailed);
+      }
     });
-    if (!opened) await run();
   }, [
     ensureAuthed,
-    groupBusy,
+    isSelf,
+    hasOwnerDuo,
+    duoPayload,
     viewerUserId,
-    groupPayload,
-    viewerGroupState,
     profileUserId,
+    profileIdentity,
+    row.source_post_id,
+    row.source_caption,
+    row.source_type,
+    schedule.label,
+    schedule.kind,
   ]);
 
   const datePillLabel = schedule.label;
   const railLabelClassName = getPostScheduleLabelClasses(schedule.kind, "rail");
   const usesDatePill = railScheduleLabelUsesPill(schedule.kind);
-
-  const groupPending = viewerGroupState === "pending";
-  const groupMember = viewerGroupState === "member";
 
   const dateLabelClassName = [
     DATE_PILL_FACE_CLASS,
@@ -900,13 +615,68 @@ export default function ProfileSocialOpportunityCard({
   const ownGroupDisplayCount = hasOwnerGroup
     ? (groupAction.displayCount ?? 1)
     : groupAction.displayCount;
-  const otherDuoActive = hasOwnerDuo ? duoJoined : false;
+
+  const heartConfirmedRef = useRef<PeopleActionConfirmedState>("idle");
+  const heartButtonState = !hasOwnerDuo
+    ? "disabled"
+    : connectBusy
+      ? "pending"
+      : heartActive
+        ? "active"
+        : "idle";
+  if (heartButtonState === "active") {
+    heartConfirmedRef.current = "active";
+  } else if (heartButtonState === "idle" || heartButtonState === "disabled") {
+    heartConfirmedRef.current = "idle";
+  }
+  const heartAriaLabel = heartActive
+    ? peopleUiCopy.deckConnectedLabel
+    : pendingMatchOpportunityId
+      ? peopleUiCopy.deckRetryComplete
+      : peopleUiCopy.deckConnectLabel;
+
+  const commentSnapshot = commentKey
+    ? getDuoCommentSnapshot(commentKey)
+    : null;
+  void duoCommentRevision;
+  const commentVisual = !hasOwnerDuo
+    ? {
+        state: "disabled" as const,
+        confirmedState: "idle" as const,
+        disabled: true,
+      }
+    : duoCommentVisual({
+        snapshot: commentSnapshot ?? {
+          state: "unknown",
+          pending: false,
+          body: null,
+          viewerHasActivePairUp: null,
+          confirmedBySend: false,
+        },
+        listCommented: null,
+      });
+  const commentPressBlocked =
+    !hasOwnerDuo ||
+    commentVisual.disabled ||
+    commentVisual.state === "pending" ||
+    commentVisual.state === "disabled";
+
+  const onCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openDetail();
+  };
 
   return (
     <>
       <article
-        className="relative w-[38vw] min-w-[180px] max-w-[240px] shrink-0 cursor-default"
+        className="relative w-[38vw] min-w-[180px] max-w-[240px] shrink-0 cursor-pointer"
         data-profile-social-card
+        role="link"
+        tabIndex={0}
+        onClick={openDetail}
+        onKeyDown={onCardKeyDown}
       >
         <div className="relative mb-3 overflow-visible rounded-[14px] border border-[var(--border)] ui-card pt-2 px-3 pb-2">
           <div className="relative z-10 flex flex-col">
@@ -937,12 +707,7 @@ export default function ProfileSocialOpportunityCard({
               </span>
             </div>
 
-            <button
-              type="button"
-              onClick={openDetail}
-              className="mt-2.5 text-left"
-              data-profile-social-caption
-            >
+            <div className="mt-2.5 text-left" data-profile-social-caption>
               <div
                 className="whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--text)]/95"
                 style={{
@@ -955,20 +720,16 @@ export default function ProfileSocialOpportunityCard({
               >
                 {caption}
               </div>
-            </button>
+            </div>
 
             <div
-              className={[
-                "mt-2.5 flex min-w-0 items-center overflow-visible",
-                /* Report control sits on the card's bottom edge. One-row
-                   actions keep the gutter. Connect's second row clears it
-                   itself so Duo+Group can use the full inner width. */
-                isSelf || !hasOwnerDuo ? "pr-8" : "",
-              ].join(" ")}
+              className="mt-2.5 flex min-w-0 items-center overflow-visible pr-8"
               data-profile-social-actions
               onClick={(e) => {
                 e.stopPropagation();
-                e.preventDefault();
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
               }}
             >
               <SocialShelfSurfaceProvider surface="rail">
@@ -1001,119 +762,37 @@ export default function ProfileSocialOpportunityCard({
                   </div>
                 ) : (
                   <div
-                    className={[
-                      socialContrastShelfClusterClassName(),
-                      hasOwnerDuo ? "w-full" : "",
-                    ].join(" ")}
+                    className="flex items-center gap-2"
                     data-profile-social-other-actions
                   >
-                    {hasOwnerDuo ? (
-                      <div
-                        className="grid w-full grid-cols-[max-content_max-content_minmax(0,1fr)] items-center justify-start gap-x-2 gap-y-1.5"
-                        data-profile-social-other-action-rows
-                      >
-                        <SocialDuoPill
-                          active={otherDuoActive}
-                          resolving={duoBusy}
-                          onPress={() => {
-                            void handleOtherDuo();
-                          }}
-                          size="compact"
-                        />
-                        {hasOwnerGroup ? (
-                          <ProfileGroupRequestPill
-                            label={
-                              groupMember
-                                ? peopleUiCopy.groupUpBrowseMemberLabel
-                                : groupPending
-                                  ? socialUiCopy.groupRequested
-                                  : socialUiCopy.groupRequest
-                            }
-                            active={groupPending}
-                            busy={groupBusy}
-                            disabled={groupMember}
-                            onPress={() => {
-                              void handleGroupRequest();
-                            }}
-                          />
-                        ) : (
-                          <SocialGroupPill
-                            displayCount={null}
-                            active={false}
-                            resolving={false}
-                            onPress={() => {
-                              /* Owner has no hosted Group — inactive; no viewer create/manage. */
-                            }}
-                            size="compact"
-                            className="pointer-events-none opacity-55"
-                          />
-                        )}
-                        {/* Connect sits on its own row, clear of the report control. */}
-                        <div className="col-span-3 flex min-w-0 justify-start pr-8">
-                          <ProfileConnectPill
-                            label={
-                              connectActive
-                                ? peopleUiCopy.deckConnectedLabel
-                                : pendingMatchOpportunityId
-                                  ? peopleUiCopy.deckRetryComplete
-                                  : peopleUiCopy.deckConnectLabel
-                            }
-                            icon={
-                              connectActive ? (
-                                <PiCheck size={11} aria-hidden />
-                              ) : (
-                                <PiHandPeace size={11} aria-hidden />
-                              )
-                            }
-                            active={connectActive}
-                            busy={connectBusy}
-                            onPress={() => {
-                              void handleConnect();
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className={socialRailBareRowClassName()}>
-                        <SocialDuoPill
-                          active={false}
-                          resolving={false}
-                          onPress={() => {
-                            /* Owner has no Duo — inactive; no viewer create/manage. */
-                          }}
-                          size="compact"
-                          className="pointer-events-none opacity-55"
-                        />
-                        {hasOwnerGroup ? (
-                          <ProfileGroupRequestPill
-                            label={
-                              groupMember
-                                ? peopleUiCopy.groupUpBrowseMemberLabel
-                                : groupPending
-                                  ? socialUiCopy.groupRequested
-                                  : socialUiCopy.groupRequest
-                            }
-                            active={groupPending}
-                            busy={groupBusy}
-                            disabled={groupMember}
-                            onPress={() => {
-                              void handleGroupRequest();
-                            }}
-                          />
-                        ) : (
-                          <SocialGroupPill
-                            displayCount={null}
-                            active={false}
-                            resolving={false}
-                            onPress={() => {
-                              /* Owner has no hosted Group — inactive; no viewer create/manage. */
-                            }}
-                            size="compact"
-                            className="pointer-events-none opacity-55"
-                          />
-                        )}
-                      </div>
-                    )}
+                    <span data-profile-social-heart>
+                      <PeopleActionStateButton
+                        kind="heart"
+                        size={44}
+                        state={heartButtonState}
+                        confirmedState={heartConfirmedRef.current}
+                        disabled={!hasOwnerDuo}
+                        ariaLabel={heartAriaLabel}
+                        onClick={() => {
+                          if (!hasOwnerDuo) return;
+                          void handleConnect();
+                        }}
+                      />
+                    </span>
+                    <span data-profile-social-comment>
+                      <PeopleActionStateButton
+                        kind="comment"
+                        size={44}
+                        state={commentVisual.state}
+                        confirmedState={commentVisual.confirmedState}
+                        disabled={commentPressBlocked && commentVisual.state !== "pending"}
+                        ariaLabel="Comment"
+                        onClick={() => {
+                          if (commentPressBlocked) return;
+                          handleComment();
+                        }}
+                      />
+                    </span>
                   </div>
                 )}
               </SocialShelfSurfaceProvider>

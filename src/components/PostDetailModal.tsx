@@ -12,6 +12,7 @@ import PostDetailBody, { type Post } from "./detail/PostDetailBody";
 import PostDetailSkeleton from "./skeletons/PostDetailSkeleton";
 import FeedLoadErrorState from "./ui/FeedLoadErrorState";
 import { supabase } from "../lib/supabaseClient";
+import { trackPostDetailOpen } from "../lib/usageAnalytics";
 import { onPostChanged } from "../lib/postEvents";
 import { applyPostPatch } from "../lib/applyPostPatch";
 import { applyPendingPostPatchToItem } from "../lib/pendingPostPatches";
@@ -150,6 +151,12 @@ export default function PostDetailModal() {
       navigate("/", { replace: true });
     }
   }, [navigate, backgroundLocation]);
+
+  useEffect(() => {
+    const postId = id?.trim();
+    if (!postId) return;
+    trackPostDetailOpen(postId);
+  }, [id]);
 
   useEffect(() => {
     composerFocusedRef.current = composerFocused;

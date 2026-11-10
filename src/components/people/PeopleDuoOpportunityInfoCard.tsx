@@ -70,6 +70,7 @@ const DUO_INFO_WIDTH_STYLE = {
 const DUO_INFO_SURFACE_CLASS = [
   "mx-auto shrink-0 border bg-transparent px-2.5 py-2.5",
   "border-black/14 app-dark:border-white/[0.22]",
+  "app-light:bg-[color-mix(in_oklab,var(--surface)_92%,transparent)]",
 ].join(" ");
 
 /** Badge-height See Post — Duo-local; shared 28px control stays on other surfaces. */

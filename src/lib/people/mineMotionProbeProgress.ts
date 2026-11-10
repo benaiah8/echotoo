@@ -499,19 +499,19 @@ const DUO_NAV_FEEDBACK_ACTIVE_DARK = {
   color: "#141414",
 } as const;
 const DUO_NAV_FEEDBACK_IDLE_LIGHT = {
-  backgroundColor: "#ebe6dc",
+  backgroundColor: "#ffffff",
   color: "#141414",
 } as const;
 const DUO_NAV_FEEDBACK_ACTIVE_LIGHT = {
   backgroundColor: "#141414",
-  color: "#f5f0e6",
+  color: "#ffffff",
 } as const;
 
 /** Disabled Duo nav: keep solid idle fill, mute chevron only. */
 export const DUO_NAV_FEEDBACK_DISABLED_ICON_DARK =
   "color-mix(in oklab, #f5f0e6 42%, transparent)";
 export const DUO_NAV_FEEDBACK_DISABLED_ICON_LIGHT =
-  "color-mix(in oklab, #141414 40%, transparent)";
+  "color-mix(in oklab, #141414 62%, transparent)";
 
 function duoNavFaceButtonIsDisabled(el: HTMLElement): boolean {
   if (typeof el.closest !== "function") return false;
@@ -537,7 +537,7 @@ function paintDuoNavIconCurrentColor(faceEl: HTMLElement): void {
 
 function duoNavFeedbackTheme(): "light" | "dark" {
   if (typeof document === "undefined") return "dark";
-  return document.documentElement.classList.contains("app-light")
+  return document.documentElement.classList.contains("theme-light")
     ? "light"
     : "dark";
 }

@@ -190,7 +190,7 @@ export default function NotificationBell({
       disabled={loading}
       className={`h-6 w-6 rounded-md border transition-all duration-200 ease-out inline-flex items-center justify-center transform active:scale-95 hover:scale-105 ${
         isEnabled
-          ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/30"
+          ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/30 app-light:bg-[var(--brand)] app-light:text-[var(--brand-ink)] app-light:border-[color-mix(in_oklab,var(--brand-ink)_32%,var(--brand))] app-light:hover:bg-[var(--brand)]"
           : "bg-gray-500/20 text-gray-400 border-gray-500/30 hover:bg-gray-500/30"
       } ${
         loading ? "animate-pulse cursor-wait" : "cursor-pointer"

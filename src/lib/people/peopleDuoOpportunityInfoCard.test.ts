@@ -77,6 +77,10 @@ describe("PeopleDuoOpportunityInfoCard", () => {
     expect(src).toContain("rounded-none");
     expect(src).toContain("shadow-none");
     expect(src).toContain("var(--text)_94%");
+    expect(src).toContain(
+      "app-light:bg-[color-mix(in_oklab,var(--surface)_92%,transparent)]"
+    );
+    expect(src).toContain("bg-transparent");
     expect(src).toContain("text-[var(--bg)]");
     expect(src).toContain('const SECTION_GAP_CLASS = "mt-4"');
     expect(src).not.toContain("mt-2.5");

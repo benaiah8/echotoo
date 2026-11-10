@@ -31,7 +31,7 @@ function duoToastTitleNode(compact: boolean): ReactNode {
       <em className="shrink-0 font-semibold italic tracking-[-0.01em]">
         {peopleUiCopy.joinToastTitleLead}
       </em>
-      {!compact ? (
+      {!compact && peopleUiCopy.joinToastTitleRest ? (
         <span className="min-w-0 truncate font-medium opacity-90">
           {peopleUiCopy.joinToastTitleRest}
         </span>

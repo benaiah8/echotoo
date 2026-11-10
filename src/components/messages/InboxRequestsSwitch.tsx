@@ -134,10 +134,9 @@ export default function InboxRequestsSwitch({
                 className={[
                   "pointer-events-none absolute -right-0.5 -top-1 z-[1]",
                   "inline-flex h-[15px] min-w-[15px] items-center justify-center",
-                  "rounded-full bg-amber-400 px-[3px]",
-                  "text-[9px] font-bold leading-none tabular-nums text-neutral-900",
+                  "rounded-full bg-[var(--brand)] px-[3px]",
+                  "text-[9px] font-bold leading-none tabular-nums text-[var(--brand-ink)]",
                   "ring-1 ring-[var(--bg)]",
-                  "app-dark:bg-amber-400 app-dark:text-neutral-900",
                 ].join(" ")}
                 aria-hidden
               >

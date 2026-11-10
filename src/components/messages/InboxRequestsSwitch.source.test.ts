@@ -76,7 +76,15 @@ describe("InboxRequestsSwitch behavior preserved", () => {
     const src = readSwitch();
     expect(src).toContain("pointer-events-none absolute -right-0.5 -top-1 z-[1]");
     expect(src).toContain("h-[15px] min-w-[15px]");
-    expect(src).toContain("bg-amber-400");
+    expect(src).toContain("bg-[var(--brand)]");
+    expect(src).toContain("text-[var(--brand-ink)]");
+    expect(src).toContain("ring-1 ring-[var(--bg)]");
+    expect(src).toContain("requestsBadge > 99");
+    expect(src).toContain('? "99+"');
+    expect(src).toContain("requestsBadge > 0");
+    expect(src).toContain("`Requests, ${badgeLabel} unread`");
+    expect(src).not.toContain("animate-pulse");
+    expect(src).not.toContain("requestsAttentionStore");
     expect(src).toContain("{badgeLabel ?? \"\"}");
     expect(src).toContain("aria-hidden");
   });

@@ -293,9 +293,11 @@ describe("Preserve Groups New/Yours / chat / Other Request (source)", () => {
     );
     expect(cancelBody).not.toContain("clearDmInboxCache");
     const card = readSrc("components/profile/ProfileSocialOpportunityCard.tsx");
-    expect(card).toContain("ProfileGroupRequestPill");
-    expect(card).toContain("requestGroupUp");
-    expect(card).toContain("withdrawGroupUpRequest");
+    expect(card).not.toContain("ProfileGroupRequestPill");
+    expect(card).not.toContain("requestGroupUp");
+    expect(card).not.toContain("withdrawGroupUpRequest");
+    const overlay = readSrc("components/social/SourceGroupsOverlay.tsx");
+    expect(overlay).toContain("runSourceGroupRequest");
     const candidates = readSrc("hooks/useGroupUpCandidates.ts");
     expect(candidates).toContain("listGroupUpCandidates");
   });

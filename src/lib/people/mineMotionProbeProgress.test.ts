@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyMineMotionProbeAdjacentMedia,
@@ -550,15 +552,21 @@ describe("mineEdgeCardDuoBottomFeedbackStyle", () => {
   });
 
   it("inverts dark-mode nav colors at peak engagement", () => {
+    const idle = mineEdgeCardDuoBottomFeedbackColors(0, "dark");
+    expect(idle.backgroundColor).toBe("#141414");
+    expect(idle.color).toBe("#f5f0e6");
     const peak = mineEdgeCardDuoBottomFeedbackColors(0.6, "dark");
     expect(peak.backgroundColor).toBe("rgb(245, 240, 230)");
     expect(peak.color).toBe("rgb(20, 20, 20)");
   });
 
   it("inverts light-mode nav colors at peak engagement", () => {
+    const idle = mineEdgeCardDuoBottomFeedbackColors(0, "light");
+    expect(idle.backgroundColor).toBe("#ffffff");
+    expect(idle.color).toBe("#141414");
     const peak = mineEdgeCardDuoBottomFeedbackColors(0.6, "light");
     expect(peak.backgroundColor).toBe("rgb(20, 20, 20)");
-    expect(peak.color).toBe("rgb(245, 240, 230)");
+    expect(peak.color).toBe("rgb(255, 255, 255)");
   });
 
   it("applyMineDuoNavFeedbackIconColor is exported for Duo nav faces", () => {
@@ -965,6 +973,40 @@ describe("writeMineIncomingRealSlideVisual", () => {
     expect(prevStyle.backgroundColor).toBe("#141414");
     expect(prevStyle.color).toBe("");
     expect(nextStyle.transform).toBeUndefined();
+  });
+
+  it("settle uses theme-light for a white circle and restores it after press", () => {
+    const motion = readFileSync(
+      join(__dirname, "mineMotionProbeProgress.ts"),
+      "utf8"
+    );
+    expect(motion).toContain('classList.contains("theme-light")');
+    expect(motion).not.toContain('classList.contains("app-light")');
+    const style: Record<string, string> = {
+      backgroundColor: "rgb(20, 20, 20)",
+      color: "rgb(255, 255, 255)",
+    };
+    const previous = globalThis.document;
+    globalThis.document = {
+      documentElement: {
+        classList: {
+          contains: (name: string) => name === "theme-light",
+        },
+      },
+    } as unknown as Document;
+    try {
+      settleMineEdgeCardDuoBottomFeedbackSide({
+        style,
+      } as unknown as HTMLElement);
+    } finally {
+      if (previous === undefined) {
+        delete (globalThis as { document?: Document }).document;
+      } else {
+        globalThis.document = previous;
+      }
+    }
+    expect(style.backgroundColor).toBe("#ffffff");
+    expect(style.color).toBe("");
   });
 
   it("settleMineEdgeCardDuoBottomFeedbackSide keeps solid fill and clears icon color", () => {

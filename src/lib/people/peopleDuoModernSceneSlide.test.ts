@@ -466,7 +466,7 @@ describe("MatchDeckCarousel Duo-modern wiring", () => {
   });
 
   it("Duo bottom clipping and overflow stay protected", () => {
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
     expect(canonical).toContain('data-people-duo-slide-scroll="true"');
     expect(canonical).toContain('data-people-duo-scroll-top-inset="true"');
     expect(canonical).toContain("peopleDuoModernScrollTopInset()");

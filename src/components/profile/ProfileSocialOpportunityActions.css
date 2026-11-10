@@ -1,0 +1,35 @@
+/**
+ * Other Profile Heart / Comment circles only.
+ * The circle color is fixed per theme. Active and inactive do not swap it.
+ * Icon fill and size stay on PeopleActionStateButton (44px face, larger active glyph).
+ */
+
+[data-profile-social-other-actions] .people-action-state-button {
+  background-color: #ffffff;
+  color: #111111;
+}
+
+html.theme-light [data-profile-social-other-actions] .people-action-state-button {
+  background-color: #111111;
+  color: #ffffff;
+}
+
+html.theme-light
+  [data-profile-social-other-actions]
+  .people-action-state-button[data-people-action-kind="heart"][data-people-action-visual="active"] {
+  color: #f43f5e;
+}
+
+html:not(.theme-light)
+  [data-profile-social-other-actions]
+  .people-action-state-button[data-people-action-kind="heart"][data-people-action-visual="active"] {
+  color: #e11d48;
+}
+
+/* Active Comment glyph only. Heart size and the 44px circle stay put. */
+[data-profile-social-other-actions]
+  .people-action-state-button[data-people-action-kind="comment"][data-people-action-visual="active"]
+  > svg {
+  width: 32px;
+  height: 32px;
+}

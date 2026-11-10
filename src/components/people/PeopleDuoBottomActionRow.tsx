@@ -49,12 +49,12 @@ const NAV_SLOT_CLASS = [
  */
 const NAV_FACE_CLASS = [
   "inline-flex h-[48px] w-[48px] items-center justify-center rounded-full",
-  "border border-white/22 app-light:border-black/14",
+  "border border-white/22 app-light:border-black/18",
   "bg-[#141414] text-[#f5f0e6] shadow-[0_2px_10px_rgba(0,0,0,0.28)]",
-  "app-light:bg-[#ebe6dc] app-light:text-[#141414]",
+  "app-light:bg-white app-light:text-[#141414]",
   "app-light:shadow-[0_2px_8px_rgba(0,0,0,0.12)]",
   "group-disabled:text-[color-mix(in_oklab,#f5f0e6_42%,transparent)]",
-  "app-light:group-disabled:text-[color-mix(in_oklab,#141414_40%,transparent)]",
+  "app-light:group-disabled:text-[color-mix(in_oklab,#141414_62%,transparent)]",
   "motion-safe:transition-colors motion-safe:duration-[240ms] motion-safe:ease-out",
   "motion-reduce:transition-none",
   "will-change-[transform,background-color,color,box-shadow]",

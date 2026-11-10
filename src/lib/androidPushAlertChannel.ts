@@ -17,8 +17,13 @@ export const ECHO_ANDROID_ALERTS_CHANNEL_NAME = "EchoToo Alerts";
 export const ECHO_ANDROID_ALERTS_CHANNEL_DESCRIPTION =
   "Messages, invites, and activity alerts from EchoToo";
 
-/** Capacitor Importance.HIGH — heads-up eligible when user/OS allow. */
-export const ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE = 5 as const;
+/**
+ * Android NotificationManager.IMPORTANCE_HIGH.
+ * Capacitor 8 passes this integer straight through to NotificationChannel.
+ * 3 is IMPORTANCE_DEFAULT (shade only). 5 is IMPORTANCE_MAX.
+ * Heads-up still depends on the device's channel settings.
+ */
+export const ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE = 4 as const;
 
 let ensureInFlight: Promise<void> | null = null;
 
@@ -36,12 +41,16 @@ export async function ensureAndroidPushAlertChannel(): Promise<void> {
   }
 
   ensureInFlight = (async () => {
+    // Do not pass `sound`. Capacitor 8 maps any sound string to
+    // android.resource://<package>/raw/<name>. "default" is not a raw
+    // resource, so the channel is created silent. Omitting sound keeps
+    // the system default. This call cannot repair a channel Android
+    // already persisted, and it must not delete or replace one.
     await PushNotifications.createChannel({
       id: ECHO_ANDROID_ALERTS_CHANNEL_ID,
       name: ECHO_ANDROID_ALERTS_CHANNEL_NAME,
       description: ECHO_ANDROID_ALERTS_CHANNEL_DESCRIPTION,
       importance: ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE,
-      sound: "default",
       vibration: true,
     });
   })();

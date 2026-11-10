@@ -1,5 +1,5 @@
 /**
- * Home filters overlay — centered content-height panel + presentation polish.
+ * Home filters overlay — bottom sheet over the Home feed.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -16,48 +16,49 @@ describe("HomeFiltersOverlay", () => {
   const panel = read("src/components/home/HomeFilterCalendarPanel.tsx");
   const css = read("src/App.css");
 
-  it("centers a content-height panel at max 90% of the safe shell", () => {
+  it("anchors a full-width sheet at 78% of the viewport", () => {
     expect(overlay).toContain('data-home-filters-shell="true"');
-    expect(overlay).toContain("items-center");
-    expect(overlay).toContain("justify-center");
-    expect(overlay).toContain("h-fit");
-    expect(overlay).toContain("self-center");
-    expect(overlay).toContain("max-h-[90%]");
+    expect(overlay).toContain('data-home-filters-sheet="true"');
+    expect(overlay).toContain(
+      "flex h-full w-full items-end justify-center pointer-events-none"
+    );
+    expect(overlay).toContain("h-[78%]");
+    expect(overlay).toContain("w-full");
+    expect(overlay).toContain("rounded-t-[28px]");
+    expect(overlay).toContain("env(safe-area-inset-top, 0px)");
+    expect(overlay).toContain("var(--safe-area-bottom-layout, 0px)");
+    expect(overlay).not.toContain("items-center justify-center pointer-events-none");
+    expect(overlay).not.toContain("h-fit");
+    expect(overlay).not.toContain("self-center");
+    expect(overlay).not.toContain("max-h-[80%]");
+    expect(overlay).not.toContain("max-h-[90%]");
     expect(overlay).toContain('data-home-filters-scroll="true"');
     expect(overlay).toContain("overflow-y-auto");
-    expect(overlay).toContain("overscroll-contain");
-    expect(overlay).not.toMatch(
-      /data-home-filters-content="true"[\s\S]{0,220}\bh-full\b/,
-    );
+    expect(overlay).toContain("min-h-0 flex-1");
   });
 
-  it("lets empty frosted margins hit the backdrop dismiss control", () => {
+  it("leaves the Home feed visible behind a light dismiss scrim", () => {
     expect(overlay).toContain('data-home-filters-backdrop="true"');
     expect(overlay).toContain('aria-label="Dismiss filters"');
     expect(overlay).toContain("playAnimatedDismiss()");
+    expect(overlay).toContain("homeFiltersDismissBackdropClass");
+    expect(overlay).toContain("bg-black/28");
+    expect(overlay).toContain("app-light:bg-black/18");
+    expect(overlay).not.toContain("glassActionSheetBackdropClass");
+    expect(overlay).not.toContain("backdrop-blur-md");
+    expect(overlay).toContain("homeFiltersSheetSurfaceClass");
+    expect(overlay).toContain("backdrop-blur-[18px]");
     expect(overlay).toContain(
-      "relative z-10 flex h-full w-full items-center justify-center pointer-events-none",
+      "bg-[color-mix(in_oklab,var(--surface)_84%,transparent)]"
     );
-    expect(overlay).toContain('data-home-filters-content="true"');
-    expect(overlay).toContain("pointer-events-auto");
   });
 
-  it("uses a stronger frosted dark tint without going opaque", () => {
-    expect(overlay).toContain("createPortal");
-    expect(overlay).toContain("bg-black/65");
-    expect(overlay).toContain("backdrop-blur-md");
-    expect(overlay).toContain("[backdrop-filter:blur(12px)]");
-    expect(overlay).toContain("[-webkit-backdrop-filter:blur(12px)]");
-    expect(overlay).toContain("useOverlayBackgroundScrollLock");
-    expect(overlay).not.toContain("bg-black/50");
-    expect(overlay).not.toMatch(/\bbg-\[var\(--bg\)\](?:\s|"|$)/);
-    expect(overlay).not.toContain("bg-black/90");
-  });
-
-  it("centers Filters title and places Clear + Done in an anchored footer", () => {
-    expect(overlay).toContain('id="home-filters-overlay-title"');
-    expect(overlay).toContain("text-center text-[15px] font-semibold");
-    expect(overlay).toMatch(/<h2[\s\S]*?>\s*Filters\s*<\/h2>/);
+  it("drops the visible Filters title and keeps Clear + Done anchored", () => {
+    expect(overlay).not.toMatch(/<h2[\s\S]*?>\s*Filters\s*<\/h2>/);
+    expect(overlay).not.toContain("home-filters-overlay-title");
+    expect(overlay).toContain('aria-label="Filters"');
+    expect(overlay).toContain("pt-6 pb-2");
+    expect(overlay).toContain("h-[78%]");
     expect(overlay).not.toContain("justify-between gap-2 pb-3");
     expect(overlay).toContain('data-home-filters-bottom-actions="true"');
     expect(overlay).toContain("justify-center gap-3");
@@ -68,12 +69,12 @@ describe("HomeFiltersOverlay", () => {
     expect(overlay).toContain("bg-[var(--brand)]");
     expect(overlay).not.toContain("PiX");
     expect(overlay).not.toContain('aria-label="Close filters"');
-    const titleAt = overlay.indexOf("home-filters-overlay-title");
+    const scrollAt = overlay.indexOf('data-home-filters-scroll="true"');
     const socialAt = overlay.indexOf("home-filters-social-heading");
     const clearAt = overlay.indexOf("Clear all filters");
     const doneAt = overlay.indexOf('aria-label="Done"');
-    expect(titleAt).toBeGreaterThan(-1);
-    expect(titleAt).toBeLessThan(socialAt);
+    expect(scrollAt).toBeGreaterThan(-1);
+    expect(scrollAt).toBeLessThan(socialAt);
     expect(clearAt).toBeGreaterThan(socialAt);
     expect(doneAt).toBeGreaterThan(clearAt);
   });
@@ -142,6 +143,22 @@ describe("HomeFiltersOverlay", () => {
     );
     expect(panel).toContain('dayPickerClassName="rdp-theme--full-width"');
     expect(panel).toContain("bg-transparent");
+    expect(css).toContain(
+      "[data-home-filters-overlay] .rdp-theme .rdp-nav"
+    );
+    expect(css).toContain("background-color: transparent !important");
+    expect(css).toContain(
+      "color-mix(in oklab, var(--surface-2) 55%, transparent)"
+    );
+    expect(css).toContain("background-color: var(--brand) !important");
+    expect(css).toContain("color: var(--brand-ink)");
+    expect(css).toContain(".home-rdp-event-count");
+    expect(css).toContain(".rdp-theme .rdp-nav");
+    expect(css).toContain("background-color: var(--bg) !important");
+    const createCalendar = read(
+      "src/components/create/CreateScheduleCalendarBody.tsx"
+    );
+    expect(createCalendar).not.toContain("[data-home-filters-overlay]");
   });
 
   it("tightens Social→Date divider and opens Date heading→chips spacing", () => {

@@ -255,7 +255,7 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     expect(css).not.toContain(".profile-social-opportunity-caption");
   });
 
-  it("Own always shows Duo + Group via shared rail pills; Connect only on Other", () => {
+  it("Own always shows Duo + Group; Other shows Heart and Comment", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityCard.tsx"
     );
@@ -274,8 +274,10 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     expect(src).toContain("data-profile-social-own-actions");
     expect(src).toContain("data-profile-social-other-actions");
     expect(src).toContain("deckConnectLabel");
-    expect(src).toContain("data-profile-social-connect");
-    expect(src).toContain("hasOwnerDuo ? (");
+    expect(src).toContain("data-profile-social-heart");
+    expect(src).toContain('kind="heart"');
+    expect(src).toContain('kind="comment"');
+    expect(src).toContain("size={44}");
     expect(src).not.toContain("OWN_TOP_ROW_CLASS");
     expect(src).not.toContain("data-profile-social-own-top");
     expect(src).not.toContain("temporaryRailFacet");
@@ -305,67 +307,51 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     expect(src).not.toContain("ACTION_ROW_CLASS");
   });
 
-  it("Other Duo preserves join/leave + Connect; Other Group uses Request states", () => {
+  it("Other Profile uses Heart + Comment; Duo/Group/Connect controls stay off that branch", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityCard.tsx"
     );
-    expect(src).toContain("joinPairUp");
-    expect(src).toContain("leavePairUp");
+    const otherStart = src.indexOf("data-profile-social-other-actions");
+    const other = src.slice(otherStart);
+    expect(other).toContain('kind="heart"');
+    expect(other).toContain('kind="comment"');
+    expect(other).toContain("size={44}");
+    expect(other).toContain("void handleConnect()");
+    expect(other).toContain("handleComment()");
+    expect(other).not.toContain("<SocialDuoPill");
+    expect(other).not.toContain("<SocialGroupPill");
+    expect(other).not.toContain("ProfileConnectPill");
+    expect(other).not.toContain("ProfileGroupRequestPill");
+    expect(other).not.toContain("openPairUpManage");
+    expect(other).not.toContain("openGroupUpManage");
+    expect(other).not.toContain("openGroupUpCreate");
+    expect(other).not.toContain("requestGroupUp");
     expect(src).toContain("connectProfilePairUp");
-    expect(src).toContain("requestGroupUp");
-    expect(src).toContain("withdrawGroupUpRequest");
-    expect(src).toContain("groupRequest");
-    expect(src).toContain("groupRequested");
-    expect(src).toContain("groupUpBrowseMemberLabel");
-    expect(src).toContain("ProfileGroupRequestPill");
-    expect(src).toContain("ProfileConnectPill");
-    expect(src).toContain(
-      "/* Owner has no Duo — inactive; no viewer create/manage. */"
-    );
-    expect(src).toContain(
-      "/* Owner has no hosted Group — inactive; no viewer create/manage. */"
-    );
-    // Other absent sides must not call Own create/manage overlays.
-    const otherActionsStart = src.indexOf("data-profile-social-other-actions");
-    const otherActions = src.slice(otherActionsStart);
-    expect(otherActions).not.toContain("openPairUpManage");
-    expect(otherActions).not.toContain("openGroupUpManage");
-    expect(otherActions).not.toContain("openGroupUpCreate");
+    expect(src).toContain("expressPairUpInterest");
+    expect(src).not.toContain("joinPairUp");
+    expect(src).not.toContain("leavePairUp");
+    expect(src).not.toContain("requestGroupUp");
+    expect(src).not.toContain("list_profile_social_opportunities");
   });
 
-  it("Other Connect uses a two-row grid; Own stays one row", () => {
+  it("Own stays one Duo+Group row; Other does not use the Connect grid", () => {
     const src = readSrc(
       "src/components/profile/ProfileSocialOpportunityCard.tsx"
     );
     const otherStart = src.indexOf("data-profile-social-other-actions");
     const ownStart = src.indexOf("data-profile-social-own-actions");
-    const other = src.slice(otherStart, src.indexOf("data-profile-social-own-actions") === -1 ? src.length : src.lastIndexOf("</article>"));
     const own = src.slice(ownStart, otherStart);
-    expect(other).toContain("data-profile-social-other-action-rows");
-    expect(other).toContain(
-      "grid w-full grid-cols-[max-content_max-content_minmax(0,1fr)] items-center justify-start gap-x-2 gap-y-1.5"
-    );
-    expect(other).toContain("col-span-3");
-    expect(other).toContain("<SocialDuoPill");
-    expect(other).toContain("<SocialGroupPill");
-    expect(other).toContain("<ProfileConnectPill");
-    expect(other).toContain("<ProfileGroupRequestPill");
-    expect(other).toContain("groupRequest");
-    expect(other).toContain("groupRequested");
-    expect(other).toContain("groupUpBrowseMemberLabel");
-    expect(other).toContain("void handleConnect()");
-    expect(other).toContain("void handleGroupRequest()");
-    expect(other).toContain('size="compact"');
-    expect(other).not.toContain("flex-wrap");
-    expect(other).not.toContain('className="hidden"');
+    const other = src.slice(otherStart);
+    expect(other).not.toContain("data-profile-social-other-action-rows");
+    expect(other).not.toContain("grid-cols-");
+    expect(other).not.toContain("<ProfileConnectPill");
     expect(own).toContain("socialRailBareRowClassName()");
-    expect(own).not.toContain("data-profile-social-other-action-rows");
-    expect(own).not.toContain("<ProfileConnectPill");
+    expect(own).toContain("<SocialDuoPill");
+    expect(own).toContain("<SocialGroupPill");
+    expect(own).toContain('size="compact"');
+    expect(own).not.toContain('kind="heart"');
+    expect(own).not.toContain('kind="comment"');
     expect(src).not.toMatch(/iPhone|isIOS|isAndroid|window\.innerWidth/);
-    expect(src).toContain("joinPairUp");
-    expect(src).toContain("connectProfilePairUp");
-    expect(src).toContain("requestGroupUp");
-    expect(src).not.toContain("list_profile_social_opportunities");
   });
 
   it("both facets render on one card; no single-facet fallback", () => {
@@ -451,18 +437,22 @@ describe("own Profile rail reuse + caption / self actions (source)", () => {
     const toastSrc = readSrc("src/lib/showProfileConnectToast.tsx");
     expect(src).toContain("connectProfilePairUp");
     expect(src).toContain("expressPairUpInterest");
-    expect(src).toContain("leavePairUp");
-    expect(src).toContain("showProfileDisconnectedToast");
-    expect(src).toContain("restoreConnect");
+    expect(src).toContain("settleProfileConnect");
+    expect(src).toContain("completePairUpMatch");
+    expect(src).toContain("openPairUpPhotoPrompt");
     expect(src).toContain("showProfileConnectToast");
     expect(src).toContain("viewer_profile_connected");
-    expect(src).toContain("PiHandPeace");
-    expect(src).toContain("PiCheck");
+    expect(src).toContain("viewer_duo_interested");
     expect(src).toContain("deckConnectedLabel");
-    expect(src).toContain("active={connectActive}");
-    expect(src).toContain("socialPillActiveGlowClassName");
-    expect(src).toContain("data-profile-social-connect");
+    expect(src).toContain("heartActive");
+    expect(src).toContain('kind="heart"');
     expect(src).toContain("isSelf ? (");
+    expect(src).not.toContain("leavePairUp");
+    expect(src).not.toContain("showProfileDisconnectedToast");
+    expect(src).not.toContain("PiHandPeace");
+    expect(src).not.toContain("PiCheck");
+    expect(src).not.toContain("runMinePairUpConnect");
+    expect(src).not.toContain("connectDiscoverPairUp");
     expect(src).not.toContain("discoverAddedToP2p");
     expect(src).not.toContain("PiHandshake");
     expect(toastSrc).toContain("profileDisconnectedToast");

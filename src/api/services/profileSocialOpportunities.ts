@@ -16,6 +16,7 @@ import type {
 import {
   getCachedProfileSocialOpportunities,
   patchCachedProfileSocialOpportunity,
+  preserveLocalDuoInterest,
   setCachedProfileSocialOpportunities,
 } from "../../lib/profileSocialOpportunityCache";
 import {
@@ -45,6 +46,7 @@ function parseDuoPayload(raw: unknown): ProfileSocialDuoPayload | null {
   return {
     opportunity_id: row.opportunity_id,
     viewer_duo_joined: row.viewer_duo_joined === true,
+    viewer_duo_interested: row.viewer_duo_interested === true,
   };
 }
 
@@ -228,6 +230,7 @@ export async function listProfileSocialOpportunities(options: {
   const result = await requestManager.execute(
     requestKey,
     async () => {
+      const startedAt = Date.now();
       const { data, error } = await supabase.rpc(
         "list_profile_social_opportunities",
         {
@@ -237,16 +240,36 @@ export async function listProfileSocialOpportunities(options: {
         }
       );
       if (error) throw toPairUpRpcError(error);
-      return parseProfileSocialOpportunitiesPage(data);
+      return {
+        page: parseProfileSocialOpportunitiesPage(data),
+        startedAt,
+      };
     },
     "high"
   );
 
   if (result.error) throw toPairUpRpcError(result.error);
-  const page = result.data ?? {
-    opportunities: [],
-    has_more: false,
-    next_cursor: null,
+  const fetched = result.data ?? {
+    page: {
+      opportunities: [],
+      has_more: false,
+      next_cursor: null,
+    },
+    startedAt: Date.now(),
+  };
+  const previous = getCachedProfileSocialOpportunities(
+    viewerUserId,
+    profileUserId
+  );
+  const page = {
+    ...fetched.page,
+    opportunities: preserveLocalDuoInterest(
+      viewerUserId,
+      profileUserId,
+      previous?.opportunities ?? null,
+      fetched.page.opportunities,
+      fetched.startedAt
+    ),
   };
 
   // Seed / replace cache only for first-page fetches (accumulated state is

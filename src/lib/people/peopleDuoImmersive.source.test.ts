@@ -87,7 +87,7 @@ describe("peopleDuoHistoricalRestoration", () => {
     const overlay = read("pages/people/MatchDeckOverlay.tsx");
     expect(layout).toContain("peopleShellMineDuoGlobalTabBottomPad");
     expect(layout).toContain("peopleDuoModernSlideScrollBottomPad");
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
     expect(overlay).not.toContain("peopleShellMineDuoGlobalTabBottomPad");
   });
 });

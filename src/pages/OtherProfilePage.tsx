@@ -65,6 +65,7 @@ import ProfileHeroAvatarAtmosphere from "../components/profile/ProfileHeroAvatar
 import ProfileStats from "../components/profile/ProfileStats";
 import ProfileSocialTile from "../components/profile/ProfileSocialTile";
 import ProfileSocialOpportunityRail from "../components/profile/ProfileSocialOpportunityRail";
+import type { ProfileIdentityMediaSource } from "../lib/profileIdentityMedia";
 import NotificationBell from "../components/ui/NotificationBell";
 import {
   PROFILE_OVERVIEW_BIO_TEXT_CLASS,
@@ -97,6 +98,10 @@ import {
 import { getPublicShareBaseUrl } from "../lib/publicSiteUrl";
 import { shareUrl } from "../lib/shareUrl";
 import { useTabActive } from "../router/PersistentTabContainer.new";
+import {
+  trackProfileView,
+  USAGE_DESTINATION_SETTLE_MS,
+} from "../lib/usageAnalytics";
 import {
   PROFILE_TAB_REFRESH_EVENT,
 } from "../lib/homeRefreshEvents";
@@ -149,6 +154,16 @@ export default function OtherProfilePage({
   // Embedded Mine overlay forces visible so feed/posts still load above People.
   const isOtherProfileTabVisible = useTabActive("other-profile");
   const isOtherProfileVisible = isOtherProfileTabVisible || embedded;
+
+  useEffect(() => {
+    if (!isOtherProfileTabVisible) return;
+    const name = username?.trim();
+    if (!name || name.toLowerCase() === "me") return;
+    const timer = window.setTimeout(() => {
+      trackProfileView(name);
+    }, USAGE_DESTINATION_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isOtherProfileTabVisible, username]);
 
   const [otherProfileFeedRefreshEpoch, setOtherProfileFeedRefreshEpoch] =
     useState(0);
@@ -215,6 +230,19 @@ export default function OtherProfilePage({
     profile?.bio,
     profile?.member_no,
   ]);
+
+  const profileIdentity = useMemo((): ProfileIdentityMediaSource | null => {
+    if (!stableProfile) return null;
+    return {
+      profile_photos: stableProfile.profile_photos,
+      echo_preset: stableProfile.echo_preset,
+      avatar_url: stableProfile.avatar_url,
+      display_name: stableProfile.display_name,
+      username: stableProfile.username,
+      user_id: stableProfile.user_id,
+      profile_id: stableProfile.id,
+    };
+  }, [stableProfile]);
 
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
@@ -1465,6 +1493,7 @@ export default function OtherProfilePage({
                       {hasAccess ? (
                         <ProfileSocialOpportunityRail
                           profileUserId={profile.user_id}
+                          profileIdentity={profileIdentity}
                           enabled={
                             !!profile.user_id &&
                             !!viewerId &&

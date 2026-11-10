@@ -12,7 +12,7 @@ describe("Mine caption Back-align structure (source)", () => {
   it("Overlay uses People feed top/bottom pads for all scopes", () => {
     const src = read("MatchDeckOverlay.tsx");
     expect(src).toContain("peopleFeedContentTopPad()");
-    expect(src).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(src).toContain("paddingBottom: 0");
     expect(src).toContain("PeopleFeedTopNav");
     expect(src).toContain("isCanonicalPairUpScope");
   });

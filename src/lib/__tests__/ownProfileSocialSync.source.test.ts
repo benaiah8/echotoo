@@ -28,15 +28,16 @@ function readSrc(rel: string): string {
 describe("Own Profile + Post Detail social sync (source)", () => {
   it("4: rail collapses when empty (existing rail contract)", () => {
     const rail = readSrc("components/profile/ProfileSocialOpportunityRail.tsx");
-    expect(rail).toContain("visible.length === 0");
+    expect(rail).toContain("(!loading && opportunities.length === 0)");
     expect(rail).toContain("return null");
   });
 
   it("8–9: joined-member / Other Profile patches unchanged", () => {
     const card = readSrc("components/profile/ProfileSocialOpportunityCard.tsx");
     expect(card).toContain("viewer_duo_joined");
-    expect(card).toContain("viewer_group_state");
-    expect(card).toContain("withdrawGroupUpRequest");
+    expect(card).toContain("viewer_profile_connected");
+    expect(card).toContain("invalidateProfileSocialOpportunities(viewerUserId, profileUserId)");
+    expect(card).not.toContain("withdrawGroupUpRequest");
     expect(card).not.toContain("removeCachedProfileSocialOpportunitySide");
     const messaging = readSrc("pages/messages/MessagesInboxPage.tsx");
     expect(messaging).toContain("Could not leave group");

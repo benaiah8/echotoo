@@ -9,8 +9,12 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { APP_SAFE_BOTTOM_SYNC_EVENT } from "../../lib/appSafeAreaBottom";
 import { PEOPLE_DECK_PREFETCH_REMAINING } from "../../lib/people/matchDeckNavigation";
-import { peopleFeedCssVars } from "../../lib/people/peopleFeedLayout";
+import {
+  peopleFeedContentBottomPad,
+  peopleFeedCssVars,
+} from "../../lib/people/peopleFeedLayout";
 import PeopleDiscoverFeedSkeleton from "./PeopleDiscoverFeedSkeleton";
 
 export type PeopleFeedListProps = {
@@ -50,7 +54,13 @@ export type PeopleFeedListProps = {
    * Plans and Groups keep the text placeholder.
    */
   loadMorePlaceholder?: "text" | "discover";
-};
+}
+
+/** End spacer doubles as the BottomTab overlay height for focus and seen. */
+function feedListBottomChromePx(root: HTMLElement): number {
+  const px = parseFloat(getComputedStyle(root).paddingBottom);
+  return Number.isFinite(px) && px > 0 ? px : 0;
+}
 
 export default function PeopleFeedList({
   children,
@@ -135,9 +145,15 @@ export default function PeopleFeedList({
         tryLoadMore();
       }
 
-      /* Focus: Discover appearances when present; else opportunity rows. */
+      /* Focus: Discover appearances when present; else opportunity rows.
+       * Bottom pad is end spacer, not a shorter scrollport — ignore the
+       * tab-covered band so the 35% line matches the pre-pad viewport. */
       if (onFocusedIdChange) {
-        const mid = root.scrollTop + root.clientHeight * 0.35;
+        const visibleHeight = Math.max(
+          0,
+          root.clientHeight - feedListBottomChromePx(root)
+        );
+        const mid = root.scrollTop + visibleHeight * 0.35;
         const appearanceRows = root.querySelectorAll<HTMLElement>(
           "[data-people-discover-appearance]"
         );
@@ -174,27 +190,39 @@ export default function PeopleFeedList({
     const root = rootRef.current;
     if (!root || !onRowVisible) return;
 
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting || entry.intersectionRatio < 0.55) continue;
-          const id = (entry.target as HTMLElement).dataset
-            .peopleFeedOpportunity;
-          if (!id || seenMarkedRef.current.has(id)) continue;
-          seenMarkedRef.current.add(id);
-          onRowVisible(id);
+    let io: IntersectionObserver | null = null;
+    const connect = () => {
+      io?.disconnect();
+      const bottomPx = Math.round(feedListBottomChromePx(root));
+      io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting || entry.intersectionRatio < 0.55) continue;
+            const id = (entry.target as HTMLElement).dataset
+              .peopleFeedOpportunity;
+            if (!id || seenMarkedRef.current.has(id)) continue;
+            seenMarkedRef.current.add(id);
+            onRowVisible(id);
+          }
+        },
+        {
+          root,
+          threshold: [0.55],
+          /* Shrink the root by the tab band so a card fully under BottomTab is not seen. */
+          rootMargin: bottomPx > 0 ? `0px 0px -${bottomPx}px 0px` : "0px",
         }
-      },
-      {
-        root,
-        threshold: [0.55],
-        rootMargin: "0px",
-      }
-    );
-
-    const rows = root.querySelectorAll("[data-people-feed-opportunity]");
-    rows.forEach((row) => io.observe(row));
-    return () => io.disconnect();
+      );
+      const rows = root.querySelectorAll("[data-people-feed-opportunity]");
+      rows.forEach((row) => io?.observe(row));
+    };
+    connect();
+    window.addEventListener("resize", connect);
+    window.addEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, connect);
+    return () => {
+      io?.disconnect();
+      window.removeEventListener("resize", connect);
+      window.removeEventListener(APP_SAFE_BOTTOM_SYNC_EVENT, connect);
+    };
   }, [onRowVisible, orderedIds.join("|"), children]);
 
   if (orderedIds.length === 0 && empty) {
@@ -218,9 +246,11 @@ export default function PeopleFeedList({
         ...peopleFeedCssVars(),
         ...style,
         ...(chromePad ? { paddingTop: chromePad } : null),
+        paddingBottom: peopleFeedContentBottomPad(),
       }}
       data-people-feed-list="true"
       data-people-feed-list-top-chrome={chromePad ? "true" : undefined}
+      data-people-feed-list-bottom-chrome="true"
       data-people-feed-focused={focusedId ?? ""}
     >
       <div

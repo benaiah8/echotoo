@@ -9,6 +9,8 @@ import type { InboxConversationRow } from "../api/services/messaging";
 type UnreadState = {
   viewerUserId: string | null;
   unreadByConversationId: Map<string, number>;
+  /** Conversation ids present on the last inbox hydrate for this viewer. */
+  listedConversationIds: Set<string>;
   activeConversationId: string | null;
 };
 
@@ -17,6 +19,7 @@ const listeners = new Set<() => void>();
 let state: UnreadState = {
   viewerUserId: null,
   unreadByConversationId: new Map(),
+  listedConversationIds: new Set(),
   activeConversationId: null,
 };
 
@@ -55,6 +58,14 @@ function mapsEqual(a: Map<string, number>, b: Map<string, number>): boolean {
   return true;
 }
 
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) {
+    if (!b.has(id)) return false;
+  }
+  return true;
+}
+
 function setState(next: UnreadState): void {
   const viewerChanged = state.viewerUserId !== next.viewerUserId;
   const activeChanged = state.activeConversationId !== next.activeConversationId;
@@ -62,7 +73,11 @@ function setState(next: UnreadState): void {
     state.unreadByConversationId,
     next.unreadByConversationId
   );
-  if (!viewerChanged && !activeChanged && !mapChanged) return;
+  const listedChanged = !setsEqual(
+    state.listedConversationIds,
+    next.listedConversationIds
+  );
+  if (!viewerChanged && !activeChanged && !mapChanged && !listedChanged) return;
   state = next;
   emit();
 }
@@ -91,6 +106,7 @@ export function clearMessagesUnreadStore(): void {
   setState({
     viewerUserId: null,
     unreadByConversationId: new Map(),
+    listedConversationIds: new Set(),
     activeConversationId: null,
   });
 }
@@ -100,14 +116,16 @@ export function setActiveConversationId(id: string | null): void {
   if (state.activeConversationId === nextId) return;
   setState({
     ...state,
+    listedConversationIds: state.listedConversationIds,
     activeConversationId: nextId,
   });
 }
 
 /**
  * Authoritative replace from inbox rows (includes Inbox + Requests).
- * Keeps unread ids not present in this page so member events outside the
- * list_my_conversations limit are not dropped.
+ * Keeps unread ids that have never appeared in a hydrate, so a member event
+ * outside the current page is not dropped. Ids that were listed and then
+ * disappear are removed, so a withdrawn request cannot leave the dot on.
  */
 export function hydrateFromInboxRows(
   viewerId: string,
@@ -132,6 +150,7 @@ export function hydrateFromInboxRows(
     for (const [id, count] of state.unreadByConversationId) {
       if (listed.has(id) || count <= 0) continue;
       if (id === state.activeConversationId) continue;
+      if (state.listedConversationIds.has(id)) continue;
       next.set(id, count);
     }
   }
@@ -139,6 +158,7 @@ export function hydrateFromInboxRows(
   setState({
     viewerUserId: vid,
     unreadByConversationId: next,
+    listedConversationIds: listed,
     activeConversationId: state.activeConversationId,
   });
 }
@@ -165,6 +185,7 @@ export function applyMemberUnread(
   setState({
     ...state,
     unreadByConversationId: next,
+    listedConversationIds: state.listedConversationIds,
   });
 }
 

@@ -9,9 +9,11 @@ import {
   applyNativePushPromptLater,
   applyNativePushPromptNever,
   applyNativePushPromptSessionDismiss,
+  hasNativePushOsPromptAttempt,
   isNativePushPromptLaterCooldownActive,
   isNativePushPromptNeverAgain,
   isNativePushPromptSessionDismissed,
+  markNativePushOsPromptAttempt,
   NATIVE_PUSH_PROMPT_DELAY_MS,
   PUSH_PROMPT_LATER_UNTIL_MS_LS_KEY,
   PUSH_PROMPT_SESSION_DISMISS_SS_KEY,
@@ -80,14 +82,14 @@ describe("native push permission onboarding", () => {
     );
   });
 
-  it("7: Allow uses requestNotificationPermissionAndRegister", () => {
+  it("7: requestable permission calls the OS registration helper directly", () => {
     const gate = read(
       "components/notifications/NativePushPermissionPromptGate.tsx"
     );
     expect(gate).toContain("requestNotificationPermissionAndRegister");
-    expect(gate).toMatch(
-      /onAllow[\s\S]*requestNotificationPermissionAndRegister\(\)/
-    );
+    expect(gate).not.toContain("onAllow");
+    expect(gate).not.toContain("FrostedCenterModal");
+    expect(gate).not.toContain("Stay in the loop");
   });
 
   it("8–9: registration pipeline + no immediate re-request on deny", () => {
@@ -129,12 +131,11 @@ describe("native push permission onboarding", () => {
     const gate = read(
       "components/notifications/NativePushPermissionPromptGate.tsx"
     );
-    expect(gate).toContain("applyNativePushPromptLater");
-    expect(gate).toContain("Never remind me again");
-    expect(gate).toContain("Stay in the loop");
-    expect(gate).toContain(
-      "Get notified about messages, invites, group updates, and plans."
-    );
+    expect(gate).not.toContain("applyNativePushPromptLater");
+    expect(gate).not.toContain("Never remind me again");
+    expect(gate).toContain("isNativePushPromptNeverAgain");
+    expect(gate).toContain("hasNativePushOsPromptAttempt");
+    expect(gate).toContain("markNativePushOsPromptAttempt");
   });
 
   it("12–13: Profile denied → Settings; prompt → explainer/request", () => {
@@ -218,13 +219,17 @@ describe("native push permission onboarding", () => {
     expect(app).toContain("appContentReady={!showSplash}");
   });
 
-  it("gate still excludes auth callback + Create/Owl; uses FrostedCenterModal", () => {
+  it("gate still excludes auth callback + Create/Owl and does not prompt twice", () => {
     const gate = read(
       "components/notifications/NativePushPermissionPromptGate.tsx"
     );
     expect(gate).toContain('AUTH_CALLBACK_PATH = "/auth/callback"');
     expect(gate).toContain("createChooserOpen || owlModalOpen");
-    expect(gate).toContain("FrostedCenterModal");
-    expect(gate).toContain("shouldShowNativePushPermissionPrompt");
+    expect(gate).toContain('if (ui === "granted")');
+    expect(gate).toContain('if (ui !== "prompt")');
+    expect(hasNativePushOsPromptAttempt("user-a")).toBe(false);
+    markNativePushOsPromptAttempt("user-a");
+    expect(hasNativePushOsPromptAttempt("user-a")).toBe(true);
+    expect(hasNativePushOsPromptAttempt("user-b")).toBe(false);
   });
 });

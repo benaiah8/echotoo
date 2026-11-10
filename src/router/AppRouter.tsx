@@ -29,6 +29,7 @@ import ReportsReviewPage from "../pages/reviews/ReportsReviewPage";
 import AppUpdatesPage from "../pages/internal/AppUpdatesPage";
 import CompanyAnnouncementsPage from "../pages/internal/CompanyAnnouncementsPage";
 import CrashReportsPage from "../pages/internal/CrashReportsPage";
+import UsageAnalyticsPage from "../pages/internal/UsageAnalyticsPage";
 import InternalLandingPage from "../pages/internal/InternalLandingPage";
 import AuthCallback from "../pages/AuthCallback";
 import PostDetailModal from "../components/PostDetailModal";
@@ -308,6 +309,14 @@ export default function AppRouter({ contentReady = true }: AppRouterProps) {
           element={
             <RequireAuthRoute>
               <CrashReportsPage />
+            </RequireAuthRoute>
+          }
+        />
+        <Route
+          path={Paths.internalUsage}
+          element={
+            <RequireAuthRoute>
+              <UsageAnalyticsPage />
             </RequireAuthRoute>
           }
         />

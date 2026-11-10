@@ -4,6 +4,7 @@
 
 import { parseOptionalBoolean } from "../../lib/people/duoCommentFields";
 import { supabase } from "../../lib/supabaseClient";
+import { trackUsage } from "../../lib/usageAnalytics";
 import { requestManager } from "../../lib/requestManager";
 import { assertPlainTextAllowedForUgc } from "../../lib/ugcTextPolicy";
 import type {
@@ -671,6 +672,11 @@ export async function expressPairUpInterest(
   }
 
   invalidatePairUpDeck(userId);
+  try {
+    trackUsage("duo_express");
+  } catch {
+    /* analytics must not affect Pair Up */
+  }
   return {
     from_opportunity_id: row.from_opportunity_id,
     to_opportunity_id: row.to_opportunity_id,
@@ -734,6 +740,14 @@ export async function completePairUpMatch(
     typeof row?.source_post_id === "string" ? row.source_post_id : null;
   if (!conversation_id || !other_user_id || !source_post_id) {
     throw new Error("Complete match failed");
+  }
+
+  if (row?.created === true) {
+    try {
+      trackUsage("duo_complete");
+    } catch {
+      /* analytics must not affect match completion */
+    }
   }
 
   return {
@@ -804,6 +818,13 @@ export async function withdrawDuoPairUpInterest(
   }
 
   invalidatePairUpDeckKind(userId, PAIR_UP_DECK_KIND_MY_PLANS);
+  if (row.withdrawn === true) {
+    try {
+      trackUsage("duo_withdraw");
+    } catch {
+      /* analytics must not affect Duo withdrawal */
+    }
+  }
   return {
     to_opportunity_id: row.to_opportunity_id,
     from_opportunity_id: row.from_opportunity_id,

@@ -274,8 +274,10 @@ describe("Pass 2 — source contracts (action toasts / Pass 1 / untouched system
     expect(duo).toContain("toast.error(peopleUiCopy.joinError)");
 
     const profile = readSrc("components/profile/ProfileSocialOpportunityCard.tsx");
-    expect(profile).toContain("toast.error(peopleUiCopy.leaveError)");
-    expect(profile).toContain("toast.error(peopleUiCopy.joinError)");
+    expect(profile).not.toContain("peopleUiCopy.leaveError");
+    expect(profile).not.toContain("peopleUiCopy.joinError");
+    expect(profile).toContain("peopleUiCopy.deckExpressError");
+    expect(profile).toContain("peopleUiCopy.deckCompleteError");
 
     const pairBtn = readSrc("components/ui/PairUpActionButton.tsx");
     expect(pairBtn).toContain("toast.error(peopleUiCopy.joinError)");

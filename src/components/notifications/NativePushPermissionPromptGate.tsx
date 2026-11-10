@@ -1,27 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
-import toast from "react-hot-toast";
 import { useAppSelector } from "../../app/hooks";
 import { supabase } from "../../lib/supabaseClient";
 import { isNativeApp } from "../../lib/storage/utils/capacitorDetection";
 import {
-  applyNativePushPromptLater,
-  applyNativePushPromptNever,
-  applyNativePushPromptSessionDismiss,
+  hasNativePushOsPromptAttempt,
+  isNativePushPromptNeverAgain,
+  markNativePushOsPromptAttempt,
   NATIVE_PUSH_PROMPT_DELAY_MS,
-  shouldShowNativePushPermissionPrompt,
 } from "../../lib/pushPromptPrefs";
 import {
   getNativePushReceiveState,
-  getPushRegistrationUserFeedback,
   requestNotificationPermissionAndRegister,
 } from "../../lib/explicitNativePushRegistration";
 import { useCreateChooser } from "../../context/CreateChooserContext";
 import { useOwlMessageModal } from "../../context/OwlMessageModalContext";
-import FrostedCenterModal, {
-  frostedModalPanelClassName,
-  frostedModalPanelStyle,
-} from "../ui/FrostedCenterModal";
 
 const AUTH_CALLBACK_PATH = "/auth/callback";
 
@@ -30,20 +23,11 @@ type Props = {
   appContentReady: boolean;
 };
 
-const pillBase =
-  "flex-1 min-w-0 rounded-full px-3 py-1.5 text-[11px] font-semibold transition " +
-  "disabled:opacity-50 whitespace-nowrap text-center";
-
-const secondaryPillClass =
-  pillBase +
-  " border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text)] hover:bg-[var(--surface)]/80";
-
-const primaryPillClass =
-  pillBase + " bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-90";
-
 /**
- * Native-only, signed-in, delayed push permission reminder.
- * OS permission is requested only from the primary button via {@link requestNotificationPermissionAndRegister}.
+ * Native-only, signed-in, splash-ready permission check.
+ * Requestable permission gets one OS prompt per user on this device.
+ * Granted permission registers the token with no prompt.
+ * Denied permission is not requested again. Settings stays user-initiated.
  */
 export default function NativePushPermissionPromptGate({
   appContentReady,
@@ -53,53 +37,58 @@ export default function NativePushPermissionPromptGate({
   const authLoading = useAppSelector((s) => s.auth.loading);
   const { isOpen: createChooserOpen } = useCreateChooser();
   const { isOpen: owlModalOpen } = useOwlMessageModal();
-
-  const [open, setOpen] = useState(false);
-  const [allowBusy, setAllowBusy] = useState(false);
-  const openedRef = useRef(false);
-
-  const close = useCallback(() => {
-    setOpen(false);
-  }, []);
+  const startedForUserRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isNativeApp()) return;
-    if (!authUser) {
-      openedRef.current = false;
+    const userId = authUser?.id?.trim() ?? "";
+    if (!userId) {
+      startedForUserRef.current = null;
       return;
     }
     if (!appContentReady) return;
     if (authLoading) return;
     if (location.pathname === AUTH_CALLBACK_PATH) return;
     if (createChooserOpen || owlModalOpen) return;
-    if (openedRef.current) return;
+    if (startedForUserRef.current === userId) return;
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void (async () => {
         if (cancelled) return;
-
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (!session?.user) {
-          return;
-        }
+        const sessionUserId = session?.user?.id?.trim() ?? "";
+        if (!sessionUserId || sessionUserId !== userId) return;
 
         const { ui } = await getNativePushReceiveState();
-        /* Auto gate only for undecided OS permission — never granted/denied/unsupported. */
-        if (ui !== "prompt") {
-          openedRef.current = true;
-          return;
-        }
-        if (!shouldShowNativePushPermissionPrompt()) {
-          openedRef.current = true;
+        if (cancelled) return;
+
+        if (ui === "granted") {
+          startedForUserRef.current = userId;
+          await requestNotificationPermissionAndRegister();
           return;
         }
 
-        if (cancelled) return;
-        openedRef.current = true;
-        setOpen(true);
+        if (ui !== "prompt") {
+          startedForUserRef.current = userId;
+          return;
+        }
+
+        if (isNativePushPromptNeverAgain()) {
+          startedForUserRef.current = userId;
+          return;
+        }
+
+        if (hasNativePushOsPromptAttempt(userId)) {
+          startedForUserRef.current = userId;
+          return;
+        }
+
+        startedForUserRef.current = userId;
+        markNativePushOsPromptAttempt(userId);
+        await requestNotificationPermissionAndRegister();
       })();
     }, NATIVE_PUSH_PROMPT_DELAY_MS);
 
@@ -116,88 +105,6 @@ export default function NativePushPermissionPromptGate({
     owlModalOpen,
   ]);
 
-  const onAllow = useCallback(async () => {
-    setAllowBusy(true);
-    try {
-      const result = await requestNotificationPermissionAndRegister();
-      const fb = getPushRegistrationUserFeedback(result);
-      if (fb.kind === "success") toast.success(fb.message);
-      else if (fb.kind === "error") toast.error(fb.message);
-    } finally {
-      applyNativePushPromptSessionDismiss();
-      setAllowBusy(false);
-      close();
-    }
-  }, [close]);
-
-  const onMaybeLater = useCallback(() => {
-    applyNativePushPromptLater();
-    close();
-  }, [close]);
-
-  const onNever = useCallback(() => {
-    applyNativePushPromptNever();
-    close();
-  }, [close]);
-
   if (!isNativeApp()) return null;
-
-  return (
-    <FrostedCenterModal
-      open={open}
-      onBackdropClick={() => {
-        onMaybeLater();
-      }}
-      zTier="dialog"
-      aria-labelledby="native-push-prompt-title"
-    >
-      <div
-        className={frostedModalPanelClassName}
-        style={frostedModalPanelStyle}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          id="native-push-prompt-title"
-          className="text-sm font-semibold mb-1 text-[var(--text)]"
-        >
-          Stay in the loop
-        </div>
-        <p className="text-xs text-[var(--text)]/70 mb-3 leading-snug">
-          Get notified about messages, invites, group updates, and plans.
-        </p>
-        <div className="flex w-full min-w-0 gap-2">
-          <button
-            type="button"
-            className={secondaryPillClass}
-            disabled={allowBusy}
-            onClick={onMaybeLater}
-          >
-            Maybe later
-          </button>
-          <button
-            type="button"
-            className={primaryPillClass}
-            disabled={allowBusy}
-            onClick={() => void onAllow()}
-          >
-            Allow notifications
-          </button>
-        </div>
-        <div className="mt-2 flex w-full justify-center">
-          <button
-            type="button"
-            className={
-              "max-w-full px-2 py-0.5 text-[11px] font-medium text-[var(--text)]/45 " +
-              "underline decoration-[var(--text)]/25 underline-offset-2 transition " +
-              "hover:text-[var(--text)]/65 whitespace-nowrap text-center disabled:opacity-40"
-            }
-            disabled={allowBusy}
-            onClick={onNever}
-          >
-            Never remind me again
-          </button>
-        </div>
-      </div>
-    </FrostedCenterModal>
-  );
+  return null;
 }

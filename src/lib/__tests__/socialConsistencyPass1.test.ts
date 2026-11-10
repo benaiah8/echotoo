@@ -109,11 +109,13 @@ describe("Own Profile Duo click + manage routing", () => {
     );
   });
 
-  it("4: Other Profile Duo resolving unchanged (duoBusy)", () => {
+  it("4: Other Profile action row is Heart + Comment, not a Duo pill", () => {
     const card = readSrc("components/profile/ProfileSocialOpportunityCard.tsx");
-    expect(card).toMatch(
-      /data-profile-social-other-actions[\s\S]*<SocialDuoPill[\s\S]*resolving=\{duoBusy\}/
-    );
+    const other = card.slice(card.indexOf("data-profile-social-other-actions"));
+    expect(other).toContain('kind="heart"');
+    expect(other).toContain('kind="comment"');
+    expect(other).not.toContain("<SocialDuoPill");
+    expect(other).not.toContain("duoBusy");
   });
 
   it("5: Feed / Detail Duo resolving unchanged", () => {

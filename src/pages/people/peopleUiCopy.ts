@@ -5,11 +5,11 @@
  */
 export const peopleUiCopy = {
   rowAction: "P2P",
-  joinToastTitle: "Down to go with someone ✌️",
+  joinToastTitle: "Up for a Duo",
   /** Narrow viewport (e.g. 320) — keep one-row capsule. */
-  joinToastTitleCompact: "Down to go ✌️",
-  joinToastTitleLead: "Down to go",
-  joinToastTitleRest: "with someone",
+  joinToastTitleCompact: "Up for a Duo",
+  joinToastTitleLead: "Up for a Duo",
+  joinToastTitleRest: "",
   joinToastTitleEmoji: "✌️",
   /** Kept for a later two-line toast; Toaster is currently single-line. */
   joinToastSupporting: "See who you sync with.",

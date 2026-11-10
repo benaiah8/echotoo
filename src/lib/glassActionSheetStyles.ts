@@ -22,17 +22,23 @@ export const glassActionSheetRowBaseClass = [
 export const glassActionSheetRowClass = `${glassActionSheetRowBaseClass} h-10`;
 
 export const glassActionSheetSectionLabelClass =
-  "w-full pt-4 pb-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 first:pt-0";
+  "w-full pt-4 pb-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 app-light:text-[var(--text)]/75 first:pt-0";
 
 export const glassActionSheetIconWrapClass =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]";
 
-export const glassActionSheetBackdropClass =
-  "pointer-events-auto absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]";
+export const glassActionSheetBackdropClass = [
+  "pointer-events-auto absolute inset-0 cursor-default border-0 transition-opacity",
+  "bg-black/50 backdrop-blur-md",
+  "[backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]",
+  "app-light:bg-[color-mix(in_oklab,var(--surface)_75%,transparent)]",
+  "app-light:backdrop-blur-[18px]",
+  "app-light:[backdrop-filter:blur(18px)] app-light:[-webkit-backdrop-filter:blur(18px)]",
+].join(" ");
 
 /** Frosted people / participants panel (Invite-direction). */
 export const glassPeoplePanelClass =
-  "w-full overflow-hidden rounded-2xl border-2 border-neutral-900/26 bg-[color-mix(in_oklab,var(--surface-2)_34%,transparent)] shadow-sm backdrop-blur-xl app-dark:border-white/34 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)]";
+  "w-full overflow-hidden rounded-2xl border-2 border-neutral-900/26 bg-[color-mix(in_oklab,var(--surface-2)_75%,transparent)] shadow-sm backdrop-blur-xl app-dark:border-white/34 app-dark:bg-[color-mix(in_oklab,var(--surface-2)_26%,transparent)]";
 
 /**
  * Edit Profile — static translucent fills (no per-field backdrop-filter).

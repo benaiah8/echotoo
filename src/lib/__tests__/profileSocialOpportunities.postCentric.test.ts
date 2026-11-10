@@ -125,7 +125,21 @@ describe("parseProfileSocialOpportunity post-centric contract", () => {
     expect(row).not.toBeNull();
     expect(row!.duo?.opportunity_id).toBe("duo-1");
     expect(row!.duo?.viewer_duo_joined).toBe(true);
+    expect(row!.duo?.viewer_duo_interested).toBe(false);
     expect(row!.group).toBeNull();
+  });
+
+  it("A2: server interest flag fills the Duo payload", () => {
+    const row = parseProfileSocialOpportunity({
+      ...baseShared,
+      duo: {
+        opportunity_id: "duo-1",
+        viewer_duo_joined: true,
+        viewer_duo_interested: true,
+      },
+      group: null,
+    });
+    expect(row!.duo?.viewer_duo_interested).toBe(true);
   });
 
   it("B: Group-only hosted post → one row with group payload", () => {

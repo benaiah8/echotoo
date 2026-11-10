@@ -8,6 +8,10 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import {
+  trackPeopleDestination,
+  USAGE_DESTINATION_SETTLE_MS,
+} from "../../lib/usageAnalytics";
 import toast from "react-hot-toast";
 import {
   completePairUpMatch,
@@ -182,7 +186,6 @@ import {
 } from "../../lib/people/discoverHeartState";
 import {
   peopleDuoModernScrollTopInset,
-  peopleFeedContentBottomPad,
   peopleFeedContentTopPad,
   peopleFeedCssVars,
 } from "../../lib/people/peopleFeedLayout";
@@ -1007,6 +1010,15 @@ export default function MatchDeckOverlay({
         : activeScope === "open_plans"
           ? "plans"
           : "duo";
+
+  useEffect(() => {
+    if (!isPeopleTabVisible) return;
+    const destination = flatActiveDestination;
+    const timer = window.setTimeout(() => {
+      trackPeopleDestination(destination);
+    }, USAGE_DESTINATION_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [flatActiveDestination, isPeopleTabVisible]);
 
   /** Drives PeopleDuoModeTransition — Groups included in same order as bottom nav. */
   const activePrimaryScope: PeoplePrimaryScope =
@@ -3903,9 +3915,9 @@ export default function MatchDeckOverlay({
         data-people-ptr-surface="true"
         style={{
           ...peopleFeedCssVars(),
-          /* Top chrome pad lives on list scrollers (scroll-under). Duo inset is in-slide. */
+          /* Top and bottom clearance live on list scrollers. Pane stays flush so Duo and feeds share one edge. */
           paddingTop: 0,
-          paddingBottom: isDuoDeckScope ? 0 : peopleFeedContentBottomPad(),
+          paddingBottom: 0,
         }}
       >
         <div

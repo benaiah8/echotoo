@@ -128,7 +128,11 @@ export default function PeopleFeedTopNav({
             return (
               <div
                 key={id}
-                className="inline-flex shrink-0 items-center"
+                className={
+                  id === "discover"
+                    ? "relative inline-flex shrink-0 items-center"
+                    : "inline-flex shrink-0 items-center"
+                }
                 data-people-feed-dest-cluster={id}
               >
                 <button
@@ -171,7 +175,7 @@ export default function PeopleFeedTopNav({
                   )}
                   <span className="whitespace-nowrap">{LABEL[id]}</span>
                 </button>
-                {id === "discover" && onDiscoverInfo ? (
+                {id === "discover" && active && onDiscoverInfo ? (
                   <button
                     type="button"
                     onClick={onDiscoverInfo}
@@ -179,14 +183,16 @@ export default function PeopleFeedTopNav({
                     title={peopleUiCopy.discoverInfoAria}
                     data-people-discover-info="true"
                     className={[
-                      "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+                      "absolute bottom-0 right-1.5 z-[3] translate-y-1/2",
+                      "inline-flex h-4 w-4 items-center justify-center rounded-full",
+                      "border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-sm",
                       "touch-manipulation transition active:scale-[0.97]",
-                      "text-[var(--text)]/45 hover:text-[var(--text)]/85 hover:bg-[var(--surface-2)]",
+                      "before:absolute before:-inset-1 before:content-['']",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
                       "focus-visible:outline-[var(--brand)]",
                     ].join(" ")}
                   >
-                    <PiInfo className="h-3.5 w-3.5" aria-hidden />
+                    <PiInfo className="h-2.5 w-2.5" aria-hidden />
                   </button>
                 ) : null}
               </div>

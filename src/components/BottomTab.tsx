@@ -57,6 +57,7 @@ import {
   isNativeApp,
 } from "../lib/storage/utils/capacitorDetection";
 import { useHasUnreadMessages } from "../lib/messagesUnreadStore";
+import { useHasRequestAttention } from "../lib/requestsAttentionStore";
 import { useHasNewActivities } from "../lib/messagesActivitiesAttentionStore";
 
 /**
@@ -122,7 +123,9 @@ function BottomTab() {
   const isAuthed = useSelector((s: any) => !!s.auth?.user);
   const hasUnreadMessages = useHasUnreadMessages();
   const hasNewActivities = useHasNewActivities();
-  const showMessagesAttention = hasUnreadMessages || hasNewActivities;
+  const hasRequestAttention = useHasRequestAttention();
+  const showMessagesAttention =
+    hasUnreadMessages || hasNewActivities || hasRequestAttention;
 
   // Modal state for AuthModal
   const { authModal } = useSelector((s: any) => s.modal);
@@ -900,7 +903,7 @@ function BottomTab() {
                   </div>
                   {index === 3 && isAuthedFinal && showMessagesAttention ? (
                     <span
-                      className="pointer-events-none absolute top-[3px] right-[8px] z-20 h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_0_1.5px_var(--bg)]"
+                      className="pointer-events-none absolute top-[3px] right-[8px] z-20 h-2 w-2 rounded-full bg-[var(--brand)] shadow-[0_0_0_1.5px_var(--bg)]"
                       aria-hidden
                     />
                   ) : null}

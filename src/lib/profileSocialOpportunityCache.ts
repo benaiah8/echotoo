@@ -4,7 +4,10 @@
  * Patches target Duo or Group sub-payload by opportunity_id.
  */
 
-import type { ProfileSocialOpportunitiesPage } from "./people/types";
+import type {
+  ProfileSocialOpportunitiesPage,
+  ProfileSocialOpportunity,
+} from "./people/types";
 
 const TTL_MS = 60_000;
 const SOFT_STALE_MS = 20_000;
@@ -13,6 +16,16 @@ type Entry = { ts: number; value: ProfileSocialOpportunitiesPage };
 
 const cache = new Map<string, Entry>();
 const listeners = new Set<() => void>();
+/** Local confirm time for one viewer's interest in one hosted Duo. */
+const duoInterestConfirmedAt = new Map<string, number>();
+
+function duoInterestKey(
+  viewerUserId: string,
+  profileUserId: string,
+  opportunityId: string
+): string {
+  return `${viewerUserId}:${profileUserId}:${opportunityId}`;
+}
 
 export function profileSocialOpportunityCacheKey(
   viewerUserId: string,
@@ -93,6 +106,7 @@ export function patchCachedProfileSocialOpportunity(
   opportunityId: string,
   patch: Partial<{
     viewer_duo_joined: boolean;
+    viewer_duo_interested: boolean;
     viewer_profile_connected: boolean;
     viewer_group_state: "none" | "pending" | "member" | null;
     request_id: string | null;
@@ -101,6 +115,22 @@ export function patchCachedProfileSocialOpportunity(
   const key = profileSocialOpportunityCacheKey(viewerUserId, profileUserId);
   const entry = cache.get(key);
   if (!entry) return;
+  const interestKey = duoInterestKey(
+    viewerUserId,
+    profileUserId,
+    opportunityId
+  );
+  if (
+    patch.viewer_duo_interested === true ||
+    patch.viewer_profile_connected === true
+  ) {
+    duoInterestConfirmedAt.set(interestKey, Date.now());
+  } else if (
+    patch.viewer_duo_interested === false ||
+    patch.viewer_profile_connected === false
+  ) {
+    duoInterestConfirmedAt.delete(interestKey);
+  }
   const next = {
     ...entry.value,
     opportunities: entry.value.opportunities.map((row) => {
@@ -111,6 +141,9 @@ export function patchCachedProfileSocialOpportunity(
             ...row.duo,
             ...(patch.viewer_duo_joined !== undefined
               ? { viewer_duo_joined: patch.viewer_duo_joined }
+              : {}),
+            ...(patch.viewer_duo_interested !== undefined
+              ? { viewer_duo_interested: patch.viewer_duo_interested }
               : {}),
             ...(patch.viewer_profile_connected !== undefined
               ? { viewer_profile_connected: patch.viewer_profile_connected }
@@ -226,6 +259,54 @@ export function invalidateProfileSocialOpportunitiesForViewer(
   emit();
 }
 
+/**
+ * Keep a Heart confirmed after this request started when the response
+ * still says the viewer is not interested. A later response wins.
+ * Keys include the viewer, so one account cannot fill another's Heart.
+ */
+export function preserveLocalDuoInterest(
+  viewerUserId: string,
+  profileUserId: string,
+  previous: readonly ProfileSocialOpportunity[] | null,
+  incoming: readonly ProfileSocialOpportunity[],
+  requestStartedAt: number
+): ProfileSocialOpportunity[] {
+  return incoming.map((row) => {
+    if (!row.duo) return row;
+    if (row.duo.viewer_duo_interested === true) return row;
+    const key = duoInterestKey(
+      viewerUserId,
+      profileUserId,
+      row.duo.opportunity_id
+    );
+    const confirmedAt = duoInterestConfirmedAt.get(key);
+    const prev = previous?.find(
+      (item) => item.duo?.opportunity_id === row.duo?.opportunity_id
+    );
+    const localTrue =
+      prev?.duo?.viewer_duo_interested === true ||
+      prev?.duo?.viewer_profile_connected === true;
+    if (
+      localTrue &&
+      confirmedAt != null &&
+      confirmedAt > requestStartedAt
+    ) {
+      return {
+        ...row,
+        duo: {
+          ...row.duo,
+          viewer_duo_interested: true,
+          viewer_profile_connected: true,
+        },
+      };
+    }
+    if (confirmedAt != null && confirmedAt <= requestStartedAt) {
+      duoInterestConfirmedAt.delete(key);
+    }
+    return row;
+  });
+}
+
 export function invalidateProfileSocialOpportunities(
   viewerUserId: string,
   profileUserId: string
@@ -237,5 +318,6 @@ export function invalidateProfileSocialOpportunities(
 /** Test helper. */
 export function __resetProfileSocialOpportunityCacheForTests(): void {
   cache.clear();
+  duoInterestConfirmedAt.clear();
   emit();
 }

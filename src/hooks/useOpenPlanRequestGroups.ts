@@ -6,10 +6,15 @@ import {
   isOpenPlanRequestGroupsSoftStale,
   subscribeOpenPlanRequestGroupsCache,
 } from "../lib/openPlanRequestGroupsCache";
+import { acceptOpenPlanSnapshot } from "../lib/openPlanRequestSeen";
+import type { OpenPlanFetchStatus } from "../lib/openPlanRequestSeen";
 import type { OpenPlanRequestGroup } from "../lib/people/types";
 
 export type UseOpenPlanRequestGroupsResult = {
   groups: OpenPlanRequestGroup[];
+  /** User id that owns the current successful snapshot. Null until then. */
+  ownerUserId: string | null;
+  fetchStatus: OpenPlanFetchStatus;
   hasMore: boolean;
   loading: boolean;
   isValidating: boolean;
@@ -57,6 +62,8 @@ export function useOpenPlanRequestGroups(options?: {
   const limit = options?.limit ?? 20;
   const enabled = options?.enabled === true;
   const [groups, setGroups] = useState<OpenPlanRequestGroup[]>([]);
+  const [ownerUserId, setOwnerUserId] = useState<string | null>(null);
+  const [fetchStatus, setFetchStatus] = useState<OpenPlanFetchStatus>("idle");
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
@@ -67,6 +74,8 @@ export function useOpenPlanRequestGroups(options?: {
 
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
+  const ownerUserIdRef = useRef(ownerUserId);
+  ownerUserIdRef.current = ownerUserId;
   const limitRef = useRef(limit);
   limitRef.current = limit;
   const enabledRef = useRef(enabled);
@@ -99,6 +108,8 @@ export function useOpenPlanRequestGroups(options?: {
     if (uid === undefined) return;
     if (!uid) {
       setGroups([]);
+      setOwnerUserId(null);
+      setFetchStatus("idle");
       setHasMore(false);
       setNextCursor(null);
       setHasLoaded(false);
@@ -108,8 +119,11 @@ export function useOpenPlanRequestGroups(options?: {
     }
     if (inflightRef.current) return inflightRef.current;
 
+    const requestUserId = uid;
     const run = (async () => {
-      const usable = groupsRef.current.length > 0 || hasLoadedRef.current;
+      const usable =
+        ownerUserIdRef.current === requestUserId &&
+        (groupsRef.current.length > 0 || hasLoadedRef.current);
       if (usable) {
         setIsValidating(true);
       } else {
@@ -122,21 +136,37 @@ export function useOpenPlanRequestGroups(options?: {
           cursor: null,
           force,
         });
-        setGroups(uniqueByOpportunityId(page.groups));
+        const accepted = acceptOpenPlanSnapshot({
+          requestUserId,
+          currentUserId: userIdRef.current ?? null,
+          status: "success",
+          groups: uniqueByOpportunityId(page.groups),
+        });
+        if (!accepted) return;
+        setGroups(accepted.groups);
+        setOwnerUserId(accepted.userId);
+        setFetchStatus("success");
         setHasMore(page.has_more);
         setNextCursor(page.next_cursor ?? null);
         setHasLoaded(true);
         hasLoadedRef.current = true;
         setError(null);
       } catch (err) {
+        if ((userIdRef.current ?? null) !== requestUserId) return;
         setError(toError(err));
+        if (ownerUserIdRef.current !== requestUserId) {
+          setFetchStatus("error");
+          setOwnerUserId(null);
+        }
         if (!hasLoadedRef.current) {
           setHasLoaded(true);
           hasLoadedRef.current = true;
         }
       } finally {
-        setLoading(false);
-        setIsValidating(false);
+        if ((userIdRef.current ?? null) === requestUserId) {
+          setLoading(false);
+          setIsValidating(false);
+        }
       }
     })();
 
@@ -160,20 +190,44 @@ export function useOpenPlanRequestGroups(options?: {
     if (userId === undefined) return;
     if (!userId) {
       setGroups([]);
+      setOwnerUserId(null);
+      setFetchStatus("idle");
       setHasMore(false);
       setNextCursor(null);
       setHasLoaded(false);
+      hasLoadedRef.current = false;
       return;
     }
 
+    inflightRef.current = null;
     const cached = getCachedOpenPlanRequestGroups(userId);
     if (cached) {
-      setGroups(uniqueByOpportunityId(cached.groups));
-      setHasMore(cached.has_more);
-      setNextCursor(cached.next_cursor);
-      setHasLoaded(true);
-      hasLoadedRef.current = true;
-      if (!isOpenPlanRequestGroupsSoftStale(userId)) return;
+      const accepted = acceptOpenPlanSnapshot({
+        requestUserId: userId,
+        currentUserId: userId,
+        status: "success",
+        groups: uniqueByOpportunityId(cached.groups),
+      });
+      if (accepted) {
+        setGroups(accepted.groups);
+        setOwnerUserId(accepted.userId);
+        setFetchStatus("success");
+        setHasMore(cached.has_more);
+        setNextCursor(cached.next_cursor);
+        setHasLoaded(true);
+        hasLoadedRef.current = true;
+        setError(null);
+        if (!isOpenPlanRequestGroupsSoftStale(userId)) return;
+      }
+    } else {
+      setGroups([]);
+      setOwnerUserId(null);
+      setFetchStatus("idle");
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      hasLoadedRef.current = false;
+      setError(null);
     }
     // Soft-stale must force network; force:false returns TTL cache and never refreshes.
     void revalidate(true);
@@ -186,7 +240,16 @@ export function useOpenPlanRequestGroups(options?: {
       if (!uid) return;
       const cached = getCachedOpenPlanRequestGroups(uid);
       if (cached) {
-        setGroups(uniqueByOpportunityId(cached.groups));
+        const accepted = acceptOpenPlanSnapshot({
+          requestUserId: uid,
+          currentUserId: uid,
+          status: "success",
+          groups: uniqueByOpportunityId(cached.groups),
+        });
+        if (!accepted) return;
+        setGroups(accepted.groups);
+        setOwnerUserId(accepted.userId);
+        setFetchStatus("success");
         setHasMore(cached.has_more);
         setNextCursor(cached.next_cursor);
         setHasLoaded(true);
@@ -210,14 +273,24 @@ export function useOpenPlanRequestGroups(options?: {
           cursor,
           force: true,
         });
-        setGroups((prev) => appendPage(prev, page.groups));
+        const accepted = acceptOpenPlanSnapshot({
+          requestUserId: uid,
+          currentUserId: userIdRef.current ?? null,
+          status: "success",
+          groups: page.groups,
+        });
+        if (!accepted) return;
+        setGroups((prev) => appendPage(prev, accepted.groups));
+        setOwnerUserId(accepted.userId);
+        setFetchStatus("success");
         setHasMore(page.has_more);
         setNextCursor(page.next_cursor ?? null);
         setError(null);
       } catch (err) {
+        if ((userIdRef.current ?? null) !== uid) return;
         setError(toError(err));
       } finally {
-        setIsValidating(false);
+        if ((userIdRef.current ?? null) === uid) setIsValidating(false);
       }
     })();
 
@@ -231,6 +304,8 @@ export function useOpenPlanRequestGroups(options?: {
 
   return {
     groups,
+    ownerUserId,
+    fetchStatus,
     hasMore,
     loading,
     isValidating,

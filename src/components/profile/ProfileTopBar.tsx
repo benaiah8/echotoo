@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { deriveProfileActionSheetScrollEdges } from "../../lib/profileActionSheetScrollEdges";
+import { glassActionSheetBackdropClass } from "../../lib/glassActionSheetStyles";
 import {
   PiArrowCounterClockwise,
   PiBell,
@@ -416,7 +417,7 @@ export default function ProfileTopBar({
   const ownSheetRowMultilineClass = `${ownSheetRowBase} min-h-[40px] max-h-[52px] h-auto py-1.5`;
 
   const ownSheetSectionLabelClass =
-    "w-full pt-4 pb-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 first:pt-0";
+    "w-full pt-4 pb-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 app-light:text-[var(--text)]/75 first:pt-0";
 
   const ownSheetIconWrapClass =
     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[color-mix(in_oklab,var(--surface-2)_55%,transparent)]";
@@ -532,7 +533,7 @@ export default function ProfileTopBar({
           >
             <button
               type="button"
-              className="pointer-events-auto absolute inset-0 cursor-default border-0 bg-black/50 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
+              className={glassActionSheetBackdropClass}
               aria-label="Dismiss profile menu"
               onClick={() => playAnimatedDismiss()}
             />
@@ -547,7 +548,7 @@ export default function ProfileTopBar({
             >
               <div
                 ref={ownProfileActionScrollRef}
-                className="flex min-h-0 max-h-[min(85dvh,calc(100vh-48px))] flex-col items-stretch gap-1.5 overflow-y-auto overscroll-contain py-0.5"
+                className="scroll-hide flex min-h-0 max-h-[min(85dvh,calc(100vh-48px))] flex-col items-stretch gap-1.5 overflow-x-hidden overflow-y-auto overscroll-contain py-0.5"
                 style={{ touchAction: "pan-y" }}
                 onScroll={updateOwnSheetScrollEdges}
                 data-profile-action-sheet-scroll="true"

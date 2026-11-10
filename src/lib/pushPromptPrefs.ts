@@ -10,6 +10,9 @@ export const PUSH_PROMPT_NEVER_LS_KEY = "push_prompt_never_v1";
 export const PUSH_PROMPT_LATER_UNTIL_MS_LS_KEY = "push_prompt_later_until_ms_v1";
 export const PUSH_PROMPT_SESSION_DISMISS_SS_KEY = "push_prompt_session_dismiss_v1";
 
+/** One automatic OS prompt per signed-in user on this device. */
+export const PUSH_OS_PROMPTED_PREFIX = "push_os_prompted_v1:";
+
 const COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export function isNativePushPromptNeverAgain(): boolean {
@@ -78,6 +81,26 @@ export function applyNativePushPromptLater(): void {
     /* noop */
   }
   setSessionDismiss();
+}
+
+export function hasNativePushOsPromptAttempt(userId: string): boolean {
+  const id = userId.trim();
+  if (!id) return true;
+  try {
+    return localStorage.getItem(PUSH_OS_PROMPTED_PREFIX + id) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markNativePushOsPromptAttempt(userId: string): void {
+  const id = userId.trim();
+  if (!id) return;
+  try {
+    localStorage.setItem(PUSH_OS_PROMPTED_PREFIX + id, "1");
+  } catch {
+    /* ignore */
+  }
 }
 
 export function applyNativePushPromptNever(): void {

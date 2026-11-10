@@ -37,6 +37,8 @@ export const Paths = {
   internalCompanyAnnouncements: "/internal/company-announcements",
   /** Reviewer-only JS/React crash reports (same allowlist as reports). */
   internalCrashReports: "/internal/crash-reports",
+  /** Reviewer-only usage totals (same allowlist as reports). */
+  internalUsage: "/internal/usage",
   hangoutDetail: "/hangout/:id",
 
   // Profile routes

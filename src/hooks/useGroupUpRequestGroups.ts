@@ -173,6 +173,12 @@ export function useGroupUpRequestGroups(options?: {
       setHasLoaded(true);
       hasLoadedRef.current = true;
       if (!isGroupUpRequestGroupsSoftStale(userId)) return;
+    } else {
+      setGroups([]);
+      setHasMore(false);
+      setNextCursor(null);
+      setHasLoaded(false);
+      hasLoadedRef.current = false;
     }
     // Soft-stale must force network; force:false returns TTL cache and never refreshes.
     void revalidate(true);

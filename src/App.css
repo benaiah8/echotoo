@@ -240,6 +240,23 @@
   padding-right: 0 !important;
 }
 
+/* Home Filters only — month bar sits on the frosted scrim, not a solid --bg strip. */
+[data-home-filters-overlay] .rdp-theme .rdp-nav,
+[data-home-filters-overlay] .rdp-theme .rdp-month_caption,
+[data-home-filters-overlay] .rdp-theme .rdp-caption_label,
+[data-home-filters-overlay] .rdp-theme .rdp-button_previous,
+[data-home-filters-overlay] .rdp-theme .rdp-button_next {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--text) !important;
+}
+[data-home-filters-overlay] .rdp-theme .rdp-chevron {
+  fill: var(--text);
+}
+[data-home-filters-overlay] .rdp-theme .rdp-weekday {
+  opacity: 1 !important;
+}
+
 /*
  * Home filters only — feathered dark wash behind the date grid (no card border/shadow).
  * Open Plan calendar chrome is unchanged; this selector is overlay-scoped.
@@ -260,9 +277,9 @@
 html.theme-light [data-home-filters-overlay] [data-home-filters-calendar] {
   background-image: radial-gradient(
     ellipse 92% 78% at 50% 42%,
-    color-mix(in oklab, #0b0b0c 14%, transparent) 0%,
-    color-mix(in oklab, #0b0b0c 6%, transparent) 50%,
-    transparent 76%
+    color-mix(in oklab, var(--surface-2) 55%, transparent) 0%,
+    color-mix(in oklab, var(--surface) 28%, transparent) 52%,
+    transparent 78%
   );
 }
 

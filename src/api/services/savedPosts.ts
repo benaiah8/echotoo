@@ -1,4 +1,5 @@
 import { supabase } from "../../lib/supabaseClient";
+import { trackUsage } from "../../lib/usageAnalytics";
 import { requestManager } from "../../lib/requestManager";
 import { isDraftPostId } from "../../lib/drafts";
 import { getViewerAuthUserId } from "./follows";
@@ -148,6 +149,11 @@ export async function savePost(
       invalidateSavedPostsCache();
       invalidateOnSave(postId, userId);
       emitPostChanged(postId, { viewerSaved: true });
+      try {
+        trackUsage("post_save");
+      } catch {
+        /* analytics must not affect save */
+      }
     }
 
     return { data, error };
@@ -178,6 +184,11 @@ export async function unsavePost(
       invalidateSavedPostsCache();
       invalidateOnSave(postId, userId);
       emitPostChanged(postId, { viewerSaved: false });
+      try {
+        trackUsage("post_unsave");
+      } catch {
+        /* analytics must not affect unsave */
+      }
     }
 
     return { data, error };

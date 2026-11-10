@@ -292,8 +292,13 @@ export type ProfileSocialDuoPayload = {
   opportunity_id: string;
   viewer_duo_joined: boolean;
   /**
-   * Client-only Profile Connect interest flag (not returned by RPC).
-   * Set after Profile Connect so Connect can stay active independently of Duo-only join.
+   * True when the signed-in viewer has an active Pair Up interest
+   * into this hosted opportunity. Returned by list_profile_social_opportunities.
+   */
+  viewer_duo_interested?: boolean;
+  /**
+   * Optimistic Profile Connect flag until the rail refetch agrees.
+   * A newer local confirm wins over a stale false from an in-flight page.
    */
   viewer_profile_connected?: boolean;
 };

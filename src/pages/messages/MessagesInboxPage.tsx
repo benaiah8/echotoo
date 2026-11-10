@@ -65,13 +65,27 @@ import {
   setDmInboxCache,
 } from "../../lib/dmInboxCache";
 import { hydrateFromInboxRows, clearConversationUnread } from "../../lib/messagesUnreadStore";
+import {
+  applyOpenPlanSeenForViewer,
+  openPlanPendingCount,
+  openPlanUnseenCount,
+  useOpenPlanSeenRevision,
+} from "../../lib/openPlanRequestSeen";
+import { deriveRequestsAttention } from "../../lib/requestsAttention";
+import {
+  clearRequestsAttention,
+  setRequestsAttention,
+} from "../../lib/requestsAttentionStore";
 import { removeDmConversationParticipantsCache } from "../../lib/dmConversationParticipantsCache";
 import { removeDmMessagesCache } from "../../lib/dmMessagesCache";
 import { getGroupConversationIdentity } from "../../lib/groupConversationIdentityCache";
 import { invalidateGroupUpOwnForPost } from "../../lib/groupUpCache";
 import { invalidateGroupUpIncoming } from "../../lib/groupUpIncomingCache";
 import { invalidateGroupUpMemberships } from "../../lib/groupUpMembershipsCache";
-import { invalidateGroupUpRequestGroups } from "../../lib/groupUpRequestGroupsCache";
+import {
+  invalidateGroupUpRequestGroups,
+  sumGroupUpRequestNewCount,
+} from "../../lib/groupUpRequestGroupsCache";
 import { invalidateGroupUpSourceList } from "../../lib/groupUpSourceListCache";
 import { logDmRealtime } from "../../lib/messagesRealtimeDebug";
 import {
@@ -95,7 +109,6 @@ import {
   isGroupUpRequestersOverlayOpen,
   subscribeGroupUpRequestersOverlay,
 } from "../../lib/groupUpRequestersOverlayStore";
-import { sumGroupUpRequestNewCount } from "../../lib/groupUpRequestGroupsCache";
 import { navigateToPostDetailInApp } from "../../lib/navigateToPostDetailInApp";
 import type {
   GroupUpRequestGroup,
@@ -256,10 +269,12 @@ export default function MessagesInboxPage() {
   const [openPlanRequestsOpened, setOpenPlanRequestsOpened] = useState(false);
 
   const openPlanGroups = useOpenPlanRequestGroups({
-    enabled: openPlanRequestsOpened,
+    enabled: Boolean(viewerUserId),
   });
   const {
     groups: openPlanRequestGroups,
+    ownerUserId: openPlanOwnerUserId,
+    fetchStatus: openPlanFetchStatus,
     hasLoaded: openPlanHasLoaded,
     hasMore: openPlanHasMore,
     isValidating: openPlanIsValidating,
@@ -268,7 +283,7 @@ export default function MessagesInboxPage() {
   } = openPlanGroups;
 
   const groupUpGroups = useGroupUpRequestGroups({
-    enabled: openPlanRequestsOpened,
+    enabled: Boolean(viewerUserId),
   });
   const {
     groups: groupUpRequestGroups,
@@ -339,25 +354,72 @@ export default function MessagesInboxPage() {
     [eligible]
   );
 
-  const requestsBadge = useMemo(() => {
+  const openPlanSeenRevision = useOpenPlanSeenRevision();
+  const requestsAttention = useMemo(() => {
     const unreadDm = requestEligible.filter((r) => r.unread_count > 0).length;
-    const openPlanCount =
-      openPlanRequestsOpened && openPlanHasLoaded
-        ? openPlanRequestGroups.length
-        : 0;
-    const groupUpNewCount =
-      openPlanRequestsOpened && groupUpHasLoaded
-        ? sumGroupUpRequestNewCount(groupUpRequestGroups)
-        : 0;
-    return unreadDm + openPlanCount + groupUpNewCount;
+    const openPlanSnapshotReady =
+      openPlanFetchStatus === "success" &&
+      openPlanOwnerUserId != null &&
+      openPlanOwnerUserId === viewerUserId;
+    const openPending = openPlanSnapshotReady
+      ? openPlanPendingCount(openPlanRequestGroups)
+      : 0;
+    const openUnseen = openPlanSnapshotReady
+      ? openPlanUnseenCount(viewerUserId, openPlanRequestGroups)
+      : 0;
+    let groupPending = 0;
+    if (groupUpHasLoaded) {
+      for (const group of groupUpRequestGroups) {
+        groupPending += Math.max(0, Math.floor(group.pending_count || 0));
+      }
+    }
+    const groupNew = groupUpHasLoaded
+      ? sumGroupUpRequestNewCount(groupUpRequestGroups)
+      : 0;
+    void openPlanSeenRevision;
+    return deriveRequestsAttention({
+      unreadRequestConversations: unreadDm,
+      openPlanPending: openPending,
+      openPlanUnseen: openUnseen,
+      groupUpPending: groupPending,
+      groupUpNew: groupNew,
+    });
   }, [
     requestEligible,
-    openPlanRequestsOpened,
-    openPlanHasLoaded,
-    openPlanRequestGroups.length,
+    viewerUserId,
+    openPlanFetchStatus,
+    openPlanOwnerUserId,
+    openPlanRequestGroups,
     groupUpHasLoaded,
     groupUpRequestGroups,
+    openPlanSeenRevision,
   ]);
+  const requestsBadge = requestsAttention.count;
+
+  useEffect(() => {
+    if (!viewerUserId) return;
+    applyOpenPlanSeenForViewer({
+      viewerUserId,
+      snapshotUserId: openPlanOwnerUserId,
+      fetchStatus: openPlanFetchStatus,
+      requestsTabOpen: inboxTab === "requests",
+      groups: openPlanRequestGroups,
+    });
+  }, [
+    viewerUserId,
+    openPlanOwnerUserId,
+    openPlanFetchStatus,
+    inboxTab,
+    openPlanRequestGroups,
+  ]);
+
+  useEffect(() => {
+    if (!viewerUserId) {
+      clearRequestsAttention();
+      return;
+    }
+    setRequestsAttention(viewerUserId, requestsAttention.attention);
+  }, [viewerUserId, requestsAttention.attention]);
 
   const composeRecentPeople = useMemo(
     () => inboxDirectsToComposePeople(rows),
@@ -626,12 +688,13 @@ export default function MessagesInboxPage() {
 
   // Defense in depth: account switch while Messages stays mounted.
   useEffect(() => {
-    if (!isMessagesVisible || !viewerUserId) return;
+    if (!viewerUserId) return;
     let cancelled = false;
     (async () => {
       const viewer = await getViewerAuthUserId();
       if (cancelled || !viewer) return;
       if (viewer === viewerUserId) return;
+      clearRequestsAttention();
       setRows([]);
       setError(null);
       setInboxTab("inbox");
@@ -745,7 +808,7 @@ export default function MessagesInboxPage() {
   ]);
 
   useEffect(() => {
-    if (!viewerUserId || !isMessagesVisible) return;
+    if (!viewerUserId) return;
 
     const onFocus = () => {
       if (
@@ -754,6 +817,9 @@ export default function MessagesInboxPage() {
       ) {
         return;
       }
+      void refreshOpenPlanRequestGroups();
+      void refreshGroupUpRequestGroups();
+      if (!isMessagesVisible) return;
       if (canSkipFreshInbox(viewerUserId)) {
         logDmRealtime("inbox-reconcile", {
           reason: "fresh_cache",
@@ -802,6 +868,8 @@ export default function MessagesInboxPage() {
     isMessagesVisible,
     loadInbox,
     refreshActivitiesBadge,
+    refreshOpenPlanRequestGroups,
+    refreshGroupUpRequestGroups,
     canSkipFreshInbox,
     runSilentInboxReconcile,
   ]);

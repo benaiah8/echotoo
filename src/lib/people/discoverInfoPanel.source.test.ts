@@ -42,13 +42,19 @@ describe("Discover info panel (icon-only, no auto intro)", () => {
     expect(overlay).toContain("hideCancel");
   });
 
-  it("wires a single accessible info icon beside Discover", () => {
+  it("wires one absolute info badge only while Discover is active", () => {
     expect(nav).toContain("onDiscoverInfo");
     expect(nav).toContain('data-people-discover-info="true"');
     expect(nav).toContain("PiInfo");
     expect(nav).toContain("peopleUiCopy.discoverInfoAria");
+    expect(nav).toContain('id === "discover" && active && onDiscoverInfo');
+    expect(nav).toContain("absolute bottom-0 right-1.5");
+    expect(nav).toContain('id === "discover"');
+    expect(nav).toContain("relative inline-flex shrink-0 items-center");
+    expect(nav).not.toContain("h-7 w-7 shrink-0");
     expect(overlay).toContain("onDiscoverInfo={handleDiscoverInfo}");
-    // Avoid a second Discover info control in the overlay chrome.
+    expect(overlay).toContain("onSelectDiscover");
+    expect(overlay).toContain("onSelectDuo");
     expect(overlay.match(/onDiscoverInfo=/g)?.length ?? 0).toBe(1);
     expect(nav.match(/data-people-discover-info/g)?.length ?? 0).toBe(1);
   });

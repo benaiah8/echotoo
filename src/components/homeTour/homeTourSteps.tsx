@@ -96,7 +96,7 @@ export const HOME_TOUR_STEPS: readonly HomeTourStep[] = [
     title: "Duo",
     body: tourStack(
       <>
-        {tourBrand("Down to go?")} See people going to the same event or checking
+        {tourBrand("Up for a Duo?")} See people going to the same event or checking
         out the same place.
       </>,
       <>

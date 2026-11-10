@@ -66,6 +66,16 @@ describe("ProfileTopBar own action sheet scroll-edge source", () => {
     "utf8",
   );
 
+  it("hides the settings scrollbar and keeps vertical scrolling", () => {
+    expect(hero).toContain(
+      'className="scroll-hide flex min-h-0 max-h-[min(85dvh,calc(100vh-48px))] flex-col items-stretch gap-1.5 overflow-x-hidden overflow-y-auto overscroll-contain py-0.5"',
+    );
+    expect(hero).toContain("onScroll={updateOwnSheetScrollEdges}");
+    expect(hero).toContain('data-profile-action-sheet-scroll="true"');
+    expect(hero).toContain("glassActionSheetBackdropClass");
+    expect(hero).toContain("app-light:text-[var(--text)]/75");
+  });
+
   it("uses pointer-events-none on top and bottom fades", () => {
     expect(hero).toContain('data-profile-action-sheet-fade="top"');
     expect(hero).toContain('data-profile-action-sheet-fade="bottom"');
@@ -98,9 +108,8 @@ describe("ProfileTopBar own action sheet scroll-edge source", () => {
     );
     expect(pill).not.toContain("backdrop-blur");
     expect(pill).not.toContain("backdrop-filter");
-    expect(hero).toContain("bg-black/50 backdrop-blur-md");
-    expect(hero).toContain("[backdrop-filter:blur(12px)]");
-    expect(hero).toContain("[-webkit-backdrop-filter:blur(12px)]");
+    expect(hero).toContain("glassActionSheetBackdropClass");
+    expect(hero).toContain("className={glassActionSheetBackdropClass}");
 
     const scrollStart = hero.indexOf('data-profile-action-sheet-scroll="true"');
     const fadeStart = hero.indexOf('data-profile-action-sheet-fade="top"');

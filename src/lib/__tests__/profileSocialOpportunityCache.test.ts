@@ -5,6 +5,7 @@ import {
   invalidateProfileSocialOpportunities,
   invalidateProfileSocialOpportunitiesForViewer,
   patchCachedProfileSocialOpportunity,
+  preserveLocalDuoInterest,
   removeCachedProfileSocialOpportunitySide,
   setCachedProfileSocialOpportunities,
 } from "../profileSocialOpportunityCache";
@@ -209,6 +210,77 @@ describe("profileSocialOpportunityCache", () => {
       ?.opportunities[0];
     expect(row?.duo?.opportunity_id).toBe("duo-1");
     expect(row?.group).toBeNull();
+  });
+
+  it("keeps a newly confirmed Heart over a stale false page", () => {
+    setCachedProfileSocialOpportunities("viewer", "owner", {
+      opportunities: [sample()],
+    });
+    patchCachedProfileSocialOpportunity("viewer", "owner", "opp-1", {
+      viewer_duo_interested: true,
+      viewer_profile_connected: true,
+    });
+    const previous =
+      getCachedProfileSocialOpportunities("viewer", "owner")?.opportunities ??
+      null;
+    const stale = preserveLocalDuoInterest(
+      "viewer",
+      "owner",
+      previous,
+      [
+        sample({
+          duo: {
+            opportunity_id: "opp-1",
+            viewer_duo_joined: true,
+            viewer_duo_interested: false,
+          },
+        }),
+      ],
+      0
+    );
+    expect(stale[0]?.duo?.viewer_duo_interested).toBe(true);
+
+    const fresh = preserveLocalDuoInterest(
+      "viewer",
+      "owner",
+      previous,
+      [
+        sample({
+          duo: {
+            opportunity_id: "opp-1",
+            viewer_duo_joined: true,
+            viewer_duo_interested: false,
+          },
+        }),
+      ],
+      Date.now() + 5_000
+    );
+    expect(fresh[0]?.duo?.viewer_duo_interested).toBe(false);
+  });
+
+  it("does not copy one viewer's Heart onto another account", () => {
+    setCachedProfileSocialOpportunities("viewer-a", "owner", {
+      opportunities: [sample()],
+    });
+    patchCachedProfileSocialOpportunity("viewer-a", "owner", "opp-1", {
+      viewer_duo_interested: true,
+    });
+    const other = preserveLocalDuoInterest(
+      "viewer-b",
+      "owner",
+      null,
+      [
+        sample({
+          duo: {
+            opportunity_id: "opp-1",
+            viewer_duo_joined: false,
+            viewer_duo_interested: false,
+          },
+        }),
+      ],
+      0
+    );
+    expect(other[0]?.duo?.viewer_duo_interested).toBe(false);
   });
 });
 

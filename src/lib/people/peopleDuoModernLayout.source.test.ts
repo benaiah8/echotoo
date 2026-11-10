@@ -179,8 +179,8 @@ describe("peopleDuoModernLayout", () => {
     expect(row).toContain("data-people-duo-nav-feedback");
     expect(overlay).not.toContain("data-people-duo-bottom-float-fade");
     expect(overlay).not.toContain("peopleShellMineDuoGlobalTabBottomPad");
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
-    expect(overlay).toContain("peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
+    expect(overlay).not.toContain("peopleFeedContentBottomPad()");
     expect(carousel).toContain("resolveDuoModernDisplayPhotoCount");
     expect(carousel).toContain("peopleMinePortraitCssVars");
   });
@@ -215,7 +215,7 @@ describe("peopleDuoModernLayout", () => {
     const carousel = read("pages/people/MatchDeckCarousel.tsx");
     const info = read("components/people/PeopleDuoOpportunityInfoCard.tsx");
     const row = read("components/people/PeopleDuoBottomActionRow.tsx");
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
     expect(overlay).not.toContain("peopleShellMineDuoGlobalTabBottomPad");
     expect(canonical).toContain('data-people-duo-slide-scroll="true"');
     expect(canonical).toContain("peopleDuoModernSlideScrollBottomPad");
@@ -246,7 +246,7 @@ describe("peopleDuoModernLayout", () => {
     expect(overlay).toContain("paddingTop: 0");
     expect(overlay).toContain("isDuoDeckScope");
     expect(overlay).toContain("frostedScrollThrough={isDuoDeckScope}");
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
     expect(canonical).toContain('data-people-duo-scroll-top-inset="true"');
     expect(canonical).toContain("height: peopleDuoModernScrollTopInset()");
     expect(canonical).not.toContain("height: peopleFeedContentTopPad()");
@@ -347,9 +347,11 @@ describe("peopleDuoModernLayout", () => {
     expect(row).toContain("peopleDuoNavFaceBound");
     expect(row).toContain("if (node.style.transform) return");
     expect(row).toContain("[&_svg]:fill-current");
+    expect(row).toContain("app-light:bg-white app-light:text-[#141414]");
+    expect(row).toContain("bg-[#141414] text-[#f5f0e6]");
     expect(row).toContain("group-disabled:text-[color-mix(in_oklab,#f5f0e6_42%,transparent)]");
     expect(row).toContain(
-      "app-light:group-disabled:text-[color-mix(in_oklab,#141414_40%,transparent)]"
+      "app-light:group-disabled:text-[color-mix(in_oklab,#141414_62%,transparent)]"
     );
     expect(row).toContain("motion-safe:duration-[240ms]");
     expect(row).toContain("motion-reduce:transition-none");

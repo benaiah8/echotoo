@@ -1,9 +1,9 @@
 /**
- * Home filters — frosted Profile Settings chrome + Open Plan full-width calendar.
+ * Home filters — bottom sheet over the Home feed.
  * Presentation / dismissal only; filter transitions stay on HomePage.
  *
- * Hit-testing: shell is noninteractive and centers a content-height panel
- * (`h-fit` / `max-h-[90%]`). Empty frosted margins reach the backdrop dismiss control.
+ * The sheet is ~78% of the viewport and anchored to the bottom. The band
+ * above it is a light dismiss scrim so the feed stays recognizable.
  */
 
 import { useEffect, useRef } from "react";
@@ -28,11 +28,11 @@ const glassPill =
   "rounded-full border border-[var(--bottom-tab-border)] bg-[var(--glass-bg)] shadow-[0_2px_10px_rgba(0,0,0,0.12),0_0_14px_color-mix(in_oklab,var(--brand)_12%,transparent)]";
 
 const sectionLabelClass =
-  "w-full pb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42";
+  "w-full pb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 app-light:text-[var(--text)]/75";
 
 /** Date heading — extra air above shortcut chips (paired with tighter Social→Date divider). */
 const dateSectionLabelClass =
-  "w-full pb-4 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42";
+  "w-full pb-4 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text)]/42 app-light:text-[var(--text)]/75";
 
 /** Hairline between Date and Calendar (~20px breathing room each side). */
 const sectionDividerClass =
@@ -46,7 +46,25 @@ const socialToDateDividerClass =
 const HOME_FILTERS_CONTENT_SWIPE_EXCLUDE =
   ".rdp-button_previous, .rdp-button_next, .rdp-nav";
 
-/** Anchored footer — no panel chrome; overlay glass stays continuous behind buttons. */
+/**
+ * Filters-only dismiss layer. Light enough that the Home feed stays visible.
+ * Not the shared action-sheet scrim.
+ */
+const homeFiltersDismissBackdropClass = [
+  "pointer-events-auto absolute inset-0 cursor-default border-0 transition-opacity",
+  "bg-black/28 app-light:bg-black/18",
+].join(" ");
+
+/** Frosted sheet surface — local to Home Filters. */
+const homeFiltersSheetSurfaceClass = [
+  "border-t border-[var(--border)]",
+  "bg-[color-mix(in_oklab,var(--surface)_84%,transparent)]",
+  "backdrop-blur-[18px] [-webkit-backdrop-filter:blur(18px)]",
+  "app-dark:bg-[color-mix(in_oklab,var(--surface)_80%,transparent)]",
+  "shadow-[0_-10px_36px_rgba(0,0,0,0.18)]",
+].join(" ");
+
+/** Anchored footer — no panel chrome; sheet glass stays continuous behind buttons. */
 const footerBarClass = [
   "relative z-[1] shrink-0",
   "flex items-center justify-center gap-3",
@@ -202,36 +220,36 @@ export default function HomeFiltersOverlay({
     >
       <button
         type="button"
-        className="pointer-events-auto absolute inset-0 cursor-default border-0 bg-black/65 backdrop-blur-md transition-opacity [backdrop-filter:blur(12px)] [-webkit-backdrop-filter:blur(12px)]"
+        className={homeFiltersDismissBackdropClass}
         aria-label="Dismiss filters"
         data-home-filters-backdrop="true"
         onClick={() => playAnimatedDismiss()}
       />
 
-      {/* Safe-area shell — centers content; never stretches interactive hit targets. */}
+      {/* Bottom-anchored sheet. The open band above is the dismiss scrim. */}
       <div
         role="presentation"
         data-home-filters-shell="true"
-        className="relative z-10 flex h-full w-full items-center justify-center pointer-events-none"
-        style={{
-          paddingTop: "calc(10px + env(safe-area-inset-top, 0px))",
-          paddingBottom:
-            "max(0.75rem, calc(0.5rem + var(--safe-area-bottom-layout, 0px)))",
-        }}
+        className="relative z-10 flex h-full w-full items-end justify-center pointer-events-none"
       >
-        {/* Content-height panel: scroll body + anchored Clear/Done footer. */}
         <div
           {...panelSwipeProps}
           role="dialog"
           aria-modal="true"
-          aria-labelledby="home-filters-overlay-title"
+          aria-label="Filters"
           data-home-filters-content="true"
+          data-home-filters-sheet="true"
           className={[
-            "pointer-events-auto self-center h-fit max-h-[90%]",
-            "flex w-full max-w-[640px] flex-col",
-            "overflow-hidden",
+            "pointer-events-auto flex h-[78%] w-full max-w-[640px] flex-col",
+            "overflow-hidden rounded-t-[28px]",
             "px-4",
+            homeFiltersSheetSurfaceClass,
           ].join(" ")}
+          style={{
+            paddingBottom: "var(--safe-area-bottom-layout, 0px)",
+            maxHeight:
+              "calc(100% - env(safe-area-inset-top, 0px) - 12px)",
+          }}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -240,17 +258,10 @@ export default function HomeFiltersOverlay({
             className={[
               "min-h-0 flex-1",
               "overflow-y-auto overflow-x-hidden overscroll-contain scroll-hide",
-              "pb-2 [-webkit-overflow-scrolling:touch]",
+              "pt-6 pb-2 [-webkit-overflow-scrolling:touch]",
             ].join(" ")}
             style={{ touchAction: "pan-y" }}
           >
-            <h2
-              id="home-filters-overlay-title"
-              className="w-full shrink-0 pb-4 text-center text-[15px] font-semibold tracking-tight text-[var(--text)]"
-            >
-              Filters
-            </h2>
-
             <section aria-labelledby="home-filters-social-heading">
               <h3 id="home-filters-social-heading" className={sectionLabelClass}>
                 Social

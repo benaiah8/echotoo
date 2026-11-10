@@ -579,20 +579,23 @@ export default function FollowButton({
 
   const getStateClass = () => {
     if (hasError) {
-      return "bg-red-500/20 text-red-400 border-red-500/30 animate-pulse";
+      return "bg-red-500/20 text-red-800 border-red-500/30 animate-pulse app-dark:text-red-400";
     }
     if (isProcessing && currentAction) {
       // Show more prominent loading state with brand colors based on action
       return currentAction === "follow"
         ? "bg-[var(--brand)]/80 text-[var(--brand-ink)] border-[var(--brand)] animate-pulse"
-        : "bg-gray-500/30 text-gray-300 border-gray-500/50 animate-pulse";
+        : "bg-[var(--text)]/10 text-[var(--text)]/75 border-[var(--border)] animate-pulse app-dark:bg-gray-500/30 app-dark:text-gray-300 app-dark:border-gray-500/50";
     }
     if (followStatus === "friends") {
       return "text-[var(--green-text)] border-[var(--green-border)] hover:brightness-110";
       // CSS will be: background: var(--green-bg);
     }
     if (followStatus === "following") {
-      return "bg-white/10 text-white border-white/20 hover:bg-white/20";
+      return "bg-[var(--surface-2)] text-[var(--text)] border-[var(--border)] hover:bg-[var(--surface)] app-dark:bg-white/10 app-dark:text-white app-dark:border-white/20 app-dark:hover:bg-white/20";
+    }
+    if (followStatus === "pending") {
+      return "bg-[var(--text)]/8 text-[var(--text)] border-[var(--border)]";
     }
     return "bg-[var(--brand)] text-[var(--brand-ink)] border-[var(--brand)] hover:bg-[var(--brand)]/90 hover:shadow-md";
   };

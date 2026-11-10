@@ -287,7 +287,13 @@ describe("Mine vertical gaps + unusedHostH", () => {
       resolve(__dirname, "../../pages/people/MatchDeckOverlay.tsx"),
       "utf8"
     );
-    expect(overlay).toContain("peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
+    expect(
+      readFileSync(
+        resolve(__dirname, "../../components/people/PeopleFeedList.tsx"),
+        "utf8"
+      )
+    ).toContain("peopleFeedContentBottomPad()");
     expect(overlay).not.toContain("data-people-mine-deck-column");
     expect(overlay).not.toContain("data-people-mine-below-spacer");
     expect(overlay).not.toContain("data-people-mine-note-to-connect-gap");

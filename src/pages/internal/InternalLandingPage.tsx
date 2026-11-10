@@ -164,6 +164,18 @@ export default function InternalLandingPage() {
                 JS / React crashes
               </div>
             </button>
+            <button
+              type="button"
+              onClick={() => navigate(Paths.internalUsage)}
+              className="w-full text-left rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/90 px-4 py-3 active:opacity-90 touch-manipulation"
+            >
+              <div className="text-sm font-semibold text-[var(--text)]">
+                Usage
+              </div>
+              <div className="text-[11px] text-[var(--text)]/55 mt-0.5">
+                Visits and existing activity
+              </div>
+            </button>
 
             <div className="mt-5 pt-4 border-t border-[var(--border)]/50">
               <p className="text-[10px] font-medium text-[var(--text)]/45 uppercase tracking-wide mb-2">

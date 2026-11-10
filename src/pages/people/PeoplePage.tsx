@@ -17,6 +17,7 @@ import {
   useTabActive,
 } from "../../router/PersistentTabContainer.new";
 import MatchDeckOverlay from "./MatchDeckOverlay";
+import { trackPeopleVisit } from "../../lib/usageAnalytics";
 import {
   peopleDebugBumpRender,
 } from "../../lib/people/peopleDeckDebug";
@@ -57,6 +58,11 @@ function PeoplePage() {
   const onRequestGroupUpsMount = useCallback(() => {
     setGroupUpsOpened(true);
   }, []);
+
+  useEffect(() => {
+    if (!isPeopleVisible) return;
+    trackPeopleVisit();
+  }, [isPeopleVisible]);
 
   useEffect(() => {
     if (!isPeopleVisible) {

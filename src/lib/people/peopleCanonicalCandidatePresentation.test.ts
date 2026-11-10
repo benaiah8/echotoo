@@ -107,7 +107,13 @@ describe("PeopleCanonicalCandidatePresentation — Mine + Discover", () => {
     expect(OVERLAY_SRC).toContain("PeopleFeedList");
     expect(OVERLAY_SRC).toContain("PeopleFeedTopNav");
     expect(OVERLAY_SRC).toContain("topChromePad={peopleFeedContentTopPad()}");
-    expect(OVERLAY_SRC).toContain("peopleFeedContentBottomPad()");
+    expect(OVERLAY_SRC).toContain("paddingBottom: 0");
+    expect(
+      readFileSync(
+        resolve(__dirname, "../../components/people/PeopleFeedList.tsx"),
+        "utf8"
+      )
+    ).toContain("peopleFeedContentBottomPad()");
     expect(OVERLAY_SRC).toContain("paddingTop: 0");
     expect(OVERLAY_SRC).toContain("handleFeedHeart");
     expect(OVERLAY_SRC).not.toContain("flex-[0.02]");

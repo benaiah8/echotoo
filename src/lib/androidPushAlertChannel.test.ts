@@ -21,7 +21,7 @@ describe("Android push alert channel", () => {
     expect(ECHO_ANDROID_ALERTS_CHANNEL_ID).toBe("echo_alerts_v1");
     expect(EDGE_CHANNEL_ID).toBe(ECHO_ANDROID_ALERTS_CHANNEL_ID);
     expect(ECHO_ANDROID_ALERTS_CHANNEL_NAME).toBe("EchoToo Alerts");
-    expect(ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE).toBe(5);
+    expect(ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE).toBe(4);
     expect(ECHO_ANDROID_ALERTS_CHANNEL_DESCRIPTION.length).toBeGreaterThan(0);
   });
 
@@ -85,6 +85,60 @@ describe("Android push alert channel", () => {
     const lib = read("src/lib/androidPushAlertChannel.ts");
     expect(lib).toContain("createChannel");
     expect(lib).toContain("importance: ECHO_ANDROID_ALERTS_CHANNEL_IMPORTANCE");
-    expect(lib).toContain('sound: "default"');
+    expect(lib).not.toMatch(/sound:\s*["']/);
+    expect(lib).toContain("vibration: true");
+  });
+
+  it("does not point the channel at a missing raw sound resource", () => {
+    const lib = read("src/lib/androidPushAlertChannel.ts");
+    expect(lib).toContain("/raw/");
+    expect(lib).not.toContain('sound: "default"');
+    const native = read(
+      "android/app/src/main/java/com/experience/app/EchoTooAlertChannel.java"
+    );
+    expect(native).toContain("IMPORTANCE_HIGH");
+    expect(native).toContain('CHANNEL_ID = "echo_alerts_v1"');
+    expect(native).toContain("enableVibration(true)");
+    expect(native).not.toContain("setSound");
+    expect(native).toContain("getNotificationChannel(CHANNEL_ID) != null) return");
+    expect(native).not.toContain("deleteNotificationChannel");
+    expect(native).not.toContain("echo_alerts_v2");
+  });
+
+  it("creates the channel at process start without a second channel id", () => {
+    const manifest = read("android/app/src/main/AndroidManifest.xml");
+    expect(manifest).toContain('android:name=".EchoTooApplication"');
+    const app = read(
+      "android/app/src/main/java/com/experience/app/EchoTooApplication.java"
+    );
+    expect(app).toContain("EchoTooAlertChannel.ensure(this)");
+    const edge = read(
+      "supabase/functions/_shared/push/androidNotificationDelivery.ts"
+    );
+    expect(edge).toContain('ECHO_ANDROID_ALERTS_CHANNEL_ID = "echo_alerts_v1"');
+    expect(edge).not.toContain("echo_alerts_v2");
+  });
+
+  it("keeps foreground OS presentation suppressed", () => {
+    const config = read("capacitor.config.ts");
+    expect(config).toContain("presentationOptions: []");
+    const ios = read("ios/App/App/AppDelegate.swift");
+    expect(ios).toContain("completionHandler([])");
+    const bridge = read("src/components/notifications/NativePushForegroundBridge.tsx");
+    expect(bridge).toContain("shouldSuppressForegroundBannerForActiveThread");
+    expect(bridge).toContain("pushNotificationReceived");
+  });
+
+  it("does not alter mute, duo-comment, or request-attention logic", () => {
+    const dm = read("supabase/functions/send-dm-push/index.ts");
+    expect(dm).toContain("skipped_muted");
+    expect(dm).toContain("notifications_muted");
+    expect(dm).toContain('androidDelivery: "notification_and_data"');
+    const duo = read("supabase/migrations/20261124120000_duo_comment_push_drain.sql");
+    expect(duo).toContain("p_duo_comment");
+    expect(duo).toContain("Sent you a Duo comment");
+    const channel = read("src/lib/androidPushAlertChannel.ts");
+    expect(channel).not.toContain("requestsAttention");
+    expect(channel).not.toContain("unread");
   });
 });

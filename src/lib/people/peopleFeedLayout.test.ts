@@ -83,7 +83,13 @@ describe("peopleFeedLayout", () => {
     expect(carousel).not.toContain("peopleDuoModernScrollTopInset");
     expect(overlay).toContain("topChromePad={peopleFeedContentTopPad()}");
     expect(overlay).toContain("paddingTop: 0");
-    expect(overlay).toContain("isDuoDeckScope ? 0 : peopleFeedContentBottomPad()");
+    expect(overlay).toContain("paddingBottom: 0");
+    expect(overlay).not.toContain(
+      "paddingBottom: isDuoDeckScope ? 0 : peopleFeedContentBottomPad()"
+    );
+    expect(read("components/people/PeopleFeedList.tsx")).toContain(
+      "paddingBottom: peopleFeedContentBottomPad()"
+    );
     expect(nav).toContain("peopleFeedTopNavOffset()");
     expect(nav).not.toContain("peopleFeedContentTopPad()");
     expect(nav).toContain("PEOPLE_FEED_TOP_FADE_BELOW_SAFE_PX");

@@ -382,7 +382,14 @@ describe("isolation from Activity / Invite unread", () => {
     expect(peek).not.toContain("right-[-14px]");
     expect(peek).not.toContain("showMessagesAttention");
     expect(peek).not.toContain("useHasNewActivities");
-    expect(bottom).toContain("bg-amber-400");
+    expect(bottom).toContain("bg-[var(--brand)]");
+    expect(bottom).toContain("shadow-[0_0_0_1.5px_var(--bg)]");
+    expect(bottom).toContain(
+      "pointer-events-none absolute top-[3px] right-[8px] z-20 h-2 w-2 rounded-full"
+    );
     expect(bottom).toContain("showMessagesAttention");
+    expect(bottom).toContain("hasUnreadMessages || hasNewActivities");
+    expect(bottom).toContain("useHasNewActivities");
+    expect(bottom).not.toContain("animate-pulse");
   });
 });

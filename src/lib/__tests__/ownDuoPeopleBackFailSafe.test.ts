@@ -86,14 +86,13 @@ describe("Own Profile Duo/Group active derivation (source)", () => {
     expect(card).not.toContain("hasOwnerGroup || groupAction.ownsActive");
   });
 
-  it("Other Profile viewer Duo join path unchanged", () => {
+  it("Other Profile no longer joins or leaves Duo from the card", () => {
     const card = readSrc("components/profile/ProfileSocialOpportunityCard.tsx");
-    expect(card).toContain(
-      "const otherDuoActive = hasOwnerDuo ? duoJoined : false"
-    );
+    expect(card).not.toContain("otherDuoActive");
+    expect(card).not.toContain("joinPairUp");
+    expect(card).not.toContain("leavePairUp");
     expect(card).toContain("viewer_duo_joined");
-    expect(card).toContain("joinPairUp");
-    expect(card).toContain("leavePairUp");
+    expect(card).toContain("connectProfilePairUp");
   });
 });
 
