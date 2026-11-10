@@ -389,7 +389,12 @@ describe("isolation from Activity / Invite unread", () => {
     );
     expect(bottom).toContain("showMessagesAttention");
     expect(bottom).toContain("hasUnreadMessages || hasNewActivities");
+    expect(bottom).toContain(
+      "hasUnreadMessages || hasNewActivities || hasRequestAttention"
+    );
+    expect(bottom).toContain("useHasUnreadMessages");
     expect(bottom).toContain("useHasNewActivities");
+    expect(bottom).toContain("useHasRequestAttention");
     expect(bottom).not.toContain("animate-pulse");
   });
 });

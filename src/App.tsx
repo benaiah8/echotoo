@@ -35,6 +35,7 @@ import MessagesUnreadRealtimeMount from "./components/MessagesUnreadRealtimeMoun
 import MessagesActivitiesAttentionMount from "./components/MessagesActivitiesAttentionMount";
 import { clearMessagesUnreadStore } from "./lib/messagesUnreadStore";
 import { clearMessagesActivitiesAttentionStore } from "./lib/messagesActivitiesAttentionStore";
+import { clearRequestsAttention } from "./lib/requestsAttentionStore";
 import { clearCompanyAnnouncementStore } from "./lib/companyAnnouncementStore";
 import PushRegistrationMount from "./components/PushRegistrationMount";
 import AndroidPushAlertChannelMount from "./components/AndroidPushAlertChannelMount";
@@ -117,6 +118,7 @@ function App() {
       if (event === "SIGNED_OUT") {
         clearMessagesUnreadStore();
         clearMessagesActivitiesAttentionStore();
+        clearRequestsAttention();
         clearCompanyAnnouncementStore();
         // Import dataCache dynamically to avoid circular dependencies
         import("./lib/dataCache").then(({ dataCache }) => {

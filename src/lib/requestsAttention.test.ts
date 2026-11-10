@@ -4,10 +4,21 @@ import { join } from "node:path";
 import type { InboxConversationRow } from "../api/services/messaging";
 import type { OpenPlanRequestGroup } from "./people/types";
 import {
+  applyLatestEligibleActivity,
+  bindMessagesActivitiesAttentionViewer,
+  clearMessagesActivitiesAttentionStore,
+  getHasNewActivities,
+} from "./messagesActivitiesAttentionStore";
+import {
   clearMessagesUnreadStore,
   getHasUnreadMessages,
   hydrateFromInboxRows,
 } from "./messagesUnreadStore";
+import {
+  clearRequestsAttention,
+  getHasRequestAttention,
+  setRequestsAttention,
+} from "./requestsAttentionStore";
 import {
   acceptOpenPlanSnapshot,
   applyOpenPlanSeenForViewer,
@@ -372,6 +383,80 @@ describe("messages unread store", () => {
 
     hydrateFromInboxRows("other-viewer", []);
     expect(getHasUnreadMessages()).toBe(false);
+  });
+});
+
+describe("logout attention isolation", () => {
+  it("SIGNED_OUT clears unread messages, activities, and request attention", () => {
+    stubStorage();
+    hydrateFromInboxRows("account-a", [row("dm-a", 2)]);
+    bindMessagesActivitiesAttentionViewer("account-a");
+    applyLatestEligibleActivity("account-a", Date.parse("2026-11-10T00:00:00.000Z"));
+    setRequestsAttention("account-a", true);
+    expect(getHasUnreadMessages()).toBe(true);
+    expect(getHasNewActivities()).toBe(true);
+    expect(getHasRequestAttention()).toBe(true);
+
+    const app = readFileSync(join(__dirname, "../App.tsx"), "utf8");
+    const signedOutStart = app.indexOf('if (event === "SIGNED_OUT")');
+    const signedOutEnd = app.indexOf("clearAuthCache();", signedOutStart);
+    const signedOut = app.slice(signedOutStart, signedOutEnd);
+    expect(signedOut).toContain("clearMessagesUnreadStore()");
+    expect(signedOut).toContain("clearMessagesActivitiesAttentionStore()");
+    expect(signedOut).toContain("clearRequestsAttention()");
+    expect(app.slice(signedOutEnd)).not.toContain("clearRequestsAttention(");
+
+    clearMessagesUnreadStore();
+    clearMessagesActivitiesAttentionStore();
+    clearRequestsAttention();
+    expect(getHasUnreadMessages()).toBe(false);
+    expect(getHasNewActivities()).toBe(false);
+    expect(getHasRequestAttention()).toBe(false);
+  });
+
+  it("does not let account B inherit account A's request attention", () => {
+    setRequestsAttention("account-a", true);
+    expect(getHasRequestAttention()).toBe(true);
+
+    clearRequestsAttention();
+    expect(getHasRequestAttention()).toBe(false);
+
+    setRequestsAttention("account-b", true);
+    expect(getHasRequestAttention()).toBe(true);
+    clearRequestsAttention();
+  });
+
+  it("keeps the next account's request attention after login", () => {
+    clearRequestsAttention();
+    setRequestsAttention("account-b", true);
+    expect(getHasRequestAttention()).toBe(true);
+
+    const app = readFileSync(join(__dirname, "../App.tsx"), "utf8");
+    const signedIn = app.slice(app.indexOf('if (event === "SIGNED_IN"'));
+    expect(signedIn).not.toContain("clearRequestsAttention(");
+    expect(getHasRequestAttention()).toBe(true);
+    clearRequestsAttention();
+  });
+
+  it("keeps inbox account-switch request attention clears", () => {
+    const inbox = readFileSync(
+      join(__dirname, "../pages/messages/MessagesInboxPage.tsx"),
+      "utf8"
+    );
+    expect(inbox).toContain("if (!viewerUserId) {\n      clearRequestsAttention();");
+    expect(inbox).toContain("clearRequestsAttention();\n      setRows([]);");
+    const unread = readFileSync(
+      join(__dirname, "../hooks/useMessagesUnreadRealtime.ts"),
+      "utf8"
+    );
+    const activities = readFileSync(
+      join(__dirname, "../hooks/useMessagesActivitiesAttention.ts"),
+      "utf8"
+    );
+    expect(unread).toContain("clearMessagesUnreadStore()");
+    expect(unread).toContain("prevViewerRef.current !== me");
+    expect(activities).toContain("clearMessagesActivitiesAttentionStore()");
+    expect(activities).toContain("prevViewerRef.current !== me");
   });
 });
 
